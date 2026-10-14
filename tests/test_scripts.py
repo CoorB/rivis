@@ -105,7 +105,6 @@ def on_request(context, url, request):
         self.assertEqual(self.up.hits_for("/echo"), [])
         self.assertIn("script:mock", self.comment_of("/echo"))
 
-    @unittest.expectedFailure
     def test_mock_with_json_body_and_headers(self):
         """FOUND-BUGS B7: any mock() that carries headers (or a JSON body → auto Content-Type) raises
         'Header fields must be bytes' — this is the shipped `mock` template."""
@@ -150,7 +149,6 @@ def on_request(context, url, request):
         self.assertEqual(r.status, 200)
         self.assertNotIn("x-never", [k.lower() for k, _ in r.json()["headers"]])
 
-    @unittest.expectedFailure
     def test_request_hook_error_stays_in_state(self):
         """FOUND-BUGS B8: the same script's (absent) on_response hook of the same flow succeeds and pops the error."""
         self.install("rboom2.py", "def on_request(context, url, request):\n    raise ValueError('boom')\n", match="/echo")
@@ -288,7 +286,6 @@ function onRequest(context, url, request) {
         self.assertEqual((r.status, r.text), (201, "js mock"))
         self.assertEqual(self.up.hits_for("/echo"), [])
 
-    @unittest.expectedFailure
     def test_mock_json_with_headers(self):
         """FOUND-BUGS B7 (JavaScript flavour)."""
         self.install("mj.js", 'async function onRequest(c, u, r) { return mock(201, {js: true}, {"X-M": "1"}); }\n', match="/echo")
