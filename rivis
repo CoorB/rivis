@@ -42,6 +42,10 @@
 #   <cli> ios on|off [--udid UDID]         CA on a simulator (default: the booted one)
 #   <cli> net-reset [--dry-run]            clear stale local web/https/socks proxies
 #                                         service — fixes "no internet after closing the proxy app"
+#   <cli> doctor [--json] [--no-net] [--fix-safe [--yes]]
+#                                 read-only health check: versions, CA, ports, system proxy,
+#                                 sim/emulator trust, running state, host reachability, disk.
+#                                 --fix-safe does only safe, reversible fixes (asks y/N)
 #   <cli> status | cert
 set -uo pipefail
 umask 077
@@ -658,6 +662,16 @@ print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n
   fi
 }
 
+# doctor — read-only health check (never writes unless --fix-safe + confirm).
+# Deliberately does NOT call ensure_rules/secure_dirs/migrate_legacy: it must not mutate state.
+cmd_doctor() {
+  [ -x "$SCRIPT_DIR/addons/doctor.py" ] || true
+  /usr/bin/python3 -I "$SCRIPT_DIR/addons/doctor.py" \
+    --project "$PROJECT" --rules "$RULES" --confdir "$CONFDIR" \
+    --port "$PORT" --web-port "$WEB_PORT" --script-dir "$PROJECT_STATE/scripts" \
+    --adb "$ADB" "$@"
+}
+
 cmd_cert() {
   ensure_ca
   echo "CA:        $CA_PEM"
@@ -666,7 +680,7 @@ cmd_cert() {
   openssl x509 -in "$CA_PEM" -noout -enddate
 }
 
-case "${1:-}" in -h|--help|help|""|cert) ;; *) migrate_legacy || exit 1 ;; esac
+case "${1:-}" in -h|--help|help|""|cert|doctor) ;; *) migrate_legacy || exit 1 ;; esac
 
 case "${1:-}" in
   projects)  shift; cmd_projects "$@" ;;
@@ -684,6 +698,7 @@ case "${1:-}" in
   compose)   shift; cmd_compose "$@" ;;
   breakpoint) shift; cmd_breakpoint "$@" ;;
   mock)      shift; cmd_mock "$@" ;;
+  doctor)    shift; cmd_doctor "$@" ;;
   cert)      cmd_cert ;;
   -h|--help|help|"") usage ;;
   *) die "unknown command '$1' ($CLI --help)" ;;

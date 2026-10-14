@@ -236,6 +236,44 @@ The script updates `product.json`, derives a lowercase CLI name and uppercase en
 two product CLI files, and prints the links to recreate. Add-ons, panel identity, paths, messages, environment
 variables, and wrappers read `product.json`, so nothing else needs editing.
 
+## Troubleshooting with `rivis doctor`
+
+When something does not work and you do not know why, run:
+
+```bash
+rivis doctor            # grouped, coloured, human-readable
+rivis doctor --no-net   # skip host reachability (finishes in under a few seconds)
+rivis doctor --json     # machine-readable, for scripts/CI
+rivis doctor --fix-safe # offer only safe, reversible fixes (asks y/N; add --yes to accept all)
+```
+
+It is **read-only** by default and checks, in order:
+
+1. **mitmproxy** is the pinned version and where it lives; **Node.js** for JS scripts.
+2. The **CA** exists, its private key is `0600`, its age and fingerprint.
+3. macOS **local-capture extension** is activated + enabled (needed for the iOS Simulator).
+4. The **proxy / web ports** are free or owned by Rivis — otherwise it names the process
+   (Proxyman, FRTMProxy, an older instance) and how to stop it.
+5. The **system proxy**: a stale localhost leftover (offers `net-reset`), a local tool that is
+   stealing simulator traffic, or a corporate proxy (left untouched).
+6. **Proxyman / FRTMProxy** running.
+7. **iOS Simulators** booted and whether each trusts the Rivis CA → `rivis ios on` if not.
+8. **Android emulators**: running, `http_proxy`, CA in the user store, Play vs Google APIs image.
+9. The **running instance**: project, rule counts, skipped (broken) rules, script errors, throttle,
+   TLS mode and — flagged loudly — anything that silently changes traffic (an active throttle,
+   block/rewrite rules, armed breakpoints, strict replay). A forgotten rule is a common "my app is
+   broken".
+10. **Network reachability** for the project's `doctor_hosts` (DNS, TCP 443, TLS), distinguishing a
+    DNS failure, no route (VPN down), a reset tunnel, and a certificate SAN mismatch. Skip with `--no-net`.
+11. **Disk**: state-dir size, the largest collections/sessions, and a low-free-space warning.
+12. The system **Python 3.9** the CLI helpers depend on.
+
+Exit code is `0` when everything passes, `1` with warnings, `2` with errors — so CI can gate on it.
+`rivis doctor` never sets a system proxy, never binds a port, never touches the CA, devices, the VPN,
+or a corporate proxy, and masks any token it reads. On Windows, `rivis.ps1 doctor` runs the same
+checks when Python is installed, and a reduced native subset (ports, WinINET/WinHTTP proxy, adb,
+mitmproxy version) otherwise.
+
 ## Troubleshooting
 
 | Symptom | Action |
