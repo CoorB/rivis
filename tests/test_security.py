@@ -133,9 +133,7 @@ class FreshCa(LiveCase):
         self.assertTrue(os.path.exists(os.path.join(conf, "mitmproxy-ca.pem")))
         self.assertEqual(oct(mode(os.path.join(conf, "mitmproxy-ca.pem"))), "0o600")          # the private key
 
-    @unittest.expectedFailure
-    def test_generated_public_certificates_are_private_too(self):
-        """FOUND-BUGS B13: ensure_ca() runs mitmdump without a umask, so the CA dir is 0755 and the public certs 0644."""
+    def test_generated_public_certificates_and_dir_are_private_too(self):
         conf = os.path.join(self.inst.home, ".mitmproxy")
         loose = sorted((f, oct(mode(os.path.join(conf, f)))) for f in os.listdir(conf) if mode(os.path.join(conf, f)) & 0o077)
         self.assertEqual(loose, [])
