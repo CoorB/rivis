@@ -472,3 +472,6 @@ footer .label[data-rv-tone="warn"] { color: var(--rv-warn); background: var(--rv
 :root[data-sbar="1"][data-fstrip="1"]:not([data-skin="off"]) #container > header { margin-bottom: 28px; }
 /* first run: mitmweb's own "mitmproxy is running…" placeholder is replaced by the panel's centred hint */
 :root[data-rv-empty="1"] .main-view > div[style*="padding: 1em 2em"] { visibility: hidden; }
+/* plain-language tab names ("Flow List" → Calls …): panel.js sets data-rv; React's text stays underneath */
+#container header nav.nav-tabs-lg a[data-rv] { font-size: 0; }
+#container header nav.nav-tabs-lg a[data-rv]::before { content: attr(data-rv); font-size: 13px; }

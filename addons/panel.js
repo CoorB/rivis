@@ -499,8 +499,8 @@
     if (seq !== renderSeq) return;
     if (f && f.type === "tcp") {       // a host that is not decrypted: only the tunnel is visible
       const conn = f.server_conn || {}, hostName = conn.sni || (f.client_conn || {}).sni || (conn.address || [""])[0] || "", portNo = (conn.address || [])[1];
-      m.innerHTML = `<div class="call"><span class="m">TUNNEL</span>${esc(hostName)}${portNo ? ":" + esc(portNo) : ""}
-          <div class="sub">${ico("lock", "sm")} not decrypted — host only, no URL, headers or body</div></div>
+      m.innerHTML = `<div class="call"><span class="m">HOST ONLY</span>${esc(hostName)}${portNo ? ":" + esc(portNo) : ""}
+          <div class="sub">${ico("lock", "sm")} Not decrypted — you can see the host, but not the URL, headers or body</div></div>
         ${tlsQuickHTML(hostName)}`;
       wireTlsQuick(f.id, hostName);
       return;
@@ -546,14 +546,14 @@
       ${tlsQuickHTML(r.pretty_host)}
       ${viewerHTML(viewer)}${viewerListsHTML()}`;
     $("mock").onclick = async () => {
-      const res = await run("mock", { flow_id: f.id }, (x) => (x.existing ? "Opened existing mock '" : "Map Local '") + x.name + "' is ON");
+      const res = await run("mock", { flow_id: f.id }, (x) => (x.existing ? "Opened existing mock '" : "Map Local '") + x.name + "' is on");
       if (res) openEditor(res.name);
     };
     root.querySelectorAll("[data-ph]").forEach((c) => (c.onclick = () => {
       const want = { request: !!(bpFor && bpFor.request), response: !!(bpFor && bpFor.response) };
       want[c.dataset.ph] = !want[c.dataset.ph];
       if (!want.request && !want.response) return bpFor && run("bp_delete", { name: bpFor.name }, "Breakpoint removed");
-      run("bp_add", { flow_id: f.id, ...want }, "Breakpoint ON — matching calls will pause");
+      run("bp_add", { flow_id: f.id, ...want }, "Breakpoint on — matching calls will pause");
     }));
     $("retry").onclick = () => openRetry(f.id);
     $("compose").onclick = async () => {
@@ -567,9 +567,9 @@
     $("curlurl").onclick = () => copyExport(f.id, "url");
     $("cmpA").onclick = () => { cmpA = { id: f.id, label: r.method + " " + r.pretty_host + r.path }; tab = "cmp"; toast("Now select another call — Compare tab"); render(); };
     $("focus").onclick = () => run("focus_host", { host: state.focus_host === r.pretty_host ? null : r.pretty_host }, state.focus_host === r.pretty_host ? "Showing all hosts" : "Showing only " + r.pretty_host);
-    $("force").onclick = () => run("quick", { flow_id: f.id, kind: "status", status: $("code").value }, (x) => "Rule '" + x.name + "' ON");
-    $("block").onclick = () => run("quick", { flow_id: f.id, kind: "block" }, (x) => "Rule '" + x.name + "' ON");
-    $("delay").onclick = () => run("quick", { flow_id: f.id, kind: "delay", ms: $("ms").value }, (x) => "Rule '" + x.name + "' ON");
+    $("force").onclick = () => run("quick", { flow_id: f.id, kind: "status", status: $("code").value }, (x) => "Rule '" + x.name + "' is on — see the Rules tab");
+    $("block").onclick = () => run("quick", { flow_id: f.id, kind: "block" }, (x) => "Rule '" + x.name + "' is on — see the Rules tab");
+    $("delay").onclick = () => run("quick", { flow_id: f.id, kind: "delay", ms: $("ms").value }, (x) => "Rule '" + x.name + "' is on — see the Rules tab");
     m.querySelectorAll("[data-copy-json]").forEach((b) => (b.onclick = () => navigator.clipboard.writeText(decodeURIComponent(b.dataset.copyJson)).then(() => toast("Copied decoded JSON"))));
     m.querySelectorAll("[data-gql]").forEach((b) => (b.onclick = () => run("graphql_filter", { name: b.dataset.gql === state.graphql_operation ? null : b.dataset.gql }, b.dataset.gql === state.graphql_operation ? "GraphQL filter cleared" : "Showing " + b.dataset.gql)));
   }
@@ -650,7 +650,7 @@
   function viewerListsHTML() {
     const v = viewers;
     let out = `<h4>Tokens seen this session (${v.tokens.length})</h4>` + (v.tokens.length ? v.tokens.map((t) => `<div class="row"><div class="n"><div><b>${esc(t.sub || "(no sub)")}</b> <span class="tag">${esc(t.alg || "JWT")}</span></div><div class="sub">iat ${esc(t.iat ?? "—")} · first: ${esc(t.method)} ${esc(t.url)}</div></div></div>`).join("") : '<p class="muted">No JWTs seen.</p>');
-    out += `<h4>GraphQL ops</h4>` + (v.graphql_ops.length ? v.graphql_ops.map((g) => `<button class="chip ${state.graphql_operation === g.name ? "on" : ""}" data-gql="${esc(g.name)}">${esc(g.name)} · ${g.count}${g.errors ? " · ERR " + g.errors : ""}</button>`).join(" ") : '<p class="muted">No GraphQL operations seen.</p>');
+    out += `<h4>GraphQL operations</h4>` + (v.graphql_ops.length ? v.graphql_ops.map((g) => `<button class="chip ${state.graphql_operation === g.name ? "on" : ""}" data-gql="${esc(g.name)}">${esc(g.name)} · ${g.count}${g.errors ? " · ERR " + g.errors : ""}</button>`).join(" ") : '<p class="muted">No GraphQL operations seen.</p>');
     return out;
   }
 
@@ -712,8 +712,8 @@
       if (!f) return toast("Select a call in the list first", true);
       $("bh").value = f.request.pretty_host; $("bpth").value = f.request.path.split("?")[0]; $("bm").value = f.request.method;
     };
-    $("badd").onclick = () => { split(); run("bp_add", { host: $("bh").value, path: $("bpth").value, method: $("bm").value, request: ph("request"), response: ph("response") }, (x) => "Breakpoint '" + x.name + "' ON"); };
-    root.querySelectorAll("[data-bi]").forEach((c) => (c.onchange = () => run("bp_update", { name: bps[c.dataset.bi].name, enabled: c.checked }, c.checked ? "ON" : "off")));
+    $("badd").onclick = () => { split(); run("bp_add", { host: $("bh").value, path: $("bpth").value, method: $("bm").value, request: ph("request"), response: ph("response") }, (x) => "Breakpoint '" + x.name + "' is on"); };
+    root.querySelectorAll("[data-bi]").forEach((c) => (c.onchange = () => run("bp_update", { name: bps[c.dataset.bi].name, enabled: c.checked }, c.checked ? "Breakpoint on" : "Breakpoint off")));
     root.querySelectorAll("[data-bph]").forEach((c) => (c.onclick = () => {
       const [i, p] = c.dataset.bph.split(":"); const b = bps[i];
       const next = { request: b.request, response: b.response }; next[p] = !next[p];
@@ -733,9 +733,9 @@
     const mn = state.manual;
     m.innerHTML = `
       <h4>Traffic profiles</h4>
-      <div class="row" style="border:0;padding:0 0 8px;flex-wrap:wrap"><label class="sub" for="tm" style="white-space:nowrap">Slow down URLs matching</label>
-        <input type="text" id="tm" class="grow" value="${esc(state.throttle_match)}" placeholder="empty = every call" title="Regular expression matched against the URL, e.g. neo\\.sa. Empty slows down every call."></div>
-      <div class="sub" style="margin:-2px 0 10px">${cur === "off" ? "Pick a profile — it only slows calls whose URL matches this pattern." : `<b>Active</b> for ${state.throttle_match ? "URLs matching <code>" + esc(state.throttle_match) + "</code>" : "every call"}.`}</div>
+      <div class="row" style="border:0;padding:0 0 8px;flex-wrap:wrap"><label class="sub" for="tm" style="white-space:nowrap">Only slow URLs containing</label>
+        <input type="text" id="tm" class="grow" value="${esc(state.throttle_match)}" placeholder="e.g. neo.sa — empty = every call" title="Text (or a pattern) matched against the URL, e.g. neo.sa. Empty slows down every call."></div>
+      <div class="sub" style="margin:-2px 0 10px">${cur === "off" ? "Pick a profile — it only slows calls whose URL contains the text above." : `<b>On</b> for ${state.throttle_match ? "URLs containing <code>" + esc(state.throttle_match) + "</code>" : "every call"}.`}</div>
       ${state.profiles.map((p) => `
         <div class="card ${p.id === cur ? "on" : ""}" data-prof="${p.id}"><div class="ic">${ico(icons[p.id] || "net")}</div>
           <div><div class="t">${esc(p.name)}</div><div class="sub">${esc(desc(p))}</div></div>${p.id === cur ? `<div class="ok">${ico("check")}</div>` : ""}</div>`).join("")}
@@ -752,10 +752,10 @@
         <div class="btns"><button class="b p" id="mapply">Apply manual profile</button></div>
       </div>
       ${tlsSectionHTML()}
-      <h4>List view</h4>
-      <div class="row">${sw('id="project-filter"', state.project_only)}<div class="n">Only ${esc(state.project.label)} calls <div class="sub">Also in the “Show” menu at the top</div></div></div>
-      <div class="row">${sw('id="dns"', state.show_dns)}<div class="n">Show DNS / UDP rows <div class="sub">off = HTTP(S) requests only</div></div></div>
-      <div class="row"><div class="n">Appearance <div class="sub">Theme, compact rows and the skin switch are in Settings (this browser only)</div></div><button class="b" id="openset">${ico("gear", "sm")}Settings</button></div>`;
+      <h4>What the list shows</h4>
+      <div class="row">${sw('id="project-filter"', state.project_only)}<div class="n">Only ${esc(state.project.label)} calls <div class="sub">Hides other apps' traffic. Also in the “Show” menu above</div></div></div>
+      <div class="row">${sw('id="dns"', state.show_dns)}<div class="n">Show background lookups (DNS) <div class="sub">Off = only web calls are listed</div></div></div>
+      <div class="row"><div class="n">Appearance <div class="sub">Theme and compact rows live in Settings (this browser only)</div></div><button class="b" id="openset">${ico("gear", "sm")}Settings</button></div>`;
     wireTlsSection();
     root.querySelectorAll("[data-prof]").forEach((c) => (c.onclick = () => {
       if (c.dataset.prof === "manual") { $("manual").style.display = ""; root.querySelectorAll("[data-prof]").forEach((x) => x.classList.toggle("on", x === c)); return; }
@@ -766,8 +766,8 @@
       run("profile", { id: "manual", manual, match: $("tm").value }, "Network: manual profile");
     };
     $("tm").onchange = () => run("profile", { id: cur, match: $("tm").value }, "Applies to: " + ($("tm").value || "all calls"));
-    $("project-filter").onchange = () => run("view", { project: state.view_project, project_only: $("project-filter").checked, show_dns: false }, "List updated");
-    $("dns").onchange = () => run("view", { project_only: false, show_dns: $("dns").checked }, "List updated");
+    $("project-filter").onchange = () => run("view", { project: state.view_project, project_only: $("project-filter").checked, show_dns: false }, "Call list updated");
+    $("dns").onchange = () => run("view", { project_only: false, show_dns: $("dns").checked }, "Call list updated");
     $("openset").onclick = () => openHelp("settings");
   }
 
@@ -809,7 +809,7 @@
       <p class="sub">Stored in ${esc(state.project_state)}/collections · recordings stay on this machine (no Git sync).</p>`;
     $("crec") && ($("crec").onclick = () => run("coll_record", { name: $("cname").value, record_match: $("cmatch").value }, "Recording into " + $("cname").value));
     $("cstop") && ($("cstop").onclick = () => run("coll_stop", {}, "Recording stopped"));
-    $("cstrict").onchange = () => run("coll_strict", { strict: $("cstrict").checked }, $("cstrict").checked ? "Strict replay ON" : "Strict replay off");
+    $("cstrict").onchange = () => run("coll_strict", { strict: $("cstrict").checked }, $("cstrict").checked ? "Strict replay on" : "Strict replay off");
     m.querySelectorAll("[data-ci]").forEach((cb) => (cb.onchange = () => run("coll_replay", { name: c.items[cb.dataset.ci].name, enabled: cb.checked }, cb.checked ? "Replaying " + c.items[cb.dataset.ci].name : "Replay off")));
     m.querySelectorAll("[data-cdel]").forEach((b) => (b.onclick = () => { const n = c.items[b.dataset.cdel].name; if (confirm("Delete collection '" + n + "'?")) run("coll_delete", { name: n }, "Deleted " + n); }));
     m.querySelectorAll("[data-cexp]").forEach((b) => (b.onclick = async () => {
@@ -917,7 +917,7 @@
         <select id="sl"><option value="js">JavaScript</option><option value="py">Python</option></select></div>
       <div class="btns"><select id="stpl" aria-label="Template"><option value="header">Request header</option><option value="json">JSON response field</option><option value="mock">Local mock</option><option value="latency">Endpoint latency</option><option value="token">Log token refresh</option></select>
         <select id="smethod" aria-label="Method"><option value="">Any method</option>${["GET","POST","PUT","PATCH","DELETE"].map((x) => `<option>${x}</option>`).join("")}</select></div>
-      <div class="btns"><label class="sub" for="smatch" style="white-space:nowrap">On URLs matching</label><input id="smatch" type="text" class="grow" value="." placeholder="URL regex" title="Regular expression matched against the URL. A single dot matches every call.">
+      <div class="btns"><label class="sub" for="smatch" style="white-space:nowrap">Run on URLs like</label><input id="smatch" type="text" class="grow" value="." placeholder="URL pattern" title="A pattern matched against the URL (a regular expression). A single dot matches every call.">
         <button class="b p" id="snew">New</button></div>
       <p class="sub">Rules run first, then scripts. Scripts are trusted code with your user rights — not a sandbox. ${info("Python and JavaScript scripts run with your user rights. The Node VM omits process, require and network helpers to prevent accidents, but it is NOT a security boundary.")}</p>
       <h4>Scripts (${scripts.length})</h4>${scripts.length ? scripts.map((s, i) => `<div class="row">${sw(`data-si="${i}"`, s.enabled !== false)}
@@ -927,7 +927,7 @@
       const r = await run("script_new", { name: $("sn").value, lang: $("sl").value, template: $("stpl").value, match: $("smatch").value, method: $("smethod").value }, (x) => "Created " + x.file);
       if (r) openScript(r.file);
     };
-    m.querySelectorAll("input[data-si]").forEach((c) => (c.onchange = () => run("script_toggle", { file: scripts[c.dataset.si].file, enabled: c.checked }, c.checked ? "Script ON" : "Script off")));
+    m.querySelectorAll("input[data-si]").forEach((c) => (c.onchange = () => run("script_toggle", { file: scripts[c.dataset.si].file, enabled: c.checked }, c.checked ? "Script on" : "Script off")));
     m.querySelectorAll("[data-sedit]").forEach((b) => (b.onclick = () => openScript(scripts[b.dataset.sedit].file)));
     m.querySelectorAll("[data-sdelete]").forEach((b) => (b.onclick = () => { const s = scripts[b.dataset.sdelete]; if (confirm("Delete script '" + s.name + "' and its source file?")) run("script_delete", { file: s.file }, "Deleted " + s.file); }));
   }
@@ -939,7 +939,7 @@
   function renderScriptEditor(m) {
     const e = editing, s = e.script;
     m.innerHTML = `<div class="btns" style="margin-top:0"><button class="b" id="sback">${ico("back", "sm")}Back</button><b style="flex:1">${esc(s.file)}</b></div>
-      <div class="btns"><input id="sematch" type="text" class="grow" value="${esc(s.match || ".")}" placeholder="URL regex"><select id="semethod"><option value="">ANY</option>${["GET","POST","PUT","PATCH","DELETE"].map((x) => `<option ${s.method === x ? "selected" : ""}>${x}</option>`).join("")}</select></div>
+      <div class="btns"><input id="sematch" type="text" class="grow" value="${esc(s.match || ".")}" placeholder="URL pattern"><select id="semethod"><option value="">ANY</option>${["GET","POST","PUT","PATCH","DELETE"].map((x) => `<option ${s.method === x ? "selected" : ""}>${x}</option>`).join("")}</select></div>
       <textarea id="sebody" spellcheck="false">${esc(e.content)}</textarea><div class="btns"><button class="b p" id="sesave">Save</button><span class="sub">${esc(e.file)}</span></div>`;
     $("sback").onclick = () => { editing = null; render(); };
     $("sesave").onclick = async () => {
@@ -1047,14 +1047,23 @@
     footerLabels();
   }
   // mitmweb's status-bar badges are developer jargon ("regular@8094", "ssl_insecure"). Relabel through attributes + CSS; the React text stays.
+  // mitmweb calls a request/response pair a "flow"; this tool says "call" everywhere
+  const TAB_NAMES = { "Flow List": "Calls", Flow: "Selected call" };
+  const PLACEHOLDERS = { Highlight: "Highlight calls matching…", Intercept: "Pause calls matching… (e.g. ~u /pay)" };
+  function relabelChrome() {
+    document.querySelectorAll("#container > header nav a").forEach((a) => { const n = TAB_NAMES[a.textContent.trim()]; setAttr(a, "data-rv", n || null); });
+    document.querySelectorAll("#container > header .filter-input input").forEach((i) => { const ph = i.getAttribute("placeholder"); if (PLACEHOLDERS[ph]) { i.setAttribute("placeholder", PLACEHOLDERS[ph]); i.setAttribute("aria-label", ph); } });
+  }
   function footerLabels() {
+    relabelChrome();
     document.querySelectorAll("footer .label").forEach((el) => {
       const t = el.textContent.trim(); let m;
+      if ((m = t.match(/^(\d+) of (\d+) flows? selected$/))) { setAttr(el, "data-rv", m[1] === "0" ? `${m[2]} call${m[2] === "1" ? "" : "s"}` : `${m[1]} selected · ${m[2]} calls`); return; }
       if ((m = t.match(/^(?:regular|local|transparent|socks5|upstream|reverse)[^@]*@(?:.*:)?(\d+)$/))) {
         setAttr(el, "data-rv", `Proxy 127.0.0.1:${m[1]}` + (state && state.project.label ? ` · ${state.project.label}` : ""));
         setAttr(el, "title", "Point the device or simulator at this address (the tool prints the exact setup commands)");
       } else if (t === "ssl_insecure") {
-        setAttr(el, "data-rv", "Server certificates not verified");
+        setAttr(el, "data-rv", "Server certificates not checked");
         setAttr(el, "title", "ssl_insecure is on: upstream (server) certificates are not checked. Fine for internal test environments.");
         setAttr(el, "data-rv-tone", "warn");
       }
@@ -1291,7 +1300,8 @@
     const brandL = $("brand").getBoundingClientRect().left;
     setAttr(DOC, "data-ribbon", hdr.getBoundingClientRect().width < 900 ? "icons" : null);
     hdr.querySelectorAll(".btn:not([title])").forEach((b) => { const t = b.textContent.replace(/[▾\s]+$/, "").trim(); if (t) b.title = t; });   // icon-only toolbar needs its names
-    const left = 356, room = brandL - left - 12;
+    const links = [...nav.querySelectorAll("a")], last = links[links.length - 1];
+    const left = Math.round((last.dataset.rv === "Selected call" ? last.getBoundingClientRect().right : last.getBoundingClientRect().right + 112) + 16), room = brandL - left - 12;
     host.style.setProperty("--sb-left", left + "px");
     host.style.setProperty("--sb-w", Math.max(200, Math.min(440, room - 34)) + "px");   // 34 = the clear-list button
     host.style.setProperty("--hb", hb + "px");
@@ -1367,18 +1377,17 @@
   const tlsCovers = (list, host) => (list || []).filter((p) => { try { return tlsRe(p).test(host); } catch (e) { return false; } });
   function tlsVerdict(host) {
     const t = state.tls || { mode: "all", allow: [], ignore: [] };
-    if (t.mode === "all") return { on: true, why: "TLS mode is all — every host is decrypted" };
-    if (t.mode === "allow") { const hit = tlsCovers(t.allow, host); return hit.length ? { on: true, why: "allowed by " + hit.join(", ") } : { on: false, why: "mode allow — not in the allow list" }; }
+    if (t.mode === "all") return { on: true, why: "every host is decrypted" };
+    if (t.mode === "allow") { const hit = tlsCovers(t.allow, host); return hit.length ? { on: true, why: "on your decrypt list (" + hit.join(", ") + ")" } : { on: false, why: "it isn't on your decrypt list" }; }
     const hit = tlsCovers(t.ignore, host);
-    return hit.length ? { on: false, why: "ignored by " + hit.join(", ") } : { on: true, why: "mode ignore — not in the ignore list" };
+    return hit.length ? { on: false, why: "it's on your leave-alone list (" + hit.join(", ") + ")" } : { on: true, why: "decrypting everything except your leave-alone list" };
   }
   function tlsQuickHTML(host) {
     const v = tlsVerdict(host);
-    return `<h4>TLS</h4>
-      <div class="sub">${ico(v.on ? "unlock" : "lock", "sm")} ${v.on ? "Decrypted" : "Not decrypted (tunnel only)"} · ${esc(v.why)}</div>
-      <div class="btns"><button class="b" id="tlsdec" ${v.on ? "disabled" : ""}>Decrypt ${esc(host)}</button>
-        <button class="b" id="tlsno" ${v.on ? "" : "disabled"}>Don't decrypt ${esc(host)}</button></div>
-      <div class="sub">New connections only · rules and mocks skip hosts that are not decrypted ${info((state.tls || {}).note || "Takes effect for new connections, no restart.")}</div>`;
+    return `<h4>HTTPS ${info((state.tls || {}).note || "Takes effect for new connections, no restart.")}</h4>
+      <div class="sub">${ico(v.on ? "unlock" : "lock", "sm")} ${v.on ? `Decrypting <b>${esc(host)}</b> — you can read its calls` : `Not decrypting <b>${esc(host)}</b> — ${esc(v.why)}`}</div>
+      <div class="btns">${v.on ? `<button class="b" id="tlsno">Stop decrypting this host</button>` : `<button class="b p" id="tlsdec">Decrypt this host</button>`}
+        <span class="sub">${v.on ? "Rules, Map Local and breakpoints work on it." : "Its calls pass through unread — nothing to edit or mock."} New connections only.</span></div>`;
   }
   function wireTlsQuick(flowId, host) {
     const go = (decrypt) => run("tls_host", { flow_id: flowId, host, decrypt }, (x) => x.message);
@@ -1387,20 +1396,20 @@
   }
   function tlsSectionHTML() {
     const t = state.tls || { mode: "all", allow: [], ignore: [] };
-    const modes = [["all", "Decrypt all"], ["allow", "Allow list only"], ["ignore", "All but ignore list"]];
+    const modes = [["all", "Every host"], ["allow", "Only listed hosts"], ["ignore", "All except listed"]];
     const list = (which, title) => `
-      <div class="sub" style="margin-top:8px"><b>${title}</b>${t.mode === which ? " · active" : ""}</div>
+      <div class="sub" style="margin-top:8px"><b>${title}</b>${t.mode === which ? " · in use" : ""}</div>
       <div class="btns" style="margin-top:4px">${t[which].map((p) => `<span class="chip">${esc(p)} <span data-tlsrm="${which}" data-p="${esc(p)}" title="Remove">${ico("x", "sm")}</span></span>`).join("") || '<span class="sub">(none)</span>'}</div>
       <div class="btns"><input type="text" class="grow" data-tlsadd="${which}" placeholder="*.example.test or api.example.test:8443"><button class="b" data-tlsaddbtn="${which}">Add</button></div>`;
-    return `<h4>TLS decryption (SSL proxying list)</h4>
+    return `<h4>HTTPS decryption ${info("Which hosts are decrypted so you can read their calls. Same idea as an SSL Proxying list.")}</h4>
       <div class="seg" id="tlsmode">${modes.map(([id, label]) => `<button data-tm="${id}" class="${t.mode === id ? "on" : ""}">${label}</button>`).join("")}</div>
       ${t.error ? `<div class="errbox">${esc(t.error)}</div>` : ""}
-      ${list("allow", "Allow list")}${list("ignore", "Ignore list")}
-      <div class="sub" style="margin-top:6px">New connections only, no restart. ${info(t.note || "")}</div>`;
+      ${list("allow", "Hosts to decrypt")}${list("ignore", "Hosts to leave alone")}
+      <div class="sub" style="margin-top:6px">Changes apply to new connections — no restart. ${info(t.note || "")}</div>`;
   }
   function wireTlsSection() {
     const t = state.tls;
-    root.querySelectorAll("[data-tm]").forEach((b) => (b.onclick = () => run("tls_set", { mode: b.dataset.tm }, "TLS mode: " + b.dataset.tm)));
+    root.querySelectorAll("[data-tm]").forEach((b) => (b.onclick = () => run("tls_set", { mode: b.dataset.tm }, "Decrypting: " + ({ all: "every host", allow: "only listed hosts", ignore: "everything except listed hosts" }[b.dataset.tm] || b.dataset.tm))));
     root.querySelectorAll("[data-tlsrm]").forEach((x) => (x.onclick = () => run("tls_set", { [x.dataset.tlsrm]: t[x.dataset.tlsrm].filter((p) => p !== x.dataset.p) }, "Removed " + x.dataset.p)));
     const add = (which) => {
       const input = root.querySelector(`[data-tlsadd="${which}"]`), value = input.value.trim().toLowerCase();
@@ -1556,15 +1565,16 @@
   }
 
   // ───────────── All rules ─────────────
+  const ACTION_NAME = { map_local: "Map Local", map_remote: "Map Remote", respond: "Fixed reply", status: "Force status", delay: "Delay", json_patch: "Edit JSON", set_header: "Header", block: "Block", drop: "Block" };
   function describe(r) {
     const a = r.action;
-    if (a === "map_local") return "serves file" + (r.status ? " (" + r.status + ")" : "");
-    if (a === "respond") return "answers " + r.status;
-    if (a === "status") return "status → " + r.status;
-    if (a === "delay") return "+" + r.ms + " ms";
-    if (a === "json_patch") return "edits " + Object.keys(r.set || {}).join(", ");
-    if (a === "set_header") return (r.value == null ? "removes " : "sets ") + r.header;
-    if (a === "map_remote") return "→ " + r.with;
+    if (a === "map_local") return "answers from a saved response" + (r.status ? " (" + r.status + ")" : "");
+    if (a === "respond") return "answers with " + r.status;
+    if (a === "status") return "changes the status to " + r.status;
+    if (a === "delay") return "waits " + r.ms + " ms first";
+    if (a === "json_patch") return "changes " + Object.keys(r.set || {}).join(", ") + " in the JSON reply";
+    if (a === "set_header") return (r.value == null ? "removes the " : "sets the ") + r.header + " header";
+    if (a === "map_remote") return "sends it to " + r.with;
     return a;
   }
   function renderRules(m) {
@@ -1572,7 +1582,7 @@
     if (!state.rules.length && !skipped.length) { m.innerHTML = emptyState("rules", "No rules yet", "Select a call and use <b>This call</b> — Map Local, a forced status, a block or a delay all become rules here."); return; }
     m.innerHTML = (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") + state.rules.map((r, i) => `
       <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
-        <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(r.action)}</span></div>
+        <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(ACTION_NAME[r.action] || r.action)}</span></div>
           <div class="sub">${esc(r.method ? r.method + " " : "")}${esc(pretty(r))} — ${esc(describe(r))}</div></div>
         ${r.action === "map_local" ? `<button class="b" data-edit="${i}">Edit</button>` : ""}
         <button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") +
@@ -1581,7 +1591,7 @@
   }
   function wireRuleRows(m) {
     m.querySelectorAll("input[data-i]").forEach((c) => (c.onchange = () =>
-      run("toggle", { name: state.rules[c.dataset.i].name, enabled: c.checked }, c.checked ? "ON" : "off")));
+      run("toggle", { name: state.rules[c.dataset.i].name, enabled: c.checked }, c.checked ? "Rule on" : "Rule off")));
     m.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => {
       const n = state.rules[b.dataset.del].name;
       if (confirm("Delete rule '" + n + "'?")) run("delete", { name: n }, "Deleted " + n);
@@ -1782,7 +1792,7 @@
       [kb(KALT, KSHIFT, "↵"), "Edit & Repeat the selected call"],
       [kb("?"), "This sheet"],
     ]],
-    ["Built into mitmweb (list focused)", [
+    ["Built-in list shortcuts (click the list first)", [
       [kb("↑") + " " + kb("↓") + " or " + kb("k") + " " + kb("j"), "Previous / next call"],
       [kb("r"), "Replay the selected call"],
       [kb("d"), "Delete the selected call"],
@@ -1818,7 +1828,7 @@
         <div class="set"><div><b>Theme</b><span class="sub">System follows your OS setting</span></div>
           <div class="seg" style="margin:0">${["system", "light", "dark"].map((m) => `<button data-theme-set="${m}" class="${themeMode() === m ? "on" : ""}">${m[0].toUpperCase() + m.slice(1)}</button>`).join("")}</div></div>
         <div class="set"><div><b>Compact rows</b><span class="sub">Tighter type and padding in the call list</span></div>${sw('id="set-compact"', compactOn())}</div>
-        <div class="set"><div><b>Rivis skin</b><span class="sub">Off = stock mitmweb look. Also: add <code>?theme=off</code> to the URL</span></div>${sw('id="set-skin"', skinOn())}</div>
+        <div class="set"><div><b>Rivis look</b><span class="sub">Off = the plain built-in look. Also: add <code>?theme=off</code> to the page address</span></div>${sw('id="set-skin"', skinOn())}</div>
         <div class="set"><div><b>Welcome card</b><span class="sub">The first-open “Coming from Proxyman?” card</span></div><button class="b" id="set-welcome">Show again</button></div>`,
     };
     $("hsheet").innerHTML = `
@@ -1832,7 +1842,7 @@
     root.querySelectorAll("#hsheet [data-go]").forEach((a) => (a.onclick = () => goTo(a.dataset.go)));
     root.querySelectorAll("[data-theme-set]").forEach((b) => (b.onclick = () => { applyTheme(b.dataset.themeSet); openHelp("settings"); }));
     if ($("set-compact")) $("set-compact").onchange = () => applyDensity($("set-compact").checked);
-    if ($("set-skin")) $("set-skin").onchange = () => { setSkin($("set-skin").checked); toast($("set-skin").checked ? "Rivis skin ON" : "Stock mitmweb look"); };
+    if ($("set-skin")) $("set-skin").onchange = () => { setSkin($("set-skin").checked); toast($("set-skin").checked ? "Rivis look on" : "Plain built-in look"); };
     if ($("set-welcome")) $("set-welcome").onclick = () => { LS.set("rivis-welcome", ""); closeHelp(); showWelcome(); };
   }
   $("help").onclick = (e) => { if (e.target === $("help")) closeHelp(); };

@@ -599,9 +599,9 @@ class ProxyPanel:
             out = {"mode": "all", "allow": [], "ignore": [], "error": str(e)}
         out["note"] = ("Applies to new connections within a second — no restart. Connections that are "
                        "already open keep their earlier decision; reopen the app or its screen. "
-                       "Hosts that are not decrypted still appear as a host-only tunnel row. They are not intercepted "
-                       "at all: rules, mocks, breakpoints, scripts and throttling do not apply to them. "
-                       "Tunnel rows keep their bytes in memory for the whole session.")
+                       "Hosts that are not decrypted still show up as a host-only row, but their URLs, headers and bodies "
+                       "stay hidden, and rules, Map Local, breakpoints, scripts and network conditions cannot touch them. "
+                       "Those rows keep their bytes in memory for the whole session.")
         return out
 
     @staticmethod
@@ -624,22 +624,22 @@ class ProxyPanel:
         if decrypt:
             blocked = tls_covering(tls, host, "ignore") if tls["mode"] == "ignore" else []
             if blocked and any(x != host for x in blocked):
-                raise PanelError("%s is covered by the ignore pattern %s — edit the list in Network → TLS"
+                raise PanelError("%s is on the leave-alone list through %s — edit it in Network → HTTPS decryption"
                                  % (host, ", ".join(x for x in blocked if x != host)))
             if tls["mode"] == "all":
-                return "mode is 'all' — %s is already decrypted" % host
+                return "%s is already decrypted — every host is" % host
             tls_update(cfg, remove=[("ignore", host)], add=[("allow", host)] if tls["mode"] == "allow" else [])
-            return "decrypting %s (new connections)" % host
+            return "Decrypting %s from now on (new connections)" % host
         # don't decrypt: in 'all' mode switch to 'ignore' so every other host stays decrypted
         if tls["mode"] == "allow":
             tls_update(cfg, remove=[("allow", host)])
             covering = tls_covering(tls_config(cfg), host, "allow")
             if covering:
-                raise PanelError("%s is covered by the allow pattern %s — edit the list in Network → TLS"
+                raise PanelError("%s is on the decrypt list through %s — edit it in Network → HTTPS decryption"
                                  % (host, ", ".join(covering)))
         else:
             tls_update(cfg, mode="ignore", add=[("ignore", host)])
-        return "%s will not be decrypted (new connections)" % host
+        return "Stopped decrypting %s (new connections)" % host
 
     # ── composer (new request from scratch), saved requests, variables ──────────
     @staticmethod
