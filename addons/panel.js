@@ -329,12 +329,22 @@
     .welcome h3 .mark { width: 26px; height: 26px; border-radius: 8px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; }
     .welcome h3 .mark svg { width: 16px; height: 16px; stroke-width: 2.2; }
     .welcome p { margin: 6px 0 12px; color: var(--rv-text-2); line-height: 1.5; }
-    .emptylist { position: fixed; z-index: 2147482100; left: 0; top: 0; width: calc(100vw - var(--open-w, 0px)); height: 100vh; pointer-events: none; display: none; align-items: center; justify-content: center; }
+    .emptylist { position: fixed; z-index: 2147482100; left: 0; top: calc(var(--hb, 80px) + 30px + var(--strip-h, 0px)); width: calc(100vw - var(--open-w, 0px)); bottom: 30px; pointer-events: none; display: none; align-items: center; justify-content: center; padding: 16px; }
     .emptylist.open { display: flex; }
-    .emptylist .box { pointer-events: auto; width: min(560px, 90vw); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: 14px; box-shadow: var(--rv-shadow-2); padding: 18px 20px; margin-top: 40px; }
-    .emptylist h3 { margin: 0 0 4px; font-size: 15px; }
-    .emptylist .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
-    .emptylist h5 { margin: 0 0 4px; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--rv-text-3); }
+    .emptylist .box { pointer-events: auto; width: min(660px, 100%); text-align: center; padding: 8px 12px; }
+    .emptylist .glyph { width: 52px; height: 52px; margin: 0 auto 12px; border-radius: 16px; background: var(--rv-accent-soft); color: var(--rv-accent-text); display: grid; place-items: center; }
+    .emptylist .glyph svg.i { width: 26px; height: 26px; }
+    .emptylist h3 { margin: 0 0 6px; font-size: 17px; font-weight: 650; color: var(--rv-text); }
+    .emptylist .lede { color: var(--rv-text-2); font-size: 13px; line-height: 1.5; max-width: 460px; margin: 0 auto; }
+    .emptylist .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; text-align: left; }
+    .emptylist .opt { background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-lg); padding: 12px 14px; box-shadow: var(--rv-shadow-1); }
+    .emptylist h5 { margin: 0 0 8px; font-size: 12.5px; letter-spacing: 0; text-transform: none; color: var(--rv-text); display: flex; align-items: center; gap: 6px; font-weight: 650; }
+    .emptylist h5 svg.i { color: var(--rv-accent-text); }
+    .emptylist code.cmd { cursor: copy; font-size: 12px; padding: 7px 9px; margin: 0 0 6px; white-space: nowrap; overflow-x: auto; }
+    .emptylist code.cmd:hover { border-color: var(--rv-accent); }
+    .emptylist .btns { justify-content: center; margin-top: 14px; }
+    .emptylist .foot { margin-top: 16px; color: var(--rv-text-3); font-size: 11.5px; }
+    @media (max-width: 760px) { .emptylist .cols { grid-template-columns: 1fr; } }
     .reddot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rv-danger); margin-right: 6px; animation: pulse 1.4s ease-in-out infinite; }
     .errtext { color: var(--rv-danger); }
     .sub svg.i, .banner svg.i, p svg.i, b svg.i, h3 svg.i, h5 svg.i { vertical-align: -3px; margin-right: 3px; }
@@ -1267,6 +1277,7 @@
     }
     if (DOC.getAttribute("data-fstrip") !== (show ? "1" : null) && (show || DOC.hasAttribute("data-fstrip"))) { setAttr(DOC, "data-fstrip", show ? "1" : null); window.dispatchEvent(new Event("resize")); }
     el.style.display = show ? "" : "none";
+    host.style.setProperty("--strip-h", show ? "28px" : "0px");
   }
   // fixed bars follow mitmweb's header: left edge after the tabs, right edge before the brand pill
   function placeBars() {
@@ -1274,7 +1285,7 @@
     const ready = !!hdr && !!mwStore();
     if (host.hasAttribute("data-sbar") !== ready) { if (ready) host.setAttribute("data-sbar", ""); else host.removeAttribute("data-sbar"); setAttr(DOC, "data-sbar", ready ? "1" : null); }
     if (!ready) return;
-    if (!placeBars._sub) { placeBars._sub = true; mwStore().subscribe(() => { clearTimeout(placeBars._t); placeBars._t = setTimeout(() => { pullSearch(); drawStrip(); }, 80); }); }
+    if (!placeBars._sub) { placeBars._sub = true; mwStore().subscribe(() => { clearTimeout(placeBars._t); placeBars._t = setTimeout(() => { pullSearch(); drawStrip(); try { drawEmptyList(); } catch (e) { /* cosmetic */ } }, 80); }); }
     const nav = hdr.querySelector("nav"), nr = nav.getBoundingClientRect();
     const hb = Math.round(hdr.getBoundingClientRect().bottom);
     const brandL = $("brand").getBoundingClientRect().left;
@@ -1829,7 +1840,7 @@
   $("gear").onclick = () => openHelp("settings");
   $("btheme").onclick = () => applyTheme({ system: "light", light: "dark", dark: "system" }[themeMode()]);
 
-  const closeWelcome = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); };
+  const closeWelcome = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); try { drawEmptyList(); } catch (e) { /* cosmetic */ } };
   $("wscrim").onclick = closeWelcome;
   function showWelcome() {
     if (LS.get("rivis-welcome", "") === "done") return;
@@ -1846,25 +1857,52 @@
     root.querySelectorAll("#welcome [data-go]").forEach((a) => (a.onclick = () => { closeWelcome(); goTo(a.dataset.go); }));
   }
 
-  // empty list → teach how to connect, with the exact commands for the active project
+  // empty list → teach the next step (first run), or explain why everything is hidden (filter / limits)
+  function emptyKind() {
+    const st = mwStore(); if (!st || !state) return null;
+    if (!document.querySelector(".flow-table, .main-view > div[style*='padding: 1em 2em']")) return null;   // the Capture tab etc. are showing instead of the list
+    let f; try { f = st.getState().flows; } catch (e) { return null; }
+    if (!f || !f.list) return null;
+    if (f.list.length === 0) return "first";
+    return f.view.length === 0 ? "hidden" : null;
+  }
   function drawEmptyList() {
     const box = $("emptylist");
-    const empty = state && flowCache.at > 0 && flowCache.byId.size === 0 && !document.querySelector(".flow-table tbody tr.has-request, .flow-table tbody tr[data-tunnel]");
-    if (!empty || $("welcome").classList.contains("open")) { box.classList.remove("open"); return; }
-    if (box.classList.contains("open")) return;
+    const kind = skinOn() ? emptyKind() : null;
+    if (!kind || $("welcome").classList.contains("open")) { if (box.classList.contains("open")) { box.classList.remove("open"); box.dataset.sig = ""; } setAttr(DOC, "data-rv-empty", null); return; }
     const cli = state.product.cli || "rivis", proj = state.active_project && state.active_project !== "default" ? ` --project ${state.active_project}` : "";
-    box.innerHTML = `<div class="box">
-      <h3>${ico("inbox", "sm")} No calls yet</h3>
-      <div class="sub">${esc(state.product.name || "Rivis")} is listening${state.project.label ? " for <b>" + esc(state.project.label) + "</b>" : ""}. Connect a device and use the app — calls appear here within a second.</div>
-      <div class="cols">
-        <div><h5>${ico("phone", "sm")} iOS Simulator</h5>
-          <code class="cmd">${esc(cli + proj + " start")}</code><code class="cmd">${esc(cli + proj + " ios on")}</code>
-          <div class="sub">Starts per-process capture (no system proxy); <i>ios on</i> trusts the certificate on the booted simulator once.</div></div>
-        <div><h5>${ico("phone", "sm")} Android emulator</h5>
-          <code class="cmd">${esc(cli + proj + " start --no-ios")}</code><code class="cmd">${esc(cli + proj + " android on")}</code>
-          <div class="sub">Points the emulator at the proxy and installs the certificate (follow the on-screen steps if prompted).</div></div>
-      </div></div>`;
-    box.classList.add("open");
+    const q = (storeSearch() === lastSent && sq().value.trim()) || storeSearch(), label = (state.project && state.project.label) || state.view_project;
+    const limits = [];
+    if (state.project_only) limits.push(`only ${label} calls`);
+    if (state.focus_host) limits.push(`only ${state.focus_host}`);
+    if (state.graphql_operation) limits.push(`GraphQL ${state.graphql_operation}`);
+    const sig = JSON.stringify([kind, q, limits, cli, proj]);
+    if (box.dataset.sig === sig && box.classList.contains("open")) return;
+    box.dataset.sig = sig;
+    if (kind === "first") {
+      box.innerHTML = `<div class="box"><div class="glyph">${ico("inbox")}</div>
+        <h3>Nothing captured yet</h3>
+        <div class="lede">${esc(state.product.name || "Rivis")} is listening${label ? " for <b>" + esc(label) + "</b>" : ""}. Run one command for the device you test on, then use the app — its calls show up here within a second.</div>
+        <div class="cols">
+          <div class="opt"><h5>${ico("phone", "sm")} iOS Simulator</h5><code class="cmd" data-copy="${esc(cli + proj + " ios on")}" title="Click to copy">${esc(cli + proj + " ios on")}</code>
+            <div class="sub">Trusts the certificate on the booted simulator (once). Then open the app.</div></div>
+          <div class="opt"><h5>${ico("phone", "sm")} Android emulator</h5><code class="cmd" data-copy="${esc(cli + proj + " android on")}" title="Click to copy">${esc(cli + proj + " android on")}</code>
+            <div class="sub">Points the emulator at ${esc(state.product.name || "Rivis")} and installs the certificate. Then open the app.</div></div>
+        </div>
+        <div class="foot">Run these in a terminal. Nothing from a simulator? Quit any other proxy app first — only one tool can own the system proxy.</div></div>`;
+    } else {
+      const why = q ? `No calls match <b>${esc(q)}</b>` : "Every call is hidden by your view settings";
+      const sub = q ? "Try a shorter word, or the host name only. Filters with <code>~</code> must be written exactly (see the examples in the search box)."
+                    : `Showing ${esc(limits.join(" and "))}. The calls are still captured — remove the limit to see them.`;
+      box.innerHTML = `<div class="box"><div class="glyph">${ico("search")}</div><h3>${why}</h3><div class="lede">${sub}</div>
+        <div class="btns">${q ? '<button class="b p" data-act="clear">Clear filter</button>' : ""}${limits.length ? `<button class="b ${q ? "" : "p"}" data-act="all">Show all traffic</button>` : ""}</div></div>`;
+    }
+    box.classList.add("open"); setAttr(DOC, "data-rv-empty", kind === "first" ? "1" : null);
+    box.querySelectorAll("[data-copy]").forEach((c) => (c.onclick = () => navigator.clipboard.writeText(c.dataset.copy).then(() => toast("Copied — paste it in a terminal"), () => toast("Select the command and copy it"))));
+    box.querySelectorAll("[data-act]").forEach((b) => (b.onclick = async () => {
+      if (b.dataset.act === "clear") { sq().value = ""; sbSync(); commitSearch(""); }
+      else { if (state.focus_host) await run("focus_host", { host: null }); if (state.graphql_operation) await run("graphql_filter", { name: null }); await run("view", { project_only: false, show_dns: state.show_dns }, "Showing all traffic"); }
+    }));
   }
 
   window.addEventListener("keydown", (e) => {
