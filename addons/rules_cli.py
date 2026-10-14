@@ -20,7 +20,8 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
-from proxy_common import ACTION_REQUIREMENTS, PRESETS, PRODUCT, breakpoints
+from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PRODUCT, breakpoints, confined_path, forbidden_file,
+                           set_trusted_file, trusted_files)
 
 ACTIONS = ACTION_REQUIREMENTS
 
@@ -96,6 +97,49 @@ def validate(r):
         die("file not found: %s (use an absolute path)" % r["file"])
 
 
+def trust_local_files(path, r):
+    """A rule typed on this machine may read the user's own files outside the project: trust them here.
+    (rules.json itself can never do this — the trust list lives in a separate file only this CLI writes.)"""
+    state_dir = os.path.dirname(os.path.abspath(path))
+    for key in ("file", "body_file"):
+        f = r.get(key)
+        if not isinstance(f, str) or not f:
+            continue
+        try:
+            confined_path(state_dir, f, key)
+            continue
+        except ValueError:
+            pass
+        why = forbidden_file(f)
+        if why:
+            die("refusing %s=%s: %s" % (key, f, why))
+        set_trusted_file(state_dir, f)
+        print("note: %s is outside the project; trusted on this machine only (undo: %s rules disallow-file '%s')"
+              % (f, PRODUCT["cli"], f))
+
+
+def trust_cmd(path, cmd, args):
+    state_dir = os.path.dirname(os.path.abspath(path))
+    if cmd == "trusted-files":
+        files = sorted(trusted_files(state_dir))
+        print("\n".join(files) if files else "(no files outside the project are trusted)")
+        return
+    if len(args) != 1:
+        die("usage: rules %s PATH" % cmd)
+    if cmd == "allow-file":
+        if not os.path.isfile(os.path.expanduser(args[0])):
+            die("file not found: %s" % args[0])
+        try:
+            real = set_trusted_file(state_dir, args[0])
+        except ValueError as e:
+            die(str(e))
+        print("trusted on this machine: %s — rules may now read it (restart not needed)" % real)
+    else:
+        print("no longer trusted: %s" % set_trusted_file(state_dir, args[0], trusted=False))
+    if os.path.exists(path):
+        os.utime(path)      # the proxy hot-reloads rules when rules.json changes
+
+
 def rules_cmd(path, args):
     cfg = load(path)
     cmd = args[0] if args else "list"
@@ -116,6 +160,8 @@ def rules_cmd(path, args):
         except ValueError as e:
             die("file is no longer valid JSON: %s — the proxy keeps the previous rules until fixed" % e)
         return
+    if cmd in ("allow-file", "disallow-file", "trusted-files"):
+        return trust_cmd(path, cmd, args[1:])
     if len(args) < 2:
         die("usage: rules %s NAME" % cmd)
     name = args[1]
@@ -141,6 +187,7 @@ def rules_cmd(path, args):
             r[k] = value(v) if k not in ("match", "replace", "with", "file", "header", "body") else v
         r.setdefault("match", ".")
         validate(r)
+        trust_local_files(path, r)
         cfg.setdefault("rules", []).append(r)
         save(path, cfg)
         print("added and ON: " + describe(r))

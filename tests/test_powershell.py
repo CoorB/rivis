@@ -71,6 +71,21 @@ class Commands(unittest.TestCase):
             self.assertIn(msg, cp.stdout + cp.stderr)
         return cp
 
+    def test_trusted_files_parity_with_the_bash_cli(self):
+        mine = os.path.join(self.home, "Desktop", "mock.json")
+        os.makedirs(os.path.dirname(mine), exist_ok=True)
+        with open(mine, "w") as fh:
+            fh.write("{}")
+        self.assertIn("trusted on this machine", self.ok("rules", "allow-file", mine))
+        self.assertIn(os.path.realpath(mine), self.bash("rules", "trusted-files"))   # same file both CLIs read
+        key = os.path.join(self.home, ".ssh", "id_rsa")
+        os.makedirs(os.path.dirname(key), exist_ok=True)
+        with open(key, "w") as fh:
+            fh.write("k")
+        self.bad("rules", "allow-file", key, msg="refusing")
+        self.ok("rules", "disallow-file", mine)
+        self.assertIn("no files outside", self.ok("rules", "trusted-files"))
+
     def bash(self, *args):
         cp = self.suite.rivis(*args, home=self.home, env=self.env)
         self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)

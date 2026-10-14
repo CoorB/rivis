@@ -18,7 +18,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Severity:** low (authenticated local user only) but every 500 is a swallowed error with no message.
 - **Tests:** `test_panel.py::MalformedInput` (2 × expectedFailure).
 
-## B2 — Host header is not validated (DNS rebinding)
+## B2 — FIXED (sec2, F-04 commit) — Host header is not validated (DNS rebinding)
 - **Repro:** with a valid session cookie, `GET /proxy/api/state` with `Host: evil.example` → `200`.
 - **Expected:** 403/421 for any Host that is not `127.0.0.1[:port]` / `localhost[:port]` (STANDARDS §2).
 - **Test:** `test_panel.py::Auth::test_dns_rebinding_host_header_is_refused` (expectedFailure).

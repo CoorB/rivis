@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with open(os.path.join(ROOT, "product.json")) as _fh:
@@ -66,6 +67,69 @@ def confined_path(base, path, what="path"):
     if resolved != base and not resolved.startswith(base + os.sep):
         raise ValueError("%s '%s' is outside the project state directory '%s'" % (what, path, base))
     return resolved
+
+
+TRUSTED_FILES = "trusted-files.json"
+# never served, even from a file the user trusted: CA keys, Rivis's own login secrets, the usual credential stores
+_FORBIDDEN_DIRS = ("~/.mitmproxy", "~/.ssh", "~/.aws", "~/.gnupg", "~/.kube", "~/.docker", "~/Library/Keychains")
+_FORBIDDEN_NAMES = ("web-token", "web-bootstrap", TRUSTED_FILES)
+_FORBIDDEN_SUFFIXES = (".pem", ".p12", ".pfx", ".key")
+
+
+def forbidden_file(path, extra_dirs=()):
+    """Why a real path must never be served by a rule, or None. `extra_dirs`: e.g. the running proxy's confdir."""
+    real = os.path.realpath(os.path.expanduser(str(path)))
+    if isinstance(extra_dirs, str):
+        extra_dirs = (extra_dirs,)
+    for d in _FORBIDDEN_DIRS + tuple(x for x in extra_dirs if x and os.path.isabs(os.path.expanduser(x))):
+        d = os.path.realpath(os.path.expanduser(d))
+        if real == d or real.startswith(d + os.sep):
+            return "it is inside %s (keys and credentials)" % d
+    name = os.path.basename(real)
+    if name in _FORBIDDEN_NAMES or name.lower().endswith(_FORBIDDEN_SUFFIXES):
+        return "it looks like a key or a %s secret (%s)" % (PRODUCT["name"], name)
+    return None
+
+
+def trusted_files(state_dir):
+    """Real paths outside the project that the user trusted on this machine (rivis rules allow-file / rules add).
+
+    Kept apart from rules.json on purpose: a shared or imported rules file can name any path, but it cannot add
+    itself to this list, so it can never read outside the project (F-09)."""
+    try:
+        with open(os.path.join(state_dir, TRUSTED_FILES)) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return set()
+    return {p for p in (doc.get("files") if isinstance(doc, dict) else None) or [] if isinstance(p, str)}
+
+
+def set_trusted_file(state_dir, path, trusted=True):
+    """Add or remove a real path in the project's trust list (0600, atomic). Returns the real path."""
+    real = os.path.realpath(os.path.expanduser(str(path)))
+    why = forbidden_file(real)
+    if trusted and why:
+        raise ValueError("refusing to trust %s: %s" % (path, why))
+    files = trusted_files(state_dir)
+    files = (files | {real}) if trusted else (files - {real})
+    fd, tmp = tempfile.mkstemp(dir=state_dir, prefix=".trusted-", suffix=".json")
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"files": sorted(files)}, fh, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, os.path.join(state_dir, TRUSTED_FILES))
+    return real
+
+
+def rule_file_path(state_dir, path, what, extra_forbidden=()):
+    """Real path a rule may read: inside the project, or a file the user trusted here (never a forbidden one)."""
+    try:
+        return confined_path(state_dir, path, what)
+    except ValueError:
+        real = os.path.realpath(os.path.expanduser(str(path)))
+        if real in trusted_files(state_dir) and not forbidden_file(real, extra_forbidden):
+            return real
+        raise ValueError("%s '%s' is outside the project — if it is your own file, trust it on this machine: "
+                         "%s rules allow-file '%s'" % (what, path, PRODUCT["cli"], path)) from None
 
 
 def tls_host_regex(pattern):

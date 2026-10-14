@@ -7,7 +7,7 @@ system proxy, one CA per workstation, removed again with `off`.
   .\<cli>.ps1 start [-Insecure] [-ProjectOnly] [-NoOpen] [-Project ID]
                                             mitmweb: proxy 127.0.0.1:8080, UI http://127.0.0.1:8083
   .\<cli>.ps1 projects list|use|show|new
-  .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|edit
+  .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|edit|allow-file PATH|disallow-file PATH|trusted-files
                                             manage hot-reloaded interception rules
   .\<cli>.ps1 scripts list|new NAME -Lang py|js [-Match REGEX]|on NAME|off NAME|edit NAME|rm NAME
   .\<cli>.ps1 throttle [off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]]
@@ -457,6 +457,38 @@ switch ($Command) {
       catch { Die "file is no longer valid JSON: $($_.Exception.Message) - the proxy keeps the previous rules until fixed" }
     } elseif ($subcommand -eq "add") {
       Write-Host "use: .\${Cli}.ps1 rules edit (see the project rules.example.json for every action)"
+    } elseif ($subcommand -in @("allow-file","disallow-file","trusted-files")) {
+      # Map Local / body_file outside the project: only files trusted here, in a list rules.json cannot write (F-09).
+      $trustPath = Join-Path (Split-Path -Parent $RulesPath) "trusted-files.json"
+      $files = @()
+      if (Test-Path $trustPath) { try { $files = @((Get-Content -Raw $trustPath | ConvertFrom-Json).files) } catch { $files = @() } }
+      if ($subcommand -eq "trusted-files") {
+        if ($files.Count) { $files | ForEach-Object { Write-Host $_ } } else { Write-Host "(no files outside the project are trusted)" }
+        break
+      }
+      $target = if ($Name) { $Name } elseif ($args.Count -gt 0) { [string]$args[0] } else { "" }
+      if (-not $target) { Die "usage: rules $subcommand PATH" }
+      $full = [IO.Path]::GetFullPath($target)
+      if ($subcommand -eq "allow-file") {
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { Die "file not found: $target" }
+        $item = Get-Item -LiteralPath $full -Force
+        if ($item.LinkType) { Die "refusing to trust ${target}: it is a link; trust the file it points to" }
+        $deny = @((Join-Path $HOME ".mitmproxy"), (Join-Path $HOME ".ssh"), (Join-Path $HOME ".aws"), (Join-Path $HOME ".gnupg"),
+                  (Join-Path $HOME ".kube"), (Join-Path $HOME ".docker"), $ConfDir) | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\','/') }
+        foreach ($d in $deny) {
+          if ($full.StartsWith($d + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { Die "refusing to trust ${target}: it is inside $d (keys and credentials)" }
+        }
+        $leaf = [IO.Path]::GetFileName($full).ToLowerInvariant()
+        if ($leaf -in @("web-token","web-bootstrap","trusted-files.json") -or $leaf -match '\.(pem|p12|pfx|key)$') { Die "refusing to trust ${target}: it looks like a key or a $ProductName secret" }
+        $files = @($files | Where-Object { $_ -ne $full }) + $full
+        Write-Host "trusted on this machine: $full - rules may now read it"
+      } else {
+        $files = @($files | Where-Object { $_ -ne $full })
+        Write-Host "no longer trusted: $full"
+      }
+      $trustDoc = ConvertTo-Json -InputObject @{ files = @($files | Sort-Object) } -Depth 3
+      [IO.File]::WriteAllText($trustPath, $trustDoc, $Utf8NoBom)
+      if (Test-Path $RulesPath) { (Get-Item $RulesPath).LastWriteTime = Get-Date }   # hot reload
     } elseif ($subcommand -in @("on","off","show","rm")) {
       $ruleName = if ($Name) { $Name } elseif ($args.Count -gt 0) { [string]$args[0] } else { "" }
       if (-not $ruleName) { Die "usage: rules $subcommand NAME" }

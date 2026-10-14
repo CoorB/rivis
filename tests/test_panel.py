@@ -50,13 +50,37 @@ class Auth(LiveCase):
         self.assertTrue(auth, cookies)
         self.assertIn("httponly", auth[0].lower())
 
-    @unittest.expectedFailure
     def test_dns_rebinding_host_header_is_refused(self):
-        """FOUND-BUGS B2: mitmweb/panel do not validate the Host header (STANDARDS §2)."""
-        for host in ("evil.example", "evil.example:%d" % self.inst.web_port, "127.0.0.1.evil.example"):
-            req_headers = {"Host": host, "Cookie": "; ".join("%s=%s" % (c.name, c.value) for c in self.panel.jar)}
-            status = raw_http(self.inst.web_port, "GET", "/proxy/api/state", req_headers)[0]
-            self.assertEqual(status, 403, host)
+        """FOUND-BUGS B2 (fixed): every UI route refuses a Host that is not a loopback name for this port (STANDARDS §2)."""
+        cookie = "; ".join("%s=%s" % (c.name, c.value) for c in self.panel.jar)
+        for path in ("/proxy/api/state", "/flows", "/", "/proxy/panel.js"):
+            for host in ("evil.example", "evil.example:%d" % self.inst.web_port, "127.0.0.1.evil.example",
+                         "127.0.0.1:%d" % (self.inst.web_port + 1)):
+                status = raw_http(self.inst.web_port, "GET", path, {"Host": host, "Cookie": cookie})[0]
+                self.assertEqual(status, 403, (path, host))
+        for host in ("127.0.0.1:%d" % self.inst.web_port, "localhost:%d" % self.inst.web_port):   # control
+            self.assertEqual(raw_http(self.inst.web_port, "GET", "/proxy/api/state", {"Host": host, "Cookie": cookie})[0],
+                             200, host)
+
+    def test_panel_api_refuses_cross_site_writes(self):
+        """F-04: a page on another local port can plant the xsrf cookie; the API must still refuse its writes."""
+        import urllib.request
+        good = {"Content-Type": "application/json", "X-XSRFToken": self.panel.xsrf}
+        port = self.inst.web_port
+        cases = [
+            ("text/plain body", "/proxy/api/view", {**good, "Content-Type": "text/plain"}),
+            ("foreign Origin", "/proxy/api/view", {**good, "Origin": "http://127.0.0.1:%d" % (port + 1)}),
+            ("evil Origin", "/proxy/api/view", {**good, "Origin": "http://evil.example"}),
+            ("cross-site fetch", "/proxy/api/view", {**good, "Sec-Fetch-Site": "cross-site"}),
+            ("same-site fetch", "/proxy/api/view", {**good, "Sec-Fetch-Site": "same-site"}),
+            ("_xsrf query form", "/proxy/api/view?_xsrf=" + self.panel.xsrf, {"Content-Type": "application/json"}),
+        ]
+        for label, path, headers in cases:
+            req = urllib.request.Request(self.panel.base + path, data=b"{}", method="POST", headers=headers)
+            self.assertEqual(self.panel._do(req)[0], 403, label)
+        own = {**good, "Origin": "http://127.0.0.1:%d" % port, "Sec-Fetch-Site": "same-origin"}
+        req = urllib.request.Request(self.panel.base + "/proxy/api/view", data=b"{}", method="POST", headers=own)
+        self.assertEqual(self.panel._do(req)[0], 200)   # control: what the real page sends
 
     def test_security_headers_on_the_page(self):
         status, body, headers = raw_http(self.inst.web_port, "GET", "/?token=" + self.inst.password)
@@ -521,6 +545,50 @@ class Confinement(LiveCase):
             fh.write("TOP-SECRET-BODYFILE")
         self.reset_state(rules=[self.rule("b", "respond", "/echo", body_file=outside)])
         self.assertNotIn("TOP-SECRET-BODYFILE", self.fetch("/echo").text)
+
+    def _trust(self, *paths):
+        with open(self.inst.path("trusted-files.json"), "w") as fh:
+            json.dump({"files": [os.path.realpath(p) for p in paths]}, fh)
+        self.addCleanup(lambda: os.path.exists(self.inst.path("trusted-files.json"))
+                        and os.unlink(self.inst.path("trusted-files.json")))
+
+    def test_a_file_the_user_trusted_on_this_machine_is_served_and_flagged(self):
+        """Item 0: users map their OWN files anywhere, as in Proxyman — once trusted locally."""
+        mine = os.path.join(self.suite.root, "my-mock.json")
+        with open(mine, "w") as fh:
+            fh.write('{"mine": true}')
+        self._trust(mine)
+        self.reset_state(rules=[self.rule("mine", "map_local", "/echo", file=mine),
+                                self.rule("body", "respond", "/text", body_file=mine)])
+        self.assertEqual(self.fetch("/echo").json(), {"mine": True})
+        self.assertIn('"mine"', self.fetch("/text").text)
+        self.assertEqual(sorted(self.panel.state()["rules_outside"]), ["body", "mine"])
+
+    def test_a_rules_file_cannot_trust_itself(self):
+        """A shared rules.json may carry any flag it likes; only the separate local trust list counts."""
+        outside = os.path.join(self.suite.root, "outside-selftrust.txt")
+        with open(outside, "w") as fh:
+            fh.write("TOP-SECRET-SELFTRUST")
+        self.reset_state(rules=[self.rule("x", "map_local", "/echo", file=outside, allow_outside=True, trusted=True)],
+                         trusted_files=[outside])
+        self.assertNotIn("TOP-SECRET-SELFTRUST", self.fetch("/echo").text)
+        self.assertIn("allow-file", json.dumps(self.panel.state()))   # the skipped-rule error says how to trust it
+
+    def test_keys_and_rivis_secrets_are_refused_even_when_trusted(self):
+        fake_ssh = os.path.join(self.inst.home, ".ssh")    # the instance's fake HOME, never the real one
+        os.makedirs(fake_ssh, exist_ok=True)
+        key = os.path.join(fake_ssh, "id_test")
+        pem = os.path.join(self.suite.root, "client.pem")
+        for path, text in ((key, "TOP-SECRET-SSH"), (pem, "TOP-SECRET-PEM")):
+            with open(path, "w") as fh:
+                fh.write(text)
+        token = self.inst.path("web-token") if os.path.exists(self.inst.path("web-token")) else None
+        trusted = [key, pem] + ([token] if token else [])
+        self._trust(*trusted)
+        self.reset_state(rules=[self.rule("ssh", "map_local", "/echo", file=key),
+                                self.rule("pem", "map_local", "/text", file=pem)])
+        self.assertNotIn("TOP-SECRET-SSH", self.fetch("/echo").text)
+        self.assertNotIn("TOP-SECRET-PEM", self.fetch("/text").text)
 
 
 class MalformedInput(LiveCase):
