@@ -29,6 +29,23 @@
  *                 JSON body is plain <div> lines (no token classes). Coloured via ::highlight(rv-key|rv-str|rv-num|rv-lit)
  *   Event log     .eventlog, .eventlog > div, .fa-* level icons
  *   Modal/options .modal, .modal-dialog, .modal-content, .modal-header, .modal-body, .modal-footer, .form-group, .help-block
+ *   Dropdowns     .dropdown-menu (File / Mark / Download / Export). The header is z-index 10 so they stay above the table header (z 3);
+ *                 panel.js fixed bars sit at 11 (search, brand, Tools), the filter strip at 2, Bootstrap modals at 1050.
+ *
+ * Pass 2 — everything below is read or driven by panel.js (a mitmproxy upgrade can break these; check them first):
+ *   Redux store   found read-only through the React root: #mitmproxy → key __reactContainer$… → fiber walk to memoizedProps.store.
+ *                 state read:   ui.filter.search, flows.list, flows.view
+ *                 action sent:  {type: "ui/filters/setFilter", payload: <filter string>}   (the store forwards it to the server;
+ *                               an INVALID filter makes the server close the websocket, so panel.js validates with its own
+ *                               POST /proxy/api/filter_check first). The address bar mirrors it as  #/flows/<id>/<tab>?s=<filter>
+ *   Endpoints     POST ./clear (Clear all calls, needs X-XSRFToken), DELETE ./flows/<id> (Delete a call, same token), GET ./flows
+ *   Selectors     .main-view > div[style*="padding: 1em 2em"]      mitmweb's own "mitmproxy is running" first-run placeholder (hidden)
+ *                 .filter-input:has(> input[placeholder="Search"])   mitmweb's Search box (hidden while the panel's bar is active)
+ *                 .filter-input input[placeholder="Highlight"|"Intercept"]   placeholders reworded by panel.js
+ *                 #container > header > div (the toolbar row, 42px) and header nav (the tabs row)
+ *   Label text    header nav a text "Flow List" → "Calls", "Flow" → "Selected call" (data-rv + CSS ::before; React text untouched)
+ *                 footer .label text  /^N of M flows? selected$/ , /^Intercept:/ , "ssl_insecure" , "<mode>@<port>"
+ *   Attributes WE add on <html>: data-sbar data-fstrip data-ribbon data-rv-empty data-narrow data-wide data-theme data-density data-skin
  * ───────────────────────────────────────────────────────────────────────────────────────────────
  */
 
@@ -157,7 +174,7 @@ body { font-family: var(--rv-font); color: var(--rv-text); font-size: 13px; -web
 :focus-visible { outline: 2px solid var(--rv-focus); outline-offset: 1px; }
 
 /* ---- top menu ---- */
-#container > header { background: var(--rv-surface); border-bottom: 1px solid var(--rv-border); box-shadow: var(--rv-shadow-1); position: relative; z-index: 3; }
+#container > header { background: var(--rv-surface); border-bottom: 1px solid var(--rv-border); box-shadow: var(--rv-shadow-1); position: relative; z-index: 10;   /* above the table header (z 3) so File / Mark / Export dropdowns are never clipped; panel.js bars sit at 11, below Bootstrap modals (1050) */ }
 header nav.nav-tabs { border: 0; background: var(--rv-bg); padding: 6px 10px 0; display: flex; gap: 2px; align-items: flex-end; }
 /* #container-scoped so these beat the broad `#container a` link colour (one ID), which would otherwise
    repaint the accent "File" tab's text in accent-text on its accent background → invisible (WCAG fail) */

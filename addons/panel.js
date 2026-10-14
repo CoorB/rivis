@@ -104,7 +104,7 @@
 
     /* launcher */
     /* the tools button lives in the toolbar row (placeBars sets --fab-top): a floating button used to cover the time column of the last rows */
-    .fab { position: fixed; top: var(--fab-top, 46px); right: calc(var(--open-w, 0px) + 12px); z-index: 2147483000; display: flex; align-items: center; gap: 7px; height: 32px; background: var(--rv-accent); color: var(--rv-accent-fg);
+    .fab { position: fixed; top: var(--fab-top, 46px); right: calc(var(--open-w, 0px) + 12px); z-index: 11; display: flex; align-items: center; gap: 7px; height: 32px; background: var(--rv-accent); color: var(--rv-accent-fg);
            border: 0; border-radius: var(--rv-r-pill); padding: 0 13px 0 5px; font-weight: 600; font-size: 12.5px; cursor: pointer; box-shadow: var(--rv-shadow-1);
            transition: transform var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease), right var(--rv-dur) var(--rv-ease); }
     .fab:hover { background: var(--rv-accent-hover); transform: translateY(-1px); }
@@ -118,7 +118,7 @@
     @keyframes pulse { 50% { opacity: .35; } }
 
     /* brand bar over mitmweb's header (product + project label, theme, help) */
-    .brand { position: fixed; top: 4px; right: 12px; z-index: 2147482000; display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 4px 0 10px;
+    .brand { position: fixed; top: 4px; right: 12px; z-index: 11; display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 4px 0 10px;
              background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-pill); box-shadow: var(--rv-shadow-1); color: var(--rv-text); font-size: 12.5px; transition: right var(--rv-dur) var(--rv-ease); }
     .brand .mark { width: 18px; height: 18px; border-radius: 6px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; margin-right: 4px; }
     .brand .mark svg { width: 12px; height: 12px; stroke-width: 2.4; }
@@ -132,7 +132,7 @@
 
 
     /* always-visible search: sits in mitmweb's top row after the tabs, wired to mitmweb's own filter (see "Search bar" below) */
-    .sbar { position: fixed; z-index: 2147482000; top: 5px; left: var(--sb-left, 360px); width: var(--sb-w, 300px); height: 30px; display: flex; align-items: center; gap: 4px; }
+    .sbar { position: fixed; z-index: 11; top: 5px; left: var(--sb-left, 360px); width: var(--sb-w, 300px); height: 30px; display: flex; align-items: center; gap: 4px; }
     :host([data-skin="off"]) .sbar, :host([data-skin="off"]) .fstrip, :host(:not([data-sbar])) .sbar, :host(:not([data-sbar])) .fstrip { display: none; }
     .sbox { flex: 1; min-width: 0; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 10px; background: var(--rv-surface); border: 1px solid var(--rv-control); border-radius: var(--rv-r-pill); color: var(--rv-text-3);
             transition: border-color var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease); }
@@ -145,7 +145,7 @@
     .sbox:focus-within kbd, .sbox.has kbd, :host([data-tight]) .sbox kbd { display: none; }
     .sbox .ib { width: 22px; height: 22px; flex: none; }
     .sbox .ib[hidden], .sbox kbd[hidden] { display: none; }
-    .spop { position: fixed; z-index: 2147482500; top: 42px; left: var(--sb-left, 360px); width: max(var(--sb-w, 300px), 340px); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-lg); box-shadow: var(--rv-shadow-2);
+    .spop { position: fixed; z-index: 12; top: 42px; left: var(--sb-left, 360px); width: max(var(--sb-w, 300px), 340px); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-lg); box-shadow: var(--rv-shadow-2);
             padding: 10px 12px; display: none; font-size: 12px; color: var(--rv-text-2); }
     .spop.open { display: block; animation: pop var(--rv-dur) var(--rv-ease); }
     .spop.err { border-color: var(--rv-danger); color: var(--rv-danger); background: var(--rv-surface); }
@@ -153,7 +153,7 @@
     .spop button.ex { display: flex; width: 100%; align-items: baseline; gap: 10px; border: 0; background: none; padding: 3px 4px; border-radius: var(--rv-r-sm); cursor: pointer; text-align: left; color: var(--rv-text-2); font-size: 12px; }
     .spop button.ex:hover { background: var(--rv-accent-soft); color: var(--rv-accent-text); }
     .spop button.ex code { background: transparent; padding: 0; min-width: 112px; color: var(--rv-text); font-size: 12px; }
-    .fstrip { position: fixed; z-index: 2147481900; left: 0; right: var(--open-w, 0px); top: var(--hb, 80px); height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 12px; background: var(--rv-surface-2); border-bottom: 1px solid var(--rv-border); font-size: 12px; color: var(--rv-text-2); overflow: hidden; white-space: nowrap; transition: right var(--rv-dur) var(--rv-ease); }
+    .fstrip { position: fixed; z-index: 2; left: 0; right: var(--open-w, 0px); top: var(--hb, 80px); height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 12px; background: var(--rv-surface-2); border-bottom: 1px solid var(--rv-border); font-size: 12px; color: var(--rv-text-2); overflow: hidden; white-space: nowrap; transition: right var(--rv-dur) var(--rv-ease); }
     .fstrip .fchip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 4px 0 9px; border-radius: var(--rv-r-pill); background: var(--rv-accent-soft); color: var(--rv-accent-text); font-weight: 600; max-width: 260px; }
     .fstrip .fchip span { overflow: hidden; text-overflow: ellipsis; }
     .fstrip .fchip button { border: 0; background: none; color: inherit; width: 16px; height: 16px; border-radius: 50%; padding: 0; display: grid; place-items: center; cursor: pointer; flex: none; }
@@ -337,12 +337,14 @@
     .welcome { position: fixed; left: calc((100vw - var(--open-w, 0px)) / 2); top: 50%; transform: translate(-50%, -50%); z-index: 2147483002; width: min(700px, calc(100vw - var(--open-w, 0px) - 32px)); max-height: min(88vh, 760px); overflow: auto;
                background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: 14px;
                box-shadow: var(--rv-shadow-3); padding: 18px 20px; display: none; animation: pop var(--rv-dur) var(--rv-ease); }
-    .welcome.open { display: block; }
+    .welcome.open { display: flex; flex-direction: column; overflow: hidden; }
+    .welcome .wbody { overflow: auto; min-height: 0; flex: 1; margin: 0 -6px; padding: 0 6px; }
+    .welcome .wfoot { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rv-border); flex: none; }
     .welcome h3 { margin: 0 0 4px; font-size: 16px; display: flex; align-items: center; gap: 10px; }
     .welcome h3 .mark { width: 26px; height: 26px; border-radius: 8px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; }
     .welcome h3 .mark svg { width: 16px; height: 16px; stroke-width: 2.2; }
     .welcome p { margin: 6px 0 12px; color: var(--rv-text-2); line-height: 1.5; }
-    .emptylist { position: fixed; z-index: 2147482100; left: 0; top: calc(var(--hb, 80px) + 30px + var(--strip-h, 0px)); width: calc(100vw - var(--open-w, 0px)); bottom: 30px; pointer-events: none; display: none; align-items: center; justify-content: center; padding: 16px; }
+    .emptylist { position: fixed; z-index: 1; left: 0; top: calc(var(--hb, 80px) + 30px + var(--strip-h, 0px)); width: calc(100vw - var(--open-w, 0px)); bottom: 30px; pointer-events: none; display: none; align-items: center; justify-content: center; padding: 16px; }
     .emptylist.open { display: flex; }
     .emptylist .box { pointer-events: auto; width: min(660px, 100%); text-align: center; padding: 8px 12px; }
     .emptylist .glyph { width: 52px; height: 52px; margin: 0 auto 12px; border-radius: 16px; background: var(--rv-accent-soft); color: var(--rv-accent-text); display: grid; place-items: center; }
@@ -1313,13 +1315,15 @@
     if (!placeBars._sub) { placeBars._sub = true; mwStore().subscribe(() => { clearTimeout(placeBars._t); placeBars._t = setTimeout(() => { pullSearch(); drawStrip(); try { drawEmptyList(); } catch (e) { /* cosmetic */ } }, 80); }); }
     const nav = hdr.querySelector("nav"), nr = nav.getBoundingClientRect();
     const hb = Math.round(hdr.getBoundingClientRect().bottom);
-    const brandL = $("brand").getBoundingClientRect().left;
+    // the brand pill slides when the drawer opens; use where it will end up, not where it is mid-transition
+    const brand = $("brand"), openW = parseFloat(host.style.getPropertyValue("--open-w")) || 0;
+    const brandL = window.innerWidth - openW - 12 - brand.offsetWidth;
     setAttr(DOC, "data-ribbon", hdr.getBoundingClientRect().width < 900 ? "icons" : null);
     hdr.querySelectorAll(".btn:not([title])").forEach((b) => { const t = b.textContent.replace(/[▾\s]+$/, "").trim(); if (t) b.title = t; });   // icon-only toolbar needs its names
     const links = [...nav.querySelectorAll("a")], last = links[links.length - 1];
     const left = Math.round((last.dataset.rv === "Selected call" ? last.getBoundingClientRect().right : last.getBoundingClientRect().right + 112) + 16), room = brandL - left - 12;
     host.style.setProperty("--sb-left", left + "px");
-    const sbw = Math.max(200, Math.min(440, room - 34));   // 34 = the clear-list button
+    const sbw = Math.max(140, Math.min(440, room - 34));   // 34 = the clear-list button
     host.style.setProperty("--sb-w", sbw + "px");
     if (host.hasAttribute("data-tight") !== (sbw < 270)) { if (sbw < 270) host.setAttribute("data-tight", ""); else host.removeAttribute("data-tight"); }
     host.style.setProperty("--hb", hb + "px");
@@ -1806,7 +1810,7 @@
     });
   };
   $("close").onclick = () => setOpen(false);
-  $("pause").onclick = (e) => { if (e.target === $("pause")) { dismissed.add(pausedOpen && pausedOpen.id); pausedOpen = null; $("pause").classList.remove("open"); toast("Still paused — reopen from the project button"); } };
+  $("pause").onclick = (e) => { if (e.target === $("pause")) { dismissed.add(pausedOpen && pausedOpen.id); pausedOpen = null; $("pause").classList.remove("open"); toast("Still paused — click the Tools button (it shows how many are waiting) to reopen"); } };
   $("project").onchange = () => {
     const v = $("project").value, label = $("project").selectedOptions[0].textContent.replace(/ only$/, "");
     if (v === "__all") return run("view", { project_only: false, show_dns: state.show_dns }, "Showing all traffic");
@@ -1939,10 +1943,10 @@
     const name = (state && state.product.name) || "Rivis";
     $("welcome").innerHTML = `
       <h3><span class="mark">${ico("mark")}</span>Welcome to ${esc(name)}</h3>
-      <p>Coming from Proxyman? The tools you know are here, placed on the call or in the drawer on the right.
+      <div class="wbody"><p>Coming from Proxyman? The tools you know are here, placed on the call or in the drawer on the right.
         Same names where they are generic. Rivis runs in a browser tab and does not set a system proxy.</p>
-      ${mapTable(MAPPING)}
-      <div class="btns" style="justify-content:flex-end;margin-top:12px"><button class="b" id="w-keys">Shortcuts</button><button class="b p" id="w-ok">Got it</button></div>`;
+      ${mapTable(MAPPING)}</div>
+      <div class="btns wfoot" style="justify-content:flex-end"><button class="b" id="w-keys">Shortcuts</button><button class="b p" id="w-ok">Got it</button></div>`;
     $("welcome").classList.add("open");
     $("w-ok").onclick = closeWelcome;
     $("w-keys").onclick = () => { closeWelcome(); openHelp("keys"); };
@@ -2000,7 +2004,7 @@
   window.addEventListener("keydown", (e) => {
     const t = e.composedPath ? e.composedPath()[0] : e.target;
     const typing = !!t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.code === "KeyF" && skinOn() && host.hasAttribute("data-sbar")) { e.preventDefault(); e.stopPropagation(); focusSearch(); return; }
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.code === "KeyF" && skinOn() && host.hasAttribute("data-sbar") && root.activeElement !== sq()) { e.preventDefault(); e.stopPropagation(); focusSearch(); return; }   // a second press lets the browser's find-in-page open
     if (e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && CHORDS[e.code]) { e.preventDefault(); e.stopPropagation(); CHORDS[e.code][1](); return; }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Enter" && !typing) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
     if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey && !typing) { e.preventDefault(); e.stopPropagation(); openHelp("keys"); return; }
