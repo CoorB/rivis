@@ -37,6 +37,46 @@
       .replace(/\\([.\-\/])/g, "$1").replace(/\[\^\/:\]\*/g, "*").replace(/\.\*/g, "*");
   };
 
+  // one icon family: 24px grid, 1.7 stroke, round caps — inline so the tool works offline
+  const ICONS = {
+    mark: '<path d="M8 19V5h5a3.5 3.5 0 0 1 0 7H8"/><path d="M13 12l4.5 7"/>',
+    call: '<path d="M5 3l14 8-6.2 1.8L10 19z"/>',
+    compose: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+    map: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/><path d="M10 14h6M13 11l3 3-3 3"/>',
+    bp: '<circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/>',
+    net: '<path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-5"/>',
+    coll: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+    cmp: '<path d="M4 5h7v14H4zM13 5h7v14h-7z"/>',
+    sess: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
+    scripts: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 6l-3 12"/>',
+    rules: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+    gear: '<path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 5v4M6 15v4"/>',
+    help: '<circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1.1.9-1.1 1.7M12 17h.01"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>',
+    moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>',
+    auto: '<circle cx="12" cy="12" r="8"/><path d="M12 4v16" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+    lock: '<path d="M6 11h12v9H6z"/><path d="M9 11V8a3 3 0 0 1 6 0v3"/>',
+    warn: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
+    pause: '<path d="M9 6v12M15 6v12"/>',
+    phone: '<path d="M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M11 18h2"/>',
+    inbox: '<path d="M4 13l2-8h12l2 8"/><path d="M4 13v6h16v-6h-5l-1 2h-4l-1-2z"/>',
+    retry: '<path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v5h5"/>',
+    note: '<path d="M5 4h14v12l-4 4H5z"/><path d="M15 20v-4h4M8 9h8M8 13h4"/>',
+    wifi: '<path d="M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 19.5h.01"/>',
+    down: '<path d="M4 6l8 11 8-11"/>',
+    sliders: '<path d="M4 12h4M16 12h4M8 8v8M16 8v8"/>',
+    x: '<path d="M6 6l12 12M18 6L6 18"/>',
+    back: '<path d="M15 5l-7 7 7 7"/>',
+    unlock: '<path d="M6 11h12v9H6z"/><path d="M9 11V8a3 3 0 0 1 5.8-1"/>',
+  };
+  const ico = (n, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ""}</svg>`;
+  const LS = {   // remembered per browser; wrapped because localStorage throws in some private windows
+    get: (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* private window */ } },
+  };
+  const DOC = document.documentElement;
+
   const host = document.createElement("div");
   host.id = "proxy-panel-host";
   document.body.appendChild(host);
@@ -46,127 +86,226 @@
   // keep every key press inside the panel from ever reaching its window handler.
   ["keydown", "keypress", "keyup"].forEach((t) => host.addEventListener(t, (e) => e.stopPropagation()));
   root.innerHTML = `
+  <link rel="stylesheet" href="./proxy/theme.css">
   <style>
     :host { all: initial; }
-    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    .fab { position: fixed; right: 18px; bottom: 34px; z-index: 2147483000; background: #0f766e; color: #fff;
-           border: 0; border-radius: 22px; padding: 10px 16px; font-weight: 600; font-size: 13px; cursor: pointer;
-           box-shadow: 0 4px 14px rgba(0,0,0,.25); }
-    .fab .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#fbbf24; margin-left:6px; }
-    .fab.paused { background:#c2410c; }
-    .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: ${W}px; max-width: 100vw; z-index: 2147483001;
-              background: #fff; color: #111; border-left: 1px solid #ddd; box-shadow: -8px 0 24px rgba(0,0,0,.12);
-              display: none; flex-direction: column; font-size: 13px; }
-    .drawer.open { display: flex; }
-    header { display:flex; align-items:center; gap:8px; padding: 10px 14px; border-bottom: 1px solid #eee; }
-    header b { font-size: 15px; flex: 1; }
-    .x { border:0; background:none; font-size:20px; cursor:pointer; color:#666; }
-    nav { display:flex; flex-wrap:wrap; border-bottom:1px solid #eee; padding: 0 6px; }
-    nav button { flex:none; border:0; background:none; padding:9px 7px; cursor:pointer; font-size:12px; color:#555;
-                 border-bottom: 2px solid transparent; white-space:nowrap; }
-    nav button.on { color:#0f766e; border-bottom-color:#0f766e; font-weight:600; }
-    nav .cnt:empty { display:none; }
-    nav .cnt { background:#e0f2f1; color:#0f766e; border-radius:8px; padding:0 5px; font-size:10px; margin-left:3px; }
-    nav .cnt.err { background:#fee2e2; color:#b91c1c; }
-    main { flex:1; overflow:auto; padding: 12px 14px; }
-    h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color:#888; }
+    * { box-sizing: border-box; font-family: var(--rv-font); }
+    button, input, select, textarea { font: inherit; }
+    svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    svg.i.sm { width: 14px; height: 14px; }
+    ::selection { background: color-mix(in srgb, var(--rv-accent) 30%, transparent); }
+    * { scrollbar-width: thin; scrollbar-color: var(--rv-border-strong) transparent; }
+    :focus-visible { outline: 2px solid var(--rv-focus); outline-offset: 1px; }
+
+    /* launcher */
+    .fab { position: fixed; right: 18px; bottom: 38px; z-index: 2147483000; display: flex; align-items: center; gap: 8px; background: var(--rv-accent); color: var(--rv-accent-fg);
+           border: 0; border-radius: var(--rv-r-pill); padding: 8px 16px 8px 10px; font-weight: 600; font-size: 13px; cursor: pointer; box-shadow: var(--rv-shadow-2);
+           transition: transform var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease); }
+    .fab:hover { background: var(--rv-accent-hover); transform: translateY(-1px); }
+    .fab:active { transform: none; }
+    .fab .mark { width: 22px; height: 22px; border-radius: 7px; background: var(--rv-accent-fg); color: var(--rv-accent); display: grid; place-items: center; }
+    .fab .mark svg { width: 15px; height: 15px; stroke-width: 2.2; }
+    .fab .dot { width: 8px; height: 8px; border-radius: 50%; background: #ffd166; box-shadow: 0 0 0 2px color-mix(in srgb, #ffd166 35%, transparent); }
+    .fab.paused { background: var(--rv-warn); color: #fff; }
+    .fab.paused .mark { color: var(--rv-warn); }
+    .fab.paused .dot { background: #fff; animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .35; } }
+
+    /* brand bar over mitmweb's header (product + project label, theme, help) */
+    .brand { position: fixed; top: 6px; right: 12px; z-index: 2147482000; display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 4px 0 10px;
+             background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-pill); box-shadow: var(--rv-shadow-1); color: var(--rv-text); font-size: 12.5px; transition: right var(--rv-dur) var(--rv-ease); }
+    .brand .mark { width: 18px; height: 18px; border-radius: 6px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; margin-right: 4px; }
+    .brand .mark svg { width: 12px; height: 12px; stroke-width: 2.4; }
+    .brand b { font-weight: 700; letter-spacing: .01em; }
+    .brand .proj { color: var(--rv-text-2); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 6px; }
+    .brand .proj::before { content: "/"; margin-right: 6px; color: var(--rv-text-3); }
+    .ib { border: 0; background: transparent; color: var(--rv-text-2); width: 26px; height: 26px; border-radius: var(--rv-r-pill); display: grid; place-items: center; cursor: pointer;
+          transition: background var(--rv-dur) var(--rv-ease), color var(--rv-dur) var(--rv-ease); }
+    .ib:hover { background: var(--rv-surface-2); color: var(--rv-text); }
+    .ib.on { background: var(--rv-accent-soft); color: var(--rv-accent-text); }
+
+    /* drawer */
+    .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: ${W}px; max-width: 100vw; z-index: 2147483001; background: var(--rv-surface); color: var(--rv-text);
+              border-left: 1px solid var(--rv-border); box-shadow: var(--rv-shadow-2); display: none; flex-direction: column; font-size: 13px; }
+    .drawer.open { display: flex; animation: slide var(--rv-dur) var(--rv-ease); }
+    @keyframes slide { from { transform: translateX(18px); opacity: .4; } }
+    header { display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; border-bottom: 1px solid var(--rv-border); }
+    header .mark { width: 22px; height: 22px; border-radius: 7px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; flex: none; }
+    header .mark svg { width: 14px; height: 14px; stroke-width: 2.2; }
+    header b { font-size: 14px; flex: 1; font-weight: 650; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    header b small { font-weight: 500; color: var(--rv-text-2); font-size: 13px; }
+    .x { border: 0; background: transparent; font-size: 20px; line-height: 1; cursor: pointer; color: var(--rv-text-2); width: 26px; height: 26px; border-radius: var(--rv-r-md); }
+    .x:hover { background: var(--rv-surface-2); color: var(--rv-text); }
+    nav { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--rv-border); overflow-x: auto; scrollbar-width: none; background: var(--rv-surface); }
+    nav::-webkit-scrollbar { display: none; }
+    nav button { flex: none; display: flex; align-items: center; gap: 5px; border: 0; background: none; padding: 8px 9px 9px; cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--rv-text-2);
+                 border-bottom: 2px solid transparent; border-radius: var(--rv-r-md) var(--rv-r-md) 0 0; white-space: nowrap; transition: color var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease); }
+    nav button:hover { color: var(--rv-text); background: var(--rv-surface-2); }
+    nav button.on { color: var(--rv-accent-text); border-bottom-color: var(--rv-accent); font-weight: 600; }
+    nav .cnt:empty { display: none; }
+    nav .cnt { background: var(--rv-accent-soft); color: var(--rv-accent-text); border-radius: var(--rv-r-pill); padding: 0 6px; font-size: 10.5px; font-weight: 700; line-height: 16px; font-variant-numeric: tabular-nums; }
+    nav .cnt.err { background: var(--rv-danger-soft); color: var(--rv-danger); }
+    main { flex: 1; overflow: auto; padding: 14px; }
+    h4 { margin: 18px 0 7px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--rv-text-3); font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    h4::after { content: ""; flex: 1; height: 1px; background: var(--rv-border); }
     h4:first-child { margin-top: 2px; }
-    .call { background:#f6f7f8; border-radius:8px; padding:8px 10px; word-break: break-all; font-size:12px; }
-    .m { font-weight:700; margin-right:6px; }
-    .btns { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center; }
-    button.b { border:1px solid #d0d5da; background:#fff; border-radius:6px; padding:6px 10px; cursor:pointer; font-size:12px; color:#111; }
-    button.b:hover { background:#f0fdfa; border-color:#0f766e; }
-    button.b:disabled { opacity:.5; cursor:default; }
-    button.p { background:#0f766e; color:#fff; border-color:#0f766e; }
-    button.p:hover { background:#115e59; }
-    button.d { color:#b91c1c; }
-    button.warn { background:#c2410c; color:#fff; border-color:#c2410c; }
-    .row { display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid #f0f0f0; }
-    .row .n { flex:1; min-width:0; }
-    .row .n div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .tag { font-size:10px; padding:1px 6px; border-radius:8px; background:#e0f2f1; color:#0f766e; margin-left:4px; }
-    .chip { font-size:11px; padding:3px 8px; border-radius:10px; border:1px solid #d0d5da; background:#fff; cursor:pointer; color:#555; }
-    .chip.on { background:#0f766e; color:#fff; border-color:#0f766e; }
-    .sub { color:#888; font-size:11px; }
-    .sw { position:relative; width:34px; height:20px; flex:none; }
-    .sw input { opacity:0; width:0; height:0; }
-    .sw span { position:absolute; inset:0; background:#ccc; border-radius:10px; cursor:pointer; transition:.15s; }
-    .sw span:before { content:""; position:absolute; width:16px; height:16px; left:2px; top:2px; background:#fff; border-radius:50%; transition:.15s; }
-    .sw input:checked + span { background:#0f766e; }
+    .call { background: var(--rv-surface-2); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 9px 11px; word-break: break-all; font-family: var(--rv-mono); font-size: 12px; line-height: 1.5; }
+    .call .sub { font-family: var(--rv-font); }
+    .m { font-weight: 700; margin-right: 8px; color: var(--rv-accent-text); font-size: 11px; letter-spacing: .03em; }
+    .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+
+    /* controls */
+    button.b { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--rv-border-strong); background: var(--rv-surface); border-radius: var(--rv-r-md); padding: 5px 11px; min-height: 28px;
+               cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--rv-text); box-shadow: var(--rv-shadow-1);
+               transition: background var(--rv-dur) var(--rv-ease), border-color var(--rv-dur) var(--rv-ease), transform var(--rv-dur) var(--rv-ease); }
+    button.b:hover { background: var(--rv-accent-soft); border-color: var(--rv-accent); color: var(--rv-accent-text); }
+    button.b:active { transform: translateY(1px); }
+    button.b:disabled { opacity: .45; cursor: default; pointer-events: none; }
+    button.p { background: var(--rv-accent); color: var(--rv-accent-fg); border-color: var(--rv-accent); box-shadow: none; font-weight: 600; }
+    button.p:hover { background: var(--rv-accent-hover); border-color: var(--rv-accent-hover); color: var(--rv-accent-fg); }
+    button.d { color: var(--rv-danger); }
+    button.d:hover { background: var(--rv-danger-soft); border-color: var(--rv-danger); color: var(--rv-danger); }
+    button.warn { background: var(--rv-warn); color: #fff; border-color: var(--rv-warn); }
+    button.warn:hover { background: var(--rv-warn); filter: brightness(.92); color: #fff; }
+    .row { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--rv-border); }
+    .row .n { flex: 1; min-width: 0; }
+    .row .n div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tag { font-size: 10px; font-weight: 700; letter-spacing: .03em; padding: 1px 7px; border-radius: var(--rv-r-pill); background: var(--rv-accent-soft); color: var(--rv-accent-text); margin-left: 4px; }
+    .tag.err { background: var(--rv-danger-soft); color: var(--rv-danger); }
+    .chip { font-size: 12px; padding: 3px 10px; border-radius: var(--rv-r-pill); border: 1px solid var(--rv-border-strong); background: var(--rv-surface); cursor: pointer; color: var(--rv-text-2); user-select: none;
+            transition: background var(--rv-dur) var(--rv-ease), color var(--rv-dur) var(--rv-ease); }
+    .chip:hover { border-color: var(--rv-accent); color: var(--rv-accent-text); }
+    .chip.on { background: var(--rv-accent); color: var(--rv-accent-fg); border-color: var(--rv-accent); }
+    .sub { color: var(--rv-text-3); font-size: 11.5px; line-height: 1.45; }
+    .muted { color: var(--rv-text-3); }
+    .sw { position: relative; width: 34px; height: 20px; flex: none; }
+    .sw input { opacity: 0; width: 100%; height: 100%; position: absolute; margin: 0; cursor: pointer; z-index: 1; }
+    .sw span { position: absolute; inset: 0; background: var(--rv-border-strong); border-radius: 10px; transition: background var(--rv-dur) var(--rv-ease); }
+    .sw span:before { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; box-shadow: var(--rv-shadow-1); transition: transform var(--rv-dur) var(--rv-ease); }
+    .sw input:checked + span { background: var(--rv-accent); }
     .sw input:checked + span:before { transform: translateX(14px); }
-    select, input[type=number], input[type=text] { border:1px solid #d0d5da; border-radius:6px; padding:5px 7px; font-size:12px; background:#fff; color:#111; }
-    input.grow { flex:1; min-width:0; }
-    textarea { width:100%; min-height: 260px; height: calc(100vh - 420px); font-family: ui-monospace, Menlo, monospace; font-size:12px;
-               border:1px solid #d0d5da; border-radius:6px; padding:8px; resize:vertical; background:#fff; color:#111; }
-    .muted { color:#888; }
-    .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 24px; z-index: 2147483003; background:#111;
-             color:#fff; padding:8px 14px; border-radius:8px; font-size:12px; display:none; max-width:80vw; }
-    .toast.err { background:#b91c1c; }
-    .card { display:flex; gap:10px; align-items:flex-start; border:1px solid #e3e6e9; border-radius:10px; padding:9px 11px;
-            margin-bottom:7px; cursor:pointer; }
-    .card:hover { border-color:#0f766e; }
-    .card.on { border-color:#0f766e; background:#f0fdfa; }
-    .card .ic { font-size:16px; width:22px; text-align:center; }
-    .card .t { font-weight:600; }
-    .card .ok { margin-left:auto; color:#0f766e; font-weight:700; }
-    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-top:8px; }
-    .grid label { font-size:11px; color:#666; display:flex; flex-direction:column; gap:3px; }
-    .seg { display:flex; gap:0; margin: 8px 0 6px; }
-    .seg button { border:1px solid #d0d5da; background:#fff; padding:5px 12px; cursor:pointer; font-size:12px; color:#555; }
-    .seg button:first-child { border-radius:6px 0 0 6px; } .seg button:last-child { border-radius:0 6px 6px 0; }
-    .seg button.on { background:#0f766e; border-color:#0f766e; color:#fff; }
-    .hrow { display:flex; gap:4px; margin-bottom:4px; }
-    .hrow input { flex:1; min-width:0; font-family: ui-monospace, Menlo, monospace; font-size:11px; }
+    .sw input:focus-visible + span { outline: 2px solid var(--rv-focus); outline-offset: 2px; }
+    select, input[type=number], input[type=text], input:not([type]), input[type=search] { border: 1px solid var(--rv-border-strong); border-radius: var(--rv-r-md); padding: 5px 8px; min-height: 28px; font-size: 12.5px; background: var(--rv-surface); color: var(--rv-text);
+            transition: border-color var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease); }
+    select:focus, input:focus, textarea:focus { outline: none; border-color: var(--rv-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rv-accent) 22%, transparent); }
+    input::placeholder, textarea::placeholder { color: var(--rv-text-3); opacity: 1; }
+    input[type=checkbox] { accent-color: var(--rv-accent); }
+    input.grow { flex: 1; min-width: 0; }
+    #project { max-width: 120px; min-height: 26px; font-size: 12px; }
+    textarea { width: 100%; min-height: 260px; height: calc(100vh - 420px); font-family: var(--rv-mono); font-size: 12px; line-height: 1.55; border: 1px solid var(--rv-border-strong); border-radius: var(--rv-r-md);
+               padding: 10px; resize: vertical; background: var(--rv-surface-2); color: var(--rv-text); tab-size: 2; }
+    textarea[readonly] { opacity: .75; }
+    .hrow input, .krow input[type=text], td input { font-family: var(--rv-mono); }
+    .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 26px; z-index: 2147483003; background: var(--rv-text); color: var(--rv-surface); padding: 9px 16px; border-radius: var(--rv-r-md);
+             font-size: 12.5px; font-weight: 500; display: none; max-width: 80vw; box-shadow: var(--rv-shadow-2); animation: toast var(--rv-dur) var(--rv-ease); }
+    .toast.err { background: var(--rv-danger); color: #fff; }
+    @keyframes toast { from { opacity: 0; transform: translate(-50%, 8px); } }
+    .card { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--rv-border); border-radius: var(--rv-r-lg); padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: var(--rv-surface);
+            transition: border-color var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease); }
+    .card:hover { border-color: var(--rv-accent); box-shadow: var(--rv-shadow-1); }
+    .card.on { border-color: var(--rv-accent); background: var(--rv-accent-soft); }
+    .card .ic { width: 24px; height: 24px; display: grid; place-items: center; color: var(--rv-accent-text); flex: none; }
+    .card .t { font-weight: 600; }
+    .card .ok { margin-left: auto; color: var(--rv-accent-text); display: grid; place-items: center; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+    .grid label { font-size: 11.5px; color: var(--rv-text-2); display: flex; flex-direction: column; gap: 4px; }
+    .seg { display: inline-flex; gap: 2px; margin: 8px 0 8px; padding: 3px; background: var(--rv-surface-2); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); }
+    .seg button { border: 0; background: transparent; padding: 4px 12px; cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--rv-text-2); border-radius: calc(var(--rv-r-md) - 2px);
+                  transition: background var(--rv-dur) var(--rv-ease), color var(--rv-dur) var(--rv-ease); }
+    .seg button:hover { color: var(--rv-text); background: var(--rv-surface-3); }
+    .seg button.on { background: var(--rv-surface); color: var(--rv-accent-text); font-weight: 600; box-shadow: var(--rv-shadow-1), inset 0 0 0 1px var(--rv-border); }
+    .hrow { display: flex; gap: 4px; margin-bottom: 4px; }
+    .hrow input { flex: 1; min-width: 0; font-size: 11.5px; }
     .hrow input:first-child { flex: 0 0 38%; }
-    .krow { display:flex; gap:4px; margin-bottom:4px; align-items:center; }
-    .krow input[type=text] { flex:1; min-width:0; font-family: ui-monospace, Menlo, monospace; font-size:11px; }
-    .krow input[type=checkbox] { flex:none; }
-    .chip span[data-tlsrm] { margin-left:4px; cursor:pointer; opacity:.7; }
-    .pause { position: fixed; inset: 0; z-index: 2147483002; background: rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; }
-    .pause.open { display:flex; }
-    .sheet { background:#fff; color:#111; width: min(860px, 94vw); max-height: 92vh; display:flex; flex-direction:column; border-radius:12px;
-             box-shadow: 0 20px 60px rgba(0,0,0,.35); overflow:hidden; }
-    .sheet header { background:#fff7ed; border-bottom:1px solid #fed7aa; }
-    .sheet main { padding: 12px 16px; }
-    .sheet footer { display:flex; gap:8px; justify-content:flex-end; padding: 10px 16px; border-top:1px solid #eee; align-items:center; }
+    .krow { display: flex; gap: 4px; margin-bottom: 4px; align-items: center; }
+    .krow input[type=text] { flex: 1; min-width: 0; font-size: 11.5px; }
+    .krow input[type=checkbox] { flex: none; }
+    .chip span[data-tlsrm] { margin-left: 4px; cursor: pointer; opacity: .7; }
+    .empty { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 28px 18px; color: var(--rv-text-3); border: 1px dashed var(--rv-border-strong); border-radius: var(--rv-r-lg); background: var(--rv-surface-2); }
+    .empty svg.i { width: 26px; height: 26px; color: var(--rv-text-3); }
+    .empty b { color: var(--rv-text); font-size: 13px; }
+    .set { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--rv-border); }
+    .set > div:first-child { flex: 1; } .set b { font-weight: 600; display: block; }
+
+    /* paused-call sheet / dialogs */
+    .pause { position: fixed; inset: 0; z-index: 2147483002; background: var(--rv-overlay); display: none; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
+    .pause.open { display: flex; }
+    .sheet { background: var(--rv-surface); color: var(--rv-text); width: min(860px, 94vw); max-height: 92vh; display: flex; flex-direction: column; border-radius: 14px; box-shadow: var(--rv-shadow-3);
+             border: 1px solid var(--rv-border); overflow: hidden; animation: pop var(--rv-dur) var(--rv-ease); }
+    @keyframes pop { from { transform: translateY(8px) scale(.985); opacity: 0; } }
+    .sheet header { background: var(--rv-surface-2); }
+    .sheet header.paused { background: var(--rv-warn-soft); border-color: color-mix(in srgb, var(--rv-warn) 40%, transparent); }
+    .sheet header.paused b { color: var(--rv-warn); }
+    .sheet header.retry { background: var(--rv-accent-soft); }
+    .sheet main { padding: 14px 16px; }
+    .sheet footer { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 16px; border-top: 1px solid var(--rv-border); align-items: center; background: var(--rv-surface-2); }
     .sheet textarea { height: 38vh; }
-    table.diff { width:100%; border-collapse:collapse; font-size:11px; table-layout:fixed; }
-    table.diff td, table.diff th { border-bottom:1px solid #eee; padding:4px 5px; vertical-align:top; word-break:break-all; text-align:left; }
-    table.diff th { color:#888; font-weight:600; }
-    table.diff td.k { font-family: ui-monospace, Menlo, monospace; color:#555; }
-    td.a { background:#fef2f2; } td.b { background:#f0fdf4; }
-    .rec { color:#dc2626; font-weight:700; }
-    pre.code { white-space:pre-wrap;word-break:break-word;background:#f6f7f8;border-radius:7px;padding:8px;font:11px ui-monospace,Menlo,monospace;max-height:260px;overflow:auto; }
-    .errbox { background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:7px;padding:8px;margin-top:6px; }
-    @media (prefers-color-scheme: dark) {
-      td.a { background:#3b1d1d; } td.b { background:#14301d; } table.diff td, table.diff th { border-color:#2c3034; }
-      .drawer, .sheet { background:#1c1f22; color:#e6e6e6; border-color:#333; }
-      header, nav, .row, .sheet footer { border-color:#2c3034; }
-      .sheet header { background:#3a2a16; border-color:#9a6a2a; }
-      .call, pre.code { background:#26292d; }
-      button.b, .chip, .seg button { background:#26292d; color:#e6e6e6; border-color:#3a3f44; }
-      select, input, textarea { background:#26292d !important; color:#e6e6e6 !important; border-color:#3a3f44 !important; }
-      .card { border-color:#3a3f44; } .card.on { background:#13302c; }
-    }
+    .banner { background: var(--rv-warn-soft); color: var(--rv-warn); border: 1px solid color-mix(in srgb, var(--rv-warn) 35%, transparent); border-radius: var(--rv-r-md); padding: 8px 11px; display: flex; align-items: center; gap: 8px; }
+    .banner.bad { background: var(--rv-danger-soft); color: var(--rv-danger); border-color: color-mix(in srgb, var(--rv-danger) 35%, transparent); }
+    .banner .sub { color: inherit; opacity: .85; }
+    table.diff { width: 100%; border-collapse: collapse; font-size: 11.5px; table-layout: fixed; }
+    table.diff td, table.diff th { border-bottom: 1px solid var(--rv-border); padding: 5px 6px; vertical-align: top; word-break: break-all; text-align: left; }
+    table.diff th { color: var(--rv-text-3); font-weight: 600; }
+    table.diff td.k { font-family: var(--rv-mono); color: var(--rv-text-2); }
+    td.a { background: var(--rv-danger-soft); } td.b { background: var(--rv-ok-soft); }
+    .rec { color: var(--rv-danger); font-weight: 700; }
+    pre.code { white-space: pre-wrap; word-break: break-word; background: var(--rv-surface-2); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 9px 11px; font: 11.5px/1.55 var(--rv-mono); max-height: 280px; overflow: auto; margin: 6px 0; }
+    .jk { color: var(--rv-accent-text); } .js { color: var(--rv-ok); } .jn { color: var(--rv-info); } .jb { color: var(--rv-t-composed); }
+    .errbox { background: var(--rv-danger-soft); color: var(--rv-danger); border: 1px solid color-mix(in srgb, var(--rv-danger) 35%, transparent); border-radius: var(--rv-r-md); padding: 8px 10px; margin-top: 8px; }
+    .errbox pre.code { color: var(--rv-danger); }
+    kbd { font: 600 11px var(--rv-mono); background: var(--rv-surface); border: 1px solid var(--rv-border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; color: var(--rv-text-2); white-space: nowrap; }
+    .map { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .map th { text-align: left; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--rv-text-3); padding: 4px 8px; }
+    .map td { padding: 7px 8px; border-top: 1px solid var(--rv-border); vertical-align: top; }
+    .map td:first-child { color: var(--rv-text-2); width: 42%; }
+    .map a { color: var(--rv-accent-text); cursor: pointer; text-decoration: none; font-weight: 600; }
+    .map a:hover { text-decoration: underline; }
+    code.cmd { display: block; font: 12px/1.5 var(--rv-mono); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 6px 10px; margin: 4px 0; text-align: left; user-select: all; color: var(--rv-text); }
+
+    /* floating cards over mitmweb: welcome + empty list */
+    .welcome { position: fixed; left: 50%; top: 96px; transform: translateX(-50%); z-index: 2147482500; width: min(520px, 92vw); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: 14px;
+               box-shadow: var(--rv-shadow-3); padding: 18px 20px; display: none; animation: pop var(--rv-dur) var(--rv-ease); }
+    .welcome.open { display: block; }
+    .welcome h3 { margin: 0 0 4px; font-size: 16px; display: flex; align-items: center; gap: 10px; }
+    .welcome h3 .mark { width: 26px; height: 26px; border-radius: 8px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; }
+    .welcome h3 .mark svg { width: 16px; height: 16px; stroke-width: 2.2; }
+    .welcome p { margin: 6px 0 12px; color: var(--rv-text-2); line-height: 1.5; }
+    .emptylist { position: fixed; z-index: 2147482100; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; display: none; align-items: center; justify-content: center; }
+    .emptylist.open { display: flex; }
+    .emptylist .box { pointer-events: auto; width: min(560px, 90vw); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: 14px; box-shadow: var(--rv-shadow-2); padding: 18px 20px; margin-top: 40px; }
+    .emptylist h3 { margin: 0 0 4px; font-size: 15px; }
+    .emptylist .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
+    .emptylist h5 { margin: 0 0 4px; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--rv-text-3); }
+    .reddot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rv-danger); margin-right: 6px; animation: pulse 1.4s ease-in-out infinite; }
+    .errtext { color: var(--rv-danger); }
+    .sub svg.i, .banner svg.i, p svg.i, b svg.i, h3 svg.i, h5 svg.i { vertical-align: -3px; margin-right: 3px; }
+    .banner button { margin-left: auto; }
+    code { font-family: var(--rv-mono); font-size: 11.5px; background: var(--rv-surface-2); border-radius: 4px; padding: 1px 5px; }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0ms !important; transition-duration: 0ms !important; } }
   </style>
-  <button class="fab" id="fab">Proxy<span class="dot" id="fabdot" style="display:none"></span></button>
+  <button class="fab" id="fab" aria-label="Open the tools drawer"><span class="mark">${ico("mark")}</span><span id="fablabel">Rivis</span><span class="dot" id="fabdot" style="display:none"></span></button>
+  <div class="brand" id="brand"><span class="mark">${ico("mark")}</span><b id="bname">Rivis</b><span class="proj" id="bproj"></span>
+    <button class="ib" id="btheme" title="Theme">${ico("auto")}</button><button class="ib" id="bhelp" title="Help, shortcuts and settings  (?)">${ico("help")}</button></div>
   <div class="drawer" id="drawer">
-    <header><b id="ptitle">Proxy tools</b><select id="project" title="Changes the list view only; restart to load another project's rules"></select><button class="x" id="close" title="Close">×</button></header>
+    <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><select id="project" title="Changes the list view only; restart to load another project's rules"></select><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button></header>
     <nav>
-      <button data-t="call" class="on">This call</button>
-      <button data-t="compose">Compose</button>
-      <button data-t="map">Map Local<span class="cnt" id="c-map"></span></button>
-      <button data-t="bp">Breakpoints<span class="cnt" id="c-bp"></span></button>
-      <button data-t="net">Network</button>
-      <button data-t="coll">Collections<span class="cnt" id="c-coll"></span></button>
-      <button data-t="cmp">Compare</button>
-      <button data-t="sess">Sessions</button>
-      <button data-t="scripts">Scripts<span class="cnt" id="c-scripts"></span></button>
-      <button data-t="rules">Rules<span class="cnt" id="c-rules"></span></button>
+      <button data-t="call" class="on">${ico("call", "sm")}This call</button>
+      <button data-t="compose">${ico("compose", "sm")}Compose</button>
+      <button data-t="map">${ico("map", "sm")}Map Local<span class="cnt" id="c-map"></span></button>
+      <button data-t="bp">${ico("bp", "sm")}Breakpoints<span class="cnt" id="c-bp"></span></button>
+      <button data-t="net">${ico("net", "sm")}Network</button>
+      <button data-t="coll">${ico("coll", "sm")}Collections<span class="cnt" id="c-coll"></span></button>
+      <button data-t="cmp">${ico("cmp", "sm")}Compare</button>
+      <button data-t="sess">${ico("sess", "sm")}Sessions</button>
+      <button data-t="scripts">${ico("scripts", "sm")}Scripts<span class="cnt" id="c-scripts"></span></button>
+      <button data-t="rules">${ico("rules", "sm")}Rules<span class="cnt" id="c-rules"></span></button>
     </nav>
     <main id="main"></main>
   </div>
   <div class="pause" id="pause"><div class="sheet" id="sheet"></div></div>
+  <div class="pause" id="help"><div class="sheet" id="hsheet"></div></div>
+  <div class="welcome" id="welcome"></div>
+  <div class="emptylist" id="emptylist"></div>
   <div class="toast" id="toast"></div>`;
 
   const $ = (id) => root.getElementById(id);
@@ -189,20 +328,20 @@
 
   // headers editor: rows of [name, value]
   const headersHTML = (rows, idp) => `<div id="${idp}">${(rows || []).map(([k, v]) =>
-      `<div class="hrow"><input type="text" value="${esc(k)}" placeholder="Header"><input type="text" value="${esc(v)}" placeholder="Value"><button class="b d" data-hdel>✕</button></div>`).join("")}</div>
+      `<div class="hrow"><input type="text" value="${esc(k)}" placeholder="Header"><input type="text" value="${esc(v)}" placeholder="Value"><button class="b d" data-hdel aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")}</div>
     <button class="b" data-hadd="${idp}">+ Add header</button>`;
   const wireHeaders = (scope) => {
     scope.querySelectorAll("[data-hdel]").forEach((b) => (b.onclick = () => b.parentElement.remove()));
     scope.querySelectorAll("[data-hadd]").forEach((b) => (b.onclick = () => {
       const box = root.getElementById(b.dataset.hadd);
       const d = document.createElement("div"); d.className = "hrow";
-      d.innerHTML = `<input type="text" placeholder="Header"><input type="text" placeholder="Value"><button class="b d" data-hdel>✕</button>`;
+      d.innerHTML = `<input type="text" placeholder="Header"><input type="text" placeholder="Value"><button class="b d" data-hdel aria-label="Remove">${ico("x", "sm")}</button>`;
       box.appendChild(d); d.querySelector("[data-hdel]").onclick = () => d.remove(); d.querySelector("input").focus();
     }));
   };
   const readHeaders = (idp) => [...root.getElementById(idp).querySelectorAll(".hrow")]
     .map((r) => [...r.querySelectorAll("input")].map((i) => i.value)).filter(([k]) => k.trim());
-  const jsonCheck = (ta, out) => { try { JSON.parse(ta.value); out.textContent = "✓ valid JSON"; return true; } catch (x) { out.textContent = ta.value.trim() ? "⚠ not JSON: " + x.message : ""; return !ta.value.trim(); } };
+  const jsonCheck = (ta, out) => { try { JSON.parse(ta.value); out.textContent = "Valid JSON"; return true; } catch (x) { out.textContent = ta.value.trim() ? "Not JSON: " + x.message : ""; return !ta.value.trim(); } };
 
   const flowCache = { at: 0, byId: new Map(), pending: null };
   async function refreshFlows() {
@@ -257,22 +396,24 @@
     const on = (xs) => xs.filter((x) => x.enabled !== false).length;
     $("c-map").textContent = on(maps) || ""; $("c-bp").textContent = on(state.breakpoints) || "";
     const skipped = state.skipped_rules || [];
-    $("c-rules").textContent = skipped.length ? `⚠ ${skipped.length}` : (on(state.rules) || "");
+    $("c-rules").textContent = skipped.length ? `! ${skipped.length}` : (on(state.rules) || "");
     $("c-rules").classList.toggle("err", skipped.length > 0);
     const cl = state.collections || { items: [] };
-    $("c-coll").textContent = cl.recording ? "● REC" : (cl.items.filter((x) => x.replay).length || "");
+    $("c-coll").textContent = cl.recording ? "REC" : (cl.items.filter((x) => x.replay).length || "");
+    $("c-coll").classList.toggle("err", !!cl.recording);
     const scriptErrors = Object.keys((state.script_status || {}).errors || {}).length;
-    $("c-scripts").textContent = scriptErrors ? `⚠ ${scriptErrors}` : (on(state.scripts || []) || "");
+    $("c-scripts").textContent = scriptErrors ? `! ${scriptErrors}` : (on(state.scripts || []) || "");
     $("c-scripts").classList.toggle("err", scriptErrors > 0);
     const active = on(state.rules) || on(state.breakpoints) || state.throttle !== "off";
     $("fabdot").style.display = active ? "inline-block" : "none";
     $("fab").classList.toggle("paused", state.paused.length > 0);
     const label = state.project.label || state.view_project;
     const product = state.product.name || "Proxy";
-    $("ptitle").textContent = `${product} · ${label}`;
+    $("ptitle").innerHTML = `${esc(product)} <small>/ ${esc(label)}</small>`;
+    $("bname").textContent = product; $("bproj").textContent = label;
     const options = state.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === state.view_project ? "selected" : ""}>${esc(p.label || p.id)}</option>`).join("");
     if ($("project").innerHTML !== options) $("project").innerHTML = options;
-    $("fab").firstChild.textContent = state.paused.length ? `${label} · ${state.paused.length} paused` : label;
+    $("fablabel").textContent = state.paused.length ? `${label} · ${state.paused.length} paused` : label;
   }
 
   // ───────────── This call ─────────────
@@ -283,7 +424,7 @@
     if (f && f.type === "tcp") {       // a host that is not decrypted: only the tunnel is visible
       const conn = f.server_conn || {}, hostName = conn.sni || (f.client_conn || {}).sni || (conn.address || [""])[0] || "", portNo = (conn.address || [])[1];
       m.innerHTML = `<div class="call"><span class="m">TUNNEL</span>${esc(hostName)}${portNo ? ":" + esc(portNo) : ""}
-          <div class="sub">🔒 not decrypted — host only, no URL, headers or body</div></div>
+          <div class="sub">${ico("lock", "sm")} not decrypted — host only, no URL, headers or body</div></div>
         ${tlsQuickHTML(hostName)}`;
       wireTlsQuick(f.id, hostName);
       return;
@@ -424,7 +565,7 @@
         <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
           <div class="n"><div><b>${esc(pretty(r))}</b></div>
             <div class="sub">${esc(r.method || "ANY")} · status ${esc(r.status || 200)} · ${esc(r.name)}</div></div>
-          <button class="b" data-edit="${i}">Edit</button><button class="b d" data-del="${i}" title="Delete">✕</button></div>`).join("")
+          <button class="b" data-edit="${i}">Edit</button><button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
       : '<p class="muted">No Map Local rules yet.</p>'}`;
     const split = () => { const v = $("mh").value.trim(); if (/^https?:\/\//.test(v)) { const [h, p] = hostPath(v); $("mh").value = h; $("mp").value = p; } };
     $("mh").onchange = split;
@@ -440,7 +581,7 @@
   function renderBp(m) {
     const bps = state.breakpoints;
     m.innerHTML = `
-      ${state.paused.length ? `<div class="call" style="background:#fff7ed">⏸ ${state.paused.length} call(s) paused <button class="b warn" id="showp">Open</button></div>` : ""}
+      ${state.paused.length ? `<div class="banner">${ico("pause", "sm")} ${state.paused.length} call(s) paused <button class="b warn" id="showp">Open</button></div>` : ""}
       <h4>New breakpoint</h4>
       <div class="btns" style="margin-top:0"><input type="text" id="bh" class="grow" placeholder="Host (or paste a full URL)">
         <input type="text" id="bpth" class="grow" placeholder="Path" value="/*"></div>
@@ -454,7 +595,7 @@
           <div class="n"><div><b>${esc(pretty(b))}</b></div><div class="sub">${esc(b.method || "Any HTTP method")}</div></div>
           <span class="chip ${b.request ? "on" : ""}" data-bph="${i}:request">Req</span>
           <span class="chip ${b.response ? "on" : ""}" data-bph="${i}:response">Resp</span>
-          <button class="b d" data-bdel="${i}">✕</button></div>`).join("")
+          <button class="b d" data-bdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
       : '<p class="muted">No breakpoints.</p>'}`;
     root.querySelectorAll("[data-nph]").forEach((c) => (c.onclick = () => c.classList.toggle("on")));
     const ph = (p) => root.querySelector(`[data-nph=${p}]`).classList.contains("on");
@@ -479,7 +620,7 @@
 
   // ───────────── Network: traffic profiles ─────────────
   function renderNet(m) {
-    const icons = { off: "∿", "3g-urban": "📶", "lte-congested": "📉", "high-latency-vpn": "🔒", "packet-loss-8": "⚠", manual: "⚙" };
+    const icons = { off: "net", "3g-urban": "wifi", "lte-congested": "down", "high-latency-vpn": "lock", "packet-loss-8": "warn", manual: "sliders" };
     const desc = (p) => p.desc || `${p.latency_ms}ms ±${p.jitter_ms}ms latency · ↓${p.down_kbps}kbps / ↑${p.up_kbps}kbps · ${p.loss_pct}% packet loss`;
     const cur = state.throttle || "off";
     const known = state.profiles.some((p) => p.id === cur);
@@ -489,8 +630,8 @@
       <div class="sub" style="margin-bottom:8px">Simulate degraded networks on the proxy. Applies to calls matching
         <input type="text" id="tm" value="${esc(state.throttle_match)}" style="width:150px" placeholder="all calls"></div>
       ${state.profiles.map((p) => `
-        <div class="card ${p.id === cur ? "on" : ""}" data-prof="${p.id}"><div class="ic">${icons[p.id] || "•"}</div>
-          <div><div class="t">${esc(p.name)}</div><div class="sub">${esc(desc(p))}</div></div>${p.id === cur ? '<div class="ok">✓</div>' : ""}</div>`).join("")}
+        <div class="card ${p.id === cur ? "on" : ""}" data-prof="${p.id}"><div class="ic">${ico(icons[p.id] || "net")}</div>
+          <div><div class="t">${esc(p.name)}</div><div class="sub">${esc(desc(p))}</div></div>${p.id === cur ? `<div class="ok">${ico("check")}</div>` : ""}</div>`).join("")}
       ${!known ? `<div class="sub">Current: ${esc(cur)} (set from the command line)</div>` : ""}
       <div id="manual" style="${cur === "manual" ? "" : "display:none"}">
         <div class="grid">
@@ -508,7 +649,7 @@
       <div class="row">${sw('id="project-filter"', state.project_only)}<div class="n">Only ${esc(state.project.label)} calls <div class="sub">uses this profile's hosts regex</div></div></div>
       <div class="sub">View profile: ${esc(state.project.label)}. Switching here changes only the list view; restart with <code>--project ${esc(state.view_project)}</code> to load that project's rules.</div>
       <div class="row">${sw('id="dns"', state.show_dns)}<div class="n">Show DNS / UDP rows <div class="sub">off = HTTP(S) requests only</div></div></div>
-      <div class="row">${sw('id="sty"', styleOn())}<div class="n">Proxyman-style list <div class="sub">compact rows, coloured methods and status codes (this browser only)</div></div></div>`;
+      <div class="row"><div class="n">Appearance <div class="sub">Theme, compact rows and the skin switch are in Settings (this browser only)</div></div><button class="b" id="openset">${ico("gear", "sm")}Settings</button></div>`;
     wireTlsSection();
     root.querySelectorAll("[data-prof]").forEach((c) => (c.onclick = () => {
       if (c.dataset.prof === "manual") { $("manual").style.display = ""; root.querySelectorAll("[data-prof]").forEach((x) => x.classList.toggle("on", x === c)); return; }
@@ -521,7 +662,7 @@
     $("tm").onchange = () => run("profile", { id: cur, match: $("tm").value }, "Applies to: " + ($("tm").value || "all calls"));
     $("project-filter").onchange = () => run("view", { project: state.view_project, project_only: $("project-filter").checked, show_dns: false }, "List updated");
     $("dns").onchange = () => run("view", { project_only: false, show_dns: $("dns").checked }, "List updated");
-    $("sty").onchange = () => { setStyle($("sty").checked); toast($("sty").checked ? "Proxyman-style list ON" : "Original mitmweb look"); };
+    $("openset").onclick = () => openHelp("settings");
   }
 
   // ───────────── Copy URL / cURL ─────────────
@@ -540,7 +681,7 @@
     m.innerHTML = `
       <h4>Record</h4>
       ${c.recording
-        ? `<div class="call"><span class="rec">● Recording</span> into <b>${esc(c.recording)}</b> — use the app now; every matching call is saved with its real response.
+        ? `<div class="call"><span class="rec"><i class="reddot"></i>Recording</span> into <b>${esc(c.recording)}</b> — use the app now; every matching call is saved with its real response.
              <div class="btns"><button class="b warn" id="cstop">Stop recording</button></div></div>`
         : `<div class="btns" style="margin-top:0"><input type="text" id="cname" class="grow" placeholder="Collection name, e.g. cards-journey-sit">
              <button class="b p" id="crec">Start recording</button></div>
@@ -550,10 +691,10 @@
       <h4>Collections (${c.items.length})</h4>
       ${c.items.length ? c.items.map((x, i) => `
         <div class="row">${sw(`data-ci="${i}"`, x.replay, c.recording === x.name ? "disabled" : "")}
-          <div class="n"><div><b>${esc(x.name)}</b>${c.recording === x.name ? ' <span class="rec">● REC</span>' : ""}</div>
+          <div class="n"><div><b>${esc(x.name)}</b>${c.recording === x.name ? ' <span class="rec"><i class="reddot"></i>REC</span>' : ""}</div>
             <div class="sub">${x.count} calls${x.created ? " · " + new Date(x.created * 1000).toLocaleString() : ""}${x.replay ? " · replaying" : ""}</div></div>
           <button class="b" data-cview="${i}">${collOpen === x.name ? "Hide" : "Calls"}</button>
-          <button class="b" data-cexp="${i}">HAR</button><button class="b d" data-cdel="${i}">✕</button></div>
+          <button class="b" data-cexp="${i}">HAR</button><button class="b d" data-cdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>
         ${collOpen === x.name ? `<div id="centries" class="sub">loading…</div>` : ""}`).join("")
       : '<p class="muted">No collections yet. Record a journey, then switch it on to replay it as mocks.</p>'}
       <h4>Import</h4>
@@ -583,7 +724,7 @@
     if (collOpen) api("coll_entries", { name: collOpen }).then((r) => {
       const box = $("centries"); if (!box) return;
       box.innerHTML = r.entries.length ? r.entries.map((e) => `<div class="row" style="padding:4px 0"><div class="n"><div>${esc(e.method)} ${esc(e.host)}${esc(e.path)}${e.query ? "?" + esc(e.query) : ""}</div></div>
-        <span class="tag">${esc(e.status)}</span><button class="b d" data-edel="${e.i}">✕</button></div>`).join("") : "empty";
+        <span class="tag">${esc(e.status)}</span><button class="b d" data-edel="${e.i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") : "empty";
       box.querySelectorAll("[data-edel]").forEach((b) => (b.onclick = () => run("coll_entry_delete", { name: collOpen, i: b.dataset.edel }, "Removed")));
     }).catch((e) => toast(e.message, true));
   }
@@ -632,8 +773,8 @@
       ${ss.length ? ss.map((x, i) => `
         <div class="row" style="align-items:flex-start"><div class="n"><div><b>${esc(x.name)}</b></div>
             <div class="sub">${x.count} calls · ${new Date(x.created * 1000).toLocaleString()}${x.hosts && x.hosts.length ? " · " + esc(x.hosts.slice(0, 3).join(", ")) : ""}</div>
-            <div class="sub" data-note="${i}" title="click to edit" style="cursor:text;white-space:normal">${x.note ? "📝 " + esc(x.note) : "<i>add a note…</i>"}</div></div>
-          <button class="b" data-sload="${i}">Open</button><button class="b" data-shar="${i}">HAR</button><button class="b d" data-sdel="${i}">✕</button></div>`).join("")
+            <div class="sub" data-note="${i}" title="click to edit" style="cursor:text;white-space:normal">${x.note ? ico("note", "sm") + " " + esc(x.note) : "<i>add a note…</i>"}</div></div>
+          <button class="b" data-sload="${i}">Open</button><button class="b" data-shar="${i}">HAR</button><button class="b d" data-sdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
       : '<p class="muted">No saved sessions yet.</p>'}
       <p class="sub">Open adds the saved calls to the list (choose “replace” to clear it first). Sessions stay in ${esc(state.project_state)}/sessions.
         Per-call notes and bookmarks: use mitmweb’s <b>Comment</b> tab and <b>Mark</b> button — they are saved with the session.</p>`;
@@ -660,9 +801,9 @@
   // ───────────── Per-project scripts ─────────────
   function renderScripts(m) {
     const scripts = state.scripts || [], status = state.script_status || {};
-    const errorHTML = (error) => error ? `<br><span class="tag" style="background:#fee2e2;color:#b91c1c">ERROR</span>
-      <span style="color:#b91c1c">${esc(error.message || error)}${error.time ? " · " + esc(error.time) : ""}</span>
-      ${error.traceback ? `<pre class="code" style="color:#b91c1c">${esc(error.traceback)}</pre>` : ""}` : "";
+    const errorHTML = (error) => error ? `<br><span class="tag err">ERROR</span>
+      <span class="errtext">${esc(error.message || error)}${error.time ? " · " + esc(error.time) : ""}</span>
+      ${error.traceback ? `<pre class="code errtext">${esc(error.traceback)}</pre>` : ""}` : "";
     m.innerHTML = `${status.node_message ? `<div class="errbox">${esc(status.node_message)}. Python scripts still work.</div>` : ""}
       <h4>New script</h4>
       <div class="btns" style="margin-top:0"><input id="sn" type="text" class="grow" placeholder="name">
@@ -673,7 +814,7 @@
       <p class="sub">Rules run first, then enabled scripts in filename order. Python and JavaScript are trusted user code and run with your user rights. The Node VM omits process, require and network helpers to prevent accidents, but it is NOT a security boundary.</p>
       <h4>Scripts (${scripts.length})</h4>${scripts.length ? scripts.map((s, i) => `<div class="row">${sw(`data-si="${i}"`, s.enabled !== false)}
         <div class="n"><div><b>${esc(s.name)}</b><span class="tag">${esc(s.lang)}</span></div><div class="sub">${esc(s.method || "ANY")} · ${esc(s.match || ".")} · ${esc(s.file)}${s.exists ? "" : " · FILE MISSING"}${errorHTML(status.errors && status.errors[s.file])}</div></div>
-        <button class="b" data-sedit="${i}">Edit</button><button class="b d" data-sdelete="${i}">✕</button></div>`).join("") : '<p class="muted">No scripts yet.</p>'}`;
+        <button class="b" data-sedit="${i}">Edit</button><button class="b d" data-sdelete="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") : '<p class="muted">No scripts yet.</p>'}`;
     $("snew").onclick = async () => {
       const r = await run("script_new", { name: $("sn").value, lang: $("sl").value, template: $("stpl").value, match: $("smatch").value, method: $("smethod").value }, (x) => "Created " + x.file);
       if (r) openScript(r.file);
@@ -689,7 +830,7 @@
   }
   function renderScriptEditor(m) {
     const e = editing, s = e.script;
-    m.innerHTML = `<div class="btns" style="margin-top:0"><button class="b" id="sback">← Back</button><b style="flex:1">${esc(s.file)}</b></div>
+    m.innerHTML = `<div class="btns" style="margin-top:0"><button class="b" id="sback">${ico("back", "sm")}Back</button><b style="flex:1">${esc(s.file)}</b></div>
       <div class="btns"><input id="sematch" type="text" class="grow" value="${esc(s.match || ".")}" placeholder="URL regex"><select id="semethod"><option value="">ANY</option>${["GET","POST","PUT","PATCH","DELETE"].map((x) => `<option ${s.method === x ? "selected" : ""}>${x}</option>`).join("")}</select></div>
       <textarea id="sebody" spellcheck="false">${esc(e.content)}</textarea><div class="btns"><button class="b p" id="sesave">Save</button><span class="sub">${esc(e.file)}</span></div>`;
     $("sback").onclick = () => { editing = null; render(); };
@@ -699,82 +840,95 @@
     };
   }
 
-  // ───────────── Proxyman-style list (restyles mitmweb's own table) ─────────────
-  const STYLE_ID = "proxy-restyle";
-  const migrateStyle = () => { try {
-    if (localStorage.getItem(STYLE_ID) === null && localStorage.getItem("neo-restyle") !== null)
-      localStorage.setItem(STYLE_ID, localStorage.getItem("neo-restyle"));
-  } catch (e) { /* private window */ } };
-  migrateStyle();
-  const styleOn = () => { try { return localStorage.getItem(STYLE_ID) !== "off"; } catch (e) { return true; } };
-  function setStyle(on) {
-    try { localStorage.setItem("proxy-restyle", on ? "on" : "off"); } catch (e) { /* private window */ }
-    let el = document.getElementById(STYLE_ID);
-    if (!on) { el && el.remove(); return; }
-    if (el) return;
-    el = document.createElement("style"); el.id = STYLE_ID;
-    el.textContent = `
-      .flow-table table { font-size: 12.5px; }
-      .flow-table tbody tr { height: 26px; }
-      .flow-table tbody tr:nth-child(even) { background: rgba(0,0,0,.025); }
-      .flow-table tbody tr:hover { background: rgba(15,118,110,.07); }
-      .flow-table tbody tr.selected, .flow-table tbody tr.selected:hover { background: #0f766e !important; color: #fff !important; }
-      .flow-table tbody tr.selected td { color: #fff !important; }
-      .flow-table td.col-path { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
-      .flow-table td.col-method[data-m] { font-weight:700; font-size:11px; letter-spacing:.02em; }
-      .flow-table td[data-m=GET] { color:#15803d; }
-      .flow-table td[data-m=POST] { color:#1d4ed8; }
-      .flow-table td[data-m=PUT], .flow-table td[data-m=PATCH] { color:#b45309; }
-      .flow-table td[data-m=DELETE] { color:#b91c1c; }
-      .flow-table td[data-m=OPTIONS], .flow-table td[data-m=HEAD], .flow-table td[data-m=CONNECT] { color:#6b7280; }
-      .flow-table td.col-status[data-s] { font-weight:700; }
-      .flow-table td.col-status[data-gql-error="1"]::after { content:" ERR"; color:#dc2626; font-size:9px; margin-left:3px; }
-      .flow-table td[data-s="2"] { color:#15803d; }
-      .flow-table td[data-s="3"] { color:#6b7280; }
-      .flow-table td[data-s="4"] { color:#c2410c; }
-      .flow-table td[data-s="5"] { color:#dc2626; }
-      .flow-table tbody tr.intercepted td { background:#fff7ed !important; }
-      .flow-table td.col-size, .flow-table td.col-time { color:#6b7280; font-variant-numeric: tabular-nums; }
-      @media (prefers-color-scheme: dark) {
-        .flow-table td[data-m=GET], .flow-table td[data-s="2"] { color:#4ade80; } .flow-table td[data-m=POST] { color:#93c5fd; }
-        .flow-table td[data-m=PUT], .flow-table td[data-m=PATCH], .flow-table td[data-s="4"] { color:#fbbf24; }
-        .flow-table td[data-m=DELETE], .flow-table td[data-s="5"] { color:#f87171; }
-      }`;
-    document.head.appendChild(el);
+  // ───────────── Theme, skin switch and list tagging (restyles mitmweb's own table) ─────────────
+  // The skin itself is /proxy/theme.css (see its "mitmweb DOM contract").  Here: the switches, plus the
+  // data-* attributes the CSS needs because CSS cannot read cell text.  Only attributes on mitmweb's own
+  // <td>/<tr> — never their children, React owns those (HANDOVER §6 #15).
+  const skinOn = () => LS.get("rivis-skin", LS.get("proxy-restyle", "on")) !== "off";
+  const themeMode = () => { const v = LS.get("rivis-theme", "system"); return v === "light" || v === "dark" ? v : "system"; };
+  const compactOn = () => LS.get("rivis-compact", "off") === "on";
+  const syncHost = () => ["data-theme", "data-density"].forEach((a) => { const v = DOC.getAttribute(a); if (v) host.setAttribute(a, v); else host.removeAttribute(a); });
+  const THEME_ICON = { system: "auto", light: "sun", dark: "moon" };
+  function applyTheme(mode) {
+    LS.set("rivis-theme", mode);
+    if (mode === "light" || mode === "dark") DOC.setAttribute("data-theme", mode); else DOC.removeAttribute("data-theme");
+    syncHost();
+    $("btheme").innerHTML = ico(THEME_ICON[mode]); $("btheme").title = "Theme: " + mode + " (click to change)";
   }
-  // tag method / status cells so the CSS above can colour them (CSS cannot read cell text).
-  // Only data-* attributes on mitmweb's own <td>s — never touch their children, React owns those.
+  function applyDensity(on) {
+    LS.set("rivis-compact", on ? "on" : "off");
+    if (on) DOC.setAttribute("data-density", "compact"); else DOC.removeAttribute("data-density");
+    syncHost(); window.dispatchEvent(new Event("resize"));
+  }
+  function setSkin(on) {
+    LS.set("rivis-skin", on ? "on" : "off");
+    const link = document.getElementById("rivis-theme");
+    const min = document.getElementById("rivis-min");
+    if (on) {
+      DOC.removeAttribute("data-skin"); min && min.remove();
+      if (!link) { const l = document.createElement("link"); l.rel = "stylesheet"; l.href = "./proxy/theme.css"; l.id = "rivis-theme"; document.head.appendChild(l); }
+    } else {
+      DOC.setAttribute("data-skin", "off"); link && link.remove();
+      if (!min) {   // stock mitmweb, plus the one functional marker: host-only TLS tunnel rows
+        const st = document.createElement("style"); st.id = "rivis-min";
+        st.textContent = `.flow-table tbody tr[data-tunnel="1"] td { opacity:.7; font-style:italic; }
+          .flow-table tbody tr[data-tunnel="1"] td.col-path::after { content:" not decrypted"; font-style:normal; font-size:10px; }`;
+        document.head.appendChild(st);
+      }
+    }
+    syncHost();
+  }
+  setSkin(skinOn()); applyTheme(themeMode()); applyDensity(compactOn());
+
+  // mitmweb's row components receive the flow as a prop; reading it from the React fiber (read-only) is exact even when the list is
+  // virtualised, sorted or filtered — unlike guessing by row index (the first <tr> is a spacer).
+  let fiberKey = null;
+  function flowOf(el) {
+    if (!fiberKey) fiberKey = Object.keys(el).find((k) => k.startsWith("__reactFiber$")) || "";
+    let f = fiberKey && el[fiberKey];
+    for (let n = 0; f && n < 8; n++, f = f.return) { const p = f.memoizedProps; if (p && p.flow && p.flow.id) return p.flow; }
+    return null;
+  }
+  const TAG_TEXT = { mock: "MOCK", rule: "RULE", script: "SCRIPT", composed: "COMPOSED" };
+  function tagsOf(comment) {
+    const out = new Set(), mockNames = new Set(((state && state.rules) || []).filter((r) => r.action === "map_local").map((r) => r.name));
+    for (const part of String(comment || "").split(" | ")) {
+      if (part.startsWith("rule:")) out.add(mockNames.has(part.slice(5).split(" ")[0]) ? "mock" : "rule");
+      else if (part.startsWith("script:")) out.add("script");
+      else if (part === "composed" || part.startsWith("edit & retry")) out.add("composed");
+    }
+    return out;
+  }
+  const setAttr = (el, k, v) => { if (v === null) { if (el.hasAttribute(k)) el.removeAttribute(k); } else if (el.getAttribute(k) !== v) el.setAttribute(k, v); };
   function tagCells() {
-    // host-only tunnel rows (not decrypted): attribute on the <tr> only, so React's children stay untouched
-    // (the path cell of a TCP flow reads "client ↔ server"; reading the row itself stays right when mitmweb virtualizes the list)
+    // host-only tunnel rows (not decrypted): attribute on the <tr> only (the path cell of a TCP flow reads "client ↔ server")
     document.querySelectorAll(".flow-table tbody tr").forEach((tr) => {
       const cell = tr.querySelector("td.col-path");
       const tunnel = cell && cell.textContent.includes(" ↔ ") ? "1" : "0";
       if (tr.dataset.tunnel !== tunnel) tr.dataset.tunnel = tunnel;
     });
-    if (!styleOn()) return;
-    document.querySelectorAll(".flow-table td.col-method, .flow-table td.col-status").forEach((td) => {
-      const t = td.textContent.trim();
-      if (td.classList.contains("col-method")) { if (td.dataset.m !== t) td.dataset.m = t; }
-      else { const v = /^\d/.test(t) ? t.charAt(0) : "x"; if (td.dataset.s !== v) td.dataset.s = v; }
-    });
+    if (!skinOn()) return;
     const errors = new Set(viewers.graphql_error_ids || []);
-    const ordered = [...flowCache.byId.keys()];
-    document.querySelectorAll(".flow-table tbody tr").forEach((tr, index) => {
-      const link = tr.querySelector('a[href*="#/flows/"]');
-      const match = link && link.getAttribute("href").match(/#\/flows\/([^/]+)/);
-      const flowId = match ? match[1] : (tr.dataset.flowId || tr.dataset.id || ordered[index]);
-      const cell = tr.querySelector("td.col-status");
-      if (cell) cell.dataset.gqlError = flowId && errors.has(flowId) ? "1" : "0";
+    document.querySelectorAll(".flow-table tbody tr").forEach((tr) => {
+      const path = tr.querySelector("td.col-path");
+      if (!path) return;                                   // spacer rows
+      const method = tr.querySelector("td.col-method"), status = tr.querySelector("td.col-status");
+      if (method) setAttr(method, "data-m", method.textContent.trim());
+      if (status) { const t = status.textContent.trim(); setAttr(status, "data-code", t || "—"); setAttr(status, "data-s", /^\d/.test(t) ? t.charAt(0) : "x"); }
+      const txt = path.textContent, at = txt.indexOf("://"), cut = at < 0 ? -1 : txt.indexOf("/", at + 3);
+      const hl = String(cut < 0 ? txt.length : cut);
+      if (path.style.getPropertyValue("--hl") !== hl) path.style.setProperty("--hl", hl);
+      const flow = flowOf(path);
+      const tags = flow ? tagsOf(flow.comment) : new Set();
+      const top = ["mock", "rule", "script", "composed"].find((t) => tags.has(t));
+      setAttr(path, "data-tag", top || null);
+      setAttr(path, "data-tag-text", top ? TAG_TEXT[top] + (tags.size > 1 ? " +" + (tags.size - 1) : "") : null);
+      setAttr(path, "title", top ? flow.comment : null);
+      if (status) setAttr(status, "data-gql-error", flow && errors.has(flow.id) ? "1" : "0");
     });
+    const line = document.querySelector(".flow-detail section.response .first-line");   // status line colour in the details pane
+    if (line) { const m = line.textContent.match(/\b([1-5])\d\d\b/); setAttr(line, "data-s", m ? m[1] : null); }
   }
-  if (!document.getElementById("proxy-tunnel-style")) {
-    const tunnelStyle = document.createElement("style"); tunnelStyle.id = "proxy-tunnel-style";
-    tunnelStyle.textContent = `.flow-table tbody tr[data-tunnel="1"] td { opacity:.7; font-style:italic; }
-      .flow-table tbody tr[data-tunnel="1"] td.col-path::after { content:" 🔒 not decrypted"; font-style:normal; font-size:10px; color:#b45309; }`;
-    document.head.appendChild(tunnelStyle);
-  }
-  setStyle(styleOn());
   new MutationObserver(() => { clearTimeout(tagCells._t); tagCells._t = setTimeout(tagCells, 60); })
     .observe(document.body, { childList: true, subtree: true, characterData: true });
 
@@ -783,7 +937,7 @@
     let p;
     try { p = await api("retry_get", { flow_id: id }); } catch (e) { return toast(e.message, true); }
     $("sheet").innerHTML = `
-      <header style="background:#f0fdfa;border-color:#99f6e4"><b>↻ Edit &amp; Retry</b><span class="sub">sends a copy; the original stays in the list</span></header>
+      <header class="retry"><b>${ico("retry", "sm")} Edit &amp; Retry</b><span class="sub">sends a copy; the original stays in the list</span></header>
       <main>
         <div class="btns" style="margin-top:0"><select id="rm">${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((x) => `<option ${x === p.method ? "selected" : ""}>${x}</option>`).join("")}</select>
           <input type="text" id="ru" class="grow" value="${esc(p.url)}"></div>
@@ -816,12 +970,12 @@
         `<option value="${esc(t.id)}" ${t.id === lastTarget() ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select>
       <button class="b p" id="${idp}-go">Copy</button>
       <label class="sub" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="${idp}-mask" ${maskOn() ? "checked" : ""}> Mask secrets</label></div>
-    <div class="sub" id="${idp}-note">${maskOn() ? "Authorization and cookie values become &lt;redacted&gt;." : "⚠ Tokens and cookies WILL be included — do not paste into tickets or chats."}</div>`;
+    <div class="sub" id="${idp}-note">${maskOn() ? "Authorization and cookie values become &lt;redacted&gt;." : "Tokens and cookies WILL be included — do not paste into tickets or chats."}</div>`;
   function wireCopyAs(idp, payload) {
     $(idp + "-mask").onchange = () => {
       remember("proxy-mask", $(idp + "-mask").checked ? "on" : "off");
       $(idp + "-note").innerHTML = $(idp + "-mask").checked ? "Authorization and cookie values become &lt;redacted&gt;."
-        : "⚠ Tokens and cookies WILL be included — do not paste into tickets or chats.";
+        : "Tokens and cookies WILL be included — do not paste into tickets or chats.";
     };
     $(idp + "-go").onclick = async () => {
       const target = $(idp + "-t").value, mask = $(idp + "-mask").checked;
@@ -853,7 +1007,7 @@
   function tlsQuickHTML(host) {
     const v = tlsVerdict(host);
     return `<h4>TLS</h4>
-      <div class="sub">${v.on ? "🔓 decrypted" : "🔒 NOT decrypted (tunnel only)"} — ${esc(v.why)}</div>
+      <div class="sub">${ico(v.on ? "unlock" : "lock", "sm")} ${v.on ? "decrypted" : "NOT decrypted (tunnel only)"} — ${esc(v.why)}</div>
       <div class="btns"><button class="b" id="tlsdec" ${v.on ? "disabled" : ""}>Decrypt ${esc(host)}</button>
         <button class="b" id="tlsno" ${v.on ? "" : "disabled"}>Don't decrypt ${esc(host)}</button></div>
       <div class="sub">${esc((state.tls || {}).note || "")}</div>`;
@@ -868,7 +1022,7 @@
     const modes = [["all", "Decrypt all hosts"], ["allow", "Only the allow list"], ["ignore", "All except the ignore list"]];
     const list = (which, title) => `
       <div class="sub" style="margin-top:8px"><b>${title}</b>${t.mode === which ? " · active" : ""}</div>
-      <div class="btns" style="margin-top:4px">${t[which].map((p) => `<span class="chip">${esc(p)} <span data-tlsrm="${which}" data-p="${esc(p)}" title="Remove">✕</span></span>`).join("") || '<span class="sub">(none)</span>'}</div>
+      <div class="btns" style="margin-top:4px">${t[which].map((p) => `<span class="chip">${esc(p)} <span data-tlsrm="${which}" data-p="${esc(p)}" title="Remove">${ico("x", "sm")}</span></span>`).join("") || '<span class="sub">(none)</span>'}</div>
       <div class="btns"><input type="text" class="grow" data-tlsadd="${which}" placeholder="*.example.test or api.example.test:8443"><button class="b" data-tlsaddbtn="${which}">Add</button></div>`;
     return `<h4>TLS decryption (SSL proxying list)</h4>
       <div class="seg" id="tlsmode">${modes.map(([id, label]) => `<button data-tm="${id}" class="${t.mode === id ? "on" : ""}">${label}</button>`).join("")}</div>
@@ -916,7 +1070,7 @@
     composeSub = "params";
   };
   const kvHTML = (key, rows, ph) => `<div data-kv="${key}">${rows.map((r, i) =>
-      `<div class="krow" data-i="${i}"><input type="checkbox" title="send this row" ${r[2] === false ? "" : "checked"}><input type="text" value="${esc(r[0])}" placeholder="${ph[0]}"><input type="text" value="${esc(r[1])}" placeholder="${ph[1]}"><button class="b d" data-kdel>✕</button></div>`).join("")}</div>
+      `<div class="krow" data-i="${i}"><input type="checkbox" title="send this row" ${r[2] === false ? "" : "checked"}><input type="text" value="${esc(r[0])}" placeholder="${ph[0]}"><input type="text" value="${esc(r[1])}" placeholder="${ph[1]}"><button class="b d" data-kdel aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")}</div>
     <button class="b" data-kadd="${key}">+ Add</button>`;
   const rowsOf = (key) => (key === "vars" ? varRows : draft[key]);
   function wireKV(scope) {
@@ -958,7 +1112,7 @@
     if ($("cb")) $("cb").oninput = () => { draft.body = $("cb").value; if (draft.body_mode === "json") jsonCheck($("cb"), $("cjs")); };
     if ($("cpretty")) $("cpretty").onclick = () => {
       try { draft.body = JSON.stringify(JSON.parse($("cb").value), null, 2); $("cb").value = draft.body; jsonCheck($("cb"), $("cjs")); }
-      catch (e) { $("cjs").textContent = "⚠ not JSON: " + e.message; }
+      catch (e) { $("cjs").textContent = "Not JSON: " + e.message; }
     };
     if ($("cvsave")) $("cvsave").onclick = () => {
       const vars = {}; varRows.forEach(([k, v]) => { if (String(k).trim()) vars[String(k).trim()] = v; });
@@ -1047,12 +1201,12 @@
   function renderRules(m) {
     const skipped = state.skipped_rules || [];
     if (!state.rules.length && !skipped.length) { m.innerHTML = '<p class="muted">No rules yet. Select a call and use “This call”.</p>'; return; }
-    m.innerHTML = (skipped.length ? `<div class="call" style="background:#fef2f2;color:#b91c1c"><b>⚠ ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub" style="color:#b91c1c">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") + state.rules.map((r, i) => `
+    m.innerHTML = (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") + state.rules.map((r, i) => `
       <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
         <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(r.action)}</span></div>
           <div class="sub">${esc(r.method ? r.method + " " : "")}${esc(pretty(r))} — ${esc(describe(r))}</div></div>
         ${r.action === "map_local" ? `<button class="b" data-edit="${i}">Edit</button>` : ""}
-        <button class="b d" data-del="${i}" title="Delete">✕</button></div>`).join("") +
+        <button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") +
       `<p class="sub">Saved in ${esc(state.rules_file)} — also editable with <code>${esc(state.product.cli)} rules</code>.</p>`;
     wireRuleRows(m);
   }
@@ -1074,7 +1228,7 @@
   function renderEditor(m) {
     const e = editing;
     m.innerHTML = `
-      <div class="btns" style="margin-top:0"><button class="b" id="back">← Back</button>
+      <div class="btns" style="margin-top:0"><button class="b" id="back">${ico("back", "sm")}Back</button>
         <b style="flex:1;align-self:center;overflow:hidden;text-overflow:ellipsis">${esc(e.name)}</b>
         status <input type="number" id="st" value="${esc(e.status)}" style="width:70px"></div>
       <div class="sub" style="margin-top:6px">${esc(e.method || "ANY")} ${esc(pretty({ match: e.match }))}</div>
@@ -1112,7 +1266,7 @@
     const p = pausedOpen, isResp = p.phase === "response";
     const q = state ? state.paused.length : 1;
     $("sheet").innerHTML = `
-      <header><b>⏸ Paused at ${isResp ? "response" : "request"}${q > 1 ? ` · ${q} waiting` : ""}</b>
+      <header class="paused"><b>${ico("pause", "sm")} Paused at ${isResp ? "response" : "request"}${q > 1 ? ` · ${q} waiting` : ""}</b>
         <span class="sub" style="max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.method)} ${esc(p.url)}</span></header>
       <main>
         ${isResp ? `<div class="btns" style="margin-top:0">Status <input type="number" id="pst" value="${esc(p.status)}" style="width:80px"></div>`
@@ -1180,6 +1334,7 @@
 
   const setOpen = (open) => {
     $("drawer").classList.toggle("open", open);
+    $("brand").style.right = open ? W + 12 + "px" : "";
     document.body.style.marginRight = open ? W + "px" : "";   // push mitmweb over instead of covering it
     document.body.style.width = open ? `calc(100% - ${W}px)` : "";
     window.dispatchEvent(new Event("resize"));
@@ -1203,5 +1358,156 @@
     lastSel = cur;
     if ($("drawer").classList.contains("open") && (tab === "call" || tab === "cmp") && !editing) render();
   }, 300);
+  // ───────────── Help · shortcuts · "Coming from Proxyman?" · settings · empty state ─────────────
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  const KMOD = isMac ? "⌘" : "Ctrl", KALT = isMac ? "⌥" : "Alt", KSHIFT = isMac ? "⇧" : "Shift";
+  const kb = (...k) => k.map((x) => `<kbd>${x}</kbd>`).join(" ");
+  const openDrawer = (t) => {
+    if (!$("drawer").classList.contains("open")) { setOpen(true); state = null; }
+    if (t) { tab = t; editing = null; }
+    render();
+  };
+  const repeatSelected = () => {
+    const id = selectedFlow();
+    if (!id) return toast("Select a call in the list first", true);
+    run("retry", { flow_id: id, edits: {} }, "Repeated — the new call is at the bottom of the list");
+  };
+  const focusFilter = () => {
+    const link = [...document.querySelectorAll("header nav a")].find((a) => a.textContent.trim() === "Flow List");
+    if (link) link.click();
+    setTimeout(() => { const i = document.querySelector('.filter-input input[placeholder="Search"]'); if (i) { i.focus(); i.select(); } }, 80);
+  };
+  // chords are Alt+Shift+<key>: the Cmd/Cmd-Alt combinations desktop proxy tools use are claimed by the browser
+  const CHORDS = {
+    KeyP: ["Open / close the tools drawer", () => (state && $("drawer").classList.contains("open") ? setOpen(false) : openDrawer())],
+    KeyC: ["Compose a new request", () => openDrawer("compose")],
+    KeyL: ["Map Local", () => openDrawer("map")],
+    KeyB: ["Breakpoints", () => openDrawer("bp")],
+    KeyN: ["Network conditions", () => openDrawer("net")],
+    KeyE: ["TLS decryption list (SSL proxying)", () => openDrawer("net")],
+    KeyS: ["Scripts", () => openDrawer("scripts")],
+    KeyD: ["Compare (diff) two calls", () => openDrawer("cmp")],
+    KeyF: ["Search / filter the list", focusFilter],
+    Enter: ["Edit & Repeat the selected call", () => { const id = selectedFlow(); if (id) openRetry(id); else toast("Select a call in the list first", true); }],
+  };
+  const SHORTCUTS = [
+    ["Rivis", [
+      [kb(KALT, KSHIFT, "P"), "Open / close the tools drawer"],
+      [kb(KALT, KSHIFT, "C"), "Compose a new request"],
+      [kb(KALT, KSHIFT, "L"), "Map Local"],
+      [kb(KALT, KSHIFT, "B"), "Breakpoints"],
+      [kb(KALT, KSHIFT, "N"), "Network conditions"],
+      [kb(KALT, KSHIFT, "E"), "TLS decryption list (SSL proxying)"],
+      [kb(KALT, KSHIFT, "S"), "Scripts"],
+      [kb(KALT, KSHIFT, "D"), "Compare (diff) two calls"],
+      [kb(KALT, KSHIFT, "F"), "Search / filter the list"],
+      [kb(KMOD, "↵"), "Repeat the selected call"],
+      [kb(KALT, KSHIFT, "↵"), "Edit & Repeat the selected call"],
+      [kb("?"), "This sheet"],
+    ]],
+    ["Built into mitmweb (list focused)", [
+      [kb("↑") + " " + kb("↓") + " or " + kb("k") + " " + kb("j"), "Previous / next call"],
+      [kb("r"), "Replay the selected call"],
+      [kb("d"), "Delete the selected call"],
+      [kb("D"), "Duplicate the selected call"],
+      [kb("Esc"), "Deselect"],
+    ]],
+  ];
+  const MAPPING = [
+    ["Map Local (answer a call from a saved response)", "On the call: <b>This call → Map Local this call…</b>; or the <b>Map Local</b> tab to add by host and path", "call"],
+    ["Breakpoint", "<b>This call → Breakpoint</b> (Request / Response); manage in the <b>Breakpoints</b> tab", "bp"],
+    ["Network Conditions (throttle)", "<b>Network</b> tab → traffic profiles", "net"],
+    ["Compose a new request", "<b>Compose</b> tab, or <b>Compose from this call</b>", "compose"],
+    ["Repeat / Edit & Repeat", "Repeat: " + kb(KMOD, "↵") + " or " + kb("r") + ". Edit: <b>This call → Edit &amp; Retry…</b>", "call"],
+    ["Diff two requests", "<b>Compare</b> tab: <i>Compare: set as A</i> on a call, then select another", "cmp"],
+    ["Export HAR", "<b>Sessions</b> or <b>Collections</b> → <i>HAR</i>", "sess"],
+    ["Filter by host / app", "<b>This call → Show only host</b>, or the search box " + kb(KALT, KSHIFT, "F"), "filter"],
+    ["SSL Proxying list", "<b>Network → TLS decryption</b> (decrypt all, or an allow / deny list)", "net"],
+    ["Scripting", "<b>Scripts</b> tab (JavaScript or Python, per project)", "scripts"],
+    ["Save a session", "<b>Sessions</b> tab → save, add a note, reopen later", "sess"],
+    ["Copy as cURL", "<b>This call → Copy cURL</b> or <b>Copy as…</b> (many languages)", "call"],
+  ];
+  const goTo = (t) => { closeHelp(); if (t === "filter") focusFilter(); else openDrawer(t); };
+  const mapTable = (rows) => `<table class="map"><tr><th>In Proxyman you did</th><th>Here</th></tr>${rows.map(([a, b, g]) =>
+    `<tr><td>${a}</td><td>${b} <a data-go="${g}">Open →</a></td></tr>`).join("")}</table>`;
+  const closeHelp = () => $("help").classList.remove("open");
+  function openHelp(which) {
+    const tabs = { map: "Coming from Proxyman?", keys: "Shortcuts", settings: "Settings" };
+    const body = {
+      map: () => `<p class="sub" style="margin:0 0 8px">Same tools, same names where they are generic — placed on the call or in the drawer. Rivis runs in a browser tab, captures the simulator per process (no system proxy) and has a project switcher.</p>${mapTable(MAPPING)}`,
+      keys: () => SHORTCUTS.map(([h, rows]) => `<h4>${h}</h4><table class="map">${rows.map(([k, d]) => `<tr><td style="width:46%">${k}</td><td>${d}</td></tr>`).join("")}</table>`).join("") +
+        `<p class="sub">Single keys are ignored while you type in a field. Alt+Shift chords avoid the browser's own ${KMOD} shortcuts.</p>`,
+      settings: () => `
+        <div class="set"><div><b>Theme</b><span class="sub">System follows your OS setting</span></div>
+          <div class="seg" style="margin:0">${["system", "light", "dark"].map((m) => `<button data-theme-set="${m}" class="${themeMode() === m ? "on" : ""}">${m[0].toUpperCase() + m.slice(1)}</button>`).join("")}</div></div>
+        <div class="set"><div><b>Compact rows</b><span class="sub">Tighter type and padding in the call list</span></div>${sw('id="set-compact"', compactOn())}</div>
+        <div class="set"><div><b>Rivis skin</b><span class="sub">Off = stock mitmweb look. Also: add <code>?theme=off</code> to the URL</span></div>${sw('id="set-skin"', skinOn())}</div>
+        <div class="set"><div><b>Welcome card</b><span class="sub">The first-open “Coming from Proxyman?” card</span></div><button class="b" id="set-welcome">Show again</button></div>`,
+    };
+    $("hsheet").innerHTML = `
+      <header><span class="mark">${ico("mark")}</span><b>${esc((state && state.product.name) || "Rivis")} <small>/ Help</small></b>
+        <div class="seg" style="margin:0">${Object.entries(tabs).map(([k, v]) => `<button data-h="${k}" class="${k === which ? "on" : ""}">${v}</button>`).join("")}</div>
+        <button class="x" id="hclose" aria-label="Close">×</button></header>
+      <main>${body[which]()}</main>`;
+    $("help").classList.add("open");
+    $("hclose").onclick = closeHelp;
+    root.querySelectorAll("[data-h]").forEach((b) => (b.onclick = () => openHelp(b.dataset.h)));
+    root.querySelectorAll("#hsheet [data-go]").forEach((a) => (a.onclick = () => goTo(a.dataset.go)));
+    root.querySelectorAll("[data-theme-set]").forEach((b) => (b.onclick = () => { applyTheme(b.dataset.themeSet); openHelp("settings"); }));
+    if ($("set-compact")) $("set-compact").onchange = () => applyDensity($("set-compact").checked);
+    if ($("set-skin")) $("set-skin").onchange = () => { setSkin($("set-skin").checked); toast($("set-skin").checked ? "Rivis skin ON" : "Stock mitmweb look"); };
+    if ($("set-welcome")) $("set-welcome").onclick = () => { LS.set("rivis-welcome", ""); closeHelp(); showWelcome(); };
+  }
+  $("help").onclick = (e) => { if (e.target === $("help")) closeHelp(); };
+  $("bhelp").onclick = () => openHelp("map");
+  $("gear").onclick = () => openHelp("settings");
+  $("btheme").onclick = () => applyTheme({ system: "light", light: "dark", dark: "system" }[themeMode()]);
+
+  function showWelcome() {
+    if (LS.get("rivis-welcome", "") === "done") return;
+    const name = (state && state.product.name) || "Rivis";
+    $("welcome").innerHTML = `
+      <h3><span class="mark">${ico("mark")}</span>Welcome to ${esc(name)}</h3>
+      <p>Coming from Proxyman? The tools you know are here, placed on the call or in the drawer on the right:
+        Map Local, Breakpoints, Network conditions, Compose, Compare, Scripts and Copy as cURL.</p>
+      ${mapTable(MAPPING.slice(0, 4))}
+      <div class="btns" style="justify-content:flex-end;margin-top:12px"><button class="b" id="w-all">All 12 tasks</button><button class="b p" id="w-ok">Got it</button></div>`;
+    $("welcome").classList.add("open");
+    $("w-ok").onclick = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); };
+    $("w-all").onclick = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); openHelp("map"); };
+    root.querySelectorAll("#welcome [data-go]").forEach((a) => (a.onclick = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); goTo(a.dataset.go); }));
+  }
+
+  // empty list → teach how to connect, with the exact commands for the active project
+  function drawEmptyList() {
+    const box = $("emptylist");
+    const empty = state && flowCache.at > 0 && flowCache.byId.size === 0 && !document.querySelector(".flow-table tbody tr.has-request, .flow-table tbody tr[data-tunnel]");
+    if (!empty || $("welcome").classList.contains("open")) { box.classList.remove("open"); return; }
+    if (box.classList.contains("open")) return;
+    const cli = state.product.cli || "rivis", proj = state.active_project && state.active_project !== "default" ? ` --project ${state.active_project}` : "";
+    box.innerHTML = `<div class="box">
+      <h3>${ico("inbox", "sm")} No calls yet</h3>
+      <div class="sub">${esc(state.product.name || "Rivis")} is listening${state.project.label ? " for <b>" + esc(state.project.label) + "</b>" : ""}. Connect a device and use the app — calls appear here within a second.</div>
+      <div class="cols">
+        <div><h5>${ico("phone", "sm")} iOS Simulator</h5>
+          <code class="cmd">${esc(cli + proj + " start")}</code><code class="cmd">${esc(cli + proj + " ios on")}</code>
+          <div class="sub">Starts per-process capture (no system proxy); <i>ios on</i> trusts the certificate on the booted simulator once.</div></div>
+        <div><h5>${ico("phone", "sm")} Android emulator</h5>
+          <code class="cmd">${esc(cli + proj + " start --no-ios")}</code><code class="cmd">${esc(cli + proj + " android on")}</code>
+          <div class="sub">Points the emulator at the proxy and installs the certificate (follow the on-screen steps if prompted).</div></div>
+      </div></div>`;
+    box.classList.add("open");
+  }
+
+  window.addEventListener("keydown", (e) => {
+    const t = e.composedPath ? e.composedPath()[0] : e.target;
+    const typing = !!t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
+    if (e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && CHORDS[e.code]) { e.preventDefault(); e.stopPropagation(); CHORDS[e.code][1](); return; }
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Enter" && !typing) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
+    if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey && !typing) { e.preventDefault(); e.stopPropagation(); openHelp("keys"); return; }
+    if (e.key === "Escape" && $("help").classList.contains("open")) { e.stopPropagation(); closeHelp(); }
+  }, true);
+  setInterval(() => { try { drawEmptyList(); } catch (err) { /* cosmetic */ } }, 1500);
+  setTimeout(showWelcome, 900);
   poll();
 })();

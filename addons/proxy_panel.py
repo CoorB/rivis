@@ -24,6 +24,17 @@ from mitmproxy import ctx, http
 from mitmproxy.addonmanager import traverse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Runs in <head> before first paint: applies the remembered theme / density and, unless the skin is
+# switched off (?theme=off or the panel toggle), loads /proxy/theme.css. Everything is wrapped in
+# try/catch because localStorage can throw in private windows.
+THEME_BOOT = """<script>(function(){try{var d=document.documentElement,s=window.localStorage,q=new URLSearchParams(location.search),t=q.get("theme");
+if(t==="off"||t==="on")s.setItem("rivis-skin",t);else if(t==="light"||t==="dark"||t==="system")s.setItem("rivis-theme",t);
+var k=s.getItem("rivis-skin")||s.getItem("proxy-restyle")||"on",m=s.getItem("rivis-theme");
+if(m==="light"||m==="dark")d.setAttribute("data-theme",m);
+if(s.getItem("rivis-compact")==="on")d.setAttribute("data-density","compact");
+if(k==="off")d.setAttribute("data-skin","off");else document.write('<link rel="stylesheet" href="./proxy/theme.css" id="rivis-theme">');
+}catch(e){document.write('<link rel="stylesheet" href="./proxy/theme.css" id="rivis-theme">');}})();</script>"""
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
@@ -1398,6 +1409,8 @@ class ProxyPanel:
             def finish(self, chunk=None):
                 if chunk is not None:
                     s = chunk.decode() if isinstance(chunk, bytes) else chunk
+                    if "</head>" in s and "proxy/theme.css" not in s:
+                        s = s.replace("</head>", THEME_BOOT + "</head>", 1)
                     if "</body>" in s and "proxy/panel.js" not in s:
                         s = s.replace("</body>", '<script src="./proxy/panel.js"></script></body>')
                     chunk = s
@@ -1407,6 +1420,13 @@ class ProxyPanel:
             def get(self):
                 with open(os.path.join(HERE, "panel.js"), "rb") as fh:
                     self.set_header("Content-Type", "application/javascript")
+                    self.set_header("Cache-Control", "no-store")
+                    self.write(fh.read())
+
+        class ThemeCSS(webapp.RequestHandler):
+            def get(self):
+                with open(os.path.join(HERE, "theme.css"), "rb") as fh:
+                    self.set_header("Content-Type", "text/css; charset=utf-8")
                     self.set_header("Cache-Control", "no-store")
                     self.write(fh.read())
 
@@ -1431,6 +1451,7 @@ class ProxyPanel:
         app.add_handlers(r".*", [
             (r"/", ProxyIndex),
             (r"/proxy/panel\.js", PanelJS),
+            (r"/proxy/theme\.css", ThemeCSS),
             (r"/proxy/api/([a-z_]+)", Api),
         ])
         app._proxy_panel_routes = True
