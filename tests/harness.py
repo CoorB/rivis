@@ -327,12 +327,13 @@ class Instance:
     """A throw-away Rivis (mitmweb) started through the real `rivis start` CLI."""
 
     def __init__(self, suite, name, project=None, setup=None, extra_env=None, start_args=("--insecure",),
-                 pre=None, node=True, rivis_bin=None):
+                 pre=None, node=True, rivis_bin=None, fresh_ca=False):
         self.suite, self.name, self.project = suite, name, project or "default"
         self.home = suite.new_home(name)
         self.proc = None
         self.extra_env, self.start_args, self.pre, self.setup = extra_env or {}, list(start_args), pre, setup
         self.rivis_bin = rivis_bin or RIVIS
+        self.fresh_ca = fresh_ca          # True: let `rivis start` generate the CA itself instead of copying the suite's
         self.password = "pw" + os.urandom(6).hex()
         self.panel = None
         self.logpath = os.path.join(ARTIFACTS, "%s-%d.log" % (name, os.getpid()))
@@ -357,7 +358,7 @@ class Instance:
             self.proxy_port, self.web_port = free_port(), free_port()
             env = suite.env(self.home, extra=self.extra_env, confdir=os.path.join(self.home, ".mitmproxy"),
                             ports=(self.proxy_port, self.web_port), password=self.password)
-            if not os.path.isdir(env["RIVIS_CONFDIR"]):
+            if not os.path.isdir(env["RIVIS_CONFDIR"]) and not self.fresh_ca:
                 shutil.copytree(suite.ca_dir, env["RIVIS_CONFDIR"])
             self.env = env
             if self.pre:

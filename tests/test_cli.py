@@ -589,7 +589,7 @@ class CertAndCa(CliBase):
         lines = [l for l in self.suite.shim_log("mitm-argv.log").splitlines() if l.startswith("mitmdump ")]
         self.assertEqual(len(lines), 1)
         self.assertIn("--listen-host 127.0.0.1", lines[0],
-                      "ensure_ca() starts mitmdump without --listen-host, so it briefly binds all interfaces (FOUND-BUGS #3)")
+                      "ensure_ca() starts mitmdump without --listen-host, so it briefly binds all interfaces")
 
 
 class Migration(CliBase):
@@ -639,7 +639,7 @@ class Migration(CliBase):
         self.assertEqual(self.snapshot(old), before)
         self.assertEqual([x for x in os.listdir(os.path.join(self.state, "projects")) if x.startswith(".")], [])
 
-    @unittest.expectedFailure      # FOUND-BUGS.md #1: rewritten paths point into the deleted .neo.tmp.* directory
+    @unittest.expectedFailure      # FOUND-BUGS.md B12: rewritten paths point into the deleted .neo.tmp.* directory
     def test_map_local_and_body_file_paths_point_at_files_that_exist(self):
         self.make_legacy()
         self.ok("projects", "list")
@@ -648,7 +648,7 @@ class Migration(CliBase):
         for name, key in (("ml", "file"), ("rs", "body_file")):
             path = rules[name][key]
             self.assertTrue(path.startswith(mocks + os.sep), "%s.%s = %s should live under %s" % (name, key, path, mocks))
-            self.assertTrue(os.path.isfile(path), "%s.%s = %s does not exist after migration (FOUND-BUGS #1)" % (name, key, path))
+            self.assertTrue(os.path.isfile(path), "%s.%s = %s does not exist after migration (FOUND-BUGS B12)" % (name, key, path))
         self.assertEqual(rules["outside"]["file"], "/etc/hosts")           # paths outside the legacy dir are untouched
 
     def test_does_not_run_when_target_exists_or_no_legacy(self):
