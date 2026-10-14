@@ -16,6 +16,7 @@ import importlib
 import math
 import os
 import re
+import secrets
 import sys
 import tempfile
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
@@ -128,6 +129,9 @@ class ProxyPanel:
             self.active_project = ctx.options.proxy_project
             self.view_project = self.active_project
             self.active_profile = project_profile(self.active_project)
+
+    def load(self, loader):
+        loader.add_option("proxy_bootstrap_file", str, "", "one-time browser login nonce file")
 
     @property
     def view_profile(self):
@@ -1513,6 +1517,36 @@ class ProxyPanel:
                 self.set_header("Cache-Control", "no-store")
                 self.write(BOOT_JS)
 
+        import tornado.web
+
+        class Bootstrap(tornado.web.RequestHandler):
+            """Exchange a one-time, non-password URL nonce for mitmweb's signed session cookie.
+            A plain tornado handler on purpose: every webapp.RequestHandler subclass is wrapped with mitmweb's
+            _require_auth, which would demand the very login this endpoint grants."""
+
+            def get(self, nonce):
+                expected_host = {"127.0.0.1", "localhost", f"127.0.0.1:{ctx.options.web_port}",
+                                 f"localhost:{ctx.options.web_port}"}
+                if self.request.headers.get("Host", "") not in expected_host:
+                    self.set_status(403); return
+                path = os.path.expanduser(ctx.options.proxy_bootstrap_file or "")
+                try:
+                    with open(path) as fh:
+                        expected = fh.read().strip()
+                except OSError:
+                    expected = ""
+                if not expected or not secrets.compare_digest(nonce, expected):
+                    self.set_status(403); return
+                try:
+                    os.remove(path)
+                except OSError:
+                    self.set_status(403); return
+                self.set_header("Cache-Control", "no-store")
+                self.set_header("Referrer-Policy", "no-referrer")
+                self.set_secure_cookie(f"mitmproxy-auth-{ctx.options.web_port}", "y", expires_days=None,
+                                       httponly=True, samesite="Strict")
+                self.redirect("/")
+
         class Api(webapp.RequestHandler):
             def get(self, op):
                 if op != "state":
@@ -1536,6 +1570,7 @@ class ProxyPanel:
             (r"/proxy/panel\.js", PanelJS),
             (r"/proxy/theme\.css", ThemeCSS),
             (r"/proxy/boot\.js", BootJS),
+            (r"/proxy/bootstrap/([0-9a-f]{32})", Bootstrap),
             (r"/proxy/api/([a-z_]+)", Api),
         ])
         app._proxy_panel_routes = True

@@ -157,12 +157,27 @@ class FreshCa(LiveCase):
 
 
 class Argv(LiveCase):
-    @unittest.expectedFailure
     def test_web_password_is_not_visible_in_the_process_list(self):
         """FOUND-BUGS B11: `rivis start` passes --set web_password=<token> on mitmweb's command line."""
         for pid in group_pids(self.inst.proc.pid):
             args = subprocess.run(["ps", "-ww", "-o", "args=", "-p", str(pid)], capture_output=True, text=True).stdout
             self.assertNotIn(self.inst.password, args, "secret visible in argv of pid %d" % pid)
+
+    def test_ui_command_uses_a_one_time_bootstrap_not_the_password(self):
+        before = self.suite.shim_log("open.log")
+        cp = self.suite.rivis("ui", home=self.inst.home, env=dict(self.inst.env))
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        opened = self.suite.shim_log("open.log")[len(before):].strip().splitlines()[-1]
+        self.assertIn("/proxy/bootstrap/", opened)
+        self.assertNotIn(self.inst.password, opened)
+        self.assertNotIn("?token=", opened)
+
+        import http.cookiejar
+        import urllib.request
+        jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), urllib.request.ProxyHandler({}))
+        self.assertEqual(opener.open(opened, timeout=10).status, 200)
+        self.assertEqual(opener.open(self.panel.base + "/proxy/api/state", timeout=10).status, 200)
 
 
 class Modes(LiveCase):

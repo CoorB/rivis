@@ -336,7 +336,7 @@ class Instance:
             self.start_args += ["--allow-private-hosts", r"^(127\.0\.0\.1|localhost)$"]
         self.rivis_bin = rivis_bin or RIVIS
         self.fresh_ca = fresh_ca          # True: let `rivis start` generate the CA itself instead of copying the suite's
-        self.password = "pw" + os.urandom(6).hex()
+        self.password = "pw" + os.urandom(16).hex()
         self.panel = None
         self.logpath = os.path.join(ARTIFACTS, "%s-%d.log" % (name, os.getpid()))
         self.proxy_port = self.web_port = None

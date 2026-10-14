@@ -507,7 +507,9 @@ class StartArgv(CliBase):
         self.assertNotIn("local:", line)                       # --no-ios: no local capture
         self.assertNotIn("ssl_insecure", line)
         self.assertIn("web_open_browser=false", line)
-        self.assertIn("web_password=x", line)
+        self.assertNotIn("web_password=", line)
+        self.assertIn("proxy_auth_token_file=" + os.path.join(self.state, "web-token"), line)
+        self.assertNotIn(" x", line)
         self.assertEqual(self.suite.shim_log("open.log"), "")  # --no-open really does not open anything
 
     def test_ios_local_capture_is_scoped_to_simulator_processes(self):
