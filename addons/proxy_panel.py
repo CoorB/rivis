@@ -1020,8 +1020,11 @@ class ProxyPanel:
             self._write_view_filter()
         elif op == "filter_check":     # the list filter is evaluated here: an invalid one closes mitmweb's websocket, so the panel asks first
             from mitmproxy import flowfilter
+            text = str(a.get("filter") or "").strip()
+            if not text:                   # empty = no filter, which is always valid
+                return {"ok": True}
             try:
-                flowfilter.parse(str(a.get("filter") or ""))
+                flowfilter.parse(text)
             except ValueError as e:
                 return {"ok": False, "error": str(e).replace("Invalid filter expression: ", "")[:200]}
             return {"ok": True}

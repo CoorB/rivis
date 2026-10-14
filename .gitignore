@@ -12,3 +12,4 @@ tests/.artifacts/
 web-token
 current-project
 .playwright-mcp/
+.ruff_cache/

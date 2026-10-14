@@ -219,6 +219,14 @@ class Ops(LiveCase):
         self.bad("view", {"project": "no-such-project"}, "unknown")
         self.bad("view", {"project": "../x"}, "bad project")
 
+    def test_filter_check_accepts_valid_filters_and_explains_invalid_ones(self):
+        # the search bar asks first: an invalid filter sent straight to mitmweb would close its websocket
+        for good in ("postman-echo.com", "~d example.com & ~m POST", "", "!~s"):
+            self.assertTrue(self.panel.ok("filter_check", {"filter": good}).get("ok"), good)
+        doc = self.panel.ok("filter_check", {"filter": "~d ("})
+        self.assertFalse(doc.get("ok"))
+        self.assertTrue(doc.get("error"))
+
     # -- export / codegen / compose --------------------------------------------------------------------
     def test_export_url_and_curl_mask_secrets_by_default(self):
         self.fetch("/echo?a=1", headers={"Authorization": "Bearer " + JWT_FRESH, "Cookie": "s=secretvalue"})
