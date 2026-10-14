@@ -67,9 +67,11 @@ class UiSmoke(LiveCase):
     def panel_text(self):
         return self.page.evaluate("document.querySelector('#proxy-panel-host').shadowRoot.textContent")
 
-    def open(self):
+    def open(self, first_run=False):
         for path in ("/json/small", "/echo?a=1", "/text"):
             self.fetch(path)
+        if not first_run:   # the "Coming from Proxyman?" welcome (and its backdrop) shows once per browser; most tests start past it
+            self.page.add_init_script("try { localStorage.setItem('rivis-welcome', 'done') } catch (e) {}")
         self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))
         self.page.wait_for_selector("#fab", timeout=20000)
         return self.page
@@ -78,6 +80,18 @@ class UiSmoke(LiveCase):
         page = self.open()
         wait_for(lambda: page.get_by_text("/json/small").count() > 0, 10, 0.2, "flow rows rendered")
         shot(page, "flows")
+        self.assertEqual(self.errors, [])
+
+    def test_first_run_welcome_shows_once_and_closes_on_escape(self):
+        page = self.open(first_run=True)
+        welcome = page.locator("#proxy-panel-host #welcome.open")
+        welcome.wait_for(timeout=10000)
+        page.keyboard.press("Escape")
+        wait_for(lambda: welcome.count() == 0, 5, 0.1, "welcome closed on Esc")
+        page.reload()
+        page.wait_for_selector("#fab", timeout=20000)
+        page.wait_for_timeout(500)
+        self.assertEqual(welcome.count(), 0, "welcome must not come back after it was closed")
         self.assertEqual(self.errors, [])
 
     def test_open_the_panel_and_click_every_tab(self):

@@ -39,6 +39,7 @@ GRAPHQL_OP_RE = re.compile(
 )
 MAX_VIEWER_BODY = 1024 * 1024
 NODE_PIPE_LIMIT = 64 * 1024 * 1024
+NO_HOOK = object()
 NODE_OUTER_TIMEOUT = 30.0
 PYTHON_TIMEOUT = 2.0
 DEFAULT_RULES = os.path.join(STATE_ROOT, "projects", "default", "rules.json")
@@ -537,7 +538,7 @@ class ProxyScripts:
     async def _python(self, item, hook, context, url, request, response=None):
         ns = self.modules[item["file"]]
         fn = ns.get(hook) or ns.get("onRequest" if hook == "on_request" else "onResponse")
-        if not fn: return None
+        if not fn: return NO_HOOK
         args = (context, url, request) if response is None else (context, url, request, response)
         if inspect.iscoroutinefunction(fn):
             ok, value, short_traceback = await asyncio.wait_for(
@@ -683,6 +684,8 @@ class ProxyScripts:
         if msg.get("error"):
             lines = str(msg["error"]).splitlines()
             raise ScriptFailure(lines[0] if lines else "JavaScript error", "\n".join(lines[:12]))
+        if not msg.get("invoked", True):
+            return NO_HOOK
         context.clear(); context.update(msg.get("context") or {})
         return msg.get("result")
 
@@ -711,6 +714,8 @@ class ProxyScripts:
                 else:
                     result = await self._javascript(item, hook, call_context, flow.request.pretty_url,
                                                     call_request, call_response)
+                if result is NO_HOOK:
+                    continue
                 context.clear(); context.update(call_context)
                 self.last_errors.pop(item["file"], None)
                 if result is None: continue
@@ -722,7 +727,7 @@ class ProxyScripts:
                         if "content-type" not in header_map:
                             header_map["content-type"] = ("content-type", ["application/json"])
                     elif not isinstance(body, bytes): body = str(body).encode()
-                    headers = [(name, value) for name, values in header_map.values() for value in values]
+                    headers = {name: ", ".join(values) for name, values in header_map.values()}
                     flow.response = http.Response.make(int(result.get("statusCode", 200)), body, headers)
                     flow.metadata["proxy_local"] = True; self._tag(flow, item); break
                 target = flow.response if response_side else flow.request

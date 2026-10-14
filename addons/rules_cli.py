@@ -10,6 +10,7 @@ Values are parsed as JSON when they can be (status=500 → 500, set={"a":1} → 
 otherwise kept as text. The running proxy picks every change up within a second.
 """
 import json
+import math
 import os
 import re
 import subprocess
@@ -49,6 +50,18 @@ def value(v):
         return json.loads(v)
     except ValueError:
         return v
+
+
+def throttle_number(text, name):
+    try:
+        number = float(text)
+    except ValueError:
+        die("%s must be a number" % name)
+    cap = 100 if name in ("loss", "loss_pct") else 120000 if name in (
+        "latency_ms", "jitter_ms", "response_delay_ms") else 1000000
+    if not math.isfinite(number) or number < 0 or number > cap:
+        die("%s must be 0–%s" % (name, cap))
+    return number
 
 
 def find(cfg, name):
@@ -153,9 +166,9 @@ def throttle_cmd(path, args):
             re.compile(v)
             cfg["throttle_match"] = v
         elif k == "loss":
-            cfg["loss"] = float(v)
+            cfg["loss"] = throttle_number(v, k)
         elif k in ("latency_ms", "jitter_ms", "down_kbps", "up_kbps", "loss_pct", "response_delay_ms"):
-            cfg.setdefault("manual", {})[k] = float(v)   # used when the profile is "manual"
+            cfg.setdefault("manual", {})[k] = throttle_number(v, k)   # used when the profile is "manual"
         else:
             die("throttle options: match=REGEX loss=PCT, and for manual: latency_ms= jitter_ms= down_kbps= up_kbps= loss_pct= response_delay_ms=")
     save(path, cfg)

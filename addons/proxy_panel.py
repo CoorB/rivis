@@ -108,6 +108,9 @@ class ProxyPanel:
         self.view_project = "default"
         self.active_profile = {"id": "default", "label": "All", "hosts": "", "record_match": "."}
         self._tls_tunnels = False      # is the list filter currently showing tunnel rows?
+        self._last_good_cfg = {"rules": []}
+        self._rules_error = None
+        self._bad_cfg = None
 
     def configure(self, updated):
         global COLL_DIR, SESS_DIR, MOCK_DIR, SCRIPT_DIR, COMPOSE_DIR
@@ -147,12 +150,39 @@ class ProxyPanel:
             return os.path.join(DEFAULT_STATE, "rules.json")
 
     def load_cfg(self):
+        cfg = None
         try:
-            with open(self.rules_path) as f:
-                cfg = json.load(f)
-        except FileNotFoundError:
-            cfg = {}
-        cfg.setdefault("rules", [])
+            try:
+                with open(self.rules_path) as f:
+                    cfg = json.load(f)
+            except FileNotFoundError:
+                cfg = {}
+            if not isinstance(cfg, dict):
+                raise ValueError("top level must be an object")
+            cfg.setdefault("rules", [])
+            if not isinstance(cfg["rules"], list):
+                raise ValueError("rules must be a list")
+            for rule in cfg["rules"]:
+                if not isinstance(rule, dict):
+                    raise ValueError("each rule must be an object")
+                self.validate(rule)
+            throttle = str(cfg.get("throttle", "off") or "off").lower()
+            if throttle not in {p["id"] for p in PROFILES} and not re.fullmatch(r"\d+ms(/\d+kbps)?", throttle):
+                raise ValueError("unknown throttle '%s'" % throttle)
+            if cfg.get("throttle_match"):
+                re.compile(cfg["throttle_match"])
+            tls_config(cfg)
+        except (PanelError, TypeError, ValueError, re.error) as exc:
+            self._rules_error = str(exc)
+            self._bad_cfg = cfg
+            for addon in self._addons():
+                if addon.__class__.__name__ == "ProxyRules" and getattr(addon, "last_good_cfg", None):
+                    self._last_good_cfg = addon.last_good_cfg
+                    break
+            return self._last_good_cfg
+        self._last_good_cfg = cfg
+        self._rules_error = None
+        self._bad_cfg = None
         return cfg
 
     def save_cfg(self, cfg):
@@ -198,7 +228,8 @@ class ProxyPanel:
     # ── state for the drawer ──────────────────────────────────────────────────
     def state(self):
         cfg = self.load_cfg()
-        tls = self.tls_state(cfg)
+        tls_cfg = self._bad_cfg if self._rules_error and isinstance(self._bad_cfg, dict) and "tls" in self._bad_cfg else cfg
+        tls = self.tls_state(tls_cfg)
         self._sync_view_state()
         if (tls["mode"] != "all") != self._tls_tunnels:
             self._tls_tunnels = tls["mode"] != "all"
@@ -212,6 +243,7 @@ class ProxyPanel:
             "projects": project_profiles(),
             "project_state": project_state(self.active_project),
             "rules_file": self.rules_path,
+            "rules_error": self._rules_error,
             "rules": cfg["rules"],
             "throttle": cfg.get("throttle", "off"),
             "throttle_match": cfg.get("throttle_match", ""),
@@ -380,6 +412,30 @@ class ProxyPanel:
                 except Exception as exc: grpc["response_error"] = str(exc)
         return {"id": f.id, "tokens": distinct, "graphql": gql, "graphql_response": gql_response, "grpc": grpc}
 
+    def response(self, flow):
+        """Mark GraphQL 200-with-errors cheaply so the list can show ERR before its drawer is opened."""
+        if not flow.response:
+            return
+        request_body = flow.request.raw_content or b""
+        response_body = flow.response.raw_content or b""
+        if len(request_body) > 256 * 1024 or len(response_body) > 512 * 1024:
+            return
+        try:
+            operations = detect_graphql(flow.request.method, flow.request.pretty_url, request_body,
+                                        flow.request.headers.get("content-type", ""))
+            if not operations:
+                return
+            doc = json.loads(response_body.decode("utf-8"))
+            errors = (doc.get("errors") if isinstance(doc, dict) else
+                      [error for item in doc if isinstance(item, dict) for error in (item.get("errors") or [])]
+                      if isinstance(doc, list) else [])
+            if errors:
+                flow.metadata["proxy_graphql_error"] = True
+                if "graphql:error" not in (flow.comment or "").split(" | "):
+                    flow.comment = (flow.comment + " | " if flow.comment else "") + "graphql:error"
+        except (UnicodeDecodeError, ValueError, TypeError):
+            return
+
     @staticmethod
     def _flow_revision(f):
         req, resp = f.request, f.response
@@ -409,7 +465,7 @@ class ProxyPanel:
             self._viewer_cache[f.id] = (revision, view, f.request.method, f.request.pretty_url)
             computed += 1
         tokens, token_keys, ops = [], set(), {}
-        graphql_error_ids = []
+        graphql_error_ids = [f.id for f in flows if f.metadata.get("proxy_graphql_error")]
         for f in flows:
             cached = self._viewer_cache.get(f.id)
             if not cached:
@@ -425,7 +481,7 @@ class ProxyPanel:
                                    "alg": token.get("alg"), "kid": token.get("kid"), "flow_id": f.id,
                                    "method": method, "url": url})
             has_errors = bool((view.get("graphql_response") or {}).get("errors"))
-            if has_errors: graphql_error_ids.append(f.id)
+            if has_errors and f.id not in graphql_error_ids: graphql_error_ids.append(f.id)
             for op in view["graphql"]:
                 item = ops.setdefault(op["name"], {"name": op["name"], "type": op["type"], "count": 0, "flow_ids": [], "errors": 0})
                 item["count"] += 1; item["flow_ids"].append(f.id); item["errors"] += int(has_errors)
@@ -574,7 +630,7 @@ class ProxyPanel:
     @staticmethod
     def flow_regex(f):
         # host + path, query string ignored, anchored on the path end
-        return re.escape(f.request.pretty_host + f.request.path.split("?")[0]) + r"(\?|$)"
+        return re.escape(f.request.pretty_host) + r"(:\d+)?" + re.escape(f.request.path.split("?")[0]) + r"(\?|$)"
 
     @staticmethod
     def default_name(f, prefix):
@@ -717,7 +773,7 @@ class ProxyPanel:
         r = mhttp.Request.make(req["method"], req["url"], b"", [])
         headers = [(k, v) for k, v in req["headers"] if k.lower() not in ("content-length", "host")]
         host_header = next((v for k, v in req["headers"] if k.lower() == "host"), None)
-        r.headers = mhttp.Headers([(str(k).encode("latin-1", "replace"), str(v).encode("latin-1", "replace"))
+        r.headers = mhttp.Headers([(str(k).encode("ascii"), str(v).encode("utf-8"))
                                    for k, v in [("Host", host_header or urlsplit(req["url"]).netloc)] + headers])
         if req["body"]:
             r.content = req["body"]        # also sets Content-Length
@@ -750,6 +806,8 @@ class ProxyPanel:
 
     # ── actions ───────────────────────────────────────────────────────────────
     def act(self, op, a):
+        if not isinstance(a, dict):
+            raise PanelError("request body must be a JSON object")
         cfg = self.load_cfg()
         if op == "viewer":
             return self._flow_viewer(self.flow(a["flow_id"]))
@@ -766,10 +824,11 @@ class ProxyPanel:
             match = a.get("match") or "."
             re.compile(match)
             method = (a.get("method") or "").upper() or None
+            source = self.script_template(lang, a.get("template") or "header")
             path = self._script_path(filename)
             os.makedirs(SCRIPT_DIR, mode=0o700, exist_ok=True)
             with open(path, "x", encoding="utf-8", newline="\n") as fh:
-                fh.write(self.script_template(lang, a.get("template") or "header"))
+                fh.write(source)
             os.chmod(path, 0o600)
             scripts.append({"name": name, "file": filename, "lang": lang, "enabled": True,
                             "match": match, "method": method})
@@ -1258,7 +1317,7 @@ class ProxyPanel:
                 return {"content": fh.read().decode("utf-8", "replace"), "status": r.get("status", 200),
                         "headers": [[k, v] for k, v in (r.get("headers") or {}).items()],
                         "match": r.get("match"), "method": r.get("method"),
-                        "file": path, "editable": os.path.dirname(path) == MOCK_DIR}
+                        "file": path, "editable": os.path.dirname(path) == os.path.realpath(MOCK_DIR)}
         elif op == "mockfile_put":
             r = self.find(cfg, a["name"])
             if r.get("action") != "map_local":
@@ -1468,7 +1527,7 @@ class ProxyPanel:
                     out = impl(self).act(op, a) or {}
                     out["state"] = impl(self).state()
                     self.write(json.dumps(out))
-                except (PanelError, KeyError, TypeError, ValueError, OSError, re.error) as e:
+                except (PanelError, AttributeError, KeyError, TypeError, ValueError, OSError, re.error) as e:
                     self.set_status(400)
                     self.write(json.dumps({"error": str(e)}))
 

@@ -20,6 +20,10 @@ system proxy, one CA per workstation, removed again with `off`.
                                             replay a request saved in the panel's Compose tab
   .\<cli>.ps1 android on|off [-Serial emulator-5554]
   .\<cli>.ps1 net-reset [-DryRun] | status | cert
+  .\<cli>.ps1 doctor [-Json] [-NoNet] [-FixSafe [-Yes]]
+                                            read-only health check. Runs the shared Python checker when
+                                            Python is installed; otherwise a reduced native subset
+                                            (ports, WinINET/WinHTTP proxy, adb, mitmproxy version)
 
 No openssl needed: the Android hash name (subject_hash_old) is computed here.
 Environment names come from product.json; legacy NEO_MITM_* names remain fallbacks.
@@ -40,6 +44,11 @@ param(
   [switch]$NoOpen,
   [switch]$DryRun,
   [switch]$NoWait,
+  [switch]$Json,
+  [switch]$NoNet,
+  [switch]$AllowProfileNetwork,
+  [switch]$FixSafe,
+  [switch]$Yes,
   [string[]]$Var = @(),
   [Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest = @()
 )
@@ -103,7 +112,7 @@ function Find-Adb {
 function Ensure-Ca {
   if (Test-Path $CaPem) { return }
   Info "no CA yet in $ConfDir - generating one"
-  $p = Start-Process mitmdump -ArgumentList "-p","0" -PassThru -WindowStyle Hidden
+  $p = Start-Process mitmdump -ArgumentList "--listen-host","127.0.0.1","--listen-port","0" -PassThru -WindowStyle Hidden
   for ($i=0; $i -lt 20 -and -not (Test-Path $CaPem); $i++) { Start-Sleep -Milliseconds 500 }
   Stop-Process $p -ErrorAction SilentlyContinue
   if (-not (Test-Path $CaPem)) { Die "CA was not generated in $ConfDir" }
@@ -234,6 +243,8 @@ $TlsModes = @("all","allow","ignore")
 function Convert-ToNumber($text, $what) {
   $n = 0.0
   if (-not [double]::TryParse($text, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { Die "$what must be a number, got '$text'" }
+  $cap = if ($what -in @("loss","loss_pct")) { 100 } elseif ($what -in @("latency_ms","jitter_ms","response_delay_ms")) { 120000 } else { 1000000 }
+  if ([double]::IsNaN($n) -or [double]::IsInfinity($n) -or $n -lt 0 -or $n -gt $cap) { Die "$what must be 0-$cap" }
   return $n
 }
 
@@ -304,7 +315,18 @@ function Test-StaleLocalProxy($spec) {
   return $true
 }
 
-if ($Command -notin @("help","cert","-h","--help","")) { Migrate-Legacy }
+if ($Command -notin @("help","cert","doctor","-h","--help","")) { Migrate-Legacy }
+
+$unexpected = @()
+if ($Command -in @("start","ui","net-reset","doctor","status","cert","help")) {
+  if ($Action) { $unexpected += $Action }; if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
+} elseif ($Action -eq "list" -and $Command -in @("projects","rules","scripts","compose")) {
+  if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
+} elseif (@($Rest).Count -and $Command -ne "throttle" -and
+          -not ($Command -eq "tls" -and $Action -in @("allow","ignore"))) {
+  $unexpected += @($Rest)
+}
+if ($unexpected.Count) { Die "unexpected argument(s): $($unexpected -join ' ')" }
 
 switch ($Command) {
   "projects" {
@@ -684,6 +706,60 @@ switch ($Command) {
     if ($DryRun) { Info "dry run: nothing changed" }
     elseif (-not $userStale -and -not $winHttpStale) { Info "no stale local proxy found" }
     else { Info "stale local proxies cleared; all other proxies left alone" }
+  }
+  "doctor" {
+    # Prefer the shared Python checker (same logic as macOS). Read-only.
+    $py = $null
+    foreach ($cand in @("py","python3","python")) {
+      $c = Get-Command $cand -ErrorAction SilentlyContinue
+      if ($c) { $py = if ($cand -eq "py") { @($c.Source,"-3") } else { @($c.Source) }; break }
+    }
+    $doctorPy = Join-Path $PSScriptRoot "addons\doctor.py"
+    if ($py -and (Test-Path $doctorPy)) {
+      $adbPath = (Get-Command adb -ErrorAction SilentlyContinue).Source
+      $argv = @($doctorPy, "--project", $Project, "--rules", $RulesPath, "--confdir", $ConfDir,
+                "--port", $Port, "--web-port", $WebPort, "--script-dir", (Join-Path $ProjectState "scripts"))
+      if ($adbPath) { $argv += @("--adb", $adbPath) }
+      if ($Json)    { $argv += "--json" }
+      if ($NoNet)   { $argv += "--no-net" }
+      if ($AllowProfileNetwork) { $argv += "--allow-profile-network" }
+      if ($FixSafe) { $argv += "--fix-safe" }
+      if ($Yes)     { $argv += "--yes" }
+      & $py[0] @($py[1..($py.Count-1)]) @argv
+      exit $LASTEXITCODE
+    }
+    # Reduced native subset when Python is unavailable.
+    Write-Host "doctor (native subset — install Python for the full check)"
+    $mitm = Get-Command mitmdump -ErrorAction SilentlyContinue
+    if ($mitm) {
+      $v = (& $mitm.Source --version 2>&1 | Select-String -Pattern 'itmproxy:?\s*v?([0-9.]+)')
+      $ver = if ($v) { $v.Matches[0].Groups[1].Value } else { "unknown" }
+      $mark = if ($ver -eq "12.2.3") { "ok" } else { "warn" }
+      Write-Host ("  [{0}] mitmproxy {1} at {2}" -f $mark, $ver, $mitm.Source)
+    } else {
+      Write-Host "  [error] mitmproxy not found (brew/choco install mitmproxy, pinned 12.2.3)"
+    }
+    foreach ($pp in @(@("proxy",$Port),@("web UI",$WebPort))) {
+      $o = Port-Owner $pp[1]
+      if ($o) { Write-Host ("  [warn] {0} port :{1} owned by {2}" -f $pp[0],$pp[1],$o) }
+      else    { Write-Host ("  [ok] {0} port :{1} is free" -f $pp[0],$pp[1]) }
+    }
+    $cur = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction SilentlyContinue
+    if ($cur.ProxyEnable -eq 1) {
+      $stale = Test-StaleLocalProxy $cur.ProxyServer
+      if ($stale) { Write-Host ("  [error] stale WinINET proxy {0} — run: {1}.ps1 net-reset" -f $cur.ProxyServer,$Cli) }
+      else        { Write-Host ("  [warn] WinINET system proxy set: {0} (steals emulator traffic)" -f $cur.ProxyServer) }
+    } else { Write-Host "  [ok] no WinINET system proxy" }
+    $whLine = (netsh winhttp show proxy 2>$null | Select-String 'Proxy Server')
+    if ($whLine) { Write-Host ("  [info] WinHTTP: {0}" -f ($whLine.ToString().Trim())) }
+    $adb = Get-Command adb -ErrorAction SilentlyContinue
+    if ($adb) {
+      & adb devices | Select-String '^(emulator-\d+)\s+device$' | ForEach-Object {
+        $e = $_.Matches[0].Groups[1].Value
+        Write-Host ("  [info] android {0}: http_proxy={1}" -f $e, ((& adb -s $e shell settings get global http_proxy) -replace "`r",''))
+      }
+    } else { Write-Host "  [info] adb not found" }
+    exit 0
   }
   "status" {
     Ensure-Rules

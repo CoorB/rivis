@@ -81,6 +81,30 @@ class DryRun(InstallerBase):
             self.assertEqual(cp.returncode, 2, args)
         self.assertEqual(self.install("--help").returncode, 0)
 
+    def test_official_download_requires_explicit_opt_in(self):
+        env = self.suite.env(self.home, extra={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"})
+        cp = self.install("--dry-run", env=env)
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertIn("--allow-official", cp.stdout + cp.stderr)
+        cp = self.install("--dry-run", "--allow-official", env=env)
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertIn("explicitly allowed", cp.stdout)
+
+    def test_installer_bundle_carries_product_identity(self):
+        bundle = os.path.join(self.suite.root, "installer-bundle")
+        os.makedirs(bundle)
+        for name in ("install.sh", "install.ps1", "VERSION", "mirror.conf", "product.json"):
+            shutil.copy2(os.path.join(harness.REPO, "install", name), os.path.join(bundle, name))
+        cp = self.install("--dry-run", "--from-mirror", "https://mirror.example", bin=os.path.join(bundle, "install.sh"))
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertIn("Rivis (rivis)", cp.stdout)
+
+    def test_installer_source_has_no_eval_and_copies_local_archives_before_verification(self):
+        src = open(INSTALL).read()
+        self.assertNotRegex(src, r"(?m)^\s*eval\s")
+        self.assertIn('cp "$MITM_TARBALL" "$TMP/mitm-local.tar.gz"', src)
+        self.assertIn('cp "$TOOL_TARBALL" "$TMP/tool-local.tar.gz"', src)
+
 
 class RealInstall(InstallerBase):
     def test_install_is_idempotent_private_and_reversible(self):
@@ -132,6 +156,14 @@ class RealInstall(InstallerBase):
         log = self.suite.shim_log("networksetup.log")
         self.assertNotRegex(log, r"-set|REFUSED")
         self.assertNotIn("0.0.0.0", open(INSTALL).read().replace("beyond 0.0.0.0", ""))
+
+    def test_fish_path_block_is_written_to_fish_config_and_removed(self):
+        env = self.suite.env(self.home, extra={"SHELL": "/opt/homebrew/bin/fish"})
+        self.ok("--yes", "--skip-local-capture", env=env)
+        fish = os.path.join(self.home, ".config", "fish", "config.fish")
+        self.assertIn("set -gx PATH", open(fish).read())
+        self.ok("--uninstall", "--yes", env=env)
+        self.assertNotIn("proxy-tool installer", open(fish).read())
 
 
 class Pins(InstallerBase):
@@ -238,7 +270,6 @@ class Release(unittest.TestCase):
                 self.assertNotRegex(data, rb"/Users/[a-z0-9._-]+/", m.name)
                 self.assertFalse(re.search(rb"(?i)(password|secret|token)\s*[:=]\s*['\"][A-Za-z0-9+/_-]{16,}['\"]", data), m.name)
 
-    @unittest.expectedFailure
     def test_release_has_no_vcs_history_env_files_keys_or_test_artifacts(self):
         """FOUND-BUGS B9: make-release.sh is a deny-list; .git/, .env, key files and tests/.artifacts ride along."""
         stage = os.path.join(self.suite.root, "release-stage2", "next")
@@ -258,7 +289,6 @@ class Release(unittest.TestCase):
 
 
 class Cosmetics(InstallerBase):
-    @unittest.expectedFailure
     def test_install_then_uninstall_restores_the_rc_file_byte_for_byte(self):
         """FOUND-BUGS B10: install appends a blank line before the managed block; uninstall leaves it behind."""
         self.ok("--yes", "--skip-local-capture")
@@ -267,11 +297,25 @@ class Cosmetics(InstallerBase):
 
     @unittest.skipUnless(subprocess.run("systemextensionsctl list 2>/dev/null | grep -q org.mitmproxy.macos-redirector", shell=True).returncode == 0,
                          "the Mitmproxy Redirector system extension is not installed on this Mac, so its state line cannot be checked")
-    @unittest.expectedFailure
     def test_self_check_redirector_state_has_no_stray_bracket(self):
         """FOUND-BUGS B10: `awk '{print $NF}'` of '[activated enabled]' prints 'enabled]'."""
         out = self.ok("--yes", "--skip-local-capture").stdout
         self.assertNotRegex(out, r"redirector\s+\S*\]")
+
+
+class WindowsInstallerSource(unittest.TestCase):
+    def test_junctions_are_removed_without_recursive_delete_and_official_is_opt_in(self):
+        src = open(os.path.join(harness.REPO, "install", "install.ps1")).read()
+        self.assertIn("function Remove-Junction", src)
+        self.assertNotRegex(src, r"Remove-Item -Recurse -Force \$Current")
+        self.assertIn("[switch]$AllowOfficial", src)
+        self.assertIn("official site (explicitly allowed)", src)
+
+    def test_own_reuse_restores_installed_by_us_and_external_reuse_warns(self):
+        for rel in ("install/install.sh", "install/install.ps1"):
+            src = open(os.path.join(harness.REPO, rel)).read()
+            self.assertRegex(src, r"MITM_BY_US=1|MitmByUs = .*StartsWith")
+            self.assertIn("binary hash is not covered by the archive pin", src)
 
 
 if __name__ == "__main__":

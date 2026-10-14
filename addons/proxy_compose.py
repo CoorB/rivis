@@ -9,6 +9,7 @@ from proxy_common import SAFE_NAME
 
 VAR_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*}}")
 METHOD_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,32}$")
+HEADER_NAME_RE = METHOD_RE
 
 
 def _rows(value):
@@ -50,14 +51,37 @@ def normalize_request(spec, variables=None):
     else:
         query = [(substitute(k, variables), substitute(v, variables)) for k, v in _rows(query_source)]
     url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", urlencode(query, doseq=True), ""))   # a #fragment is never sent
-    headers = [(substitute(k, variables), substitute(v, variables)) for k, v in _rows(spec.get("headers") or [])
-               if str(k).strip()]
+    headers = []
+    for key, value in _rows(spec.get("headers") or []):
+        key, value = substitute(key, variables), substitute(value, variables)
+        if not key.strip():
+            continue
+        if not HEADER_NAME_RE.fullmatch(key):
+            raise ValueError("invalid HTTP header name")
+        if any(ord(char) < 0x20 and char != "\t" for char in value) or "\x7f" in value:
+            raise ValueError("invalid control character in HTTP header value")
+        headers.append((key, value))
+    supplied_body = substitute(spec.get("body") or "", variables)
+    explicit_mode = "body_mode" in spec and spec.get("body_mode") not in (None, "")
     mode = str(spec.get("body_mode") or "none").lower()
+    inferred_form = None
+    if not explicit_mode and supplied_body:
+        content_type = next((v.lower() for k, v in headers if k.lower() == "content-type"), "")
+        if "application/x-www-form-urlencoded" in content_type:
+            mode, inferred_form = "form", parse_qsl(supplied_body, keep_blank_values=True)
+        elif "json" in content_type:
+            mode = "json"
+        else:
+            try:
+                json.loads(supplied_body)
+                mode = "json"
+            except ValueError:
+                mode = "raw"
     if mode not in ("none", "json", "form", "raw"):
         raise ValueError("body mode must be none, json, form or raw")
     body = b""
     if mode == "json":
-        text = substitute(spec.get("body") or "", variables)
+        text = supplied_body
         try:
             value = json.loads(text)
         except ValueError as exc:
@@ -66,12 +90,13 @@ def normalize_request(spec, variables=None):
         if not any(k.lower() == "content-type" for k, _ in headers):
             headers.append(("Content-Type", "application/json"))
     elif mode == "form":
-        form = [(substitute(k, variables), substitute(v, variables)) for k, v in _rows(spec.get("form") or [])]
+        form = inferred_form if inferred_form is not None else [
+            (substitute(k, variables), substitute(v, variables)) for k, v in _rows(spec.get("form") or [])]
         body = urlencode(form, doseq=True).encode("utf-8")
         if not any(k.lower() == "content-type" for k, _ in headers):
             headers.append(("Content-Type", "application/x-www-form-urlencoded"))
     elif mode == "raw":
-        body = substitute(spec.get("body") or "", variables).encode("utf-8")
+        body = supplied_body.encode("utf-8")
     return {"method": method, "url": url, "headers": headers, "body": body, "body_mode": mode}
 
 

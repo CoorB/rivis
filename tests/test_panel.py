@@ -163,7 +163,7 @@ class Ops(LiveCase):
         self.assertTrue(self.panel.ok("mock", {"flow_id": fid})["existing"])
         self.widen_match(name, "/json/small")
         self.up.reset_hits()
-        wait_for(lambda: "rule:" in self.comment_after("/json/small"), 8, 0.3, "mock served")
+        wait_for(lambda: "mock:" in self.comment_after("/json/small"), 8, 0.3, "mock served")
         self.up.reset_hits()
         self.assertEqual(self.fetch("/json/small").json(), SMALL_JSON)
         self.assertEqual(self.up.hits_for("/json/small"), [])
@@ -177,7 +177,6 @@ class Ops(LiveCase):
         self.bad("mockfile_get", {"name": "ghost"}, "no rule")
         self.bad("mock", {"flow_id": "nope"}, "no longer")
 
-    @unittest.expectedFailure
     def test_rules_built_from_a_call_match_that_call_on_a_non_default_port(self):
         """FOUND-BUGS B3: flow_regex drops ':port', so mock/quick/breakpoint-from-call never match a call to host:port."""
         self.fetch("/json/small")
@@ -286,7 +285,7 @@ class Ops(LiveCase):
         doc = self.panel.ok("compose_send", {"spec": {"method": "GET", "url": self.up.url("/echo?c=1")}})
         fl = wait_for(lambda: (lambda f: f if f and f.get("response") else None)(self.find_flow(doc["id"])), 10, 0.2, "composed flow")
         self.assertEqual(fl["response"]["status_code"], 207)
-        self.assertIn("rule:mockecho", fl["comment"])
+        self.assertIn("mock:mockecho", fl["comment"])
         self.assertIn("composed", fl["comment"])
         self.assertEqual(self.up.hits_for("/echo"), [])
         self.bad("compose_send", {"spec": {"url": "ftp://x"}})
@@ -298,6 +297,17 @@ class Ops(LiveCase):
         fl = wait_for(lambda: (lambda f: f if f and f.get("response") else None)(self.find_flow(doc["id"])), 10, 0.2, "saved send")
         self.assertEqual(fl["response"]["status_code"], 200)
         self.assertEqual(len(self.up.hits_for("/json/small")), 1)
+
+    def test_compose_send_infers_body_and_does_not_replace_unicode_header_bytes(self):
+        doc = self.panel.ok("compose_send", {"spec": {"method": "POST", "url": self.up.url("/echo"),
+                                                       "headers": [["X-Name", "Jalapeño"]],
+                                                       "body": "plain body"}})
+        wait_for(lambda: self.find_flow(doc["id"]) and self.find_flow(doc["id"]).get("response"),
+                 10, 0.2, "composed response")
+        hit = self.up.hits_for("/echo")[-1]
+        self.assertEqual(hit["body"], b"plain body")
+        value = next(v for k, v in hit["headers"] if k.lower() == "x-name")
+        self.assertEqual(value.encode("latin-1"), "Jalapeño".encode("utf-8"))
 
     def comment_after(self, path):
         self.fetch(path)
@@ -400,7 +410,6 @@ class Ops(LiveCase):
         self.assertFalse(os.path.exists(self.inst.path("scripts", "x.py")))
         self.assertFalse(os.path.exists(self.inst.path("scripts", "y.py")))
 
-    @unittest.expectedFailure
     def test_failed_script_new_leaves_no_orphan_file(self):
         """FOUND-BUGS B4: an unknown template raises after the file was created → empty orphan blocks the name."""
         self.inst.clear_dir("scripts")
@@ -528,7 +537,6 @@ class MalformedInput(LiveCase):
             self.assertIn("error", doc)
         self.assertEqual(self.panel.post("view", raw=b"")[0], 200)       # empty body == {}
 
-    @unittest.expectedFailure
     def test_non_object_json_bodies_give_json_error_not_500(self):
         """FOUND-BUGS B1: [] / null / 123 / "x" as the request body → HTTP 500 HTML page."""
         for raw in (b"[]", b"null", b"123", b'"str"', b"true"):
@@ -536,7 +544,6 @@ class MalformedInput(LiveCase):
                 code, doc, _ = self.panel.post(op, raw=raw)
                 self.assertEqual(code, 400, "%s %r -> %s" % (op, raw, code))
 
-    @unittest.expectedFailure
     def test_wrongly_typed_names_give_json_error_not_500(self):
         """FOUND-BUGS B1: name/host given as number, list, object or bool → HTTP 500."""
         for op, key in (("sess_save", "name"), ("coll_record", "name"), ("coll_import", "name"),

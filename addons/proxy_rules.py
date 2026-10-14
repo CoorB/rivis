@@ -122,7 +122,8 @@ def _tag(flow, text):
 def _tag_rule(flow, rule, suffix="", modified=True):
     if modified:
         flow.metadata["proxy_modified"] = True
-    _tag(flow, f"rule:{rule['name']}{suffix}")
+    kind = "mock" if rule.get("action") in ("respond", "map_local") else "rule"
+    _tag(flow, f"{kind}:{rule['name']}{suffix}")
 
 
 def _compile_rule(source, fallback_name=None):
@@ -176,6 +177,7 @@ class ProxyRules:
         self.throttle_re = None
         self.loss = 0
         self.skipped_rules = []
+        self.last_good_cfg = {"rules": []}
         self._bp_filter = _UNSET
         self._intercept_set = _UNSET
         self.tls = tls_config({})
@@ -221,6 +223,12 @@ class ProxyRules:
         try:
             with open(self.path) as f:
                 cfg = json.load(f)
+            if not isinstance(cfg, dict):
+                raise ValueError("top level must be an object")
+            if not isinstance(cfg.get("rules", []), list):
+                raise ValueError("rules must be a list")
+            if cfg.get("rules") and all(not isinstance(r, dict) for r in cfg["rules"]):
+                raise ValueError("rules must contain objects")
             rules = []
             skipped = []
             for index, source in enumerate(cfg.get("rules", [])):
@@ -247,6 +255,7 @@ class ProxyRules:
             self.throttle_re, self.loss = throttle_re, loss
             self.tls = tls
             self.skipped_rules = skipped
+            self.last_good_cfg = cfg
             self.mtime = mtime
             names = ", ".join(r.get("name", "?") for r in rules) or "none"
             ctx.log.info(f"proxy_rules: loaded {self.path} — active rules: {names}; "

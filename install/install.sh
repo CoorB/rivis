@@ -2,13 +2,13 @@
 # One-step installer (macOS, bash 3.2). Idempotent; safe to re-run.
 #
 #   install.sh [--dry-run] [--from-mirror URL] [--mitmproxy-tarball PATH] [--tool-tarball PATH]
-#              [--skip-local-capture] [--no-rc] [--yes]
+#              [--allow-official] [--skip-local-capture] [--no-rc] [--yes]
 #   install.sh --uninstall [--dry-run]
 #
 # mitmproxy source, in priority order (the pinned SHA-256 in mirror.conf is verified in EVERY case; mismatch = refuse):
 #   1. --from-mirror URL   (or MIRROR_BASE_URL in mirror.conf, once IT publishes it)
 #   2. --mitmproxy-tarball PATH
-#   3. the official URL
+#   3. the official URL, only with --allow-official
 # A compatible mitmproxy (same pinned version) already on PATH, e.g. the Homebrew cask, is reused.
 #
 # Never: sudo, system proxy changes, listening beyond 127.0.0.1, touching an existing ~/.mitmproxy CA,
@@ -22,7 +22,7 @@ CONF="$HERE/mirror.conf"
 RC_BEGIN="# >>> proxy-tool installer (managed) >>>"
 RC_END="# <<< proxy-tool installer (managed) <<<"
 
-DRY=0; UNINSTALL=0; MIRROR=""; MITM_TARBALL=""; TOOL_TARBALL=""; SKIP_LOCAL=0; NO_RC=0; YES=0
+DRY=0; UNINSTALL=0; MIRROR=""; MITM_TARBALL=""; TOOL_TARBALL=""; SKIP_LOCAL=0; NO_RC=0; YES=0; ALLOW_OFFICIAL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
@@ -30,6 +30,7 @@ while [ $# -gt 0 ]; do
     --from-mirror) [ $# -ge 2 ] || { echo "--from-mirror needs a URL" >&2; exit 2; }; MIRROR="$2"; shift ;;
     --mitmproxy-tarball) [ $# -ge 2 ] || { echo "needs a path" >&2; exit 2; }; MITM_TARBALL="$2"; shift ;;
     --tool-tarball) [ $# -ge 2 ] || { echo "needs a path" >&2; exit 2; }; TOOL_TARBALL="$2"; shift ;;
+    --allow-official) ALLOW_OFFICIAL=1 ;;
     --skip-local-capture) SKIP_LOCAL=1 ;;
     --no-rc) NO_RC=1 ;;
     --yes|-y) YES=1 ;;
@@ -55,10 +56,11 @@ conf() {  # conf KEY — value from mirror.conf (plain KEY=VALUE, never sourced)
 
 # ---- identity (never hardcode the product name) ----------------------------------------------------------------
 product_json=""
-for c in "$SRC_ROOT/product.json" "$HOME"/.local/*/current/product.json; do [ -f "$c" ] && { product_json="$c"; break; }; done
+for c in "$HERE/product.json" "$SRC_ROOT/product.json" "$HOME"/.local/*/current/product.json; do [ -f "$c" ] && { product_json="$c"; break; }; done
 if [ -z "$product_json" ] && [ -n "$TOOL_TARBALL" ]; then
-  tmp_pj=$(mktemp -d); tar -xzf "$TOOL_TARBALL" -C "$tmp_pj" --include='*/product.json' 2>/dev/null
-  product_json=$(ls "$tmp_pj"/*/product.json 2>/dev/null | head -1)
+  tmp_pj=$(mktemp -d); trap 'rm -rf "$tmp_pj"' EXIT HUP INT TERM
+  tar -xzf "$TOOL_TARBALL" -C "$tmp_pj" --include='*/product.json' 2>/dev/null
+  product_json=$(find "$tmp_pj" -mindepth 2 -maxdepth 2 -type f -name product.json | head -1)
 fi
 [ -n "$product_json" ] || die "cannot find product.json (run from a checkout, or pass --tool-tarball)"
 CLI=$(plutil -extract cli raw -o - "$product_json") || die "bad product.json"
@@ -75,8 +77,11 @@ TOOL_DIR="$ROOT/tool-$TOOL_VERSION"
 RECEIPT="$ROOT/install-receipt"                  # records what WE installed, so uninstall removes only that
 CONFDIR="$HOME/.mitmproxy"
 PREFIX_VAR=$(plutil -extract env_prefix raw -o - "$product_json" 2>/dev/null || echo RIVIS)
-eval "_c=\${${PREFIX_VAR}_CONFDIR:-}"; [ -n "$_c" ] && CONFDIR="$_c"
+echo "$CLI" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,63}$' || die "product.json has an invalid cli"
+echo "$PREFIX_VAR" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$' || die "product.json has an invalid env_prefix"
+conf_var="${PREFIX_VAR}_CONFDIR"; _c="${!conf_var:-}"; [ -n "$_c" ] && CONFDIR="$_c"
 STATE_DIR=$(plutil -extract state_dir raw -o - "$product_json" 2>/dev/null); STATE_DIR="${STATE_DIR/#\~/$HOME}"
+[ -z "${tmp_pj:-}" ] || { rm -rf "$tmp_pj"; trap - EXIT HUP INT TERM; }
 
 # ---- uninstall -------------------------------------------------------------------------------------------------
 strip_rc_block() {  # strip_rc_block FILE — removes only our marked block
@@ -100,7 +105,7 @@ if [ "$UNINSTALL" = 1 ]; then
   for d in "$ROOT"/tool-*; do [ -d "$d" ] && do_ rm -rf "$d"; done
   do_ rm -f "$ROOT/current" "$RECEIPT"
   [ "$DRY" = 1 ] || rmdir "$ROOT" 2>/dev/null
-  for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.bashrc"; do strip_rc_block "$rc"; done
+  for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.config/fish/config.fish"; do strip_rc_block "$rc"; done
   echo
   info "kept (your data): state dir $STATE_DIR and the CA in $CONFDIR"
   echo "  To remove them too:  rm -rf \"$STATE_DIR\"   and   remove the CA from test devices first ($CLI ios off / $CLI android off)"
@@ -137,11 +142,12 @@ if [ -n "$REUSE" ]; then
 else
   if [ -n "$MIRROR" ];      then M_URL="$MIRROR/mitmproxy/$MITM_VERSION/$M_FILE"; M_FROM="internal mirror"
   elif [ -n "$MITM_TARBALL" ]; then M_URL=""; M_FROM="local tarball $MITM_TARBALL"
-  else M_URL="https://downloads.mitmproxy.org/$MITM_VERSION/$M_FILE"; M_FROM="official site"; fi
+  elif [ "$ALLOW_OFFICIAL" = 1 ]; then M_URL="https://downloads.mitmproxy.org/$MITM_VERSION/$M_FILE"; M_FROM="official site (explicitly allowed)"
+  else die "no internal mirror or local mitmproxy tarball; pass --allow-official to explicitly permit downloads.mitmproxy.org"; fi
   info "plan: install mitmproxy $MITM_VERSION from $M_FROM → $MITM_DIR"
   [ -n "${M_URL:-}" ] && info "      url    $M_URL"
   info "      sha256 $M_SHA (verified before use)"
-  [ "$M_FROM" = "official site" ] && warn "the corporate web filter may block downloads.mitmproxy.org — use --from-mirror or --mitmproxy-tarball"
+  echo "$M_FROM" | grep -q '^official site' && warn "using the public official site by explicit request"
 fi
 if [ -n "$TOOL_TARBALL" ]; then T_FROM="tarball $TOOL_TARBALL"
 elif [ -n "$MIRROR" ] && [ ! -f "$SRC_ROOT/$CLI" ]; then T_FROM="mirror $MIRROR/$CLI/$CLI-$TOOL_VERSION.tar.gz"
@@ -151,7 +157,10 @@ info "plan: install tool from $T_FROM → $TOOL_DIR"
 info "plan: launcher $LINK (puts the pinned mitmproxy first on PATH for the tool only)"
 if [ "$NO_RC" = 1 ]; then info "plan: no shell rc edits (--no-rc)"
 elif echo ":$PATH:" | grep -qF ":$BIN_DIR:"; then info "plan: $BIN_DIR already on PATH — no rc edit"
-else info "plan: add $BIN_DIR to PATH via a marked block in $(basename "${SHELL:-zsh}" | sed 's/zsh/.zshrc/;s/bash/.bash_profile/')"; fi
+else
+  case "$(basename "${SHELL:-zsh}")" in bash) plan_rc=.bash_profile ;; fish) plan_rc=.config/fish/config.fish ;; *) plan_rc=.zshrc ;; esac
+  info "plan: add $BIN_DIR to PATH via a marked block in $plan_rc"
+fi
 if [ -f "$CONFDIR/mitmproxy-ca-cert.pem" ]; then info "plan: CA exists in $CONFDIR — left untouched"
 else info "plan: generate the per-workstation CA in $CONFDIR (mitmdump on 127.0.0.1, random port, stopped right after)"; fi
 if [ "$SKIP_LOCAL" = 1 ]; then info "plan: skip local-capture setup (--skip-local-capture)"
@@ -179,13 +188,15 @@ fetch() {  # fetch URL DEST
 MITM_BIN_DIR=""; MITM_BY_US=0
 if [ -n "$REUSE" ]; then
   MITM_BIN_DIR="$(dirname "$REUSE")"
+  case "$REUSE" in "$MITM_DIR"/*) MITM_BY_US=1 ;; *) warn "reusing external mitmproxy based on its reported version; its binary hash is not covered by the archive pin" ;; esac
   info "reusing mitmproxy $MITM_VERSION at $MITM_BIN_DIR"
 else
   mkdir -p "$ROOT"
   if [ -n "${M_URL:-}" ]; then
     fetch "$M_URL" "$TMP/mitm.tar.gz"; MITM_FILE="$TMP/mitm.tar.gz"
   else
-    [ -f "$MITM_TARBALL" ] || die "no such file: $MITM_TARBALL"; MITM_FILE="$MITM_TARBALL"
+    [ -f "$MITM_TARBALL" ] || die "no such file: $MITM_TARBALL"
+    cp "$MITM_TARBALL" "$TMP/mitm-local.tar.gz"; MITM_FILE="$TMP/mitm-local.tar.gz"
   fi
   verify "$MITM_FILE" "$M_SHA" "mitmproxy tarball"
   rm -rf "$TMP/mitm-x"; mkdir "$TMP/mitm-x"
@@ -205,8 +216,9 @@ mkdir -p "$ROOT"
 rm -rf "$TMP/tool-x"; mkdir "$TMP/tool-x"
 if [ -n "$TOOL_TARBALL" ]; then
   [ -f "$TOOL_TARBALL" ] || die "no such file: $TOOL_TARBALL"
-  verify "$TOOL_TARBALL" "$T_SHA" "tool tarball"
-  tar -xzf "$TOOL_TARBALL" -C "$TMP/tool-x" --strip-components=1 || die "cannot extract tool tarball"
+  cp "$TOOL_TARBALL" "$TMP/tool-local.tar.gz"
+  verify "$TMP/tool-local.tar.gz" "$T_SHA" "tool tarball"
+  tar -xzf "$TMP/tool-local.tar.gz" -C "$TMP/tool-x" --strip-components=1 || die "cannot extract tool tarball"
 elif [ -f "$SRC_ROOT/$CLI" ]; then
   # running from our own checkout: copy it, leaving out state and snapshots
   ( cd "$SRC_ROOT" && tar -cf - --exclude './install' --exclude '.DS_Store' --exclude '*.pyc' --exclude '__pycache__' . ) | tar -xf - -C "$TMP/tool-x"
@@ -237,10 +249,15 @@ cp "$TMP/launcher" "$LINK"
 info "launcher $LINK"
 
 add_rc() {
-  local rc
-  case "$(basename "${SHELL:-/bin/zsh}")" in bash) rc="$HOME/.bash_profile" ;; *) rc="$HOME/.zshrc" ;; esac
+  local rc line
+  case "$(basename "${SHELL:-/bin/zsh}")" in
+    bash) rc="$HOME/.bash_profile"; line="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+    fish) rc="$HOME/.config/fish/config.fish"; line="set -gx PATH \"$BIN_DIR\" \$PATH"; mkdir -p "$(dirname "$rc")" ;;
+    *) rc="$HOME/.zshrc"; line="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+  esac
   if [ -f "$rc" ] && grep -qF "$RC_BEGIN" "$rc"; then info "PATH block already in $rc"; return; fi
-  { echo; echo "$RC_BEGIN"; echo "export PATH=\"$BIN_DIR:\$PATH\""; echo "$RC_END"; } >> "$rc"
+  [ ! -s "$rc" ] || [ "$(tail -c 1 "$rc" | wc -l | tr -d ' ')" = 1 ] || echo >> "$rc"
+  { echo "$RC_BEGIN"; echo "$line"; echo "$RC_END"; } >> "$rc"
   info "added $BIN_DIR to PATH in $rc (open a new terminal to pick it up)"
 }
 if [ "$NO_RC" = 0 ] && ! echo ":$PATH:" | grep -qF ":$BIN_DIR:"; then add_rc; fi
@@ -313,7 +330,7 @@ info "self-check"
 echo "  tool          $NAME $TOOL_VERSION  ($ROOT/current)"
 echo "  mitmproxy     $("$MITMDUMP" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}')  ($MITM_BIN_DIR)"
 echo "  CA sha256     $(openssl x509 -in "$CA_PEM" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)"
-echo "  redirector    $(ext_state | awk '{print $NF}' | grep . || echo 'not installed')"
+echo "  redirector    $(ext_state | sed -n 's/.*\[\([^]]*\)\].*/\1/p' | grep . || echo 'not installed')"
 [ "$EXT_OK" = 1 ] || echo "  NOTE: iOS Simulator capture needs the Redirector approved (see above). Android and plain proxy work without it."
 echo
 info "next steps"

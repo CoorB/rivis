@@ -42,6 +42,10 @@
 #   <cli> ios on|off [--udid UDID]         CA on a simulator (default: the booted one)
 #   <cli> net-reset [--dry-run]            clear stale local web/https/socks proxies
 #                                         service — fixes "no internet after closing the proxy app"
+#   <cli> doctor [--json] [--no-net] [--fix-safe [--yes]]
+#                                 read-only health check: versions, CA, ports, system proxy,
+#                                 sim/emulator trust, running state, host reachability, disk.
+#                                 --fix-safe does only safe, reversible fixes (asks y/N)
 #   <cli> status | cert
 set -uo pipefail
 umask 077
@@ -138,8 +142,8 @@ info()  { echo "• $*"; }
 ensure_ca() {
   [ -f "$CA_PEM" ] && return
   info "no CA yet in $CONFDIR — generating one (first mitmproxy run does this)"
-  command -v mitmdump >/dev/null || die "mitmproxy not installed (brew install --cask mitmproxy, after IT approval)"
-  mitmdump --set confdir="$CONFDIR" -p 0 >/dev/null 2>&1 & local p=$!
+  command -v mitmdump >/dev/null || die "mitmproxy not installed (install the pinned build from the internal mirror)"
+  mitmdump --listen-host 127.0.0.1 --listen-port 0 --set confdir="$CONFDIR" >/dev/null 2>&1 & local p=$!
   for _ in $(seq 1 20); do [ -f "$CA_PEM" ] && break; sleep 0.5; done
   kill "$p" 2>/dev/null; wait "$p" 2>/dev/null
   [ -f "$CA_PEM" ] || die "CA was not generated in $CONFDIR"
@@ -171,7 +175,7 @@ migrate_legacy() {
     echo "$CLI: legacy state copy failed; migration will be retried next time" >&2
     return 1
   fi
-  if [ -f "$tmp/rules.json" ] && ! /usr/bin/python3 -I - "$tmp/rules.json" "$old/mocks" "$tmp/mocks" <<'PY'
+  if [ -f "$tmp/rules.json" ] && ! /usr/bin/python3 -I - "$tmp/rules.json" "$old/mocks" "$target/mocks" <<'PY'
 import json, os, sys, tempfile
 path, old, new = sys.argv[1:]
 try:
@@ -658,6 +662,16 @@ print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n
   fi
 }
 
+# doctor — read-only health check (never writes unless --fix-safe + confirm).
+# Deliberately does NOT call ensure_rules/secure_dirs/migrate_legacy: it must not mutate state.
+cmd_doctor() {
+  [ -x "$SCRIPT_DIR/addons/doctor.py" ] || true
+  /usr/bin/python3 -I "$SCRIPT_DIR/addons/doctor.py" \
+    --project "$PROJECT" --rules "$RULES" --confdir "$CONFDIR" \
+    --port "$PORT" --web-port "$WEB_PORT" --script-dir "$PROJECT_STATE/scripts" \
+    --adb "$ADB" "$@"
+}
+
 cmd_cert() {
   ensure_ca
   echo "CA:        $CA_PEM"
@@ -666,7 +680,7 @@ cmd_cert() {
   openssl x509 -in "$CA_PEM" -noout -enddate
 }
 
-case "${1:-}" in -h|--help|help|""|cert) ;; *) migrate_legacy || exit 1 ;; esac
+case "${1:-}" in -h|--help|help|""|cert|doctor) ;; *) migrate_legacy || exit 1 ;; esac
 
 case "${1:-}" in
   projects)  shift; cmd_projects "$@" ;;
@@ -684,6 +698,7 @@ case "${1:-}" in
   compose)   shift; cmd_compose "$@" ;;
   breakpoint) shift; cmd_breakpoint "$@" ;;
   mock)      shift; cmd_mock "$@" ;;
+  doctor)    shift; cmd_doctor "$@" ;;
   cert)      cmd_cert ;;
   -h|--help|help|"") usage ;;
   *) die "unknown command '$1' ($CLI --help)" ;;

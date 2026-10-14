@@ -39,7 +39,7 @@ Put the printed hash into `TOOL_SHA256` in `mirror.conf`. The tarball excludes `
 
 ## 3. The installer bundle (so users need nothing else)
 
-Publish alongside: `install.sh`, `install.ps1`, `VERSION`, `mirror.conf` (with `MIRROR_BASE_URL` and all hashes filled in).
+Publish alongside: `install.sh`, `install.ps1`, `VERSION`, `mirror.conf`, `product.json` (with `MIRROR_BASE_URL` and all hashes filled in).
 They must stay in one directory; the tool tarball does not contain them. Distribute as a folder or zip.
 
 ## 4. Optional: internal Homebrew tap

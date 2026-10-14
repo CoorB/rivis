@@ -2,13 +2,13 @@
 .SYNOPSIS
   One-step installer for Windows (PowerShell 5.1). User-scope only: no admin, no system proxy, 127.0.0.1 only.
 .DESCRIPTION
-  install.ps1 [-DryRun] [-FromMirror URL] [-MitmproxyZip PATH] [-ToolTarball PATH] [-NoPath]
+  install.ps1 [-DryRun] [-FromMirror URL] [-MitmproxyZip PATH] [-ToolTarball PATH] [-AllowOfficial] [-NoPath]
   install.ps1 -Uninstall [-DryRun]
 
   mitmproxy source, in priority order (the pinned SHA-256 in mirror.conf is verified in EVERY case; mismatch = refuse):
     1. -FromMirror URL (or MIRROR_BASE_URL in mirror.conf once IT publishes it)
     2. -MitmproxyZip PATH
-    3. the official URL
+    3. the official URL, only with -AllowOfficial
   A mitmdump of the pinned version already on PATH is reused.
   Windows has no iOS Simulator: only the Android emulator path (adb from the Android SDK) and plain proxying apply.
   Uninstall removes our files and the PATH entry; it keeps the state dir and the CA.
@@ -20,6 +20,7 @@ param(
   [string]$FromMirror = "",
   [string]$MitmproxyZip = "",
   [string]$ToolTarball = "",
+  [switch]$AllowOfficial,
   [switch]$NoPath
 )
 $ErrorActionPreference = "Stop"
@@ -43,7 +44,7 @@ function Get-Conf([string]$key) {
 
 # ---- identity (never hardcode the product name) ---------------------------------------------------------------
 $ProductJson = $null
-foreach ($c in @((Join-Path $SrcRoot "product.json"))) { if (Test-Path $c) { $ProductJson = $c } }
+foreach ($c in @((Join-Path $Here "product.json"), (Join-Path $SrcRoot "product.json"))) { if (Test-Path $c) { $ProductJson = $c; break } }
 if (-not $ProductJson) {
   $hit = Get-ChildItem (Join-Path $env:LOCALAPPDATA "*\current\product.json") -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($hit) { $ProductJson = $hit.FullName }
@@ -76,6 +77,12 @@ function Path-Has([string]$dir) {
   foreach ($p in ((Get-UserPath) -split ";")) { if ($p.TrimEnd("\") -ieq $dir.TrimEnd("\")) { return $true } }
   return $false
 }
+function Remove-Junction([string]$path) {
+  if (Test-Path $path) {
+    & cmd.exe /c rmdir "$path" | Out-Null
+    if ($LASTEXITCODE) { Die "cannot remove junction $path" }
+  }
+}
 
 # ---- uninstall ------------------------------------------------------------------------------------------------
 if ($Uninstall) {
@@ -88,7 +95,7 @@ if ($Uninstall) {
   }
   Do-It "remove launcher and current link" {
     Remove-Item -Force (Join-Path $BinDir "$Cli.cmd") -ErrorAction SilentlyContinue
-    if (Test-Path $Current) { Remove-Item -Recurse -Force $Current }
+    Remove-Junction $Current
     Remove-Item -Force $Receipt -ErrorAction SilentlyContinue
   }
   if (Path-Has $BinDir) {
@@ -132,12 +139,13 @@ if ($Reuse) { Info "plan: mitmproxy $MitmVersion already present at $Reuse - reu
 else {
   if ($Mirror)            { $MUrl = "$Mirror/mitmproxy/$MitmVersion/$MFile"; $From = "internal mirror" }
   elseif ($MitmproxyZip)  { $From = "local zip $MitmproxyZip" }
-  else                    { $MUrl = "https://downloads.mitmproxy.org/$MitmVersion/$MFile"; $From = "official site" }
+  elseif ($AllowOfficial) { $MUrl = "https://downloads.mitmproxy.org/$MitmVersion/$MFile"; $From = "official site (explicitly allowed)" }
+  else { Die "no internal mirror or local mitmproxy zip; pass -AllowOfficial to explicitly permit downloads.mitmproxy.org" }
   Info "plan: install mitmproxy $MitmVersion from $From -> $MitmDir"
   if ($MUrl) { Info "      url    $MUrl" }
   if ($MSha) { Info "      sha256 $MSha (verified before use)" }
   else { Warn "no pinned SHA-256 for the Windows zip in mirror.conf yet - the installer will refuse until IT fills MITMPROXY_SHA256_WINDOWS_X86_64" }
-  if ($From -eq "official site") { Warn "the corporate web filter may block downloads.mitmproxy.org - use -FromMirror or -MitmproxyZip" }
+  if ($From -like "official site*") { Warn "using the public official site by explicit request" }
 }
 if ($ToolTarball) { $TFrom = "tarball $ToolTarball" }
 elseif (Test-Path (Join-Path $SrcRoot "$Cli.ps1")) { $TFrom = "this checkout ($SrcRoot)" }
@@ -179,10 +187,15 @@ try {
 
   # ---- 1. mitmproxy ----
   $MitmByUs = $false
-  if ($Reuse) { $MitmBin = Split-Path -Parent $Reuse; Info "reusing mitmproxy $MitmVersion at $MitmBin" }
+  if ($Reuse) {
+    $MitmBin = Split-Path -Parent $Reuse
+    $MitmByUs = $Reuse.StartsWith($MitmDir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+    if (-not $MitmByUs) { Warn "reusing external mitmproxy based on its reported version; its binary hash is not covered by the archive pin" }
+    Info "reusing mitmproxy $MitmVersion at $MitmBin"
+  }
   else {
     if ($MUrl) { $zip = Join-Path $Tmp "mitm.zip"; Fetch $MUrl $zip }
-    else { if (-not (Test-Path $MitmproxyZip)) { Die "no such file: $MitmproxyZip" }; $zip = $MitmproxyZip }
+    else { if (-not (Test-Path $MitmproxyZip)) { Die "no such file: $MitmproxyZip" }; $zip = Join-Path $Tmp "mitm-local.zip"; Copy-Item $MitmproxyZip $zip }
     Verify $zip $MSha "mitmproxy zip"
     $x = Join-Path $Tmp "mitm-x"
     Expand-Archive -Path $zip -DestinationPath $x -Force
@@ -200,8 +213,9 @@ try {
   $tx = Join-Path $Tmp "tool-x"; New-Item -ItemType Directory -Path $tx | Out-Null
   if ($ToolTarball) {
     if (-not (Test-Path $ToolTarball)) { Die "no such file: $ToolTarball" }
-    Verify $ToolTarball $TSha "tool tarball"
-    & tar.exe -xzf $ToolTarball -C $tx --strip-components=1; if ($LASTEXITCODE) { Die "cannot extract tool tarball (tar.exe needs Windows 10 1803+)" }
+    $localTool = Join-Path $Tmp "tool-local.tar.gz"; Copy-Item $ToolTarball $localTool
+    Verify $localTool $TSha "tool tarball"
+    & tar.exe -xzf $localTool -C $tx --strip-components=1; if ($LASTEXITCODE) { Die "cannot extract tool tarball (tar.exe needs Windows 10 1803+)" }
   } elseif (Test-Path (Join-Path $SrcRoot "$Cli.ps1")) {
     Get-ChildItem $SrcRoot -Force | Where-Object { $_.Name -notin @("install", ".DS_Store") } | ForEach-Object {
       Copy-Item $_.FullName -Destination $tx -Recurse -Force
@@ -215,7 +229,7 @@ try {
   if (Test-Path $ToolDir) { Remove-Item -Recurse -Force $ToolDir }
   Move-Item $tx $ToolDir
   Get-ChildItem $ToolDir -Recurse -File | Unblock-File
-  if (Test-Path $Current) { Remove-Item -Recurse -Force $Current }
+  Remove-Junction $Current
   # a junction needs no admin rights (a symlink does)
   & cmd.exe /c mklink /J "$Current" "$ToolDir" | Out-Null; if ($LASTEXITCODE) { Die "cannot create junction $Current" }
   Info "installed tool $ToolVersion -> $ToolDir"

@@ -47,7 +47,7 @@ async function invoke(msg) {
   entry.fresh = false;
   if (!functionName) {
     const raw = vm.runInContext(`JSON.stringify({context:globalThis.__proxyState,logs:globalThis.__proxyLogs,result:null})`, entry.context);
-    return JSON.parse(raw);
+    return { ...JSON.parse(raw), invoked: false };
   }
   const args = msg.hook === "on_request" ? "__proxyState,__proxyInput.url,__proxyInput.request"
                                          : "__proxyState,__proxyInput.url,__proxyInput.request,__proxyInput.response";
@@ -60,7 +60,7 @@ async function invoke(msg) {
   ]).finally(() => clearTimeout(timer));
   entry.context.__proxyResolved = result;
   const raw = vm.runInContext(`JSON.stringify({context:globalThis.__proxyState,logs:globalThis.__proxyLogs,result:globalThis.__proxyResolved})`, entry.context, { timeout: 2000 });
-  return JSON.parse(raw);
+  return { ...JSON.parse(raw), invoked: true };
 }
 
 rl.on("line", async (line) => {

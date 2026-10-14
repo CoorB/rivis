@@ -1,0 +1,228 @@
+"""Unit tests for doctor's pure classifiers and state summary (stdlib only, no mitmproxy)."""
+import os
+import tempfile
+import unittest
+from unittest import mock
+
+import _paths  # noqa: F401
+from doctor import (
+    Report, _cert_dates, _trusted_panel_listener, check_ca, check_network,
+    classify_network_failure, classify_system_proxy, executable_is_safe, is_loopback,
+    parse_lsof_listener, parse_networksetup_proxy, summarize_state,
+)
+
+
+class Lsof(unittest.TestCase):
+    SAMPLE = (
+        "COMMAND   PID   USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\n"
+        "mitmweb 80112 macm92    7u  IPv4 0x3f2920d762f904cf      0t0  TCP 127.0.0.1:8083 (LISTEN)\n"
+    )
+
+    def test_parses_owner(self):
+        rows = parse_lsof_listener(self.SAMPLE)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["command"], "mitmweb")
+        self.assertEqual(rows[0]["pid"], "80112")
+        self.assertEqual(rows[0]["name"], "127.0.0.1:8083")
+
+    def test_empty(self):
+        self.assertEqual(parse_lsof_listener(""), [])
+        self.assertEqual(parse_lsof_listener("COMMAND PID USER FD TYPE DEV SIZE NODE NAME"), [])
+
+    def test_proxyman(self):
+        out = ("COMMAND  PID USER FD TYPE DEV OFF NODE NAME\n"
+               "Proxyman 42 me 10u IPv4 0x1 0t0 TCP *:8080 (LISTEN)\n")
+        rows = parse_lsof_listener(out)
+        self.assertEqual(rows[0]["command"], "Proxyman")
+
+
+class NetworksetupParser(unittest.TestCase):
+    def test_enabled_proxy(self):
+        block = "Enabled: Yes\nServer: 127.0.0.1\nPort: 9090\nAuthenticated Proxy Enabled: 0"
+        self.assertEqual(parse_networksetup_proxy(block),
+                         {"enabled": True, "server": "127.0.0.1", "port": "9090"})
+
+    def test_disabled(self):
+        block = "Enabled: No\nServer:\nPort: 0"
+        got = parse_networksetup_proxy(block)
+        self.assertFalse(got["enabled"])
+
+    def test_blank(self):
+        self.assertEqual(parse_networksetup_proxy(""),
+                         {"enabled": False, "server": "", "port": ""})
+
+
+class SystemProxyClass(unittest.TestCase):
+    def test_stale_localhost(self):
+        self.assertEqual(classify_system_proxy("127.0.0.1", "9090", False), "local_stale")
+
+    def test_active_localhost(self):
+        self.assertEqual(classify_system_proxy("localhost", "9090", True), "local_active")
+
+    def test_corporate(self):
+        self.assertEqual(classify_system_proxy("proxy.corp.example", "8080", False), "corporate")
+
+    def test_loopback_helper(self):
+        self.assertTrue(is_loopback("127.0.0.1"))
+        self.assertTrue(is_loopback("::1"))
+        self.assertFalse(is_loopback("10.0.0.1"))
+
+
+class CertificateParser(unittest.TestCase):
+    @staticmethod
+    def tlv(tag, value):
+        if len(value) < 128:
+            length = bytes([len(value)])
+        else:
+            raw = len(value).to_bytes((len(value).bit_length() + 7) // 8, "big")
+            length = bytes([0x80 | len(raw)]) + raw
+        return bytes([tag]) + length + value
+
+    def test_reads_utc_and_generalized_validity_without_private_ssl_api(self):
+        validity = self.tlv(0x30, self.tlv(0x17, b"491231235959Z") + self.tlv(0x18, b"20500101000000Z"))
+        tbs = self.tlv(0x30, self.tlv(0x02, b"\x01") + self.tlv(0x30, b"") + self.tlv(0x30, b"") + validity)
+        der = self.tlv(0x30, tbs)
+        with tempfile.NamedTemporaryFile() as fh:
+            fh.write(der); fh.flush()
+            before, after = _cert_dates(fh.name)
+        self.assertEqual(before, 2524607999)  # 2049-12-31 23:59:59 UTC
+        self.assertEqual(after, 2524608000)   # 2050-01-01 00:00:00 UTC
+
+    def test_corrupt_certificate_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "mitmproxy-ca-cert.pem")
+            with open(path, "wb") as fh:
+                fh.write(b"not a certificate")
+            with self.assertRaises(ValueError):
+                _cert_dates(path)
+            rep = Report()
+            check_ca(rep, directory)
+            self.assertTrue(any(level == "error" and "corrupt" in title
+                                for _, level, title, _, _ in rep.items))
+            self.assertFalse(any(level == "ok" for _, level, _, _, _ in rep.items))
+
+
+class ExecutableTrust(unittest.TestCase):
+    def test_group_or_world_writable_executable_is_refused(self):
+        with tempfile.NamedTemporaryFile() as fh:
+            os.chmod(fh.name, 0o755)
+            self.assertTrue(executable_is_safe(fh.name)[0])
+            os.chmod(fh.name, 0o775)
+            safe, reason = executable_is_safe(fh.name)
+            self.assertFalse(safe)
+            self.assertIn("writable", reason)
+
+
+class RunningInstanceTrust(unittest.TestCase):
+    def test_listener_must_be_loopback_ours_and_use_the_same_rules(self):
+        owner = [{"command": "mitmweb", "pid": "42", "name": "127.0.0.1:18083"}]
+        command = "501 /opt/mitmweb -s %s --set proxy_rules_file=%s\n" % (
+            os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "addons", "proxy_panel.py")),
+            os.path.realpath("/tmp/rules.json"))
+        with mock.patch("doctor.run", return_value=(0, command, "")), mock.patch("doctor.os.getuid", return_value=501):
+            self.assertTrue(_trusted_panel_listener(owner, "/tmp/rules.json")[0])
+            self.assertFalse(_trusted_panel_listener(owner, "/tmp/other.json")[0])
+            remote = [dict(owner[0], name="*:18083")]
+            self.assertFalse(_trusted_panel_listener(remote, "/tmp/rules.json")[0])
+
+
+class ProfileNetworkConsent(unittest.TestCase):
+    def test_user_profile_hosts_need_explicit_opt_in(self):
+        profile = {"doctor_hosts": ["internal.example"]}
+        with mock.patch("doctor.project_profile", return_value=profile), \
+             mock.patch("doctor.os.path.isfile", return_value=True), \
+             mock.patch("doctor._probe_host") as probe:
+            rep = Report()
+            check_network(rep, "custom", False)
+            probe.assert_not_called()
+            self.assertTrue(any(level == "skip" for _, level, _, _, _ in rep.items))
+
+            rep = Report()
+            check_network(rep, "custom", False, allow_profile_network=True)
+            probe.assert_called_once_with("internal.example")
+
+
+class NetworkFailure(unittest.TestCase):
+    def test_dns(self):
+        self.assertEqual(classify_network_failure("dns", "gaierror",
+                         "[Errno 8] nodename nor servname provided"), "dns_fail")
+
+    def test_tcp_timeout_is_no_route(self):
+        self.assertEqual(classify_network_failure("tcp", "timeout", "timed out"), "no_route")
+
+    def test_tcp_refused(self):
+        self.assertEqual(classify_network_failure("tcp", "ConnectionRefusedError",
+                         "[Errno 61] Connection refused"), "refused")
+
+    def test_tcp_unreachable(self):
+        self.assertEqual(classify_network_failure("tcp", "OSError",
+                         "[Errno 65] No route to host"), "no_route")
+
+    def test_tls_san_mismatch(self):
+        self.assertEqual(classify_network_failure("tls", "SSLCertVerificationError",
+                         "Hostname mismatch, certificate is not valid for 'x'"), "cert_san_mismatch")
+
+    def test_tls_untrusted(self):
+        self.assertEqual(classify_network_failure("tls", "SSLCertVerificationError",
+                         "certificate verify failed: self-signed certificate"), "cert_untrusted")
+
+    def test_tls_reset(self):
+        self.assertEqual(classify_network_failure("tls", "ConnectionResetError",
+                         "Connection reset by peer"), "tls_reset")
+
+    def test_tls_handshake_refused(self):
+        self.assertEqual(classify_network_failure("tls", "SSLError",
+                         "[SSL] sslv3 alert handshake failure"), "tls_refused")
+
+    def test_tls_wrong_version(self):
+        self.assertEqual(classify_network_failure("tls", "SSLError",
+                         "WRONG_VERSION_NUMBER"), "tls_refused")
+
+
+class SummarizeState(unittest.TestCase):
+    def base(self, **kw):
+        state = {"active_project": "neo", "rules": [], "skipped_rules": [],
+                 "throttle": "off", "loss": 0, "breakpoints": [],
+                 "collections": {}, "tls": {"mode": "all"}, "script_status": {"errors": {}}}
+        state.update(kw)
+        return state
+
+    def test_clean(self):
+        lines, flags = summarize_state(self.base())
+        self.assertEqual(flags, [])
+        self.assertTrue(any("project neo" in t for _, t, _ in lines))
+
+    def test_skipped_and_script_errors(self):
+        lines, flags = summarize_state(self.base(
+            skipped_rules=[{"name": "bad"}],
+            script_status={"errors": {"qa.js": "boom"}}))
+        titles = " ".join(t for _, t, _ in lines)
+        self.assertIn("skipped", titles)
+        self.assertIn("script error", titles)
+
+    def test_throttle_flagged(self):
+        _, flags = summarize_state(self.base(throttle="3g-urban", throttle_match="neo"))
+        self.assertTrue(any("throttle active" in f for f in flags))
+
+    def test_block_rule_flagged(self):
+        _, flags = summarize_state(self.base(
+            rules=[{"name": "kill", "enabled": True, "action": "block"}]))
+        self.assertTrue(any("rewrite/replace traffic" in f for f in flags))
+
+    def test_disabled_rule_not_flagged(self):
+        _, flags = summarize_state(self.base(
+            rules=[{"name": "kill", "enabled": False, "action": "block"}]))
+        self.assertEqual(flags, [])
+
+    def test_strict_replay_flagged(self):
+        _, flags = summarize_state(self.base(collections={"strict": True}))
+        self.assertTrue(any("strict replay" in f for f in flags))
+
+    def test_breakpoint_flagged(self):
+        _, flags = summarize_state(self.base(
+            breakpoints=[{"name": "bp", "enabled": True, "match": "x"}]))
+        self.assertTrue(any("breakpoint" in f for f in flags))
+
+
+if __name__ == "__main__":
+    unittest.main()
