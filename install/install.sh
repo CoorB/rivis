@@ -60,7 +60,7 @@ for c in "$HERE/product.json" "$SRC_ROOT/product.json" "$HOME"/.local/*/current/
 if [ -z "$product_json" ] && [ -n "$TOOL_TARBALL" ]; then
   tmp_pj=$(mktemp -d); trap 'rm -rf "$tmp_pj"' EXIT HUP INT TERM
   tar -xzf "$TOOL_TARBALL" -C "$tmp_pj" --include='*/product.json' 2>/dev/null
-  product_json=$(ls "$tmp_pj"/*/product.json 2>/dev/null | head -1)
+  product_json=$(find "$tmp_pj" -mindepth 2 -maxdepth 2 -type f -name product.json | head -1)
 fi
 [ -n "$product_json" ] || die "cannot find product.json (run from a checkout, or pass --tool-tarball)"
 CLI=$(plutil -extract cli raw -o - "$product_json") || die "bad product.json"

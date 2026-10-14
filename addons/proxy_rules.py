@@ -225,8 +225,10 @@ class ProxyRules:
                 cfg = json.load(f)
             if not isinstance(cfg, dict):
                 raise ValueError("top level must be an object")
-            if not isinstance(cfg.get("rules", []), list) or any(not isinstance(r, dict) for r in cfg.get("rules", [])):
-                raise ValueError("rules must be a list of objects")
+            if not isinstance(cfg.get("rules", []), list):
+                raise ValueError("rules must be a list")
+            if cfg.get("rules") and all(not isinstance(r, dict) for r in cfg["rules"]):
+                raise ValueError("rules must contain objects")
             rules = []
             skipped = []
             for index, source in enumerate(cfg.get("rules", [])):

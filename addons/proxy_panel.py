@@ -110,6 +110,7 @@ class ProxyPanel:
         self._tls_tunnels = False      # is the list filter currently showing tunnel rows?
         self._last_good_cfg = {"rules": []}
         self._rules_error = None
+        self._bad_cfg = None
 
     def configure(self, updated):
         global COLL_DIR, SESS_DIR, MOCK_DIR, SCRIPT_DIR, COMPOSE_DIR
@@ -149,6 +150,7 @@ class ProxyPanel:
             return os.path.join(DEFAULT_STATE, "rules.json")
 
     def load_cfg(self):
+        cfg = None
         try:
             try:
                 with open(self.rules_path) as f:
@@ -172,6 +174,7 @@ class ProxyPanel:
             tls_config(cfg)
         except (PanelError, TypeError, ValueError, re.error) as exc:
             self._rules_error = str(exc)
+            self._bad_cfg = cfg
             for addon in self._addons():
                 if addon.__class__.__name__ == "ProxyRules" and getattr(addon, "last_good_cfg", None):
                     self._last_good_cfg = addon.last_good_cfg
@@ -179,6 +182,7 @@ class ProxyPanel:
             return self._last_good_cfg
         self._last_good_cfg = cfg
         self._rules_error = None
+        self._bad_cfg = None
         return cfg
 
     def save_cfg(self, cfg):
@@ -224,7 +228,8 @@ class ProxyPanel:
     # ── state for the drawer ──────────────────────────────────────────────────
     def state(self):
         cfg = self.load_cfg()
-        tls = self.tls_state(cfg)
+        tls_cfg = self._bad_cfg if self._rules_error and isinstance(self._bad_cfg, dict) and "tls" in self._bad_cfg else cfg
+        tls = self.tls_state(tls_cfg)
         self._sync_view_state()
         if (tls["mode"] != "all") != self._tls_tunnels:
             self._tls_tunnels = tls["mode"] != "all"
