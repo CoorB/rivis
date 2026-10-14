@@ -665,6 +665,18 @@ class Migration(CliBase):
             self.assertTrue(os.path.isfile(path), "%s.%s = %s does not exist after migration (FOUND-BUGS B12)" % (name, key, path))
         self.assertEqual(rules["outside"]["file"], "/etc/hosts")           # paths outside the legacy dir are untouched
 
+    def test_neo_mitm_users_land_in_project_neo_without_flags(self):
+        self.make_legacy()
+        r = self.ok("rules", "list")                                    # the very first plain command already shows their rules
+        self.assertIn("projects/neo/rules.json", r.stdout)
+        self.assertIn("ml", r.stdout)
+        self.assertEqual(open(os.path.join(self.state, "current-project")).read().strip(), "neo")
+        self.assertIn("projects/neo/rules.json", self.ok("rules", "list").stdout)   # and every later one
+
+    def test_fresh_install_without_legacy_stays_on_default(self):
+        self.assertIn("projects/default/rules.json", self.ok("rules", "list").stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.state, "current-project")))
+
     def test_does_not_run_when_target_exists_or_no_legacy(self):
         self.ok("--project", "neo", "rules", "list")          # creates projects/neo first
         self.make_legacy()

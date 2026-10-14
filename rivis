@@ -94,6 +94,7 @@ PROJECT_SOURCE="default"
 if [ -n "$PROJECT_ARG" ]; then PROJECT="$PROJECT_ARG"; PROJECT_SOURCE="argument"
 elif [ -n "$PROJECT_ENV" ]; then PROJECT="$PROJECT_ENV"; PROJECT_SOURCE="environment"
 elif [ -f "$STATE_ROOT/current-project" ]; then PROJECT="$(sed -n '1p' "$STATE_ROOT/current-project")"; PROJECT_SOURCE="current-project"
+elif [ -d "$HOME/.neo-mitm" ] && [ ! -e "$STATE_ROOT/projects/neo" ]; then PROJECT="neo"; PROJECT_SOURCE="legacy"   # first run after neo-mitm: its state becomes project neo (migrate_legacy)
 else PROJECT="default"; fi
 
 valid_id() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; }
@@ -211,6 +212,9 @@ PY
     return 1
   fi
   info "copied legacy ~/.neo-mitm state into $target (the original was left unchanged)"
+  if [ ! -f "$STATE_ROOT/current-project" ]; then   # neo-mitm users keep working on their rules without --project
+    (umask 077; printf '%s\n' neo > "$STATE_ROOT/current-project") && info "current project: neo (change with: $CLI projects use ID)"
+  fi
 }
 
 ensure_rules() {
