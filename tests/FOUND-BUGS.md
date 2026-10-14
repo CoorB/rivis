@@ -116,3 +116,14 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
   which does not exist → every migrated map_local / respond-body_file rule silently 404s/falls through.
 - **Expected:** rewrite to `~/.rivis/projects/neo/mocks/…` (the final location) — or rename first, then rewrite.
 - **Test:** `test_cli.py::Migration::test_map_local_and_body_file_paths_point_at_files_that_exist` (expectedFailure).
+
+## B14 — `throttle` accepts out-of-range and non-finite numbers (CLI + PowerShell; the panel validates them)
+- **Where:** `addons/rules_cli.py` `throttle` (`float(v)` with no range check) and the same logic in `rivis.ps1`. The panel's
+  `profile` op enforces `0 ≤ loss_pct ≤ 100`, `0 ≤ latency ≤ 120000 ms` and finiteness.
+- **Repro:** `rivis throttle lte loss=nan` → exit 0, `rules.json` now contains `"loss": NaN`; `rivis throttle manual down_kbps=inf`
+  → `"down_kbps": Infinity`. Python can read these back, but `/proxy/api/state` serialises them as `NaN`/`Infinity`, which
+  the browser's `JSON.parse` rejects, so the panel's state refresh breaks until the file is fixed by hand.
+  `loss=150`, `loss=-1`, `latency_ms=-5`, `loss_pct=500` are also stored unchallenged.
+- **Expected:** exit non-zero with `loss must be 0–100` (same limits as the panel).
+- **Tests:** `test_cli.py::Throttle::test_out_of_range_and_non_finite_numbers_are_refused`,
+  `test_powershell.py::Commands::test_throttle_rejects_out_of_range_and_non_finite_numbers` (expectedFailure).

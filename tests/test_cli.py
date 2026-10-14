@@ -302,6 +302,22 @@ class Throttle(CliBase):
         self.assertNotEqual(r.returncode, 0)
 
 
+    @unittest.expectedFailure
+    def test_out_of_range_and_non_finite_numbers_are_refused(self):
+        """FOUND-BUGS B14: loss=150 / -1 / nan and manual latency=-5 / 1e99 / inf are written to rules.json."""
+        for args in (("lte", "loss=150"), ("lte", "loss=-1"), ("lte", "loss=nan"), ("manual", "latency_ms=-5"),
+                     ("manual", "loss_pct=500"), ("manual", "down_kbps=inf"), ("manual", "latency_ms=1e99")):
+            r = self.cli("throttle", *args)
+            self.assertNotEqual(r.returncode, 0, "throttle %s was accepted: %s" % (" ".join(args), r.stdout[-80:]))
+
+    def test_nan_in_rules_json_would_break_the_panel_state_json(self):
+        """Why B14 matters: Python writes NaN/Infinity, which is not JSON and breaks JSON.parse in the browser."""
+        import json as _json
+        self.assertIn("NaN", _json.dumps({"loss": float("nan")}))
+        with self.assertRaises(ValueError):
+            _json.loads('{"loss": NaN}', parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)))
+
+
 class Breakpoints(CliBase):
     def test_add_list_off(self):
         self.ok("breakpoint", r"/api/login")
