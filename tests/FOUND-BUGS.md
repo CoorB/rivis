@@ -1,14 +1,13 @@
 # Product bugs found while building the suite
 
-Nothing here was fixed (the brief says: do not touch the product). Each entry has a standalone repro and the
-related test is marked `expectedFailure` (or asserts the correct behaviour and is listed as such), so the suite
-flips to "unexpected success" — a failing run — the moment the bug is fixed, which is the cue to delete the marker.
+Fixed entries retain their original repro for regression history and are marked with the fixing commit. Open entries
+still have an `expectedFailure` test, so an unexpected success fails the suite until its marker and ledger entry are updated.
 
 
 All repros assume a running Rivis: `rivis start --no-ios --no-open`, then log in at `rivis ui` and use the panel's
 cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST /proxy/api/<op> with the session".
 
-## B1 — panel returns an HTML 500 for wrongly shaped input (should be a JSON 400)
+## B1 — FIXED in 222d3d0 — panel returns an HTML 500 for wrongly shaped input (should be a JSON 400)
 - **Where:** `addons/proxy_panel.py` `Api.post` catches `PanelError, KeyError, TypeError, ValueError, OSError, re.error`,
   but `act()` calls `a.get(...)` / `.strip()` on whatever JSON arrived.
 - **Repro:**
@@ -24,7 +23,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Expected:** 403/421 for any Host that is not `127.0.0.1[:port]` / `localhost[:port]` (STANDARDS §2).
 - **Test:** `test_panel.py::Auth::test_dns_rebinding_host_header_is_refused` (expectedFailure).
 
-## B3 — rules created from a captured call never match calls on a non-default port
+## B3 — FIXED in 222d3d0 — rules created from a captured call never match calls on a non-default port
 - **Where:** `proxy_panel.py` `flow_regex()` = `re.escape(pretty_host + path) + r"(\?|$)"`. The URL the rules engine tests is
   `http://host:PORT/path`, so `host/path` never matches when a port is present.
 - **Repro:** capture `http://127.0.0.1:5173/api/x`, then `P quick {"flow_id": <id>, "kind": "block"}` → the new rule's
@@ -35,7 +34,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Test:** `test_panel.py::Ops::test_rules_built_from_a_call_match_that_call_on_a_non_default_port` (expectedFailure);
   the other panel tests re-point the rule at the path so the rest of each op is still covered.
 
-## B4 — a failed `script_new` leaves an orphan empty script file that blocks the name
+## B4 — FIXED in 222d3d0 — a failed `script_new` leaves an orphan empty script file that blocks the name
 - **Where:** `proxy_panel.py` `script_new`: `open(path, "x")` runs before `script_template()` can raise.
 - **Repro:** `P script_new {"name": "orph", "lang": "py", "template": "nope"}` → 400, but `scripts/orph.py` (empty) now exists,
   and `P script_new {"name": "orph", "lang": "py"}` fails with `[Errno 17] File exists`.
@@ -60,7 +59,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
   (expectedFailure). Note: the CLI `rivis rules add --file` and the NEO migration deliberately use arbitrary paths today —
   the fix is probably a per-rule opt-in flag, so decide the policy before "fixing" the test.
 
-## B7 — `mock()` in a Python/JavaScript script fails whenever it carries headers (incl. the shipped `mock` template)
+## B7 — FIXED in 7d2b67e — `mock()` in a Python/JavaScript script fails whenever it carries headers (incl. the shipped `mock` template)
 - **Where:** `addons/proxy_scripts.py` `_run`: builds `headers = [(name, value) …]` of `str` tuples and calls
   `http.Response.make(status, body, headers)`; mitmproxy 12.2.3 requires bytes there →
   `TypeError: Header fields must be bytes.` (an empty header list works, which is why `mock(200, "x")` does).
@@ -71,7 +70,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Tests:** `test_scripts.py::PythonScripts::test_mock_with_json_body_and_headers`,
   `JavaScriptScripts::test_mock_json_with_headers` (expectedFailure). Plain-text, header-less mocks are covered and pass.
 
-## B8 — a script's error disappears from the panel state almost immediately
+## B8 — FIXED in 7d2b67e — a script's error disappears from the panel state almost immediately
 - **Where:** `proxy_scripts.py` `_run`: on every hook call that does not raise, `self.last_errors.pop(item["file"])`.
   A script that only defines `on_request` raises in the request hook, then the response hook of the same flow finds no
   function (`return None`), takes the success path and erases the error. The panel's *Scripts* tab therefore (almost)
@@ -82,7 +81,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Expected:** error shown until the next *successful run of that same hook* (or the file is edited).
 - **Test:** `test_scripts.py::PythonScripts::test_request_hook_error_stays_in_state` (expectedFailure).
 
-## B9 — `make-release.sh` is a deny-list: `.git/`, `.env`, key files and `tests/` artifacts ship in the tarball
+## B9 — FIXED in c60c71b — `make-release.sh` is a deny-list: `.git/`, `.env`, key files and `tests/` artifacts ship in the tarball
 - **Where:** `install/mirror/make-release.sh` excludes a fixed list of names (rules.json, web-token, *.har, *.snapshot …) and
   tars everything else under `next/`.
 - **Repro:** in a checkout that has a `.git/` dir (which `next/` does), a stray `.env` / `id_rsa` / `server.pem`, or
@@ -93,7 +92,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Test:** `test_installer.py::Release::test_release_has_no_vcs_history_env_files_keys_or_test_artifacts` (expectedFailure).
   The deny-list itself and the "no private keys / developer paths in shipped files" scans pass.
 
-## B10 — installer cosmetics (low)
+## B10 — FIXED in c60c71b — installer cosmetics (low)
 - `install.sh` self-check prints `redirector    enabled]` (`awk '{print $NF}'` on `[activated enabled]`).
   Test: `Cosmetics::test_self_check_redirector_state_has_no_stray_bracket` (skipped when the extension is not installed).
 - install appends a blank line before the managed rc block; uninstall removes the block but not that blank line, so
@@ -108,7 +107,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
   `MITMPROXY_WEB_PASSWORD`/a generated options file with 0600), or hash it (mitmweb accepts an argon2 hash).
 - **Test:** `test_security.py::Argv::test_web_password_is_not_visible_in_the_process_list` (expectedFailure).
 
-## B12 — legacy `~/.neo-mitm` migration rewrites mock paths into a temp dir that is then renamed away
+## B12 — FIXED in 13ca519 — legacy `~/.neo-mitm` migration rewrites mock paths into a temp dir that is then renamed away
 - **Where:** `rivis` `migrate_legacy`: it copies into `projects/.neo.tmp.XXXXXX/`, rewrites each `file` / `body_file` that
   lived under `~/.neo-mitm/mocks` to `<tmp>/mocks/…`, and only afterwards renames the tmp dir to `projects/neo`.
 - **Repro:** create `~/.neo-mitm/{rules.json,mocks/m.json}` with a `map_local` rule whose `file` is `~/.neo-mitm/mocks/m.json`;
@@ -117,7 +116,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Expected:** rewrite to `~/.rivis/projects/neo/mocks/…` (the final location) — or rename first, then rewrite.
 - **Test:** `test_cli.py::Migration::test_map_local_and_body_file_paths_point_at_files_that_exist` (expectedFailure).
 
-## B14 — `throttle` accepts out-of-range and non-finite numbers (CLI + PowerShell; the panel validates them)
+## B14 — FIXED in 9ae2fbc — `throttle` accepts out-of-range and non-finite numbers (CLI + PowerShell; the panel validates them)
 - **Where:** `addons/rules_cli.py` `throttle` (`float(v)` with no range check) and the same logic in `rivis.ps1`. The panel's
   `profile` op enforces `0 ≤ loss_pct ≤ 100`, `0 ≤ latency ≤ 120000 ms` and finiteness.
 - **Repro:** `rivis throttle lte loss=nan` → exit 0, `rules.json` now contains `"loss": NaN`; `rivis throttle manual down_kbps=inf`
@@ -135,7 +134,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Expected:** the visible tab re-renders when the polled state changed (and no input has focus), so CLI and UI never disagree on screen.
 - **Test:** `tests/ui/test_ui.py::UiSmoke::test_open_rules_tab_refreshes_when_a_rule_is_added_elsewhere` (expectedFailure).
 
-## B16 — the panel's `/proxy/api/state` returns HTTP 500 while `rules.json` is broken
+## B16 — FIXED in 222d3d0 — the panel's `/proxy/api/state` returns HTTP 500 while `rules.json` is broken
 Found by a QA run (01:04). The proxy keeps applying the previous rules and mitmweb stays up, but the
 panel state endpoint 500s, so the drawer breaks until the file is fixed. Repro:
 `test_rules_engine.py::HotReload::test_broken_rules_json_keeps_previous_rules_and_never_kills_mitmweb` (write any of
