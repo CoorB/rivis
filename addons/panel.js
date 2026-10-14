@@ -27,6 +27,8 @@
     return p[0] === "flows" && p[1] ? p[1] : null;
   };
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const emptyState = (icon, title, hint) =>
+    `<div class="empty">${ico(icon)}<b>${esc(title)}</b><span class="sub">${hint}</span></div>`;
   const hostPath = (u) => { try { const x = new URL(u); return [x.host, x.pathname]; } catch (e) { return ["", u]; } };
   // a rule's match regex → readable "host/path" for lists
   const pretty = (r) => {
@@ -263,7 +265,8 @@
     code.cmd { display: block; font: 12px/1.5 var(--rv-mono); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 6px 10px; margin: 4px 0; text-align: left; user-select: all; color: var(--rv-text); }
 
     /* floating cards over mitmweb: welcome + empty list */
-    .welcome { position: fixed; left: 50%; top: 96px; transform: translateX(-50%); z-index: 2147482500; width: min(520px, 92vw); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: 14px;
+    .welcome { position: fixed; left: 50%; top: 72px; transform: translateX(-50%); z-index: 2147482500; width: min(680px, 94vw); max-height: min(78vh, 720px); overflow: auto;
+               background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: 14px;
                box-shadow: var(--rv-shadow-3); padding: 18px 20px; display: none; animation: pop var(--rv-dur) var(--rv-ease); }
     .welcome.open { display: block; }
     .welcome h3 { margin: 0 0 4px; font-size: 16px; display: flex; align-items: center; gap: 10px; }
@@ -411,6 +414,7 @@
     const product = state.product.name || "Proxy";
     $("ptitle").innerHTML = `${esc(product)} <small>/ ${esc(label)}</small>`;
     $("bname").textContent = product; $("bproj").textContent = label;
+    document.title = product + " · " + label;
     const options = state.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === state.view_project ? "selected" : ""}>${esc(p.label || p.id)}</option>`).join("");
     if ($("project").innerHTML !== options) $("project").innerHTML = options;
     $("fablabel").textContent = state.paused.length ? `${label} · ${state.paused.length} paused` : label;
@@ -430,7 +434,7 @@
       return;
     }
     if (!f || f.type !== "http") {
-      m.innerHTML = '<p class="muted">Select a call in the list to Map Local it, set a breakpoint, force an error, block or delay it.</p>';
+      m.innerHTML = emptyState("call", "No call selected", "Click a row in the list. Everything for that call — Map Local, Breakpoint, Copy as cURL, Edit &amp; Retry — is on this tab.");
       return;
     }
     const r = f.request, s = f.response;
@@ -502,7 +506,40 @@
     m.querySelectorAll("[data-gql]").forEach((b) => (b.onclick = () => run("graphql_filter", { name: b.dataset.gql === state.graphql_operation ? null : b.dataset.gql }, b.dataset.gql === state.graphql_operation ? "GraphQL filter cleared" : "Showing " + b.dataset.gql)));
   }
 
-  function jpretty(value) { return esc(JSON.stringify(value, null, 2)); }
+  // Colour JSON we own (viewers). Keys, strings, numbers, true/false/null. Escapes as it goes.
+  function colorJSON(src) {
+    const text = String(src ?? "");
+    let i = 0, out = "";
+    const push = (cls, s) => { out += cls ? `<span class="${cls}">${esc(s)}</span>` : esc(s); };
+    while (i < text.length) {
+      const c = text[i];
+      if (c === '"') {
+        let j = i + 1, escaped = false;
+        while (j < text.length) {
+          const ch = text[j];
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === '"') { j++; break; }
+          j++;
+        }
+        let k = j;
+        while (k < text.length && /\s/.test(text[k])) k++;
+        push(text[k] === ":" ? "jk" : "js", text.slice(i, j));
+        i = j;
+        continue;
+      }
+      if ((c === "-" || (c >= "0" && c <= "9")) && (i === 0 || /[\s,:[{]/.test(text[i - 1]))) {
+        const m = text.slice(i).match(/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/);
+        if (m) { push("jn", m[0]); i += m[0].length; continue; }
+      }
+      const word = text.startsWith("false", i) ? "false" : text.startsWith("true", i) ? "true" : text.startsWith("null", i) ? "null" : "";
+      if (word && (i + word.length === text.length || /[\s,\]}]/.test(text[i + word.length]))) { push("jb", word); i += word.length; continue; }
+      push("", c);
+      i++;
+    }
+    return out;
+  }
+  function jpretty(value) { return colorJSON(JSON.stringify(value, null, 2)); }
   function gqlPretty(query) {
     let out = "", indent = 0, string = false, escapeNext = false, space = false;
     const pad = () => "  ".repeat(indent);
@@ -566,7 +603,7 @@
           <div class="n"><div><b>${esc(pretty(r))}</b></div>
             <div class="sub">${esc(r.method || "ANY")} · status ${esc(r.status || 200)} · ${esc(r.name)}</div></div>
           <button class="b" data-edit="${i}">Edit</button><button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
-      : '<p class="muted">No Map Local rules yet.</p>'}`;
+      : emptyState("map", "No Map Local rules yet", "Select a call and use <b>Map Local this call</b>, or add one above with a host and path. <b>*</b> and <b>?</b> are wildcards.")}`;
     const split = () => { const v = $("mh").value.trim(); if (/^https?:\/\//.test(v)) { const [h, p] = hostPath(v); $("mh").value = h; $("mp").value = p; } };
     $("mh").onchange = split;
     $("madd").onclick = async () => {
@@ -596,7 +633,7 @@
           <span class="chip ${b.request ? "on" : ""}" data-bph="${i}:request">Req</span>
           <span class="chip ${b.response ? "on" : ""}" data-bph="${i}:response">Resp</span>
           <button class="b d" data-bdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
-      : '<p class="muted">No breakpoints.</p>'}`;
+      : emptyState("bp", "No breakpoints", "Add one above, or open a call and turn on <b>Request</b> or <b>Response</b>. A match pauses and this sheet opens on its own.")}`;
     root.querySelectorAll("[data-nph]").forEach((c) => (c.onclick = () => c.classList.toggle("on")));
     const ph = (p) => root.querySelector(`[data-nph=${p}]`).classList.contains("on");
     const split = () => { const v = $("bh").value.trim(); if (/^https?:\/\//.test(v)) { const [h, p] = hostPath(v); $("bh").value = h; $("bpth").value = p; } };
@@ -696,7 +733,7 @@
           <button class="b" data-cview="${i}">${collOpen === x.name ? "Hide" : "Calls"}</button>
           <button class="b" data-cexp="${i}">HAR</button><button class="b d" data-cdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>
         ${collOpen === x.name ? `<div id="centries" class="sub">loading…</div>` : ""}`).join("")
-      : '<p class="muted">No collections yet. Record a journey, then switch it on to replay it as mocks.</p>'}
+      : emptyState("coll", "No collections yet", "Name a journey above and <b>Start recording</b>, use the app, then stop. Switch a collection on to replay those responses as mocks.")}
       <h4>Import</h4>
       <div class="btns" style="margin-top:0"><input type="file" id="chf" accept=".har,application/json" style="font-size:11px">
         <input type="text" id="chn" placeholder="name" style="width:120px"><button class="b" id="cimp">Import HAR</button></div>
@@ -775,7 +812,7 @@
             <div class="sub">${x.count} calls · ${new Date(x.created * 1000).toLocaleString()}${x.hosts && x.hosts.length ? " · " + esc(x.hosts.slice(0, 3).join(", ")) : ""}</div>
             <div class="sub" data-note="${i}" title="click to edit" style="cursor:text;white-space:normal">${x.note ? ico("note", "sm") + " " + esc(x.note) : "<i>add a note…</i>"}</div></div>
           <button class="b" data-sload="${i}">Open</button><button class="b" data-shar="${i}">HAR</button><button class="b d" data-sdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
-      : '<p class="muted">No saved sessions yet.</p>'}
+      : emptyState("sess", "No saved sessions yet", "Name the capture above and <b>Save session</b>. Open brings it back into the list; HAR exports it.")}
       <p class="sub">Open adds the saved calls to the list (choose “replace” to clear it first). Sessions stay in ${esc(state.project_state)}/sessions.
         Per-call notes and bookmarks: use mitmweb’s <b>Comment</b> tab and <b>Mark</b> button — they are saved with the session.</p>`;
     $("ssave").onclick = () => run("sess_save", { name: $("sn").value.trim(), note: $("snote").value, visible_only: $("svis").checked }, (x) => "Saved " + x.count + " calls");
@@ -814,7 +851,7 @@
       <p class="sub">Rules run first, then enabled scripts in filename order. Python and JavaScript are trusted user code and run with your user rights. The Node VM omits process, require and network helpers to prevent accidents, but it is NOT a security boundary.</p>
       <h4>Scripts (${scripts.length})</h4>${scripts.length ? scripts.map((s, i) => `<div class="row">${sw(`data-si="${i}"`, s.enabled !== false)}
         <div class="n"><div><b>${esc(s.name)}</b><span class="tag">${esc(s.lang)}</span></div><div class="sub">${esc(s.method || "ANY")} · ${esc(s.match || ".")} · ${esc(s.file)}${s.exists ? "" : " · FILE MISSING"}${errorHTML(status.errors && status.errors[s.file])}</div></div>
-        <button class="b" data-sedit="${i}">Edit</button><button class="b d" data-sdelete="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") : '<p class="muted">No scripts yet.</p>'}`;
+        <button class="b" data-sedit="${i}">Edit</button><button class="b d" data-sdelete="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") : emptyState("scripts", "No scripts yet", "Pick a template above and click <b>New</b>. Rules run first; enabled scripts run after them, in filename order.")}`;
     $("snew").onclick = async () => {
       const r = await run("script_new", { name: $("sn").value, lang: $("sl").value, template: $("stpl").value, match: $("smatch").value, method: $("smethod").value }, (x) => "Created " + x.file);
       if (r) openScript(r.file);
@@ -928,6 +965,65 @@
     });
     const line = document.querySelector(".flow-detail section.response .first-line");   // status line colour in the details pane
     if (line) { const m = line.textContent.match(/\b([1-5])\d\d\b/); setAttr(line, "data-s", m ? m[1] : null); }
+    paintJSONBody();
+  }
+  // mitmweb's JSON view is plain text (no token spans). Colour it with ranges over those text nodes.
+  function paintJSONBody() {
+    const names = ["rv-key", "rv-str", "rv-num", "rv-lit"];
+    const clear = () => { if (window.CSS && CSS.highlights) names.forEach((n) => CSS.highlights.delete(n)); };
+    if (!skinOn() || !window.Highlight || !window.CSS || !CSS.highlights) { clear(); return; }
+    const pre = document.querySelector(".flow-detail .contentview pre");
+    const label = (document.querySelector(".contentview .controls h5") || {}).textContent || "";
+    const buckets = { key: [], str: [], num: [], lit: [] };
+    if (pre && /json/i.test(label)) {
+      const nodes = [];
+      const walker = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT);
+      let full = "", node;
+      while ((node = walker.nextNode())) { nodes.push({ node, start: full.length }); full += node.nodeValue; }
+      const take = (a, b, kind) => {
+        for (let n = 0; n < nodes.length && a < b; n++) {
+          const start = nodes[n].start;
+          const end = n + 1 < nodes.length ? nodes[n + 1].start : full.length;
+          const from = Math.max(a, start), to = Math.min(b, end);
+          if (from >= to) continue;
+          const range = document.createRange();
+          range.setStart(nodes[n].node, from - start);
+          range.setEnd(nodes[n].node, to - start);
+          buckets[kind].push(range);
+        }
+      };
+      let i = 0;
+      while (i < full.length) {
+        const c = full[i];
+        if (c === '"') {
+          let j = i + 1, escaped = false;
+          while (j < full.length) {
+            const ch = full[j];
+            if (escaped) escaped = false;
+            else if (ch === "\\") escaped = true;
+            else if (ch === '"') { j++; break; }
+            j++;
+          }
+          let k = j;
+          while (k < full.length && /\s/.test(full[k])) k++;
+          take(i, j, full[k] === ":" ? "key" : "str");
+          i = j;
+          continue;
+        }
+        if ((c === "-" || (c >= "0" && c <= "9")) && (i === 0 || /[\s,:[{]/.test(full[i - 1]))) {
+          const m = full.slice(i).match(/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/);
+          if (m) { take(i, i + m[0].length, "num"); i += m[0].length; continue; }
+        }
+        const word = full.startsWith("false", i) ? "false" : full.startsWith("true", i) ? "true" : full.startsWith("null", i) ? "null" : "";
+        if (word && (i + word.length === full.length || /[\s,\]}]/.test(full[i + word.length]))) { take(i, i + word.length, "lit"); i += word.length; continue; }
+        i++;
+      }
+    }
+    const cssName = { key: "rv-key", str: "rv-str", num: "rv-num", lit: "rv-lit" };
+    Object.entries(buckets).forEach(([kind, ranges]) => {
+      if (ranges.length) CSS.highlights.set(cssName[kind], new Highlight(...ranges));
+      else CSS.highlights.delete(cssName[kind]);
+    });
   }
   new MutationObserver(() => { clearTimeout(tagCells._t); tagCells._t = setTimeout(tagCells, 60); })
     .observe(document.body, { childList: true, subtree: true, characterData: true });
@@ -1200,7 +1296,7 @@
   }
   function renderRules(m) {
     const skipped = state.skipped_rules || [];
-    if (!state.rules.length && !skipped.length) { m.innerHTML = '<p class="muted">No rules yet. Select a call and use “This call”.</p>'; return; }
+    if (!state.rules.length && !skipped.length) { m.innerHTML = emptyState("rules", "No rules yet", "Select a call and use <b>This call</b> — Map Local, a forced status, a block or a delay all become rules here."); return; }
     m.innerHTML = (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") + state.rules.map((r, i) => `
       <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
         <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(r.action)}</span></div>
@@ -1468,13 +1564,13 @@
     const name = (state && state.product.name) || "Rivis";
     $("welcome").innerHTML = `
       <h3><span class="mark">${ico("mark")}</span>Welcome to ${esc(name)}</h3>
-      <p>Coming from Proxyman? The tools you know are here, placed on the call or in the drawer on the right:
-        Map Local, Breakpoints, Network conditions, Compose, Compare, Scripts and Copy as cURL.</p>
-      ${mapTable(MAPPING.slice(0, 4))}
-      <div class="btns" style="justify-content:flex-end;margin-top:12px"><button class="b" id="w-all">All 12 tasks</button><button class="b p" id="w-ok">Got it</button></div>`;
+      <p>Coming from Proxyman? The tools you know are here, placed on the call or in the drawer on the right.
+        Same names where they are generic. Rivis runs in a browser tab and does not set a system proxy.</p>
+      ${mapTable(MAPPING)}
+      <div class="btns" style="justify-content:flex-end;margin-top:12px"><button class="b" id="w-keys">Shortcuts</button><button class="b p" id="w-ok">Got it</button></div>`;
     $("welcome").classList.add("open");
     $("w-ok").onclick = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); };
-    $("w-all").onclick = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); openHelp("map"); };
+    $("w-keys").onclick = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); openHelp("keys"); };
     root.querySelectorAll("#welcome [data-go]").forEach((a) => (a.onclick = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); goTo(a.dataset.go); }));
   }
 
