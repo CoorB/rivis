@@ -7,5 +7,6 @@
   "throttle_match": "neo\\.sa",
   "dev_ssl_insecure_hint": "use --insecure for envs with no valid cert (NEO: dev)",
   "android_packages": ["com.snb.neo.uat"],
-  "ios_bundle_ids": []
+  "ios_bundle_ids": [],
+  "doctor_hosts": ["backbase-edge-sit.neo.sa"]
 }
