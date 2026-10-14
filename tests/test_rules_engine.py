@@ -196,7 +196,7 @@ class Semantics(LiveCase):
     def test_unnamed_rule_gets_a_fallback_name(self):
         self.reset_state(rules=[{"enabled": True, "match": "/echo", "action": "respond", "body": "anon"}])
         self.assertEqual(self.fetch("/echo").text, "anon")
-        self.assertIn("rule:rule #1", self.comment("/echo"))
+        self.assertIn("rule:rule #2", self.comment("/echo"))   # #1 is the harness sync-marker rule
 
     def test_bad_rules_are_skipped_and_listed_while_the_rest_still_apply(self):
         self.reset_state(rules=[

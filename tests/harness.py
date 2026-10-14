@@ -279,6 +279,39 @@ class Panel:
     def flows(self):
         return self.get_json("/flows")
 
+    def option(self, name):
+        return self.get_json("/options")[name]["value"]
+
+    def set_option(self, name, value):
+        req = urllib.request.Request(self.base + "/options", data=json.dumps({name: value}).encode(), method="PUT",
+                                     headers={"Content-Type": "application/json", "X-XSRFToken": self.xsrf})
+        code, body = self._do(req)
+        assert code == 200, "PUT /options %s -> %s %r" % (name, code, body[:200])
+
+
+class Background:
+    """Run a blocking call (a curl that will be paused at a breakpoint) in a thread; .result() joins it."""
+
+    def __init__(self, fn, *a, **kw):
+        import threading
+        self._out = {}
+
+        def run():
+            try:
+                self._out["v"] = fn(*a, **kw)
+            except BaseException as exc:      # noqa: BLE001 - re-raised in result()
+                self._out["e"] = exc
+        self._t = threading.Thread(target=run, daemon=True)
+        self._t.start()
+
+    def result(self, timeout=30):
+        self._t.join(timeout)
+        if self._t.is_alive():
+            raise AssertionError("background call still running after %ss" % timeout)
+        if "e" in self._out:
+            raise self._out["e"]
+        return self._out["v"]
+
 
 def raw_http(port, method, path, headers=None, body=None):
     """No cookie jar, no helper: for auth / XSRF negative tests."""
@@ -453,8 +486,11 @@ class Instance:
         os.chmod(tmp, 0o600)
         os.replace(tmp, self.rules_path)
         if marker:
-            wait_for(lambda: self.fetch("http://127.0.0.1:1/__sync__/" + marker, timeout=5).text == "ok-" + marker,
-                     12, 0.2, "rules reload")
+            url = "http://127.0.0.1:1/__sync__/" + marker
+            if float(base.get("loss") or 0) >= 100 and not base.get("throttle_match"):       # every call is killed before rules run: a kill IS the proof
+                wait_for(lambda: (lambda r: r.rc != 0 and r.status == 0)(self.fetch(url, timeout=5)), 12, 0.2, "loss reload")
+            else:
+                wait_for(lambda: self.fetch(url, timeout=5).text == "ok-" + marker, 12, 0.2, "rules reload")
             time.sleep(0.15)
         return base
 
