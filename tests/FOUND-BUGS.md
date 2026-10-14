@@ -40,24 +40,33 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
   and `P script_new {"name": "orph", "lang": "py"}` fails with `[Errno 17] File exists`.
 - **Test:** `test_panel.py::Ops::test_failed_script_new_leaves_no_orphan_file` (expectedFailure).
 
-## B5 — panel ops follow symlinks inside the project's state dir (read outside the project)
+## B5 — FIXED in fc8de99 — panel ops follow symlinks inside the project's state dir (read outside the project)
 - **Where:** `script_get` (`_script_path` does not resolve), `coll_entries` / `coll_export` / `sess_*` (plain `open`).
   Only the mock-file ops use `realpath` confinement.
 - **Repro:** `ln -s /etc/hosts ~/.rivis/projects/default/collections/evil.json`; `P coll_entries {"name":"evil"}` reads it
   through the symlink (for `scripts/evil.py` + a rules.json entry: `P script_get {"file":"evil.py"}` returns `/etc/hosts`).
   A shared project archive that preserves symlinks is enough to plant one.
 - **Expected:** one confinement helper (STANDARDS §2) that refuses anything whose realpath leaves the project dir.
-- **Tests:** `test_panel.py::Confinement::test_symlinked_{script,collection}_is_not_read_through_the_panel` (expectedFailure).
+- **Fix:** `proxy_common.confined_path` (realpath on both sides) is now the single containment rule: the panel path
+  helpers (`_script_path`, `coll_file`, `sess_paths`) refuse escaping symlinks with a 400, the collections/sessions/
+  scripts listings skip them, and `proxy_collections.coll_path`, `proxy_scripts.load_script_files` and the composer
+  store confine through the same helper.
+- **Tests:** `test_panel.py::Confinement::test_symlinked_{script,collection}_is_not_read_through_the_panel`
+  (expectedFailure markers removed — they pass).
 
-## B6 — a rule can serve any file the user can read (`map_local.file`, `respond.body_file`)
+## B6 — FIXED in fc8de99 — a rule can serve any file the user can read (`map_local.file`, `respond.body_file`)
 - **Repro:** rules.json `{"name":"m","action":"map_local","match":"/echo","file":"/etc/hosts"}` → the proxy answers with
   `/etc/hosts`. A shared rules.json therefore reads outside its project with no visible opt-in (STANDARDS §2:
   "never read files outside its project without an explicit, visible user opt-in").
   The panel refuses to *create* such a rule (`add` rejects `file`/`body_file`) and to *open* it (`mockfile_get`), but the
   engine serves it.
+- **Fix (policy decided: confinement, no per-rule opt-in):** `_compile_rule` confines `map_local.file` and
+  `respond`/`status` `body_file` to the project's state directory at load time (`confined_path`, symlinks resolved);
+  an outside path skips the rule with a clear error — it shows as disabled/error in the panel (`skipped_rules`) and the
+  proxy keeps running. The CLI still *writes* such rules (migration leaves `rules.json` content untouched), but the
+  engine no longer serves them; legitimate in-project files (e.g. `mocks/`) keep working.
 - **Tests:** `test_panel.py::Confinement::test_{map_local_rule,respond_body_file}_…outside_the_project_is_not_served`
-  (expectedFailure). Note: the CLI `rivis rules add --file` and the NEO migration deliberately use arbitrary paths today —
-  the fix is probably a per-rule opt-in flag, so decide the policy before "fixing" the test.
+  (expectedFailure markers removed — they pass). `test_rules_engine.py` file fixtures moved inside the project.
 
 ## B7 — FIXED in 7d2b67e — `mock()` in a Python/JavaScript script fails whenever it carries headers (incl. the shipped `mock` template)
 - **Where:** `addons/proxy_scripts.py` `_run`: builds `headers = [(name, value) …]` of `str` tuples and calls
