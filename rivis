@@ -65,8 +65,8 @@ STATE_ROOT="${STATE_ROOT/#\~/$HOME}"
 env_value() {
   local suffix="$1" fallback="$2" var value=""
   var="${ENV_PREFIX}_${suffix}"
-  eval 'value=${'"$var"'-}'
-  [ -n "$value" ] || eval 'value=${NEO_MITM_'"$suffix"'-}'
+  value="$(printenv "$var" 2>/dev/null || true)"
+  [ -n "$value" ] || value="$(printenv "NEO_MITM_${suffix}" 2>/dev/null || true)"
   printf '%s' "${value:-$fallback}"
 }
 
@@ -135,6 +135,7 @@ ADB="${ADB:-$(command -v adb || echo "$HOME/Library/Android/sdk/platform-tools/a
 RULES="$(env_value RULES "$PROJECT_STATE/rules.json")"
 WEB_PASSWORD="$(env_value WEB_PASSWORD "")"
 ADDON="$SCRIPT_DIR/addons/proxy_rules.py"
+AUTH_ADDON="$SCRIPT_DIR/addons/proxy_auth.py"
 
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0" | sed "s/<cli>/$CLI/g; s/<ProductName>/$PRODUCT_NAME/g"; }
 die()   { echo "$CLI: $*" >&2; exit 1; }
@@ -305,9 +306,10 @@ PY
 
 # ───────────────────────── start ─────────────────────────
 cmd_start() {
-  local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0
+  local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0 private_hosts=""
   while [ $# -gt 0 ]; do case "$1" in
     --insecure|--dev) insecure=1 ;; --no-ios) ios=0 ;; --ios-filter) filter="$2"; shift ;;
+    --allow-private-hosts) [ $# -ge 2 ] || die "--allow-private-hosts needs a regex"; private_hosts="$2"; shift ;;
     --project-only|--neo-only) project_only=1 ;; --no-open) open_ui=0 ;; --all) show_all=1 ;;
     *) die "start: unknown option $1" ;; esac; shift; done
   command -v mitmweb >/dev/null || die "mitmweb not found (brew install --cask mitmproxy)"
@@ -318,13 +320,17 @@ cmd_start() {
   # WITH the token — mitmweb's own auto-open lands on a "403 Authentication Required" page.
   local token="${WEB_PASSWORD:-$(openssl rand -hex 16)}"
   (umask 077; echo "$token" > "$STATE_ROOT/web-token")
-  local url="http://127.0.0.1:$WEB_PORT/?token=$token"
+  local bootstrap; bootstrap=$(openssl rand -hex 16)
+  (umask 077; echo "$bootstrap" > "$STATE_ROOT/web-bootstrap")
+  local url="http://127.0.0.1:$WEB_PORT/"
+  local bootstrap_url="http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap"
   local args=(--listen-host 127.0.0.1 --mode "regular@$PORT"
               --set web_host=127.0.0.1 --set "web_port=$WEB_PORT" --set web_open_browser=false
-              --set "web_password=$token"
               --set confdir="$CONFDIR" --set connection_strategy=lazy
-              -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_panel.py"
+              -s "$AUTH_ADDON" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_panel.py"
+              --set "proxy_auth_token_file=$STATE_ROOT/web-token" --set "proxy_bootstrap_file=$STATE_ROOT/web-bootstrap"
               --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT")
+  [ -n "$private_hosts" ] && args+=(--set "proxy_private_hosts=$private_hosts")
   # local capture: the iOS Simulator shares the Mac network stack and has no proxy
   # setting of its own. Scoping capture to simulator processes keeps us off the
   # system proxy (forbidden) and leaves every Mac app — Teams, browser, VPN — untouched.
@@ -356,10 +362,10 @@ cmd_start() {
   else info "view   HTTP(S) requests only (DNS lookups hidden; --all to show them)"; fi
   info "project $PROJECT ($PROJECT_LABEL)"
   info "rules  $RULES  ($CLI rules list)"
-  info "UI     $url"
+  info "UI     $url (opens signed in; the password is never printed)"
   info "       (reopen any time: $CLI ui)   — Ctrl-C to stop"
   if [ "$open_ui" = 1 ]; then
-    ( for _ in $(seq 1 40); do [ -n "$(port_owner "$WEB_PORT")" ] && { open "$url"; break; }; sleep 0.25; done ) &
+    ( for _ in $(seq 1 40); do [ -n "$(port_owner "$WEB_PORT")" ] && { open "$bootstrap_url"; break; }; sleep 0.25; done ) &
   fi
   exec mitmweb "${args[@]}"
 }
@@ -376,7 +382,12 @@ cmd_stop() {   # stop mitmweb on our ports (only mitmweb — never another app)
 cmd_ui() {
   [ -n "$(port_owner "$WEB_PORT")" ] || die "mitmweb is not running — $CLI start"
   [ -f "$STATE_ROOT/web-token" ] || die "no token file — restart with $CLI start"
-  open "http://127.0.0.1:$WEB_PORT/?token=$(cat "$STATE_ROOT/web-token")"
+  local bootstrap tmp
+  bootstrap=$(openssl rand -hex 16) || die "could not generate a one-time UI login"
+  tmp="$STATE_ROOT/.web-bootstrap.$$"
+  (umask 077; printf '%s\n' "$bootstrap" > "$tmp") || die "could not create one-time UI login"
+  mv "$tmp" "$STATE_ROOT/web-bootstrap" || { rm -f "$tmp"; die "could not save one-time UI login"; }
+  open "http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap"
 }
 
 # ───────────────────────── rules / throttle ─────────────────────────

@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
-from harness import LiveCase
+from harness import LiveCase, raw_http
 
 LSOF = "/usr/sbin/lsof"
 NETWORKSETUP = "/usr/sbin/networksetup"
@@ -124,6 +124,22 @@ class Network(LiveCase):
         self.assertNotRegex(new, r"(?m)^-set|REFUSED")
 
 
+class PrivateRelay(LiveCase):
+    """Starts without the harness's explicit private-upstream allow-list."""
+    INSTANCE_KW = {"start_args": ("--insecure",), "allow_private": False}
+
+    def setUp(self):
+        self.up.reset_hits()  # do not use LiveCase.reset_state: its sync endpoint is intentionally private
+
+    def test_plain_proxy_refuses_origin_form_host_header_relay(self):
+        """F-01: GET /path + Host must not relay to a local/VPN destination."""
+        status, body, _ = raw_http(self.inst.proxy_port, "GET", "/secret",
+                                   {"Host": "127.0.0.1:%d" % self.up.http_port, "Connection": "close"})
+        self.assertEqual(status, 403)
+        self.assertEqual(self.up.hits_for("/secret"), [], "origin-form request reached the Host destination")
+        self.assertNotIn(b"RivisUpstream", body)
+
+
 class FreshCa(LiveCase):
     """The CA the CLI generates itself on first start (no pre-seeded copy)."""
     INSTANCE_KW = {"fresh_ca": True}
@@ -141,12 +157,27 @@ class FreshCa(LiveCase):
 
 
 class Argv(LiveCase):
-    @unittest.expectedFailure
     def test_web_password_is_not_visible_in_the_process_list(self):
         """FOUND-BUGS B11: `rivis start` passes --set web_password=<token> on mitmweb's command line."""
         for pid in group_pids(self.inst.proc.pid):
             args = subprocess.run(["ps", "-ww", "-o", "args=", "-p", str(pid)], capture_output=True, text=True).stdout
             self.assertNotIn(self.inst.password, args, "secret visible in argv of pid %d" % pid)
+
+    def test_ui_command_uses_a_one_time_bootstrap_not_the_password(self):
+        before = self.suite.shim_log("open.log")
+        cp = self.suite.rivis("ui", home=self.inst.home, env=dict(self.inst.env))
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        opened = self.suite.shim_log("open.log")[len(before):].strip().splitlines()[-1]
+        self.assertIn("/proxy/bootstrap/", opened)
+        self.assertNotIn(self.inst.password, opened)
+        self.assertNotIn("?token=", opened)
+
+        import http.cookiejar
+        import urllib.request
+        jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), urllib.request.ProxyHandler({}))
+        self.assertEqual(opener.open(opened, timeout=10).status, 200)
+        self.assertEqual(opener.open(self.panel.base + "/proxy/api/state", timeout=10).status, 200)
 
 
 class Modes(LiveCase):

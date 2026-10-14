@@ -98,7 +98,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - install appends a blank line before the managed rc block; uninstall removes the block but not that blank line, so
   install/uninstall cycles grow the user's rc file. Test: `Cosmetics::test_install_then_uninstall_restores_the_rc_file_byte_for_byte`.
 
-## B11 — the web-UI password is on mitmweb's command line (visible in `ps`)
+## B11 — FIXED in F-03 — the web-UI password is on mitmweb's command line (visible in `ps`)
 - **Where:** `rivis` `cmd_start`: `--set "web_password=$token"`.
 - **Repro:** `rivis start …` in one terminal; in another, as any local user: `ps -ww -o args= -p $(pgrep -x mitmweb)` →
   `… --set web_password=<the token> …`. The token is the only thing standing between a local user/process and the

@@ -327,14 +327,16 @@ class Instance:
     """A throw-away Rivis (mitmweb) started through the real `rivis start` CLI."""
 
     def __init__(self, suite, name, project=None, setup=None, extra_env=None, start_args=("--insecure",),
-                 pre=None, node=True, rivis_bin=None, fresh_ca=False):
+                 pre=None, node=True, rivis_bin=None, fresh_ca=False, allow_private=True):
         self.suite, self.name, self.project = suite, name, project or "default"
         self.home = suite.new_home(name)
         self.proc = None
         self.extra_env, self.start_args, self.pre, self.setup = extra_env or {}, list(start_args), pre, setup
+        if allow_private and "--allow-private-hosts" not in self.start_args:
+            self.start_args += ["--allow-private-hosts", r"^(127\.0\.0\.1|localhost)$"]
         self.rivis_bin = rivis_bin or RIVIS
         self.fresh_ca = fresh_ca          # True: let `rivis start` generate the CA itself instead of copying the suite's
-        self.password = "pw" + os.urandom(6).hex()
+        self.password = "pw" + os.urandom(16).hex()
         self.panel = None
         self.logpath = os.path.join(ARTIFACTS, "%s-%d.log" % (name, os.getpid()))
         self.proxy_port = self.web_port = None

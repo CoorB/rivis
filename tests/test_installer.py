@@ -102,8 +102,33 @@ class DryRun(InstallerBase):
     def test_installer_source_has_no_eval_and_copies_local_archives_before_verification(self):
         src = open(INSTALL).read()
         self.assertNotRegex(src, r"(?m)^\s*eval\s")
+        self.assertNotRegex(open(harness.RIVIS).read(), r"(?m)^\s*eval\s")
         self.assertIn('cp "$MITM_TARBALL" "$TMP/mitm-local.tar.gz"', src)
         self.assertIn('cp "$TOOL_TARBALL" "$TMP/tool-local.tar.gz"', src)
+
+    def test_unverified_tool_metadata_is_never_extracted_or_evaluated(self):
+        """F-02: product.json from a bad archive cannot run before SHA-256 verification."""
+        stage = os.path.join(self.suite.root, "standalone-installer")
+        os.makedirs(os.path.join(stage, "install"))
+        for name in ("install.sh", "VERSION", "mirror.conf"):
+            shutil.copy2(os.path.join(harness.REPO, "install", name), os.path.join(stage, "install", name))
+        marker = os.path.join(self.suite.root, "F02-PWNED")
+        archive = os.path.join(self.suite.root, "evil-product.tar.gz")
+        payload = os.path.join(self.suite.root, "evil-product")
+        os.makedirs(os.path.join(payload, "rivis-evil"))
+        product = {"name": "Rivis", "cli": "rivis",
+                   "env_prefix": "X_CONFDIR:-}; touch %s; : ${Y" % marker,
+                   "state_dir": "~/.rivis"}
+        import json
+        with open(os.path.join(payload, "rivis-evil", "product.json"), "w") as fh:
+            json.dump(product, fh)
+        with tarfile.open(archive, "w:gz") as tf:
+            tf.add(os.path.join(payload, "rivis-evil"), arcname="rivis-evil")
+        cp = self.install("--dry-run", "--tool-tarball", archive,
+                          bin=os.path.join(stage, "install", "install.sh"))
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertRegex(cp.stdout + cp.stderr, r"no pinned SHA-256|MISMATCH")
+        self.assertFalse(os.path.exists(marker), "unverified env_prefix executed")
 
 
 class RealInstall(InstallerBase):
