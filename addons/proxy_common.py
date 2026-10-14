@@ -52,6 +52,22 @@ def project_state(project_id):
     return os.path.join(STATE_ROOT, "projects", project_id)
 
 
+def confined_path(base, path, what="path"):
+    """Real path of `path`, refused unless it stays inside the `base` directory.
+
+    One containment rule for every file the product reads or writes (STANDARDS §2):
+    realpath resolves symlinks on BOTH sides, so a link planted inside the project
+    cannot point out of it, and a base under /tmp (macOS: /private/tmp) still
+    contains its own files. Paths that do not exist yet are checked the same way,
+    so new files are confined before they are created.
+    """
+    base = os.path.realpath(os.path.expanduser(str(base)))
+    resolved = os.path.realpath(os.path.expanduser(str(path)))
+    if resolved != base and not resolved.startswith(base + os.sep):
+        raise ValueError("%s '%s' is outside the project state directory '%s'" % (what, path, base))
+    return resolved
+
+
 def tls_host_regex(pattern):
     """Convert a Proxyman-style host wildcard to mitmproxy's host:port regex."""
     pattern = str(pattern or "").strip().lower().rstrip(".")

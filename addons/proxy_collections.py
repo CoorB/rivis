@@ -32,7 +32,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
-from proxy_common import SAFE_NAME, STATE_ROOT, project_profile, project_state
+from proxy_common import SAFE_NAME, STATE_ROOT, confined_path, project_profile, project_state
 
 DEFAULT_RECORD = "."
 COLL_DIR = os.path.join(STATE_ROOT, "projects", "default", "collections")
@@ -55,7 +55,9 @@ def body_hash(raw):
 def coll_path(name):
     if not SAFE_NAME.fullmatch(name or ""):
         raise ValueError("bad collection name")
-    return os.path.join(COLL_DIR, name + ".json")
+    # confine to the project state dir: a symlink planted in collections/ must not
+    # read (replay) or replace (record) a file outside the project (B5)
+    return confined_path(os.path.dirname(COLL_DIR), os.path.join(COLL_DIR, name + ".json"), "collection")
 
 
 def load_coll(name):

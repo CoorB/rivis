@@ -30,13 +30,13 @@ class Actions(LiveCase):
 
     def test_respond_body_file_and_binary_exact(self):
         blob = bytes(range(256)) * 40
-        path = os.path.join(self.inst.home, "blob.bin")
+        path = self.inst.path("blob.bin")          # inside the project: file rules are confined (F-09)
         open(path, "wb").write(blob)
         self.reset_state(rules=[self.rule("r", "respond", "/echo", body_file=path)])
         self.assertEqual(self.fetch("/echo").body, blob)
 
     def test_map_local_content_type_from_extension(self):
-        jf, tf, bf = (os.path.join(self.inst.home, n) for n in ("a.json", "a.txt", "a.zzz"))
+        jf, tf, bf = (self.inst.path(n) for n in ("a.json", "a.txt", "a.zzz"))
         open(jf, "w").write('{"j": 1}')
         open(tf, "w").write("text")
         open(bf, "wb").write(b"\x00\x01\x02")
@@ -51,7 +51,7 @@ class Actions(LiveCase):
         self.assertEqual(self.up.hits, [])
 
     def test_map_local_missing_file_falls_through_and_is_tagged(self):
-        self.reset_state(rules=[self.rule("ml", "map_local", "/json/small", file="/nonexistent/file.json")])
+        self.reset_state(rules=[self.rule("ml", "map_local", "/json/small", file=self.inst.path("missing.json"))])
         r = self.fetch("/json/small")
         self.assertEqual(r.json(), SMALL_JSON)                 # the real server answered
         self.assertIn("rule:ml FAILED", self.comment("/json/small"))
@@ -172,7 +172,7 @@ class Semantics(LiveCase):
     def test_first_match_wins_for_local_answers(self):
         self.reset_state(rules=[self.rule("first", "respond", "/echo", body="one"),
                                 self.rule("second", "respond", "/echo", body="two"),
-                                self.rule("third", "map_local", "/echo", file="/nonexistent")])
+                                self.rule("third", "map_local", "/echo", file=self.inst.path("nonexistent.json"))])
         self.assertEqual(self.fetch("/echo").text, "one")
         c = self.comment("/echo")
         self.assertIn("mock:first", c)
