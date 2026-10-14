@@ -48,11 +48,12 @@
   /* borders */
   --rv-border: #dbe2e8;
   --rv-border-strong: #c3ced7;
+  --rv-control: #8393a0;       /* input / select outline: >= 3:1 on the surface (WCAG 1.4.11) */
   /* text tiers (all ≥ 4.5:1 on --rv-surface) */
   --rv-text: #14202b;
   --rv-text-2: #44525f;
-  --rv-text-3: #5f6e7b;
-  --rv-host: #5f6e7b;          /* dimmed host in the list */
+  --rv-text-3: #56656f;
+  --rv-host: #56656f;          /* dimmed host in the list */
   /* accent: "river" teal — own identity */
   --rv-accent: #0a7280;
   --rv-accent-hover: #085d69;
@@ -64,13 +65,14 @@
   --rv-ok: #11693f;      --rv-ok-soft: #dff3e8;
   --rv-warn: #8f4f00;    --rv-warn-soft: #fdecd0;
   --rv-danger: #b3262d;  --rv-danger-soft: #fbe2e3;
+  --rv-warn-fg: #ffffff; --rv-danger-fg: #ffffff;   /* text on a solid warn / danger fill */
   --rv-info: #1f55b4;    --rv-info-soft: #e0eafa;
   /* methods */
   --rv-m-get: #11693f;   --rv-m-post: #1f55b4;  --rv-m-put: #8f4f00;
-  --rv-m-patch: #a2410a; --rv-m-delete: #b3262d; --rv-m-other: #5f6e7b;
+  --rv-m-patch: #a2410a; --rv-m-delete: #b3262d; --rv-m-other: #56656f;
   /* status classes */
-  --rv-s-1: #5f6e7b;  --rv-s-2: #11693f;  --rv-s-3: #1f55b4;
-  --rv-s-4: #8f4f00;  --rv-s-5: #b3262d;  --rv-s-none: #5f6e7b;
+  --rv-s-1: #56656f;  --rv-s-2: #11693f;  --rv-s-3: #1f55b4;
+  --rv-s-4: #8f4f00;  --rv-s-5: #b3262d;  --rv-s-none: #56656f;
   /* call tags */
   --rv-t-mock: #076371;      /* mocked / answered locally */
   --rv-t-rule: #8f4f00;      /* modified by a rule */
@@ -102,14 +104,14 @@
   color-scheme: dark;
   --rv-bg: #0c1217; --rv-surface: #121a21; --rv-surface-2: #19232b; --rv-surface-3: #223039;
   --rv-row-alt: #151e25; --rv-row-hover: #172a30; --rv-row-sel: #12414a; --rv-overlay: rgba(0,0,0,.6);
-  --rv-border: #25323b; --rv-border-strong: #364753;
-  --rv-text: #e8eef2; --rv-text-2: #b0bcc6; --rv-text-3: #8d9ba7; --rv-host: #8d9ba7;
+  --rv-border: #25323b; --rv-border-strong: #364753; --rv-control: #647889;
+  --rv-text: #e8eef2; --rv-text-2: #b0bcc6; --rv-text-3: #9aa8b3; --rv-host: #9aa8b3;
   --rv-accent: #35c2cf; --rv-accent-hover: #5ad2dd; --rv-accent-fg: #04252a; --rv-accent-soft: #11363c;
   --rv-accent-text: #5cd0db; --rv-focus: #5cd0db;
   --rv-ok: #4fd08a; --rv-ok-soft: #12311f; --rv-warn: #f0b24a; --rv-warn-soft: #3a2a0d;
-  --rv-danger: #ff7b81; --rv-danger-soft: #3d1a1d; --rv-info: #7fb0ff; --rv-info-soft: #14284a;
-  --rv-m-get: #4fd08a; --rv-m-post: #7fb0ff; --rv-m-put: #f0b24a; --rv-m-patch: #ff9a5c; --rv-m-delete: #ff7b81; --rv-m-other: #8d9ba7;
-  --rv-s-1: #8d9ba7; --rv-s-2: #4fd08a; --rv-s-3: #7fb0ff; --rv-s-4: #f0b24a; --rv-s-5: #ff7b81; --rv-s-none: #8d9ba7;
+  --rv-danger: #ff7b81; --rv-danger-soft: #3d1a1d; --rv-warn-fg: #2a1a00; --rv-danger-fg: #2b0a0c; --rv-info: #7fb0ff; --rv-info-soft: #14284a;
+  --rv-m-get: #4fd08a; --rv-m-post: #7fb0ff; --rv-m-put: #f0b24a; --rv-m-patch: #ff9a5c; --rv-m-delete: #ff7b81; --rv-m-other: #9aa8b3;
+  --rv-s-1: #9aa8b3; --rv-s-2: #4fd08a; --rv-s-3: #7fb0ff; --rv-s-4: #f0b24a; --rv-s-5: #ff7b81; --rv-s-none: #9aa8b3;
   --rv-t-mock: #5cd0db; --rv-t-rule: #f0b24a; --rv-t-script: #7fb0ff; --rv-t-composed: #ff8fc1; --rv-t-tunnel: #d8c36a;
   --rv-shadow-1: 0 1px 2px rgba(0,0,0,.5);
   --rv-shadow-2: 0 8px 24px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
@@ -120,14 +122,14 @@
     color-scheme: dark;
     --rv-bg: #0c1217; --rv-surface: #121a21; --rv-surface-2: #19232b; --rv-surface-3: #223039;
     --rv-row-alt: #151e25; --rv-row-hover: #172a30; --rv-row-sel: #12414a; --rv-overlay: rgba(0,0,0,.6);
-    --rv-border: #25323b; --rv-border-strong: #364753;
-    --rv-text: #e8eef2; --rv-text-2: #b0bcc6; --rv-text-3: #8d9ba7; --rv-host: #8d9ba7;
+    --rv-border: #25323b; --rv-border-strong: #364753; --rv-control: #647889;
+    --rv-text: #e8eef2; --rv-text-2: #b0bcc6; --rv-text-3: #9aa8b3; --rv-host: #9aa8b3;
     --rv-accent: #35c2cf; --rv-accent-hover: #5ad2dd; --rv-accent-fg: #04252a; --rv-accent-soft: #11363c;
     --rv-accent-text: #5cd0db; --rv-focus: #5cd0db;
     --rv-ok: #4fd08a; --rv-ok-soft: #12311f; --rv-warn: #f0b24a; --rv-warn-soft: #3a2a0d;
-    --rv-danger: #ff7b81; --rv-danger-soft: #3d1a1d; --rv-info: #7fb0ff; --rv-info-soft: #14284a;
-    --rv-m-get: #4fd08a; --rv-m-post: #7fb0ff; --rv-m-put: #f0b24a; --rv-m-patch: #ff9a5c; --rv-m-delete: #ff7b81; --rv-m-other: #8d9ba7;
-    --rv-s-1: #8d9ba7; --rv-s-2: #4fd08a; --rv-s-3: #7fb0ff; --rv-s-4: #f0b24a; --rv-s-5: #ff7b81; --rv-s-none: #8d9ba7;
+    --rv-danger: #ff7b81; --rv-danger-soft: #3d1a1d; --rv-warn-fg: #2a1a00; --rv-danger-fg: #2b0a0c; --rv-info: #7fb0ff; --rv-info-soft: #14284a;
+    --rv-m-get: #4fd08a; --rv-m-post: #7fb0ff; --rv-m-put: #f0b24a; --rv-m-patch: #ff9a5c; --rv-m-delete: #ff7b81; --rv-m-other: #9aa8b3;
+    --rv-s-1: #9aa8b3; --rv-s-2: #4fd08a; --rv-s-3: #7fb0ff; --rv-s-4: #f0b24a; --rv-s-5: #ff7b81; --rv-s-none: #9aa8b3;
     --rv-t-mock: #5cd0db; --rv-t-rule: #f0b24a; --rv-t-script: #7fb0ff; --rv-t-composed: #ff8fc1; --rv-t-tunnel: #d8c36a;
     --rv-shadow-1: 0 1px 2px rgba(0,0,0,.5);
     --rv-shadow-2: 0 8px 24px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
@@ -193,11 +195,11 @@ header nav.nav-tabs { border: 0; background: var(--rv-bg); padding: 6px 10px 0; 
 
 /* filter + intercept inputs */
 .filter-input { background: transparent; }
-.filter-input .input-group-addon { background: var(--rv-surface-2); border: 1px solid var(--rv-border); border-right: 0; border-radius: var(--rv-r-md) 0 0 var(--rv-r-md); color: var(--rv-text-3); }
+.filter-input .input-group-addon { background: var(--rv-surface-2); border: 1px solid var(--rv-control); border-right: 0; border-radius: var(--rv-r-md) 0 0 var(--rv-r-md); color: var(--rv-text-3); }
 .filter-input .input-group-addon .fa { color: var(--rv-text-3) !important; }
 .filter-input.has-error .input-group-addon, .has-error .form-control { border-color: var(--rv-danger) !important; }
 .form-control, input[type="text"], input[type="number"], input[type="search"], textarea, select {
-  font-family: var(--rv-mono); font-size: 12.5px; background: var(--rv-surface); color: var(--rv-text); border: 1px solid var(--rv-border);
+  font-family: var(--rv-mono); font-size: 12.5px; background: var(--rv-surface); color: var(--rv-text); border: 1px solid var(--rv-control);
   border-radius: 0 var(--rv-r-md) var(--rv-r-md) 0; box-shadow: none; transition: border-color var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease);
 }
 .form-control::placeholder, input::placeholder { color: var(--rv-text-3); font-family: var(--rv-font); opacity: 1; }

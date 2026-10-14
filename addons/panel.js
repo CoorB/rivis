@@ -109,7 +109,7 @@
     .fab .mark { width: 22px; height: 22px; border-radius: 7px; background: var(--rv-accent-fg); color: var(--rv-accent); display: grid; place-items: center; }
     .fab .mark svg { width: 15px; height: 15px; stroke-width: 2.2; }
     .fab .dot { width: 8px; height: 8px; border-radius: 50%; background: #ffd166; box-shadow: 0 0 0 2px color-mix(in srgb, #ffd166 35%, transparent); }
-    .fab.paused { background: var(--rv-warn); color: #fff; }
+    .fab.paused { background: var(--rv-warn); color: var(--rv-warn-fg); }
     .fab.paused .mark { color: var(--rv-warn); }
     .fab.paused .dot { background: #fff; animation: pulse 1.2s ease-in-out infinite; }
     @keyframes pulse { 50% { opacity: .35; } }
@@ -171,8 +171,8 @@
     button.p:hover { background: var(--rv-accent-hover); border-color: var(--rv-accent-hover); color: var(--rv-accent-fg); }
     button.d { color: var(--rv-danger); }
     button.d:hover { background: var(--rv-danger-soft); border-color: var(--rv-danger); color: var(--rv-danger); }
-    button.warn { background: var(--rv-warn); color: #fff; border-color: var(--rv-warn); }
-    button.warn:hover { background: var(--rv-warn); filter: brightness(.92); color: #fff; }
+    button.warn { background: var(--rv-warn); color: var(--rv-warn-fg); border-color: var(--rv-warn); }
+    button.warn:hover { background: var(--rv-warn); filter: brightness(.92); color: var(--rv-warn-fg); }
     .row { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--rv-border); }
     .row .n { flex: 1; min-width: 0; }
     .row .n div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -186,25 +186,26 @@
     .muted { color: var(--rv-text-3); }
     .sw { position: relative; width: 34px; height: 20px; flex: none; }
     .sw input { opacity: 0; width: 100%; height: 100%; position: absolute; margin: 0; cursor: pointer; z-index: 1; }
-    .sw span { position: absolute; inset: 0; background: var(--rv-border-strong); border-radius: 10px; transition: background var(--rv-dur) var(--rv-ease); }
-    .sw span:before { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; box-shadow: var(--rv-shadow-1); transition: transform var(--rv-dur) var(--rv-ease); }
+    .sw span { position: absolute; inset: 0; background: var(--rv-text-3); border-radius: 10px; transition: background var(--rv-dur) var(--rv-ease); }   /* off track >= 3:1 against the surface (WCAG 1.4.11) */
+    .sw span:before { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: var(--rv-surface); border-radius: 50%; box-shadow: var(--rv-shadow-1); transition: transform var(--rv-dur) var(--rv-ease); }
     .sw input:checked + span { background: var(--rv-accent); }
+    .sw input:checked + span:before { background: var(--rv-accent-fg); }
     .sw input:checked + span:before { transform: translateX(14px); }
     .sw input:focus-visible + span { outline: 2px solid var(--rv-focus); outline-offset: 2px; }
-    select, input[type=number], input[type=text], input:not([type]), input[type=search] { border: 1px solid var(--rv-border-strong); border-radius: var(--rv-r-md); padding: 5px 8px; min-height: 28px; font-size: 12.5px; background: var(--rv-surface); color: var(--rv-text);
+    select, input[type=number], input[type=text], input:not([type]), input[type=search] { border: 1px solid var(--rv-control); border-radius: var(--rv-r-md); padding: 5px 8px; min-height: 28px; font-size: 12.5px; background: var(--rv-surface); color: var(--rv-text);
             transition: border-color var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease); }
     select:focus, input:focus, textarea:focus { outline: none; border-color: var(--rv-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rv-accent) 22%, transparent); }
     input::placeholder, textarea::placeholder { color: var(--rv-text-3); opacity: 1; }
     input[type=checkbox] { accent-color: var(--rv-accent); }
     input.grow { flex: 1; min-width: 0; }
     #project { max-width: 120px; min-height: 26px; font-size: 12px; }
-    textarea { width: 100%; min-height: 260px; height: calc(100vh - 420px); font-family: var(--rv-mono); font-size: 12px; line-height: 1.55; border: 1px solid var(--rv-border-strong); border-radius: var(--rv-r-md);
+    textarea { width: 100%; min-height: 260px; height: calc(100vh - 420px); font-family: var(--rv-mono); font-size: 12px; line-height: 1.55; border: 1px solid var(--rv-control); border-radius: var(--rv-r-md);
                padding: 10px; resize: vertical; background: var(--rv-surface-2); color: var(--rv-text); tab-size: 2; }
     textarea[readonly] { opacity: .75; }
     .hrow input, .krow input[type=text], td input { font-family: var(--rv-mono); }
     .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 26px; z-index: 2147483003; background: var(--rv-text); color: var(--rv-surface); padding: 9px 16px; border-radius: var(--rv-r-md);
              font-size: 12.5px; font-weight: 500; display: none; max-width: 80vw; box-shadow: var(--rv-shadow-2); animation: toast var(--rv-dur) var(--rv-ease); }
-    .toast.err { background: var(--rv-danger); color: #fff; }
+    .toast.err { background: var(--rv-danger); color: var(--rv-danger-fg); }
     @keyframes toast { from { opacity: 0; transform: translate(-50%, 8px); } }
     .card { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--rv-border); border-radius: var(--rv-r-lg); padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: var(--rv-surface);
             transition: border-color var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease); }
@@ -794,10 +795,12 @@
     if (seq !== renderSeq) return;
     const lab = (x) => x ? `${esc(x.method)} ${esc(x.url || x.label)}${x.status ? " → " + x.status : ""}` : "";
     m.innerHTML = `
-      <h4>A</h4><div class="call">${cmpA ? esc(cmpA.label) : '<span class="muted">not set — select a call and press “Set selected as A”</span>'}</div>
+      <h4>Compare two calls</h4>
+      <div class="sub" style="margin-bottom:6px">1 · Select a call and set it as <b>A</b>. 2 · Select another call and compare.</div>
+      <div class="call"><span class="m">A</span>${cmpA ? esc(cmpA.label) : '<span class="muted">not set yet</span>'}</div>
+      <div class="call" style="margin-top:6px"><span class="m">B</span>${f ? esc(f.request.method + " " + f.request.pretty_host + f.request.path) : '<span class="muted">select a call in the list</span>'}</div>
       <div class="btns"><button class="b" id="seta" ${f ? "" : "disabled"}>Set selected as A</button>
-        <button class="b p" id="docmp" ${cmpA && f && f.id !== cmpA.id ? "" : "disabled"}>Compare A with selected</button></div>
-      <div class="sub">${f ? "Selected: " + esc(f.request.method + " " + f.request.pretty_host + f.request.path) : "Select a call in the list."}</div>
+        <button class="b p" id="docmp" ${cmpA && f && f.id !== cmpA.id ? "" : "disabled"}>Compare A with B</button></div>
       <div id="cmpout"></div>`;
     $("seta").onclick = () => { cmpA = { id: f.id, label: f.request.method + " " + f.request.pretty_host + f.request.path }; cmpResult = null; render(); };
     $("docmp").onclick = async () => { const r = await run("diff", { a: cmpA.id, b: f.id }); if (r) { cmpResult = r; drawCmp(); } };
