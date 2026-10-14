@@ -655,7 +655,6 @@ class Migration(CliBase):
         self.assertEqual(self.snapshot(old), before)
         self.assertEqual([x for x in os.listdir(os.path.join(self.state, "projects")) if x.startswith(".")], [])
 
-    @unittest.expectedFailure      # FOUND-BUGS.md B12: rewritten paths point into the deleted .neo.tmp.* directory
     def test_map_local_and_body_file_paths_point_at_files_that_exist(self):
         self.make_legacy()
         self.ok("projects", "list")

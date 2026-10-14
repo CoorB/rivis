@@ -175,7 +175,7 @@ migrate_legacy() {
     echo "$CLI: legacy state copy failed; migration will be retried next time" >&2
     return 1
   fi
-  if [ -f "$tmp/rules.json" ] && ! /usr/bin/python3 -I - "$tmp/rules.json" "$old/mocks" "$tmp/mocks" <<'PY'
+  if [ -f "$tmp/rules.json" ] && ! /usr/bin/python3 -I - "$tmp/rules.json" "$old/mocks" "$target/mocks" <<'PY'
 import json, os, sys, tempfile
 path, old, new = sys.argv[1:]
 try:
