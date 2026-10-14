@@ -134,3 +134,10 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
   `tests/.artifacts/ui-dbg.png` when the test is run with a failing wait). Same for CLI edits to throttle/breakpoints etc.
 - **Expected:** the visible tab re-renders when the polled state changed (and no input has focus), so CLI and UI never disagree on screen.
 - **Test:** `tests/ui/test_ui.py::UiSmoke::test_open_rules_tab_refreshes_when_a_rule_is_added_elsewhere` (expectedFailure).
+
+## B16 — the panel's `/proxy/api/state` returns HTTP 500 while `rules.json` is broken
+Found by a QA run (01:04). The proxy keeps applying the previous rules and mitmweb stays up, but the
+panel state endpoint 500s, so the drawer breaks until the file is fixed. Repro:
+`test_rules_engine.py::HotReload::test_broken_rules_json_keeps_previous_rules_and_never_kills_mitmweb` (write any of
+the listed broken payloads to rules.json, wait 2 s, GET /proxy/api/state). Expected: 200 with the last good state plus
+a visible "rules.json has an error: <reason>" banner.
