@@ -155,7 +155,6 @@ class Commands(unittest.TestCase):
         self.bad("throttle", "lte", "match=(unclosed")
         self.bad("throttle", "lte", "loss=abc")
 
-    @unittest.expectedFailure
     def test_throttle_rejects_out_of_range_and_non_finite_numbers(self):
         """FOUND-BUGS B14 (same in the bash CLI)."""
         for arg in ("loss=150", "loss=-1", "loss=NaN"):

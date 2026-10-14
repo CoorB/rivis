@@ -302,7 +302,6 @@ class Throttle(CliBase):
         self.assertNotEqual(r.returncode, 0)
 
 
-    @unittest.expectedFailure
     def test_out_of_range_and_non_finite_numbers_are_refused(self):
         """FOUND-BUGS B14: loss=150 / -1 / nan and manual latency=-5 / 1e99 / inf are written to rules.json."""
         for args in (("lte", "loss=150"), ("lte", "loss=-1"), ("lte", "loss=nan"), ("manual", "latency_ms=-5"),

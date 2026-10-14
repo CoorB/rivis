@@ -243,6 +243,8 @@ $TlsModes = @("all","allow","ignore")
 function Convert-ToNumber($text, $what) {
   $n = 0.0
   if (-not [double]::TryParse($text, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { Die "$what must be a number, got '$text'" }
+  $cap = if ($what -in @("loss","loss_pct")) { 100 } elseif ($what -in @("latency_ms","jitter_ms","response_delay_ms")) { 120000 } else { 1000000 }
+  if ([double]::IsNaN($n) -or [double]::IsInfinity($n) -or $n -lt 0 -or $n -gt $cap) { Die "$what must be 0-$cap" }
   return $n
 }
 
