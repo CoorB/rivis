@@ -234,13 +234,12 @@ input[type="checkbox"] { accent-color: var(--rv-accent); }
 .flow-table .col-path .fa-pause, .flow-table .col-path .fa-exclamation, .flow-table .col-path .fa-times { color: var(--rv-warn); }
 .flow-table .col-path .fa-exclamation, .flow-table .col-path .fa-times { color: var(--rv-danger); }
 .flow-table .col-path { font-family: var(--rv-mono); font-size: 12px; color: var(--rv-text); position: relative; }
-/* host dimmed + path emphasised: the text stays in the DOM (React owns it); a gradient clipped to the glyphs recolours the first --hl characters */
-.flow-table td.col-path[style*="--hl"] {
-  color: transparent; -webkit-text-fill-color: transparent;
-  background-image: linear-gradient(90deg, var(--rv-host) calc(var(--hl) * 1ch), var(--rv-text) calc(var(--hl) * 1ch));
-  -webkit-background-clip: text; background-clip: text;
-}
-.flow-table td.col-path .marker { -webkit-text-fill-color: initial; color: var(--rv-warn); }
+/* host dimmed + path emphasised: React owns the text node, so colour ranges with the CSS Highlight API (panel.js paintURLs) */
+.flow-table td.col-path { color: var(--rv-text); }
+::highlight(rv-url-host) { color: var(--rv-host); }
+::highlight(rv-url-scheme) { color: var(--rv-text-3); }
+::highlight(rv-url-query) { color: var(--rv-text-3); }
+.flow-table td.col-path .marker { color: var(--rv-warn); }
 .flow-table td.col-method, .flow-table th.col-method { width: 84px; min-width: 84px !important; overflow: visible; }
 .flow-table td.col-status { width: 70px; min-width: 64px; }
 .flow-table td.col-size, .flow-table td.col-time { width: 62px; text-align: right; color: var(--rv-text-3); font-variant-numeric: tabular-nums; font-size: 12px; font-family: var(--rv-mono); }
@@ -385,3 +384,25 @@ footer .label-primary { color: var(--rv-accent-text); background: var(--rv-accen
 @media (prefers-reduced-motion: reduce) {
   #container *, #container *::before, #container *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }
+
+/* ===== polish pass (2026-10-14 night) ===== */
+/* toolbar: one calm monochrome icon style; mitmweb sets per-icon colours inline/with text-* classes */
+#container > header .menu-entry .fa, #container > header .btn .fa, #container > header .input-group-addon .fa {
+  color: var(--rv-text-2) !important;
+}
+#container > header .btn:not([disabled]):hover .fa, #container > header .menu-entry:hover .fa { color: var(--rv-accent-text) !important; }
+#container > header .btn[disabled] .fa, #container > header .btn.disabled .fa { color: var(--rv-text-3) !important; opacity: .55; }
+/* size/time never truncate */
+.flow-table td.col-size, .flow-table th.col-size { width: 70px; min-width: 70px !important; }
+.flow-table td.col-time, .flow-table th.col-time { width: 78px; min-width: 78px !important; }
+.flow-table td.col-size, .flow-table td.col-time { overflow: visible; text-overflow: clip; white-space: nowrap; }
+/* row clutter: quieter type icons, slim https strip */
+.flow-table .resource-icon { opacity: .5; transform: scale(.82); }
+.flow-table td.col-tls { width: 3px; }
+.flow-table .col-tls-https { background-color: color-mix(in srgb, var(--rv-accent) 45%, transparent); }
+/* status bar: mitmweb's "HTTP Proxy Server Address" shows the default listen_port (8080) even when Rivis listens
+   elsewhere via --mode regular@PORT, so it is misleading; the mode label already shows the real port */
+footer .label[title="HTTP Proxy Server Address"] { display: none !important; }
+/* hide the scheme text (React keeps the node; we only shift it): the left strip shows https vs http */
+:root:not([data-skin="off"]) .flow-table td.col-path[style*="--sch"] { text-indent: calc(var(--sch) * -1ch); padding-left: 0; }
+.flow-table td.col-icon { padding-right: 8px; }

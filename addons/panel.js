@@ -138,12 +138,13 @@
     header b small { font-weight: 500; color: var(--rv-text-2); font-size: 13px; }
     .x { border: 0; background: transparent; font-size: 20px; line-height: 1; cursor: pointer; color: var(--rv-text-2); width: 26px; height: 26px; border-radius: var(--rv-r-md); }
     .x:hover { background: var(--rv-surface-2); color: var(--rv-text); }
-    nav { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--rv-border); overflow-x: auto; scrollbar-width: none; background: var(--rv-surface); }
+    nav { display: flex; flex-wrap: wrap; gap: 0 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--rv-border); background: var(--rv-surface); }   /* wraps: every tab stays visible, no hidden scroll */
     nav::-webkit-scrollbar { display: none; }
     nav button { flex: none; display: flex; align-items: center; gap: 5px; border: 0; background: none; padding: 8px 9px 9px; cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--rv-text-2);
                  border-bottom: 2px solid transparent; border-radius: var(--rv-r-md) var(--rv-r-md) 0 0; white-space: nowrap; transition: color var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease); }
     nav button:hover { color: var(--rv-text); background: var(--rv-surface-2); }
     nav button.on { color: var(--rv-accent-text); border-bottom-color: var(--rv-accent); font-weight: 600; }
+    .info { color: var(--rv-text-3); cursor: help; font-size: 11px; }
     nav .cnt:empty { display: none; }
     nav .cnt { background: var(--rv-accent-soft); color: var(--rv-accent-text); border-radius: var(--rv-r-pill); padding: 0 6px; font-size: 10.5px; font-weight: 700; line-height: 16px; font-variant-numeric: tabular-nums; }
     nav .cnt.err { background: var(--rv-danger-soft); color: var(--rv-danger); }
@@ -265,9 +266,9 @@
     code.cmd { display: block; font: 12px/1.5 var(--rv-mono); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 6px 10px; margin: 4px 0; text-align: left; user-select: all; color: var(--rv-text); }
 
     /* floating cards over mitmweb: welcome + empty list */
-    .welcome { position: fixed; left: 50%; top: 72px; transform: translateX(-50%); z-index: 2147482500; width: min(680px, 94vw); max-height: min(78vh, 720px); overflow: auto;
+    .welcome { position: fixed; left: 50%; top: 72px; transform: translateX(-50%); z-index: 2147483002; width: min(680px, 94vw); max-height: min(78vh, 720px); overflow: auto;
                background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: 14px;
-               box-shadow: var(--rv-shadow-3); padding: 18px 20px; display: none; animation: pop var(--rv-dur) var(--rv-ease); }
+               box-shadow: 0 0 0 100vmax var(--rv-overlay), var(--rv-shadow-3); padding: 18px 20px; display: none; animation: pop var(--rv-dur) var(--rv-ease); }
     .welcome.open { display: block; }
     .welcome h3 { margin: 0 0 4px; font-size: 16px; display: flex; align-items: center; gap: 10px; }
     .welcome h3 .mark { width: 26px; height: 26px; border-radius: 8px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; }
@@ -474,7 +475,7 @@
         <button class="b" id="block">Block (network error)</button></div>
       <div class="btns"><input type="number" id="ms" value="8000" step="1000" style="width:90px"> ms
         <button class="b" id="delay">Delay this call</button></div>
-      <p class="sub">These apply to every future call to this endpoint (same method + path, any query) until you turn them off.</p>
+      <p class="sub" title="Same method + path, any query, until you turn them off in Rules.">Applies to every future call to this endpoint. <span class="info" aria-label="details">ⓘ</span></p>
       ${tlsQuickHTML(r.pretty_host)}
       ${viewerHTML(viewer)}${viewerListsHTML()}`;
     $("mock").onclick = async () => {
@@ -965,7 +966,28 @@
     });
     const line = document.querySelector(".flow-detail section.response .first-line");   // status line colour in the details pane
     if (line) { const m = line.textContent.match(/\b([1-5])\d\d\b/); setAttr(line, "data-s", m ? m[1] : null); }
+    paintURLs();
     paintJSONBody();
+  }
+  // Flow-list URLs: scheme + host muted, path in full colour, query muted. Ranges over React's text node (never replaced).
+  function paintURLs() {
+    const names = ["rv-url-scheme", "rv-url-host", "rv-url-query"];
+    if (!window.Highlight || !window.CSS || !CSS.highlights) return;
+    if (!skinOn()) { names.forEach((n) => CSS.highlights.delete(n)); return; }
+    const buckets = { "rv-url-scheme": [], "rv-url-host": [], "rv-url-query": [] };
+    const add = (node, a, b, name) => { if (a >= b) return; const r = document.createRange(); r.setStart(node, a); r.setEnd(node, b); buckets[name].push(r); };
+    document.querySelectorAll(".flow-table tbody td.col-path").forEach((cell) => {
+      const node = Array.from(cell.childNodes).find((n) => n.nodeType === Node.TEXT_NODE && n.nodeValue.includes("://"));
+      if (!node) return;
+      const t = node.nodeValue, at = t.indexOf("://");
+      const cut = t.indexOf("/", at + 3), end = cut < 0 ? t.length : cut, q = cut < 0 ? -1 : t.indexOf("?", cut);
+      add(node, 0, at + 3, "rv-url-scheme");
+      const sch = String(at + 3);                       // CSS shifts the scheme out of view (the strip already shows https)
+      if (cell.style.getPropertyValue("--sch") !== sch) cell.style.setProperty("--sch", sch);
+      add(node, at + 3, end, "rv-url-host");
+      if (q >= 0) add(node, q, t.length, "rv-url-query");
+    });
+    names.forEach((n) => { if (buckets[n].length) CSS.highlights.set(n, new Highlight(...buckets[n])); else CSS.highlights.delete(n); });
   }
   // mitmweb's JSON view is plain text (no token spans). Colour it with ranges over those text nodes.
   function paintJSONBody() {
@@ -1106,7 +1128,7 @@
       <div class="sub">${ico(v.on ? "unlock" : "lock", "sm")} ${v.on ? "decrypted" : "NOT decrypted (tunnel only)"} — ${esc(v.why)}</div>
       <div class="btns"><button class="b" id="tlsdec" ${v.on ? "disabled" : ""}>Decrypt ${esc(host)}</button>
         <button class="b" id="tlsno" ${v.on ? "" : "disabled"}>Don't decrypt ${esc(host)}</button></div>
-      <div class="sub">${esc((state.tls || {}).note || "")}</div>`;
+      <div class="sub" title="${esc((state.tls || {}).note || "")}">Takes effect for new connections, no restart. Not-decrypted hosts skip rules and mocks. <span class="info" aria-label="details">ⓘ</span></div>`;
   }
   function wireTlsQuick(flowId, host) {
     const go = (decrypt) => run("tls_host", { flow_id: flowId, host, decrypt }, (x) => x.message);
