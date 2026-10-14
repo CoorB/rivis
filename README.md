@@ -123,6 +123,9 @@ by a tiny same-origin boot script in `<head>` (the page CSP forbids inline scrip
 - **Light / dark** follow the OS by default; the brand bar (top-right) has a theme toggle, remembered per
   browser.
 - **Compact rows** and the **skin on/off** switch live in the panel's **Settings** (the gear / `?` → Settings).
+- **List tags:** MOCK / RULE / SCRIPT / COMPOSED / NOT DECRYPTED show as a one-letter glyph in the first column (the word
+  appears when the list is wide); a GraphQL response with `errors` shows `200 !`. Plain `http://` calls get an amber edge.
+- **Project switch:** the **Show** menu in the drawer header picks *All traffic* or *<project> only* (list view; rules still load via `--project`).
 - **Kill switch:** add `?theme=off` to the URL (or turn the skin off in Settings) to fall back to stock mitmweb;
   `?theme=on` restores it. Both are remembered in `localStorage`, so stock mode persists until you turn it back on.
 - Press **`?`** for the keyboard-shortcut sheet. First-time users get a dismissible **"Coming from Proxyman?"**

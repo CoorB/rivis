@@ -16,7 +16,7 @@ Proxyman?**. Each row there has an **Open →** link that takes you straight to 
    proxy, so it never sweeps up traffic from your browser, Slack, or anything else on the machine — only the
    app you pointed at it. (That is also why you will not see the dozens of background tunnels Proxyman shows.)
 3. **There is a project switcher.** A project is a saved profile — a label, a host filter, and its own rules,
-   collections and sessions. Switch the *view* from the panel header; load a different project's *rules* by
+   collections and sessions. Switch the *view* with the **Show** menu in the drawer header (*All traffic* or *<project> only*); load a different project's *rules* by
    restarting with `--project <id>`.
 
 ## Task-by-task mapping
