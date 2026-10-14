@@ -59,3 +59,25 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Tests:** `test_panel.py::Confinement::test_{map_local_rule,respond_body_file}_…outside_the_project_is_not_served`
   (expectedFailure). Note: the CLI `rivis rules add --file` and the NEO migration deliberately use arbitrary paths today —
   the fix is probably a per-rule opt-in flag, so decide the policy before "fixing" the test.
+
+## B7 — `mock()` in a Python/JavaScript script fails whenever it carries headers (incl. the shipped `mock` template)
+- **Where:** `addons/proxy_scripts.py` `_run`: builds `headers = [(name, value) …]` of `str` tuples and calls
+  `http.Response.make(status, body, headers)`; mitmproxy 12.2.3 requires bytes there →
+  `TypeError: Header fields must be bytes.` (an empty header list works, which is why `mock(200, "x")` does).
+- **Repro:** `rivis scripts add mock demo --lang py --template mock --match /api` (or `mock(200, {"a": 1})`: a dict body adds
+  `Content-Type` automatically) → every matching call goes upstream unchanged; log line
+  `proxy_scripts: demo on_request: TypeError: Header fields must be bytes.; flow unchanged`.
+- **Expected:** a local response with the given status/body/headers. Fix: pass a dict (or encode to bytes).
+- **Tests:** `test_scripts.py::PythonScripts::test_mock_with_json_body_and_headers`,
+  `JavaScriptScripts::test_mock_json_with_headers` (expectedFailure). Plain-text, header-less mocks are covered and pass.
+
+## B8 — a script's error disappears from the panel state almost immediately
+- **Where:** `proxy_scripts.py` `_run`: on every hook call that does not raise, `self.last_errors.pop(item["file"])`.
+  A script that only defines `on_request` raises in the request hook, then the response hook of the same flow finds no
+  function (`return None`), takes the success path and erases the error. The panel's *Scripts* tab therefore (almost)
+  never shows request-hook errors; only the log does.
+- **Repro:** `def on_request(context, url, request): raise ValueError("boom")`, match `/echo`; call `/echo` once; poll
+  `GET /proxy/api/state` → `script_status.errors` stays `{}` (log shows `boom on_request: ValueError: boom`).
+  A script with only an `on_response` hook keeps its error, which is what the passing tests use.
+- **Expected:** error shown until the next *successful run of that same hook* (or the file is edited).
+- **Test:** `test_scripts.py::PythonScripts::test_request_hook_error_stays_in_state` (expectedFailure).

@@ -327,11 +327,12 @@ class Instance:
     """A throw-away Rivis (mitmweb) started through the real `rivis start` CLI."""
 
     def __init__(self, suite, name, project=None, setup=None, extra_env=None, start_args=("--insecure",),
-                 pre=None, node=True):
+                 pre=None, node=True, rivis_bin=None):
         self.suite, self.name, self.project = suite, name, project or "default"
         self.home = suite.new_home(name)
         self.proc = None
         self.extra_env, self.start_args, self.pre, self.setup = extra_env or {}, list(start_args), pre, setup
+        self.rivis_bin = rivis_bin or RIVIS
         self.password = "pw" + os.urandom(6).hex()
         self.panel = None
         self.logpath = os.path.join(ARTIFACTS, "%s-%d.log" % (name, os.getpid()))
@@ -361,7 +362,7 @@ class Instance:
             self.env = env
             if self.pre:
                 self.pre(self)
-            argv = ["/bin/bash", RIVIS] + (["--project", self.project] if self.project != "default" else []) \
+            argv = ["/bin/bash", self.rivis_bin] + (["--project", self.project] if self.project != "default" else []) \
                 + ["start", "--no-ios", "--no-open"] + self.start_args
             logfh = open(self.logpath, "ab")
             self.proc = subprocess.Popen(argv, env=env, cwd=suite.root, stdin=subprocess.DEVNULL, stdout=logfh,
