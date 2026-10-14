@@ -5,7 +5,7 @@ import re
 import tempfile
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from proxy_common import SAFE_NAME
+from proxy_common import SAFE_NAME, confined_path
 
 VAR_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*}}")
 METHOD_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,32}$")
@@ -114,7 +114,13 @@ class ComposerStore:
         path = os.path.abspath(os.path.join(self.directory, name + ".json"))
         if os.path.dirname(path) != self.directory:
             raise ValueError("bad composer name")
-        return path
+        # confine to the project state dir (the composer dir's parent): a symlink
+        # planted in composer/ must not read or write outside the project (B5)
+        return confined_path(os.path.dirname(self.directory), path, "saved request")
+
+    def _vars_path(self):
+        return confined_path(os.path.dirname(self.directory),
+                             os.path.join(self.directory, "vars.json"), "composer variables")
 
     def _write(self, path, value):
         self._ensure()
@@ -159,7 +165,7 @@ class ComposerStore:
         os.unlink(self._path(name))
 
     def variables(self):
-        path = os.path.join(self.directory, "vars.json")
+        path = self._vars_path()
         try:
             with open(path, encoding="utf-8") as fh:
                 value = json.load(fh)
@@ -175,4 +181,4 @@ class ComposerStore:
         for key in value:
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", key):
                 raise ValueError("invalid variable name '%s'" % key)
-        self._write(os.path.join(self.directory, "vars.json"), value)
+        self._write(self._vars_path(), value)

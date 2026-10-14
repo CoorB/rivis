@@ -30,7 +30,7 @@ except ImportError:  # Pure helpers are intentionally importable by static tests
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
-from proxy_common import PRODUCT, SAFE_NAME, STATE_ROOT, project_state
+from proxy_common import PRODUCT, SAFE_NAME, STATE_ROOT, confined_path, project_state
 
 JWT_RE = re.compile(r"(?<![A-Za-z0-9_-])([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)(?![A-Za-z0-9_-])")
 GRAPHQL_OP_RE = re.compile(
@@ -250,10 +250,17 @@ def load_script_files(script_dir, cfg):
         if os.path.basename(filename) != filename or not filename.endswith((".py", ".js")):
             continue
         path = os.path.join(script_dir, filename)
-        if os.path.isfile(path):
-            copy_item = dict(item); copy_item["path"] = path
-            copy_item["name"] = copy_item.get("name") or os.path.splitext(filename)[0]
-            out.append(copy_item)
+        if not os.path.isfile(path):
+            continue
+        try:   # a symlink planted in scripts/ must not run code from outside the project (B5)
+            path = confined_path(os.path.dirname(os.path.abspath(script_dir)), path, "script")
+        except ValueError as e:
+            if ctx:
+                ctx.log.warn(f"proxy_scripts: skipping '{filename}': {e}")
+            continue
+        copy_item = dict(item); copy_item["path"] = path
+        copy_item["name"] = copy_item.get("name") or os.path.splitext(filename)[0]
+        out.append(copy_item)
     return sorted(out, key=lambda x: x["file"].lower())
 
 

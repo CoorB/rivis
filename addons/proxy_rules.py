@@ -27,6 +27,12 @@ Actions
   map_remote  replace (regex), with                  rewrite the URL before it is sent
   block                                              kill the connection (app sees a network error)
 
+`file` / `body_file` must live inside the project's state directory (the directory holding
+this rules file; symlinks are resolved, so a link inside the project cannot point out of it).
+A rule pointing anywhere else is skipped at load time with an error — the panel shows it as
+disabled and the proxy keeps running. This stops a shared rules file from serving arbitrary
+local files (security finding F-09).
+
 Every rule that fires appends "rule:<name>" to the flow comment, so the UI shows what changed a call.
 """
 import asyncio
@@ -50,7 +56,7 @@ if HERE not in sys.path:
 import proxy_common
 importlib.reload(proxy_common)
 from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PROFILE_VALUES, STATE_ROOT, breakpoints,
-                          tls_config, tls_options)
+                          confined_path, tls_config, tls_options)
 
 # Traffic profiles: latency ms, jitter ms, down kbps, up kbps, loss %, extra response delay ms.
 # The first four named ones are FRTMProxy's built-ins, same numbers, so teams see the same thing.
@@ -128,7 +134,7 @@ def _tag_rule(flow, rule, suffix="", modified=True):
     _tag(flow, f"{kind}:{rule['name']}{suffix}")
 
 
-def _compile_rule(source, fallback_name=None):
+def _compile_rule(source, state_dir, fallback_name=None):
     if not isinstance(source, dict):
         raise TypeError("rule must be an object")
     rule = dict(source)
@@ -148,8 +154,12 @@ def _compile_rule(source, fallback_name=None):
             raise TypeError("map_remote with must be text")
     elif action == "respond":
         int(rule.get("status", 200))
+        if rule.get("body_file"):
+            rule["body_file"] = confined_path(state_dir, rule["body_file"], "body_file")
     elif action == "status":
         int(rule["status"])
+        if rule.get("body_file"):
+            rule["body_file"] = confined_path(state_dir, rule["body_file"], "body_file")
     elif action == "delay":
         rule["ms"] = float(rule["ms"])
         if rule["ms"] < 0:
@@ -162,8 +172,13 @@ def _compile_rule(source, fallback_name=None):
             raise TypeError("set_header header must be text")
         if rule.get("side", "request") not in ("request", "response"):
             raise ValueError("set_header side must be request or response")
-    elif action == "map_local" and not isinstance(rule["file"], str):
-        raise TypeError("map_local file must be text")
+    elif action == "map_local":
+        if not isinstance(rule["file"], str):
+            raise TypeError("map_local file must be text")
+        # A shared rules file must not turn the proxy into a reader for arbitrary
+        # local files: confine to the project state dir (symlinks resolved), or skip
+        # the rule with this error (it shows as disabled/error in the panel).
+        rule["file"] = confined_path(state_dir, rule["file"], "map_local file")
     if "headers" in rule and not isinstance(rule["headers"], dict):
         raise TypeError("headers must be an object")
     return rule
@@ -238,13 +253,14 @@ class ProxyRules:
                 raise ValueError("rules must contain objects")
             rules = []
             skipped = []
+            state_dir = os.path.dirname(os.path.abspath(os.path.expanduser(self.path)))
             for index, source in enumerate(cfg.get("rules", [])):
                 if isinstance(source, dict) and not source.get("enabled", True):
                     continue
                 name = source.get("name") if isinstance(source, dict) else None
                 name = name or f"rule #{index + 1}"
                 try:
-                    rules.append(_compile_rule(source, name))
+                    rules.append(_compile_rule(source, state_dir, name))
                 except (KeyError, TypeError, ValueError, re.error) as e:
                     skipped.append({"name": name, "error": str(e)})
                     ctx.log.warn(f"proxy_rules: skipping rule '{name}': {e}")

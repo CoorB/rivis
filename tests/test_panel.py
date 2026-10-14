@@ -477,7 +477,6 @@ class Confinement(LiveCase):
         with open(outside) as fh:
             self.assertEqual(fh.read(), "TOP-SECRET")
 
-    @unittest.expectedFailure
     def test_symlinked_script_is_not_read_through_the_panel(self):
         """FOUND-BUGS B5."""
         outside = os.path.join(self.suite.root, "outside-script.txt")
@@ -493,7 +492,6 @@ class Confinement(LiveCase):
         code, doc, raw = self.panel.post("script_get", {"file": "evil.py"})
         self.assertFalse(code == 200 and "TOP-SECRET-SCRIPT" in raw.decode(), "script_get followed a symlink out of the project")
 
-    @unittest.expectedFailure
     def test_symlinked_collection_is_not_read_through_the_panel(self):
         """FOUND-BUGS B5."""
         outside = os.path.join(self.suite.root, "outside-coll.json")
@@ -508,7 +506,6 @@ class Confinement(LiveCase):
         code, doc, raw = self.panel.post("coll_entries", {"name": "evil"})
         self.assertFalse(code == 200 and b"TOP-SECRET-HOST" in raw, "coll_entries followed a symlink out of the project")
 
-    @unittest.expectedFailure
     def test_map_local_rule_pointing_outside_the_project_is_not_served(self):
         """FOUND-BUGS B6."""
         outside = os.path.join(self.suite.root, "outside-map.txt")
@@ -517,7 +514,6 @@ class Confinement(LiveCase):
         self.reset_state(rules=[self.rule("m", "map_local", "/echo", file=outside)])
         self.assertNotIn("TOP-SECRET-MAPLOCAL", self.fetch("/echo").text)
 
-    @unittest.expectedFailure
     def test_respond_body_file_outside_the_project_is_not_served(self):
         """FOUND-BUGS B6."""
         outside = os.path.join(self.suite.root, "outside-body.txt")

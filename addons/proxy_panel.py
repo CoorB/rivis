@@ -48,13 +48,14 @@ if HERE not in sys.path:
 import proxy_common
 importlib.reload(proxy_common)
 from proxy_common import (ACTIONS, PANEL_PROFILES, PRODUCT, SAFE_NAME, STATE_ROOT, breakpoints,
-                          project_profile, project_profiles, project_state, tls_config,
-                          tls_covering, tls_update)
+                          confined_path, project_profile, project_profiles, project_state,
+                          tls_config, tls_covering, tls_update)
 from proxy_codegen import TARGETS, generate
 from proxy_compose import ComposerStore, normalize_request
 from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, find_jwts)
 
 DEFAULT_STATE = os.path.join(STATE_ROOT, "projects", "default")
+STATE_DIR = DEFAULT_STATE          # confinement base for every panel file op (F-09/B5)
 COLL_DIR = os.path.join(DEFAULT_STATE, "collections")
 SESS_DIR = os.path.join(DEFAULT_STATE, "sessions")
 MOCK_DIR = os.path.join(DEFAULT_STATE, "mocks")
@@ -114,9 +115,10 @@ class ProxyPanel:
         self._bad_cfg = None
 
     def configure(self, updated):
-        global COLL_DIR, SESS_DIR, MOCK_DIR, SCRIPT_DIR, COMPOSE_DIR
+        global STATE_DIR, COLL_DIR, SESS_DIR, MOCK_DIR, SCRIPT_DIR, COMPOSE_DIR
         if "proxy_project" in updated or "proxy_rules_file" in updated:
             base = project_state(ctx.options.proxy_project)
+            STATE_DIR = base
             COLL_DIR = os.path.join(base, "collections")
             SESS_DIR = os.path.join(base, "sessions")
             MOCK_DIR = os.path.join(base, "mocks")
@@ -319,7 +321,12 @@ class ProxyPanel:
                 continue
             x = dict(item)
             filename = x.get("file", "")
-            x["exists"] = os.path.basename(filename) == filename and os.path.isfile(os.path.join(SCRIPT_DIR, filename))
+            x["exists"] = False
+            if os.path.basename(filename) == filename:
+                try:   # a symlink out of the project counts as missing, and script_get refuses it (B5)
+                    x["exists"] = os.path.isfile(confined_path(STATE_DIR, os.path.join(SCRIPT_DIR, filename), "script"))
+                except (TypeError, ValueError):
+                    pass
             out.append(x)
         return sorted(out, key=lambda x: x.get("file", "").lower())
 
@@ -328,7 +335,10 @@ class ProxyPanel:
         if os.path.basename(filename or "") != filename or not SAFE_NAME.fullmatch(os.path.splitext(filename)[0] or "") \
                 or not filename.endswith((".py", ".js")):
             raise PanelError("bad script filename")
-        return os.path.join(SCRIPT_DIR, filename)
+        try:   # a symlink planted in scripts/ must not read or write outside the project (B5)
+            return confined_path(STATE_DIR, os.path.join(SCRIPT_DIR, filename), "script")
+        except ValueError as e:
+            raise PanelError(str(e))
 
     @staticmethod
     def script_template(lang, kind):
@@ -519,6 +529,10 @@ class ProxyPanel:
                     name = fn[:-5]
                     path = os.path.join(COLL_DIR, fn)
                     try:
+                        confined_path(STATE_DIR, path)
+                    except ValueError:
+                        continue      # symlink out of the project: never read, never listed (B5)
+                    try:
                         st = os.stat(path)
                         key = (path, st.st_mtime_ns, st.st_size)
                         cached = self._coll_count_cache.get(key)
@@ -542,7 +556,8 @@ class ProxyPanel:
             for fn in sorted(os.listdir(SESS_DIR)):
                 if fn.endswith(".meta.json"):
                     try:
-                        with open(os.path.join(SESS_DIR, fn)) as fh:
+                        path = confined_path(STATE_DIR, os.path.join(SESS_DIR, fn))   # B5
+                        with open(path) as fh:
                             out.append(json.load(fh))
                     except (OSError, ValueError):
                         pass
@@ -552,13 +567,20 @@ class ProxyPanel:
     def sess_paths(name):
         if not SAFE_NAME.fullmatch(name or ""):
             raise PanelError("session name: letters, digits, . _ - only (max 64)")
-        return os.path.join(SESS_DIR, name + ".flows"), os.path.join(SESS_DIR, name + ".meta.json")
+        try:   # a symlink planted in sessions/ must not read outside the project (B5)
+            return (confined_path(STATE_DIR, os.path.join(SESS_DIR, name + ".flows"), "session"),
+                    confined_path(STATE_DIR, os.path.join(SESS_DIR, name + ".meta.json"), "session"))
+        except ValueError as e:
+            raise PanelError(str(e))
 
     @staticmethod
     def coll_file(name):
         if not SAFE_NAME.fullmatch(name or ""):
             raise PanelError("collection name: letters, digits, . _ - only (max 64)")
-        return os.path.join(COLL_DIR, name + ".json")
+        try:   # a symlink planted in collections/ must not read outside the project (B5)
+            return confined_path(STATE_DIR, os.path.join(COLL_DIR, name + ".json"), "collection")
+        except ValueError as e:
+            raise PanelError(str(e))
 
     def view_filter(self):
         if self.show_dns:
