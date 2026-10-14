@@ -25,16 +25,23 @@ from mitmproxy.addonmanager import traverse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Runs in <head> before first paint: applies the remembered theme / density and, unless the skin is
-# switched off (?theme=off or the panel toggle), loads /proxy/theme.css. Everything is wrapped in
-# try/catch because localStorage can throw in private windows.
-THEME_BOOT = """<script>(function(){try{var d=document.documentElement,s=window.localStorage,q=new URLSearchParams(location.search),t=q.get("theme");
+# mitmweb serves a strict CSP (default-src 'self'; no 'unsafe-inline' for scripts), so the boot logic
+# CANNOT be an inline <script> — it would be blocked and the skin would only apply late, after panel.js
+# loads (a flash of stock mitmweb), and the ?theme=off kill switch would never run. It is therefore
+# served as a same-origin external script (/proxy/boot.js), injected synchronously into <head> so it
+# runs before first paint. It applies the remembered theme / density and, unless the skin is switched
+# off (?theme=off or the panel toggle), parser-writes the /proxy/theme.css link (render-blocking → no
+# flash). Everything is wrapped in try/catch because localStorage can throw in private windows.
+THEME_BOOT = '<script src="./proxy/boot.js"></script>'
+BOOT_JS = b"""(function(){var load=true;try{
+var d=document.documentElement,s=window.localStorage,q=new URLSearchParams(location.search),t=q.get("theme");
 if(t==="off"||t==="on")s.setItem("rivis-skin",t);else if(t==="light"||t==="dark"||t==="system")s.setItem("rivis-theme",t);
 var k=s.getItem("rivis-skin")||s.getItem("proxy-restyle")||"on",m=s.getItem("rivis-theme");
 if(m==="light"||m==="dark")d.setAttribute("data-theme",m);
 if(s.getItem("rivis-compact")==="on")d.setAttribute("data-density","compact");
-if(k==="off")d.setAttribute("data-skin","off");else document.write('<link rel="stylesheet" href="./proxy/theme.css" id="rivis-theme">');
-}catch(e){document.write('<link rel="stylesheet" href="./proxy/theme.css" id="rivis-theme">');}})();</script>"""
+if(k==="off"){d.setAttribute("data-skin","off");load=false;}
+}catch(e){}
+if(load)document.write('<link rel="stylesheet" href="./proxy/theme.css" id="rivis-theme">');})();"""
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
@@ -1409,7 +1416,7 @@ class ProxyPanel:
             def finish(self, chunk=None):
                 if chunk is not None:
                     s = chunk.decode() if isinstance(chunk, bytes) else chunk
-                    if "</head>" in s and "proxy/theme.css" not in s:
+                    if "</head>" in s and "proxy/boot.js" not in s:
                         s = s.replace("</head>", THEME_BOOT + "</head>", 1)
                     if "</body>" in s and "proxy/panel.js" not in s:
                         s = s.replace("</body>", '<script src="./proxy/panel.js"></script></body>')
@@ -1429,6 +1436,13 @@ class ProxyPanel:
                     self.set_header("Content-Type", "text/css; charset=utf-8")
                     self.set_header("Cache-Control", "no-store")
                     self.write(fh.read())
+
+        class BootJS(webapp.RequestHandler):
+            # Pre-paint boot: served as a same-origin script because the page CSP blocks inline <script>.
+            def get(self):
+                self.set_header("Content-Type", "application/javascript")
+                self.set_header("Cache-Control", "no-store")
+                self.write(BOOT_JS)
 
         class Api(webapp.RequestHandler):
             def get(self, op):
@@ -1452,6 +1466,7 @@ class ProxyPanel:
             (r"/", ProxyIndex),
             (r"/proxy/panel\.js", PanelJS),
             (r"/proxy/theme\.css", ThemeCSS),
+            (r"/proxy/boot\.js", BootJS),
             (r"/proxy/api/([a-z_]+)", Api),
         ])
         app._proxy_panel_routes = True
