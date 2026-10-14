@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Backward-compatible NEO profile entry point.
+set -u
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd -P)"
+CLI=$(/usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["cli"])' "$SCRIPT_DIR/product.json")
+for arg in "$@"; do
+  [ "$arg" = "--" ] && break
+  case "$arg" in --project|--project=*) exec "$SCRIPT_DIR/$CLI" "$@" ;; esac
+done
+exec "$SCRIPT_DIR/$CLI" --project neo "$@"

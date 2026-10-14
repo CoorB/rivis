@@ -1,0 +1,11 @@
+{
+  "id": "default",
+  "label": "All",
+  "description": "All HTTP traffic",
+  "hosts": "",
+  "record_match": ".",
+  "throttle_match": ".",
+  "dev_ssl_insecure_hint": "use --insecure only when the upstream certificate cannot be validated",
+  "android_packages": [],
+  "ios_bundle_ids": []
+}

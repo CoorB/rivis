@@ -1,0 +1,30 @@
+# Homebrew formula template for IT's INTERNAL tap only. Replace every <PLACEHOLDER>. Never publish to a public tap.
+# Rename this file and the class to the product's cli name (see product.json).
+class Proxytool < Formula
+  desc "<PRODUCT DESCRIPTION>"
+  homepage "<INTERNAL HOMEPAGE URL>"
+  url "<MIRROR_BASE_URL>/<cli>/<cli>-<VERSION>.tar.gz"
+  sha256 "<SHA256 PRINTED BY make-release.sh>"
+  version "<VERSION>"
+
+  # mitmproxy is installed separately from the same mirror at the pinned version (see install.sh); no auto-update.
+  def install
+    libexec.install Dir["*"]
+    (bin/"<cli>").write <<~SH
+      #!/usr/bin/env bash
+      exec "#{libexec}/<cli>" "$@"
+    SH
+  end
+
+  def caveats
+    <<~EOS
+      First run: `<cli> start`. For iOS Simulator capture macOS asks you to approve the
+      "Mitmproxy Redirector" network extension (System Settings > General > Login Items & Extensions).
+      Pinned, no auto-update: upgrades are reviewed by IT.
+    EOS
+  end
+
+  test do
+    assert_match "<cli>", shell_output("#{bin}/<cli> 2>&1", 1)
+  end
+end

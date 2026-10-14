@@ -1,0 +1,11 @@
+{
+  "id": "neo",
+  "label": "NEO",
+  "description": "SNB NEO retail banking (Backbase)",
+  "hosts": "neo\\.sa|alahli\\.com",
+  "record_match": "neo\\.sa|alahli\\.com",
+  "throttle_match": "neo\\.sa",
+  "dev_ssl_insecure_hint": "use --insecure for envs with no valid cert (NEO: dev)",
+  "android_packages": ["com.snb.neo.uat"],
+  "ios_bundle_ids": []
+}

@@ -1,0 +1,690 @@
+#!/usr/bin/env bash
+# Product-neutral mitmproxy wrapper for macOS.
+#
+# SECURITY CONDITIONS THIS SCRIPT ENFORCES (IT approval, 2026-10)
+#   * proxy binds 127.0.0.1 only — never 0.0.0.0. Android emulators still reach it
+#     (10.0.2.2 = host loopback); physical devices cannot, by design.
+#   * NEVER touches the macOS system proxy. The iOS Simulator is captured with
+#     mitmproxy local-capture mode scoped to simulator processes only.
+#   * one CA per workstation (~/.mitmproxy), installed only on sims/emulators,
+#     and `off` removes it again.
+#
+#   <cli> [--project ID] start [--insecure] [--project-only] [--all] [--no-ios] [--no-open]
+#                                 mitmweb: proxy 127.0.0.1:8080, UI 127.0.0.1:8083 (opens logged in)
+#                                 --insecure   disable upstream TLS verification (--dev alias)
+#                                 --project-only show only the active project's hosts (--neo-only alias)
+#                                 --all        also show DNS/UDP rows (hidden by default)
+#                                 --no-ios     regular proxy only (Android emulator)
+#                                 --ios-filter local-capture process filter (default CoreSimulator)
+#   <cli> projects list|use ID|show ID|new ID --label L --hosts REGEX
+#   <cli> ui | stop | status | cert
+#   <cli> rules list|on NAME|off NAME|show NAME|rm NAME|edit
+#   <cli> rules add NAME match=REGEX action=ACTION [key=value ...]
+#                                 Proxyman-style rules, hot-reloaded, kept across restarts:
+#                                 respond | map_local | status | json_patch | delay |
+#                                 set_header | map_remote | block   (see rules.example.json)
+#   <cli> scripts list|new NAME --lang py|js [--match REGEX]|on NAME|off NAME|edit NAME|rm NAME
+#   <cli> throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]
+#                 [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
+#   <cli> tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
+#                                 which hosts are decrypted (Proxyman "SSL Proxying list"); wildcards like
+#                                 *.example.test. Hot-reloaded for NEW connections — no restart.
+#   <cli> compose list | send NAME [--var name=value] [--no-wait]
+#                                 replay a request saved in the panel's Compose tab through the running proxy
+#   <cli> breakpoint URL-REGEX [--request|--response] | off
+#                                 pause matching calls in the UI to edit them, then Resume
+#   <cli> mock NAME URL-REGEX              save the last matching response and Map-Local it
+#   <cli> android on|off [-s SERIAL] [--auto-ui]
+#                                 CA + proxy on an emulator. Google APIs image (no Play
+#                                 Store): fully automatic via adb root. Google Play image:
+#                                 prints the Settings steps; --auto-ui tries to tap them
+#                                 (best effort — Settings layout differs per Android build)
+#   <cli> ios on|off [--udid UDID]         CA on a simulator (default: the booted one)
+#   <cli> net-reset [--dry-run]            clear stale local web/https/socks proxies
+#                                         service — fixes "no internet after closing the proxy app"
+#   <cli> status | cert
+set -uo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd -P)"   # works through a ~/bin symlink
+PRODUCT_JSON="$SCRIPT_DIR/product.json"
+
+product_value() {
+  /usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$PRODUCT_JSON" "$1"
+}
+PRODUCT_NAME="$(product_value name)"
+CLI="$(product_value cli)"
+ENV_PREFIX="$(product_value env_prefix)"
+STATE_ROOT="$(product_value state_dir)"
+STATE_ROOT="${STATE_ROOT/#\~/$HOME}"
+
+env_value() {
+  local suffix="$1" fallback="$2" var value=""
+  var="${ENV_PREFIX}_${suffix}"
+  eval 'value=${'"$var"'-}'
+  [ -n "$value" ] || eval 'value=${NEO_MITM_'"$suffix"'-}'
+  printf '%s' "${value:-$fallback}"
+}
+
+# --project is global and accepted before or after every command.
+PROJECT_ARG=""
+ARGS=()
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--" ]; then
+    shift
+    while [ $# -gt 0 ]; do ARGS+=("$1"); shift; done
+  elif [ "$1" = "--project" ]; then
+    [ $# -ge 2 ] || { echo "$CLI: --project needs an ID" >&2; exit 1; }
+    PROJECT_ARG="$2"; shift 2
+  elif [[ "$1" == --project=* ]]; then
+    PROJECT_ARG="${1#--project=}"; [ -n "$PROJECT_ARG" ] || { echo "$CLI: --project needs an ID" >&2; exit 1; }
+    shift
+  else
+    ARGS+=("$1"); shift
+  fi
+done
+[ ${#ARGS[@]} -gt 0 ] && set -- "${ARGS[@]}" || set --
+
+PROJECT_ENV="$(env_value PROJECT "")"
+PROJECT_SOURCE="default"
+if [ -n "$PROJECT_ARG" ]; then PROJECT="$PROJECT_ARG"; PROJECT_SOURCE="argument"
+elif [ -n "$PROJECT_ENV" ]; then PROJECT="$PROJECT_ENV"; PROJECT_SOURCE="environment"
+elif [ -f "$STATE_ROOT/current-project" ]; then PROJECT="$(sed -n '1p' "$STATE_ROOT/current-project")"; PROJECT_SOURCE="current-project"
+else PROJECT="default"; fi
+
+valid_id() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; }
+if ! valid_id "$PROJECT"; then
+  if [ "$PROJECT_SOURCE" = "current-project" ]; then
+    echo "$CLI: warning: ignoring invalid current-project '$PROJECT'; using default" >&2
+    PROJECT="default"
+  else echo "$CLI: invalid project ID '$PROJECT'" >&2; exit 1; fi
+fi
+
+profile_dir() {
+  if [ -f "$STATE_ROOT/profiles/$1/project.json" ]; then printf '%s' "$STATE_ROOT/profiles/$1"
+  elif [ -f "$SCRIPT_DIR/projects/$1/project.json" ]; then printf '%s' "$SCRIPT_DIR/projects/$1"
+  else return 1; fi
+}
+if ! PROJECT_PROFILE="$(profile_dir "$PROJECT")"; then
+  if [ "$PROJECT_SOURCE" = "current-project" ]; then
+    echo "$CLI: warning: current project '$PROJECT' no longer exists; using default" >&2
+    PROJECT="default"
+    PROJECT_PROFILE="$(profile_dir "$PROJECT")" || { echo "$CLI: default project profile is missing" >&2; exit 1; }
+  else echo "$CLI: unknown project '$PROJECT' ($CLI projects list)" >&2; exit 1; fi
+fi
+PROJECT_JSON="$PROJECT_PROFILE/project.json"
+project_value() {
+  /usr/bin/python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2],""); print(v if not isinstance(v,(dict,list)) else json.dumps(v))' "$PROJECT_JSON" "$1"
+}
+PROJECT_LABEL="$(project_value label)"
+PROJECT_HOSTS="$(project_value hosts)"
+PROJECT_ANDROID="$(project_value android_packages)"
+PROJECT_IOS="$(project_value ios_bundle_ids)"
+PROJECT_STATE="$STATE_ROOT/projects/$PROJECT"
+
+PORT="$(env_value PORT 8080)"
+WEB_PORT="$(env_value WEB_PORT 8083)"
+CONFDIR="$(env_value CONFDIR "$HOME/.mitmproxy")"
+CA_PEM="$CONFDIR/mitmproxy-ca-cert.pem"
+ADB="${ADB:-$(command -v adb || echo "$HOME/Library/Android/sdk/platform-tools/adb")}"
+RULES="$(env_value RULES "$PROJECT_STATE/rules.json")"
+WEB_PASSWORD="$(env_value WEB_PASSWORD "")"
+ADDON="$SCRIPT_DIR/addons/proxy_rules.py"
+
+usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0" | sed "s/<cli>/$CLI/g; s/<ProductName>/$PRODUCT_NAME/g"; }
+die()   { echo "$CLI: $*" >&2; exit 1; }
+info()  { echo "• $*"; }
+
+ensure_ca() {
+  [ -f "$CA_PEM" ] && return
+  info "no CA yet in $CONFDIR — generating one (first mitmproxy run does this)"
+  command -v mitmdump >/dev/null || die "mitmproxy not installed (brew install --cask mitmproxy, after IT approval)"
+  mitmdump --set confdir="$CONFDIR" -p 0 >/dev/null 2>&1 & local p=$!
+  for _ in $(seq 1 20); do [ -f "$CA_PEM" ] && break; sleep 0.5; done
+  kill "$p" 2>/dev/null; wait "$p" 2>/dev/null
+  [ -f "$CA_PEM" ] || die "CA was not generated in $CONFDIR"
+}
+
+ca_hash()   { openssl x509 -inform PEM -subject_hash_old -noout -in "$CA_PEM"; }
+ca_sha256() { openssl x509 -in "$CA_PEM" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d :; }
+
+port_owner() { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==2{print $1" pid "$2" "$9}'; }
+
+secure_dirs() {
+  (umask 077; mkdir -p "$STATE_ROOT" "$PROJECT_STATE" "$PROJECT_STATE/mocks" \
+    "$PROJECT_STATE/collections" "$PROJECT_STATE/sessions" "$PROJECT_STATE/scripts" "$STATE_ROOT/profiles")
+  chmod 700 "$STATE_ROOT" "$PROJECT_STATE" "$PROJECT_STATE/mocks" \
+    "$PROJECT_STATE/collections" "$PROJECT_STATE/sessions" "$PROJECT_STATE/scripts" "$STATE_ROOT/profiles" 2>/dev/null || true
+}
+
+migrate_legacy() {
+  local old="$HOME/.neo-mitm" parent="$STATE_ROOT/projects" target="$STATE_ROOT/projects/neo" tmp
+  [ -d "$old" ] || return 0
+  [ -e "$target" ] && return 0
+  (umask 077; mkdir -p "$parent") || return 1
+  tmp=$(mktemp -d "$parent/.neo.tmp.XXXXXX") || return 1
+  if ! (umask 077
+    [ ! -f "$old/rules.json" ] || cp "$old/rules.json" "$tmp/rules.json"
+    for d in mocks collections sessions; do [ ! -d "$old/$d" ] || cp -R "$old/$d" "$tmp/$d"; done
+  ); then
+    rm -rf "$tmp"
+    echo "$CLI: legacy state copy failed; migration will be retried next time" >&2
+    return 1
+  fi
+  if [ -f "$tmp/rules.json" ] && ! /usr/bin/python3 -I - "$tmp/rules.json" "$old/mocks" "$tmp/mocks" <<'PY'
+import json, os, sys, tempfile
+path, old, new = sys.argv[1:]
+try:
+    with open(path) as fh:
+        doc = json.load(fh)
+except (OSError, ValueError):
+    raise SystemExit(0)
+changed = False
+for rule in doc.get("rules", []):
+    for key in ("file", "body_file"):
+        if not isinstance(rule.get(key), str):
+            continue
+        expanded = os.path.expanduser(rule[key])
+        if expanded == old or expanded.startswith(old + os.sep):
+            rule[key] = new + expanded[len(old):]
+            changed = True
+if changed:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".migrate-", suffix=".json")
+    with os.fdopen(fd, "w") as fh:
+        json.dump(doc, fh, indent=2, ensure_ascii=False); fh.write("\n")
+    os.chmod(tmp, 0o600); os.replace(tmp, path)
+PY
+  then
+    rm -rf "$tmp"
+    echo "$CLI: could not rewrite copied legacy rules; migration will be retried next time" >&2
+    return 1
+  fi
+  find "$tmp" -type d -exec chmod 700 {} \; 2>/dev/null || true
+  find "$tmp" -type f -exec chmod 600 {} \; 2>/dev/null || true
+  if ! mv "$tmp" "$target"; then
+    rm -rf "$tmp"
+    echo "$CLI: could not finish legacy migration; it will be retried next time" >&2
+    return 1
+  fi
+  info "copied legacy ~/.neo-mitm state into $target (the original was left unchanged)"
+}
+
+ensure_rules() {
+  migrate_legacy
+  secure_dirs
+  [ -f "$RULES" ] && return
+  local example="$PROJECT_PROFILE/rules.example.json"
+  [ -f "$example" ] || die "rules example not found: $example"
+  cp "$example" "$RULES" || die "cannot create $RULES"
+  chmod 600 "$RULES"
+  info "created $RULES from project '$PROJECT' (all rules off)"
+}
+
+cmd_projects() {
+  local action="${1:-list}"; shift || true
+  case "$action" in
+    list)
+      /usr/bin/python3 -I - "$SCRIPT_DIR/projects" "$STATE_ROOT/profiles" "$PROJECT" <<'PY'
+import json, os, sys
+repo, user, current = sys.argv[1:]
+items = {}
+for root in (repo, user):
+    if not os.path.isdir(root): continue
+    for name in os.listdir(root):
+        path = os.path.join(root, name, "project.json")
+        if name.startswith("_") or not os.path.isfile(path): continue
+        try:
+            with open(path) as fh: doc = json.load(fh)
+            items[name] = doc
+        except (OSError, ValueError): pass
+for name in sorted(items):
+    doc = items[name]
+    print("%s %-16s %-18s %s" % ("*" if name == current else " ", name, doc.get("label", name), doc.get("description", "")))
+PY
+      ;;
+    use)
+      [ $# -eq 1 ] || die "usage: $CLI projects use ID"
+      valid_id "$1" || die "invalid project ID '$1'"
+      profile_dir "$1" >/dev/null || die "unknown project '$1'"
+      (umask 077; mkdir -p "$STATE_ROOT"; printf '%s\n' "$1" > "$STATE_ROOT/current-project")
+      chmod 600 "$STATE_ROOT/current-project"
+      info "current project: $1 (restart a running proxy to load its rules)"
+      ;;
+    show)
+      local id="${1:-$PROJECT}" dir
+      valid_id "$id" || die "invalid project ID '$id'"
+      dir="$(profile_dir "$id")" || die "unknown project '$id'"
+      /usr/bin/python3 -I -m json.tool "$dir/project.json"
+      ;;
+    new)
+      [ $# -ge 1 ] || die "usage: $CLI projects new ID --label LABEL --hosts REGEX"
+      local id="$1" label="" hosts=""; shift
+      valid_id "$id" || die "invalid project ID '$id'"
+      while [ $# -gt 0 ]; do case "$1" in
+        --label) [ $# -ge 2 ] || die "--label needs a value"; label="$2"; shift ;;
+        --hosts) [ $# -ge 2 ] || die "--hosts needs a value"; hosts="$2"; shift ;;
+        *) die "projects new: unknown option $1" ;;
+      esac; shift; done
+      [ -n "$label" ] || die "projects new: --label is required"
+      [ -n "$hosts" ] || die "projects new: --hosts is required"
+      [ ! -e "$STATE_ROOT/profiles/$id" ] || die "user profile '$id' already exists"
+      /usr/bin/python3 -I -c 'import re,sys; re.compile(sys.argv[1])' "$hosts" 2>/dev/null || die "invalid hosts regex"
+      local new_tmp="$STATE_ROOT/profiles/.$id.tmp.$$"
+      (umask 077; mkdir -p "$STATE_ROOT/profiles"; mkdir "$new_tmp"; cp "$SCRIPT_DIR/projects/_template/rules.example.json" "$new_tmp/rules.example.json") || { rm -rf "$new_tmp"; die "could not create user profile '$id'"; }
+      if ! /usr/bin/python3 -I - "$new_tmp/project.json" "$id" "$label" "$hosts" <<'PY'
+import json, os, sys
+path, ident, label, hosts = sys.argv[1:]
+doc = {"id": ident, "label": label, "description": "User project profile", "hosts": hosts,
+       "record_match": hosts, "throttle_match": hosts, "dev_ssl_insecure_hint":
+       "use --insecure only when the upstream certificate cannot be validated",
+       "android_packages": [], "ios_bundle_ids": []}
+with open(path, "w") as fh: json.dump(doc, fh, indent=2); fh.write("\n")
+os.chmod(path, 0o600)
+rules = os.path.join(os.path.dirname(path), "rules.example.json")
+with open(rules) as fh: cfg = json.load(fh)
+cfg["throttle_match"] = hosts; cfg["collections"]["record_match"] = hosts
+with open(rules, "w") as fh: json.dump(cfg, fh, indent=2); fh.write("\n")
+os.chmod(rules, 0o600)
+PY
+      then rm -rf "$new_tmp"; die "could not create user profile '$id'"
+      fi
+      mv "$new_tmp" "$STATE_ROOT/profiles/$id" || { rm -rf "$new_tmp"; die "could not install user profile '$id'"; }
+      info "created user profile $STATE_ROOT/profiles/$id"
+      ;;
+    *) die "usage: $CLI projects list|use ID|show [ID]|new ID --label LABEL --hosts REGEX" ;;
+  esac
+}
+
+# ───────────────────────── start ─────────────────────────
+cmd_start() {
+  local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0
+  while [ $# -gt 0 ]; do case "$1" in
+    --insecure|--dev) insecure=1 ;; --no-ios) ios=0 ;; --ios-filter) filter="$2"; shift ;;
+    --project-only|--neo-only) project_only=1 ;; --no-open) open_ui=0 ;; --all) show_all=1 ;;
+    *) die "start: unknown option $1" ;; esac; shift; done
+  command -v mitmweb >/dev/null || die "mitmweb not found (brew install --cask mitmproxy)"
+  ensure_ca; ensure_rules
+  local o; o=$(port_owner "$PORT"); [ -n "$o" ] && die "port $PORT already taken: $o  (a previous $CLI? run: $CLI stop)"
+  o=$(port_owner "$WEB_PORT"); [ -n "$o" ] && die "UI port $WEB_PORT already taken: $o"
+  # UI login: one token per run (or the product-prefixed WEB_PASSWORD). We open the browser ourselves
+  # WITH the token — mitmweb's own auto-open lands on a "403 Authentication Required" page.
+  local token="${WEB_PASSWORD:-$(openssl rand -hex 16)}"
+  (umask 077; echo "$token" > "$STATE_ROOT/web-token")
+  local url="http://127.0.0.1:$WEB_PORT/?token=$token"
+  local args=(--listen-host 127.0.0.1 --mode "regular@$PORT"
+              --set web_host=127.0.0.1 --set "web_port=$WEB_PORT" --set web_open_browser=false
+              --set "web_password=$token"
+              --set confdir="$CONFDIR" --set connection_strategy=lazy
+              -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_panel.py"
+              --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT")
+  # local capture: the iOS Simulator shares the Mac network stack and has no proxy
+  # setting of its own. Scoping capture to simulator processes keeps us off the
+  # system proxy (forbidden) and leaves every Mac app — Teams, browser, VPN — untouched.
+  [ "$ios" = 1 ] && args+=(--mode "local:$filter")
+  [ "$insecure" = 1 ] && args+=(--set ssl_insecure=true)
+  # Simulator capture also grabs DNS/UDP — dozens of lookup rows that bury the API calls.
+  # Default view = HTTP(S) requests only, like Proxyman. --all shows the raw stream.
+  local view="~http"
+  if [ "$project_only" = 1 ] && [ -n "$PROJECT_HOSTS" ]; then
+    local escaped_hosts
+    escaped_hosts=$(/usr/bin/python3 -I -c 'import sys; print(sys.argv[1].replace("\\", "\\\\").replace("'"'"'", "\\'"'"'"))' "$PROJECT_HOSTS")
+    view="~http & (~d '$escaped_hosts')"
+  fi
+  [ "$show_all" = 1 ] && view=""
+  [ -n "$view" ] && args+=(--set "view_filter=$view")
+  info "proxy  127.0.0.1:$PORT   (Android emulator: 10.0.2.2:$PORT)"
+  # Another tool (Proxyman, FRTMProxy) as system proxy = the simulator sends its traffic THERE;
+  # local capture then only sees DNS rows. Seen 2026-10-14: Proxyman on :9091 stole every call.
+  local sp; sp=$(scutil --proxy | awk '/HTTPSEnable/{e=$3} /HTTPSProxy/{h=$3} /HTTPSPort/{p=$3} END{if(e==1)print h":"p}')
+  if [ "$ios" = 1 ] && [ -n "$sp" ]; then
+    local who; who=$(port_owner "${sp##*:}" | awk '{print $1}')
+    echo "!! WARNING: macOS system proxy is $sp (${who:-nothing listening}) — iOS Simulator traffic goes there," >&2
+    echo "!!          not to $PRODUCT_NAME. Quit ${who:-that tool} (or: $CLI net-reset) before testing iOS." >&2
+  fi
+  [ "$ios" = 1 ] && info "iOS    local capture of processes matching '$filter' (no system proxy)"
+  [ "$insecure" = 1 ] && info "TLS    upstream verification OFF"
+  if [ "$show_all" = 1 ]; then info "view   everything (incl. DNS/UDP)"
+  elif [ "$project_only" = 1 ]; then info "view   $PROJECT_LABEL HTTP calls only — everything else still proxied, just hidden"
+  else info "view   HTTP(S) requests only (DNS lookups hidden; --all to show them)"; fi
+  info "project $PROJECT ($PROJECT_LABEL)"
+  info "rules  $RULES  ($CLI rules list)"
+  info "UI     $url"
+  info "       (reopen any time: $CLI ui)   — Ctrl-C to stop"
+  if [ "$open_ui" = 1 ]; then
+    ( for _ in $(seq 1 40); do [ -n "$(port_owner "$WEB_PORT")" ] && { open "$url"; break; }; sleep 0.25; done ) &
+  fi
+  exec mitmweb "${args[@]}"
+}
+
+cmd_stop() {   # stop mitmweb on our ports (only mitmweb — never another app)
+  local pids; pids=$(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u)
+  local stopped=0
+  for pid in $pids; do
+    if ps -o comm= -p "$pid" | grep -q mitmweb; then kill "$pid" && stopped=1; fi
+  done
+  [ "$stopped" = 1 ] && info "stopped mitmweb on :$PORT/:$WEB_PORT" || info "nothing to stop on :$PORT/:$WEB_PORT"
+}
+
+cmd_ui() {
+  [ -n "$(port_owner "$WEB_PORT")" ] || die "mitmweb is not running — $CLI start"
+  [ -f "$STATE_ROOT/web-token" ] || die "no token file — restart with $CLI start"
+  open "http://127.0.0.1:$WEB_PORT/?token=$(cat "$STATE_ROOT/web-token")"
+}
+
+# ───────────────────────── rules / throttle ─────────────────────────
+cmd_breakpoint() { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" breakpoint "$@"; }
+
+# mock NAME URL-REGEX — Proxyman's "right-click → Map Local": take the newest captured call
+# matching the regex, save its real response body to a file, and serve that file from now on.
+cmd_mock() {
+  [ $# -eq 2 ] || die "usage: $CLI mock NAME URL-REGEX   (run the journey once first so the call is captured)"
+  ensure_rules
+  [ -n "$(port_owner "$WEB_PORT")" ] || die "mitmweb is not running — $CLI start"
+  local tok; tok=$(cat "$STATE_ROOT/web-token")
+  local tmp; tmp=$(mktemp); curl -sf "http://127.0.0.1:$WEB_PORT/flows?token=$tok" > "$tmp" \
+    || { rm -f "$tmp"; die "could not read the captured calls"; }
+  local pick; pick=$(/usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" mock-pick "$1" "$2" "$tmp") || { rm -f "$tmp"; exit 1; }
+  rm -f "$tmp"
+  local id status method; { read -r id; read -r status; read -r method; } <<< "$pick"
+  mkdir -p "$PROJECT_STATE/mocks"
+  local file="$PROJECT_STATE/mocks/$1.json"
+  curl -sf "http://127.0.0.1:$WEB_PORT/flows/$id/response/content.data?token=$tok" -o "$file" || die "could not read the response body"
+  /usr/bin/python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$file" 2>/dev/null \
+    || { mv "$file" "${file%.json}.txt"; file="${file%.json}.txt"; }
+  /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" rules add "$1" "match=$2" action=map_local \
+    "file=$file" "status=$status" "method=$method" >/dev/null || exit 1
+  info "saved the real $method response ($status) to $file"
+  info "map_local rule '$1' is ON — edit that file; every save applies to the next call"
+  info "turn off: $CLI rules off $1"
+}
+
+cmd_rules()    { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" rules "$@"; }
+cmd_scripts()  { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" --script-dir "$PROJECT_STATE/scripts" "$@"; }
+cmd_throttle() { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" throttle "$@"; }
+cmd_tls() {
+  ensure_rules
+  [ $# -gt 0 ] || set -- list
+  /usr/bin/python3 -I "$SCRIPT_DIR/addons/tls_cli.py" "$RULES" "$@"
+}
+cmd_compose() {
+  [ $# -gt 0 ] || set -- list
+  local sub="$1"; shift
+  case "$sub" in
+    list) /usr/bin/python3 -I "$SCRIPT_DIR/addons/compose_cli.py" list --dir "$PROJECT_STATE/composer" ;;
+    send) [ $# -ge 1 ] || die "compose send NAME [--var name=value] [--no-wait]"
+          local tokfile="$STATE_ROOT/web-token"
+          /usr/bin/python3 -I "$SCRIPT_DIR/addons/compose_cli.py" send "$@" --dir "$PROJECT_STATE/composer" \
+            --port "$WEB_PORT" --token-file "$tokfile" --project "$PROJECT" ;;
+    *) die "compose list | send NAME" ;;
+  esac
+}
+
+# ───────────────────────── android ─────────────────────────
+pick_serial() {
+  local s devices q1 q2
+  if [ -n "${SERIAL:-}" ]; then s="$SERIAL"
+  else
+    devices=$("$ADB" devices) || die "adb devices failed"
+    s=$(printf '%s\n' "$devices" | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
+  fi
+  [ -z "$s" ] && die "no running emulator (adb devices). Physical devices need a separate approval."
+  [ "$(echo "$s" | wc -l | tr -d ' ')" -gt 1 ] && die "several emulators running — pass -s SERIAL: $(echo $s)"
+  [[ "$s" =~ ^emulator-[0-9]+$ ]] || die "physical devices need a separate approval"
+  q1=$("$ADB" -s "$s" shell getprop ro.kernel.qemu 2>/dev/null | tr -d '\r') || die "$s: could not verify emulator status"
+  q2=$("$ADB" -s "$s" shell getprop ro.boot.qemu 2>/dev/null | tr -d '\r') || die "$s: could not verify emulator status"
+  [ "$q1" = 1 ] || [ "$q2" = 1 ] || die "physical devices need a separate approval"
+  echo "$s"
+}
+
+have_root() { [ "$("$ADB" -s "$1" shell id -u 2>/dev/null | tr -d '\r')" = "0" ]; }
+
+# Tap the first on-screen node whose text/content-desc matches the regex (scrolls if needed).
+# Drives the Settings CA screens on Google Play images, where `adb root` is refused.
+# English UI labels; on mismatch the caller falls back to printed manual steps.
+ui_tap() {
+  local s="$1" re="$2" b i xml prev=""
+  [ -n "${SCREEN_H:-}" ] || SCREEN_H=$("$ADB" -s "$s" shell wm size | tr -d '\r' | awk -F'[x ]' '/size/{print $NF}')
+  for i in $(seq 1 12); do
+    "$ADB" -s "$s" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1
+    xml=$("$ADB" -s "$s" shell cat /sdcard/proxy-ui.xml 2>/dev/null)
+    b=$(printf '%s' "$xml" | tr '>' '\n' | grep -E "(text|content-desc)=\"($re)\"" | head -1 \
+        | grep -oE 'bounds="\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]"' | grep -oE '[0-9]+' | tr '\n' ' ')
+    if [ -n "$b" ]; then
+      set -- $b
+      # a row in the bottom 12% may sit under the nav bar: scroll once more first —
+      # unless the last scroll moved nothing (end of list), then tap where it is
+      if [ "$4" -lt $(( SCREEN_H * 88 / 100 )) ] || [ "$xml" = "$prev" ]; then
+        "$ADB" -s "$s" shell input tap $(( ($1+$3)/2 )) $(( ($2+$4)/2 )); sleep 2; return 0
+      fi
+    fi
+    prev="$xml"
+    # slow, short drag (no fling) so the list is still when we dump it again
+    "$ADB" -s "$s" shell input swipe 500 $(( SCREEN_H * 60 / 100 )) 500 $(( SCREEN_H * 35 / 100 )) 900; sleep 1.5
+  done
+  return 1
+}
+ui_screen_has() { "$ADB" -s "$1" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1; "$ADB" -s "$1" shell cat /sdcard/proxy-ui.xml | grep -qE "text=\"($2)\""; }
+open_credentials() {   # Settings → Security → More security → Encryption & credentials
+  # NEW_TASK|CLEAR_TASK: a stale screen left on top of the Settings task would hijack the flow
+  "$ADB" -s "$1" shell am start -f 0x10008000 -a android.settings.SECURITY_SETTINGS >/dev/null 2>&1
+  local t; for t in $(seq 1 20); do   # the Security page takes ~4s; never swipe the launcher
+    "$ADB" -s "$1" shell dumpsys window 2>/dev/null | grep -q "mCurrentFocus=.*com.android.settings" && break
+    sleep 0.5
+  done
+  sleep 1
+  ui_tap "$1" "More security.*" && ui_tap "$1" "Encryption.*credentials"
+}
+ui_install_ca() {
+  local s="$1"
+  open_credentials "$s" && ui_tap "$s" "Install a certificate" && ui_tap "$s" "CA certificate" \
+    && ui_tap "$s" "INSTALL ANYWAY|Install anyway" && sleep 2 \
+    && { ui_tap "$s" "proxy-ca.crt" || { ui_tap "$s" "Show roots" && ui_tap "$s" "Downloads?" && ui_tap "$s" "proxy-ca.crt"; }; }
+}
+ui_remove_ca() {   # every user-store entry named mitmproxy
+  local s="$1" n=0
+  open_credentials "$s" && ui_tap "$s" "Trusted credentials" && ui_tap "$s" "USER|User" || return 1
+  while [ $n -lt 5 ] && ui_tap "$s" "mitmproxy"; do
+    ui_tap "$s" "Uninstall|REMOVE|Remove" && ui_tap "$s" "OK" || return 1
+    n=$((n+1))
+  done
+  ui_screen_has "$s" "mitmproxy" && return 1
+  echo "$n"
+}
+
+cmd_android() {
+  local action="${1:-}"; shift || true
+  local auto_ui=0
+  while [ $# -gt 0 ]; do case "$1" in -s) SERIAL="$2"; shift ;; --auto-ui) auto_ui=1 ;; *) die "android: unknown option $1" ;; esac; shift; done
+  [ -x "$ADB" ] || die "adb not found"
+  local s; s=$(pick_serial) || exit 1
+  [ "$action" = on ] && ensure_ca
+  local h=""; [ -f "$CA_PEM" ] && h=$(ca_hash)
+  # The user store is sufficient for debug builds that trust user CAs; no system remount is used.
+  local dst="/data/misc/user/0/cacerts-added/$h.0"
+  "$ADB" -s "$s" root >/dev/null 2>&1 || true; sleep 2
+  "$ADB" -s "$s" wait-for-device || die "$s: wait-for-device failed"
+  case "$action" in
+    on)
+      if have_root "$s"; then
+        "$ADB" -s "$s" push "$CA_PEM" "/data/local/tmp/$h.0" >/dev/null 2>&1 || die "push failed"
+        "$ADB" -s "$s" shell "mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/$h.0 $dst \
+          && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0" || die "install failed"
+        info "$s: CA installed in user store ($h.0)"
+      else
+        # Google Play images refuse `adb root`. The CA has to go in through Settings once.
+        "$ADB" -s "$s" push "$CONFDIR/mitmproxy-ca-cert.cer" /sdcard/Download/proxy-ca.crt >/dev/null 2>&1 \
+          || die "could not push the CA to the emulator — proxy NOT enabled"
+        info "$s is a Google Play image (no adb root) — the CA goes in through Settings once."
+        if [ "$auto_ui" = 1 ] && ui_install_ca "$s"; then
+          info "$s: CA installed in user store via Settings"
+        else
+          [ "$auto_ui" = 1 ] && info "  --auto-ui could not drive this Android build's Settings — do it by hand:"
+          [ "$auto_ui" = 1 ] || info "  CA pushed to Downloads. On the emulator:"
+          info "  Settings → Security → More security → Encryption & credentials → Install a"
+          info "  certificate → CA certificate → Install anyway → Downloads → proxy-ca.crt"
+          info "  (or use a 'Google APIs' AVD without Play Store: there it is a direct copy)"
+        fi
+        "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
+      fi
+      "$ADB" -s "$s" shell settings put global http_proxy "10.0.2.2:$PORT" || die "$s: setting the proxy failed"
+      local now; now=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') \
+        || die "$s: could not verify the proxy"
+      [ "$now" = "10.0.2.2:$PORT" ] || die "$s: setting the proxy failed"
+      info "$s: proxy → 10.0.2.2:$PORT. Run a *Debug* variant (release builds pin TLS)."
+      if [ -z "$(port_owner "$PORT")" ]; then
+        info "WARNING: nothing listens on :$PORT yet — run '$CLI start' or the emulator has no internet"
+      fi
+      ;;
+    off)
+      # proxy first: it is what cuts the emulator's network if left behind
+      "$ADB" -s "$s" shell settings put global http_proxy :0 || die "$s: clearing the proxy failed"
+      local now; now=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') \
+        || die "$s: could not verify the cleared proxy"
+      case "$now" in ":0"|null) info "$s: proxy cleared" ;; "") die "$s: empty proxy result — could not verify it was cleared" ;; *) die "$s: proxy still set ($now)" ;; esac
+      if have_root "$s"; then
+        [ -n "$h" ] || die "$s: CA file $CA_PEM is gone, cannot tell which cert to remove — list /data/misc/user/0/cacerts-added by hand"
+        "$ADB" -s "$s" shell "rm -f $dst /sdcard/Download/proxy-ca.crt"
+        "$ADB" -s "$s" shell "[ ! -e $dst ]" || die "$s: CA still present at $dst"
+        info "$s: CA removed"
+      else
+        "$ADB" -s "$s" shell rm -f /sdcard/Download/proxy-ca.crt
+        local n
+        if [ "$auto_ui" = 1 ] && n=$(ui_remove_ca "$s"); then info "$s: removed $n mitmproxy CA entr$( [ "$n" = 1 ] && echo y || echo ies ) via Settings"
+        else info "$s: remove the CA by hand: Encryption & credentials → Trusted credentials → User → mitmproxy → Uninstall"; fi
+        "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
+      fi ;;
+    *) die "usage: $CLI android on|off [-s SERIAL]" ;;
+  esac
+}
+
+# ───────────────────────── ios ─────────────────────────
+# iOS ≤17: TrustStore.sqlite, iOS 18+/26: TrustStore.sqlite3 — same tsettings table
+sim_truststore() { find "$HOME/Library/Developer/CoreSimulator/Devices/$1/data/private/var/protected/trustd" -name "TrustStore.sqlite*" -not -name "*-*" 2>/dev/null | head -1; }
+
+cmd_ios() {
+  local action="${1:-}"; shift || true; local udid=""
+  while [ $# -gt 0 ]; do case "$1" in --udid) udid="$2"; shift ;; *) die "ios: unknown option $1" ;; esac; shift; done
+  if [ -z "$udid" ]; then
+    udid=$(xcrun simctl list devices booted | grep -oE '[0-9A-F-]{36}' )
+    [ -z "$udid" ] && die "no booted simulator"
+    [ "$(echo "$udid" | wc -l | tr -d ' ')" -gt 1 ] && die "several simulators booted — pass --udid: $(echo $udid)"
+  fi
+  case "$action" in
+    on)
+      ensure_ca
+      xcrun simctl keychain "$udid" add-root-cert "$CA_PEM" || die "add-root-cert failed"
+      info "$udid: mitmproxy CA trusted. Use a build configured to trust the workstation CA."
+      ;;
+    off)
+      # `simctl keychain reset` would also wipe the app's keychain (device binding,
+      # passcode) and force a re-onboard. Delete only our row from the trust store.
+      local db; db=$(sim_truststore "$udid")
+      if [ -z "$db" ]; then info "$udid: no trust store — nothing to remove"; return; fi
+      [ -f "$CA_PEM" ] || die "CA file $CA_PEM is gone, cannot tell which cert to remove"
+      local sha; sha=$(ca_sha256)
+      local n; n=$(sqlite3 "$db" "begin immediate; delete from tsettings where hex(sha256)='$sha'; select changes(); commit;") \
+        || die "$udid: could not edit the trust store (sim busy? shut it down and retry)"
+      [ "$(sqlite3 "$db" "select count(*) from tsettings where hex(sha256)='$sha';")" = 0 ] || die "$udid: CA still trusted"
+      info "$udid: removed $n trust entr$( [ "$n" = 1 ] && echo y || echo ies ) for the mitmproxy CA (restart the app; reboot the sim if it still trusts it)"
+      ;;
+    *) die "usage: $CLI ios on|off [--udid UDID]" ;;
+  esac
+}
+
+# ───────────────────────── net-reset ─────────────────────────
+# FRTMProxy / Proxyman restore whatever proxy state they found at launch. If that was a
+# leftover 127.0.0.1 from a crashed session, every Mac app loses the network once the
+# proxy app quits. Only stale local-loopback entries are safe to clear.
+cmd_net_reset() {
+  local dry=0; [ "${1:-}" = "--dry-run" ] && dry=1
+  local changed=0 enabled=0
+  while IFS= read -r svc; do
+    case "$svc" in ""|"An asterisk"*|\**) continue ;; esac
+    local kind getter setter details on host port label
+    for kind in web secure socks; do
+      case "$kind" in
+        web) getter=-getwebproxy; setter=-setwebproxystate; label=http ;;
+        secure) getter=-getsecurewebproxy; setter=-setsecurewebproxystate; label=https ;;
+        socks) getter=-getsocksfirewallproxy; setter=-setsocksfirewallproxystate; label=socks ;;
+      esac
+      details=$(networksetup "$getter" "$svc" 2>/dev/null) || continue
+      on=$(printf '%s\n' "$details" | awk '/^Enabled:/{print $2;exit}')
+      [ "$on" = Yes ] || continue
+      enabled=1
+      host=$(printf '%s\n' "$details" | awk '/^Server:/{sub(/^Server:[[:space:]]*/,"");print;exit}')
+      port=$(printf '%s\n' "$details" | awk '/^Port:/{print $2;exit}')
+      if { [ "$host" = 127.0.0.1 ] || [ "$host" = localhost ] || [ "$host" = ::1 ]; } \
+          && [ -n "$port" ] && [ -z "$(port_owner "$port")" ]; then
+        changed=1
+        echo "  $svc: $label=$host:$port — $([ "$dry" = 1 ] && echo 'would clear' || echo 'clearing')"
+        [ "$dry" = 1 ] || networksetup "$setter" "$svc" off || die "could not clear $label proxy on $svc"
+      else
+        echo "  $svc: $label=$host:$port — left alone (not a local leftover)"
+      fi
+    done
+  done < <(networksetup -listallnetworkservices)
+  if [ "$enabled" = 0 ]; then info "no system proxy set on any service — network is clean"
+  elif [ "$changed" = 0 ]; then info "no stale local proxy found — enabled proxies were left alone"
+  elif [ "$dry" = 1 ]; then info "dry run: only the stale local proxies above would be cleared"
+  else info "stale local proxies cleared; all other proxies left alone"; fi
+}
+
+# ───────────────────────── status ─────────────────────────
+cmd_status() {
+  ensure_rules
+  local o; o=$(port_owner "$PORT"); echo "proxy :$PORT     ${o:-not listening}"
+  local w; w=$(port_owner "$WEB_PORT"); echo "web UI :$WEB_PORT   ${w:-not listening}"
+  local sp; sp=$(scutil --proxy | awk '/HTTPSEnable/{e=$3} /HTTPSProxy/{h=$3} /HTTPSPort/{p=$3} END{if(e==1)print h":"p; else print "off"}')
+  echo "project: $PROJECT ($PROJECT_LABEL)"
+  /usr/bin/python3 -I -c 'import json,sys; sys.path.insert(0,sys.argv[1]); from proxy_common import tls_config
+t=tls_config(json.load(open(sys.argv[2]))); n=len(t[t["mode"]]) if t["mode"]!="all" else 0
+print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n==1 else "s")) if t["mode"]!="all" else " (every host)"))' "$SCRIPT_DIR/addons" "$RULES" 2>/dev/null || echo "TLS decryption: unreadable rules file"
+  [ "$PROJECT_ANDROID" = "[]" ] || echo "project Android packages: $PROJECT_ANDROID"
+  [ "$PROJECT_IOS" = "[]" ] || echo "project iOS bundle IDs: $PROJECT_IOS"
+  echo "macOS system https proxy: $sp$( [ "$sp" != off ] && [ -z "$(port_owner "${sp##*:}")" ] && echo "   ← NOTHING LISTENS THERE: Mac apps have no network. Run: $CLI net-reset")"
+  if [ -x "$ADB" ]; then
+    for s in $("$ADB" devices | awk '/^emulator-[0-9]+\tdevice$/{print $1}'); do
+      echo "android $s: http_proxy=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r')"
+    done
+  fi
+  xcrun simctl list devices booted 2>/dev/null | grep -E "Booted" | sed 's/^ */ios booted: /'
+  systemextensionsctl list 2>/dev/null | grep -q "macos-redirector.*activated enabled" \
+    && echo "local-capture extension: enabled" \
+    || echo "local-capture extension: NOT enabled — System Settings → General → Login Items & Extensions → Network Extensions → Mitmproxy Redirector"
+  if /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" --script-dir "$PROJECT_STATE/scripts" list 2>/dev/null | grep -qE '^  (ON |off) .* js '; then
+    local node_path
+    node_path=$(/usr/bin/python3 -I -c 'import runpy,sys; d=runpy.run_path(sys.argv[1]); print(d["find_node"]() or "")' "$SCRIPT_DIR/addons/proxy_scripts.py")
+    [ -n "$node_path" ] || echo "scripts: Node.js not installed — JS scripts disabled (Python scripts still work)"
+  fi
+}
+
+cmd_cert() {
+  ensure_ca
+  echo "CA:        $CA_PEM"
+  echo "sha256:    $(ca_sha256)"
+  echo "android:   $(ca_hash).0"
+  openssl x509 -in "$CA_PEM" -noout -enddate
+}
+
+case "${1:-}" in -h|--help|help|""|cert) ;; *) migrate_legacy || exit 1 ;; esac
+
+case "${1:-}" in
+  projects)  shift; cmd_projects "$@" ;;
+  start)     shift; cmd_start "$@" ;;
+  android)   shift; cmd_android "$@" ;;
+  ios)       shift; cmd_ios "$@" ;;
+  net-reset) shift; cmd_net_reset "$@" ;;
+  status)    cmd_status ;;
+  ui)        cmd_ui ;;
+  stop)      cmd_stop ;;
+  rules)     shift; cmd_rules "$@" ;;
+  scripts)   shift; cmd_scripts "$@" ;;
+  throttle)  shift; cmd_throttle "$@" ;;
+  tls)       shift; cmd_tls "$@" ;;
+  compose)   shift; cmd_compose "$@" ;;
+  breakpoint) shift; cmd_breakpoint "$@" ;;
+  mock)      shift; cmd_mock "$@" ;;
+  cert)      cmd_cert ;;
+  -h|--help|help|"") usage ;;
+  *) die "unknown command '$1' ($CLI --help)" ;;
+esac

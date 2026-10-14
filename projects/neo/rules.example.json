@@ -1,0 +1,76 @@
+{
+  "throttle": "off",
+  "throttle_match": "neo\\.sa",
+  "loss": 0,
+  "tls": {"mode": "all", "allow": ["*.neo.sa", "*.alahli.com"], "ignore": []},
+  "rules": [
+    {
+      "name": "productsummary-500",
+      "enabled": false,
+      "note": "negative test: accounts screen when productsummary fails",
+      "match": "/api/arrangement-manager/client-api/v2/productsummary",
+      "method": "GET",
+      "action": "respond",
+      "status": 500,
+      "body": {"message": "Internal Server Error (mocked locally)"}
+    },
+    {
+      "name": "productsummary-mock",
+      "enabled": false,
+      "note": "serve a saved response from disk — use an ABSOLUTE path",
+      "match": "/api/arrangement-manager/client-api/v2/productsummary",
+      "action": "map_local",
+      "file": "/Users/YOU/project-mocks/productsummary.json"
+    },
+    {
+      "name": "cards-503",
+      "enabled": false,
+      "note": "real call goes out, app receives 503 instead",
+      "match": "/api/cards-manager/",
+      "action": "status",
+      "status": 503
+    },
+    {
+      "name": "zero-balance",
+      "enabled": false,
+      "note": "edit fields in the real JSON response (dot path, [i] for lists)",
+      "match": "/api/arrangement-manager/client-api/v2/productsummary",
+      "action": "json_patch",
+      "set": {"aggregatedBalance.value": "0.00"}
+    },
+    {
+      "name": "slow-login",
+      "enabled": false,
+      "note": "hold one endpoint for 8 s (loader / timeout testing)",
+      "match": "/auth/realms/retail/protocol/openid-connect/token",
+      "action": "delay",
+      "ms": 8000
+    },
+    {
+      "name": "accept-language-ar",
+      "enabled": false,
+      "match": "neo\\.sa",
+      "action": "set_header",
+      "side": "request",
+      "header": "Accept-Language",
+      "value": "ar"
+    },
+    {
+      "name": "uat-to-sit",
+      "enabled": false,
+      "note": "send uat edge calls to sit instead",
+      "match": "backbase-edge-uat\\.neo\\.sa",
+      "action": "map_remote",
+      "replace": "backbase-edge-uat\\.neo\\.sa",
+      "with": "backbase-edge-sit.neo.sa"
+    },
+    {
+      "name": "block-remote-config",
+      "enabled": false,
+      "note": "app sees a network error for this call",
+      "match": "/api/remote-config/",
+      "action": "block"
+    }
+  ],
+  "scripts": []
+}

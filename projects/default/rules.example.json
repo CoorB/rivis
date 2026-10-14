@@ -1,0 +1,23 @@
+{
+  "throttle": "off",
+  "throttle_match": ".",
+  "loss": 0,
+  "tls": {"mode": "all", "allow": [], "ignore": []},
+  "manual": {
+    "latency_ms": 0,
+    "jitter_ms": 0,
+    "down_kbps": 0,
+    "up_kbps": 0,
+    "loss_pct": 0,
+    "response_delay_ms": 0
+  },
+  "rules": [],
+  "scripts": [],
+  "breakpoints": [],
+  "collections": {
+    "recording": null,
+    "record_match": ".",
+    "replay": [],
+    "strict": false
+  }
+}

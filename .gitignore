@@ -1,0 +1,13 @@
+.DS_Store
+dist/
+__pycache__/
+*.pyc
+node_modules/
+tests/.artifacts/
+# never commit user state or recordings
+**/rules.json
+!projects/**/rules.example.json
+*.flows
+*.har
+web-token
+current-project
