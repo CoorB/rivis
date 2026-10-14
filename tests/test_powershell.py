@@ -88,6 +88,16 @@ class Commands(unittest.TestCase):
         for word in ("start", "projects", "rules", "scripts", "throttle", "tls", "compose", "android", "net-reset"):
             self.assertIn(word, out)
 
+    def test_unexpected_remaining_arguments_are_rejected(self):
+        for args in (("status", "extra"), ("cert", "extra"), ("doctor", "extra"),
+                     ("rules", "list", "extra", "more"), ("compose", "list", "extra", "more")):
+            self.bad(*args, msg="unexpected argument")
+
+    def test_ca_generation_and_profile_network_are_explicitly_scoped(self):
+        src = open(os.path.join(harness.REPO, "rivis.ps1")).read()
+        self.assertRegex(src, r'Start-Process mitmdump[^\n]+"--listen-host","127\.0\.0\.1"')
+        self.assertIn('$argv += "--allow-profile-network"', src)
+
     def test_projects_list_new_use_show_and_validation(self):
         out = self.ok("projects", "list")
         self.assertIn("* default", out)

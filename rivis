@@ -142,8 +142,8 @@ info()  { echo "• $*"; }
 ensure_ca() {
   [ -f "$CA_PEM" ] && return
   info "no CA yet in $CONFDIR — generating one (first mitmproxy run does this)"
-  command -v mitmdump >/dev/null || die "mitmproxy not installed (brew install --cask mitmproxy, after IT approval)"
-  mitmdump --set confdir="$CONFDIR" -p 0 >/dev/null 2>&1 & local p=$!
+  command -v mitmdump >/dev/null || die "mitmproxy not installed (install the pinned build from the internal mirror)"
+  mitmdump --listen-host 127.0.0.1 --listen-port 0 --set confdir="$CONFDIR" >/dev/null 2>&1 & local p=$!
   for _ in $(seq 1 20); do [ -f "$CA_PEM" ] && break; sleep 0.5; done
   kill "$p" 2>/dev/null; wait "$p" 2>/dev/null
   [ -f "$CA_PEM" ] || die "CA was not generated in $CONFDIR"

@@ -25,11 +25,13 @@ Checks (each → ✓ ok / ⚠ warn / ✗ error, one line + the exact fix):
 Exit: 0 all ✓, 1 any ⚠, 2 any ✗.
 """
 import argparse
+import calendar
 import json
 import os
 import re
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import time
@@ -182,6 +184,22 @@ def which(name):
     return None
 
 
+def executable_is_safe(path):
+    """Only execute a regular PATH tool owned by this user/root and not group/world writable."""
+    try:
+        resolved = os.path.realpath(path)
+        st = os.stat(resolved)
+    except OSError as e:
+        return False, str(e)
+    if not stat.S_ISREG(st.st_mode):
+        return False, "not a regular file"
+    if not WIN and st.st_uid not in (0, os.getuid()):
+        return False, "owned by uid %s" % st.st_uid
+    if st.st_mode & 0o022:
+        return False, "executable is writable by group/other"
+    return True, resolved
+
+
 def port_owner(port):
     rc, out, _ = run(["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN"])
     if rc is None:
@@ -196,21 +214,26 @@ def check_mitmproxy_node(rep):
     if not mitm:
         rep.add(sec, ERR, "mitmproxy not found",
                 "neither mitmdump nor mitmweb is on PATH",
-                "brew install --cask mitmproxy (after IT approval), pinned %s" % PINNED_MITMPROXY)
+                "install the pinned %s build from the internal mirror" % PINNED_MITMPROXY)
     else:
-        rc, out, err = run([mitm, "--version"])
-        ver = ""
-        m = re.search(r"[Mm]itmproxy:?\s*v?([0-9]+\.[0-9]+\.[0-9]+)", (out or "") + (err or ""))
-        if m:
-            ver = m.group(1)
-        if ver == PINNED_MITMPROXY:
-            rep.add(sec, OK, "mitmproxy %s" % ver, "at %s" % mitm)
-        elif ver:
-            rep.add(sec, WARN, "mitmproxy %s (pinned is %s)" % (ver, PINNED_MITMPROXY),
-                    "at %s — each upgrade needs IT review" % mitm,
-                    "install the pinned %s build from the internal mirror" % PINNED_MITMPROXY)
+        safe, reason = executable_is_safe(mitm)
+        if not safe:
+            rep.add(sec, ERR, "unsafe mitmproxy executable", "%s: %s" % (mitm, reason),
+                    "remove the writable/untrusted PATH entry and install the pinned build from the internal mirror")
         else:
-            rep.add(sec, WARN, "mitmproxy version unknown", "at %s; --version did not report a version" % mitm)
+            rc, out, err = run([mitm, "--version"])
+            ver = ""
+            m = re.search(r"[Mm]itmproxy:?\s*v?([0-9]+\.[0-9]+\.[0-9]+)", (out or "") + (err or ""))
+            if m:
+                ver = m.group(1)
+            if ver == PINNED_MITMPROXY:
+                rep.add(sec, OK, "mitmproxy %s" % ver, "at %s" % mitm)
+            elif ver:
+                rep.add(sec, WARN, "mitmproxy %s (pinned is %s)" % (ver, PINNED_MITMPROXY),
+                        "at %s — each upgrade needs IT review" % mitm,
+                        "install the pinned %s build from the internal mirror" % PINNED_MITMPROXY)
+            else:
+                rep.add(sec, WARN, "mitmproxy version unknown", "at %s; --version did not report a version" % mitm)
 
     node = os.environ.get("%s_NODE" % PRODUCT["env_prefix"]) or which("node")
     if not node:
@@ -218,29 +241,98 @@ def check_mitmproxy_node(rep):
                 "JavaScript scripts are disabled (Python scripts still work)",
                 "install Node.js only if you need JS scripting rules")
     else:
-        rc, out, err = run([node, "--version"])
-        rep.add(sec, OK, "node %s" % (out.strip() or "present"), "at %s" % node)
+        safe, reason = executable_is_safe(node)
+        if not safe:
+            rep.add(sec, WARN, "unsafe Node.js executable", "%s: %s" % (node, reason),
+                    "remove the writable/untrusted PATH entry; JavaScript scripts stay disabled")
+        else:
+            rc, out, err = run([node, "--version"])
+            rep.add(sec, OK, "node %s" % (out.strip() or "present"), "at %s" % node)
+
+
+def _read_cert_der(path):
+    with open(path, "rb") as fh:
+        raw = fh.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise ValueError("certificate is larger than 1 MiB")
+    if b"-----BEGIN CERTIFICATE-----" in raw:
+        try:
+            return ssl.PEM_cert_to_DER_cert(raw.decode("ascii"))
+        except (UnicodeDecodeError, ValueError) as e:
+            raise ValueError("invalid PEM certificate: %s" % e)
+    if not raw:
+        raise ValueError("certificate is empty")
+    return raw
 
 
 def _pem_sha256(path):
-    import base64
     import hashlib
-    raw = open(path).read()
-    body = "".join(l for l in raw.splitlines() if "CERTIFICATE" not in l)
-    return hashlib.sha256(base64.b64decode(body)).hexdigest().upper()
+    return hashlib.sha256(_read_cert_der(path)).hexdigest().upper()
+
+
+def _der_tlv(data, offset):
+    """Return (tag, value, next_offset) for one bounded DER TLV."""
+    if offset >= len(data):
+        raise ValueError("truncated DER")
+    tag, offset = data[offset], offset + 1
+    if offset >= len(data):
+        raise ValueError("truncated DER length")
+    first, offset = data[offset], offset + 1
+    if first & 0x80:
+        count = first & 0x7f
+        if count == 0 or count > 4 or offset + count > len(data):
+            raise ValueError("invalid DER length")
+        length = int.from_bytes(data[offset:offset + count], "big")
+        offset += count
+    else:
+        length = first
+    end = offset + length
+    if end > len(data):
+        raise ValueError("truncated DER value")
+    return tag, data[offset:end], end
+
+
+def _parse_asn1_time(tag, value):
+    try:
+        text = value.decode("ascii")
+        if not text.endswith("Z"):
+            raise ValueError("certificate time is not UTC")
+        if tag == 0x17:  # UTCTime: 1950..2049 pivot from RFC 5280
+            if len(text) != 13 or not text[:2].isdigit():
+                raise ValueError("malformed UTCTime")
+            year = (1900 if int(text[:2]) >= 50 else 2000) + int(text[:2])
+            parsed = time.strptime(str(year) + text[2:], "%Y%m%d%H%M%SZ")
+        elif tag == 0x18:  # GeneralizedTime
+            parsed = time.strptime(text, "%Y%m%d%H%M%SZ")
+        else:
+            raise ValueError("certificate validity has an unknown time type")
+        return calendar.timegm(parsed)
+    except (UnicodeDecodeError, ValueError) as e:
+        raise ValueError("invalid certificate time: %s" % e)
 
 
 def _cert_dates(path):
-    try:
-        d = ssl._ssl._test_decode_cert(path)
-    except Exception:
-        return None, None
-    def parse(v):
-        try:
-            return time.mktime(time.strptime(v, "%b %d %H:%M:%S %Y %Z"))
-        except (ValueError, TypeError):
-            return None
-    return parse(d.get("notBefore")), parse(d.get("notAfter"))
+    der = _read_cert_der(path)
+    tag, cert, end = _der_tlv(der, 0)
+    if tag != 0x30 or end != len(der):
+        raise ValueError("certificate is not one DER sequence")
+    tag, tbs, _ = _der_tlv(cert, 0)
+    if tag != 0x30:
+        raise ValueError("certificate has no TBSCertificate")
+    offset = 0
+    tag, _value, next_offset = _der_tlv(tbs, offset)
+    if tag == 0xa0:  # optional explicit version
+        offset = next_offset
+    for _name in ("serial", "signature", "issuer"):
+        _tag, _value, offset = _der_tlv(tbs, offset)
+    tag, validity, _ = _der_tlv(tbs, offset)
+    if tag != 0x30:
+        raise ValueError("certificate has no validity sequence")
+    before_tag, before, offset = _der_tlv(validity, 0)
+    after_tag, after, offset = _der_tlv(validity, offset)
+    if offset != len(validity):
+        raise ValueError("certificate validity contains trailing data")
+    return _parse_asn1_time(before_tag, before), _parse_asn1_time(after_tag, after)
 
 
 def check_ca(rep, confdir):
@@ -253,10 +345,11 @@ def check_ca(rep, confdir):
         return
     try:
         fp = _pem_sha256(ca)
-    except Exception as e:
-        fp = ""
-        rep.add(sec, WARN, "could not read the CA fingerprint", str(e))
-    not_before, not_after = _cert_dates(ca)
+        not_before, not_after = _cert_dates(ca)
+    except (OSError, ValueError) as e:
+        rep.add(sec, ERR, "CA certificate is unreadable or corrupt", str(e),
+                "move the broken certificate aside, then run `%s start` to regenerate it" % PRODUCT["cli"])
+        return
     short = (fp[:8] + "\u2026" + fp[-4:]) if fp else "?"
     rep.add(sec, OK, "CA present (sha256 %s)" % short,
             "%s — one CA per workstation; if this fingerprint shows on another machine, regenerate it" % ca)
@@ -318,7 +411,7 @@ def check_ports(rep, port, web_port):
             continue
         o = owners[0]
         comm = o["command"].lower()
-        if comm.startswith("mitmweb") or comm.startswith("mitmdump") or comm.startswith("python"):
+        if comm.startswith("mitmweb") or comm.startswith("mitmdump"):
             rep.add(sec, OK, "%s port :%d owned by %s (pid %s)" % (label, p, o["command"], o["pid"]),
                     "a %s / mitmproxy instance" % PRODUCT["name"],
                     "if it is a leftover: `%s stop`" % PRODUCT["cli"])
@@ -577,11 +670,49 @@ def summarize_state(state):
     return lines, flags
 
 
-def check_running(rep, web_port):
+def _trusted_panel_listener(owners, rules_path):
+    """Return (trusted, detail). Never authenticate until the listener is identified as this Rivis run."""
+    if len(owners) != 1:
+        return False, "expected one listener, found %d" % len(owners)
+    owner = owners[0]
+    endpoint = owner.get("name", "")
+    if not (endpoint.startswith("127.0.0.1:") or endpoint.startswith("localhost:") or
+            endpoint.startswith("[::1]:") or endpoint.startswith("::1:")):
+        return False, "listener is not bound to loopback (%s)" % (endpoint or "unknown address")
+    if not str(owner.get("pid", "")).isdigit():
+        return False, "listener PID is unavailable"
+    rc, out, err = run(["ps", "-p", owner["pid"], "-o", "uid=", "-o", "command="])
+    if rc != 0 or not out.strip():
+        return False, "cannot inspect listener process: %s" % (err.strip() or "ps failed")
+    first, _, command = out.strip().partition(" ")
+    try:
+        uid = int(first)
+    except ValueError:
+        return False, "cannot read listener owner"
+    if not WIN and uid != os.getuid():
+        return False, "listener belongs to uid %d" % uid
+    expected_panel = os.path.realpath(os.path.join(HERE, "proxy_panel.py"))
+    if "mitmweb" not in command or expected_panel not in command:
+        return False, "listener command is not this Rivis mitmweb"
+    if rules_path:
+        expanded = os.path.abspath(os.path.expanduser(rules_path))
+        expected_rules = {"proxy_rules_file=" + expanded, "proxy_rules_file=" + os.path.realpath(expanded)}
+        if not any(value in command for value in expected_rules):
+            return False, "listener serves a different rules file"
+    return True, "pid %s" % owner["pid"]
+
+
+def check_running(rep, web_port, rules_path=""):
     sec = "Running instance"
     owners = port_owner(web_port)
     if not owners:
         rep.add(sec, INFO, "not running", "start it with `%s start`" % PRODUCT["cli"])
+        return
+    trusted, detail = _trusted_panel_listener(owners, rules_path)
+    if not trusted:
+        rep.add(sec, ERR, "web port :%d is not a verified %s instance" % (web_port, PRODUCT["name"]),
+                detail + "; the saved UI token was not sent",
+                "stop the other listener or choose another %s_WEB_PORT" % PRODUCT["env_prefix"])
         return
     tokfile = os.path.join(STATE_ROOT, "web-token")
     if not os.path.isfile(tokfile):
@@ -617,7 +748,7 @@ def check_running(rep, web_port):
                 (PRODUCT["cli"], PRODUCT["cli"], PRODUCT["cli"]))
 
 
-def check_network(rep, project, no_net):
+def check_network(rep, project, no_net, allow_profile_network=False):
     sec = "Network"
     try:
         profile = project_profile(project)
@@ -630,6 +761,12 @@ def check_network(rep, project, no_net):
         return
     if no_net:
         rep.add(sec, SKIP, "network checks skipped (--no-net)", "%d host(s) not probed" % len(hosts))
+        return
+    override = os.path.join(STATE_ROOT, "profiles", project, "project.json")
+    if os.path.isfile(override) and not allow_profile_network:
+        rep.add(sec, SKIP, "network checks skipped for a user profile",
+                "%d doctor_hosts not probed without explicit consent" % len(hosts),
+                "rerun with --allow-profile-network after reviewing %s" % override)
         return
     for host in hosts:
         cat = _probe_host(str(host))
@@ -861,6 +998,7 @@ def main(argv):
     ap.add_argument("--adb", default="")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--no-net", action="store_true")
+    ap.add_argument("--allow-profile-network", action="store_true")
     ap.add_argument("--fix-safe", action="store_true")
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args(argv)
@@ -875,8 +1013,8 @@ def main(argv):
     check_other_tools(rep)
     check_ios(rep, args.confdir)
     check_android(rep, args.adb)
-    check_running(rep, args.web_port)
-    check_network(rep, args.project, args.no_net)
+    check_running(rep, args.web_port, args.rules)
+    check_network(rep, args.project, args.no_net, args.allow_profile_network)
     check_disk(rep, args.project)
     queue_stale_current_project(rep)
 

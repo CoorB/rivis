@@ -46,6 +46,7 @@ param(
   [switch]$NoWait,
   [switch]$Json,
   [switch]$NoNet,
+  [switch]$AllowProfileNetwork,
   [switch]$FixSafe,
   [switch]$Yes,
   [string[]]$Var = @(),
@@ -111,7 +112,7 @@ function Find-Adb {
 function Ensure-Ca {
   if (Test-Path $CaPem) { return }
   Info "no CA yet in $ConfDir - generating one"
-  $p = Start-Process mitmdump -ArgumentList "-p","0" -PassThru -WindowStyle Hidden
+  $p = Start-Process mitmdump -ArgumentList "--listen-host","127.0.0.1","--listen-port","0" -PassThru -WindowStyle Hidden
   for ($i=0; $i -lt 20 -and -not (Test-Path $CaPem); $i++) { Start-Sleep -Milliseconds 500 }
   Stop-Process $p -ErrorAction SilentlyContinue
   if (-not (Test-Path $CaPem)) { Die "CA was not generated in $ConfDir" }
@@ -313,6 +314,17 @@ function Test-StaleLocalProxy($spec) {
 }
 
 if ($Command -notin @("help","cert","doctor","-h","--help","")) { Migrate-Legacy }
+
+$unexpected = @()
+if ($Command -in @("start","ui","net-reset","doctor","status","cert","help")) {
+  if ($Action) { $unexpected += $Action }; if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
+} elseif ($Action -eq "list" -and $Command -in @("projects","rules","scripts","compose")) {
+  if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
+} elseif (@($Rest).Count -and $Command -ne "throttle" -and
+          -not ($Command -eq "tls" -and $Action -in @("allow","ignore"))) {
+  $unexpected += @($Rest)
+}
+if ($unexpected.Count) { Die "unexpected argument(s): $($unexpected -join ' ')" }
 
 switch ($Command) {
   "projects" {
@@ -708,6 +720,7 @@ switch ($Command) {
       if ($adbPath) { $argv += @("--adb", $adbPath) }
       if ($Json)    { $argv += "--json" }
       if ($NoNet)   { $argv += "--no-net" }
+      if ($AllowProfileNetwork) { $argv += "--allow-profile-network" }
       if ($FixSafe) { $argv += "--fix-safe" }
       if ($Yes)     { $argv += "--yes" }
       & $py[0] @($py[1..($py.Count-1)]) @argv

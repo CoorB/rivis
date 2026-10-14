@@ -1,9 +1,13 @@
 """Unit tests for doctor's pure classifiers and state summary (stdlib only, no mitmproxy)."""
+import os
+import tempfile
 import unittest
+from unittest import mock
 
 import _paths  # noqa: F401
 from doctor import (
-    classify_network_failure, classify_system_proxy, is_loopback,
+    Report, _cert_dates, _trusted_panel_listener, check_ca, check_network,
+    classify_network_failure, classify_system_proxy, executable_is_safe, is_loopback,
     parse_lsof_listener, parse_networksetup_proxy, summarize_state,
 )
 
@@ -62,6 +66,80 @@ class SystemProxyClass(unittest.TestCase):
         self.assertTrue(is_loopback("127.0.0.1"))
         self.assertTrue(is_loopback("::1"))
         self.assertFalse(is_loopback("10.0.0.1"))
+
+
+class CertificateParser(unittest.TestCase):
+    @staticmethod
+    def tlv(tag, value):
+        if len(value) < 128:
+            length = bytes([len(value)])
+        else:
+            raw = len(value).to_bytes((len(value).bit_length() + 7) // 8, "big")
+            length = bytes([0x80 | len(raw)]) + raw
+        return bytes([tag]) + length + value
+
+    def test_reads_utc_and_generalized_validity_without_private_ssl_api(self):
+        validity = self.tlv(0x30, self.tlv(0x17, b"491231235959Z") + self.tlv(0x18, b"20500101000000Z"))
+        tbs = self.tlv(0x30, self.tlv(0x02, b"\x01") + self.tlv(0x30, b"") + self.tlv(0x30, b"") + validity)
+        der = self.tlv(0x30, tbs)
+        with tempfile.NamedTemporaryFile() as fh:
+            fh.write(der); fh.flush()
+            before, after = _cert_dates(fh.name)
+        self.assertEqual(before, 2524607999)  # 2049-12-31 23:59:59 UTC
+        self.assertEqual(after, 2524608000)   # 2050-01-01 00:00:00 UTC
+
+    def test_corrupt_certificate_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "mitmproxy-ca-cert.pem")
+            with open(path, "wb") as fh:
+                fh.write(b"not a certificate")
+            with self.assertRaises(ValueError):
+                _cert_dates(path)
+            rep = Report()
+            check_ca(rep, directory)
+            self.assertTrue(any(level == "error" and "corrupt" in title
+                                for _, level, title, _, _ in rep.items))
+            self.assertFalse(any(level == "ok" for _, level, _, _, _ in rep.items))
+
+
+class ExecutableTrust(unittest.TestCase):
+    def test_group_or_world_writable_executable_is_refused(self):
+        with tempfile.NamedTemporaryFile() as fh:
+            os.chmod(fh.name, 0o755)
+            self.assertTrue(executable_is_safe(fh.name)[0])
+            os.chmod(fh.name, 0o775)
+            safe, reason = executable_is_safe(fh.name)
+            self.assertFalse(safe)
+            self.assertIn("writable", reason)
+
+
+class RunningInstanceTrust(unittest.TestCase):
+    def test_listener_must_be_loopback_ours_and_use_the_same_rules(self):
+        owner = [{"command": "mitmweb", "pid": "42", "name": "127.0.0.1:18083"}]
+        command = "501 /opt/mitmweb -s %s --set proxy_rules_file=%s\n" % (
+            os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "addons", "proxy_panel.py")),
+            os.path.realpath("/tmp/rules.json"))
+        with mock.patch("doctor.run", return_value=(0, command, "")), mock.patch("doctor.os.getuid", return_value=501):
+            self.assertTrue(_trusted_panel_listener(owner, "/tmp/rules.json")[0])
+            self.assertFalse(_trusted_panel_listener(owner, "/tmp/other.json")[0])
+            remote = [dict(owner[0], name="*:18083")]
+            self.assertFalse(_trusted_panel_listener(remote, "/tmp/rules.json")[0])
+
+
+class ProfileNetworkConsent(unittest.TestCase):
+    def test_user_profile_hosts_need_explicit_opt_in(self):
+        profile = {"doctor_hosts": ["internal.example"]}
+        with mock.patch("doctor.project_profile", return_value=profile), \
+             mock.patch("doctor.os.path.isfile", return_value=True), \
+             mock.patch("doctor._probe_host") as probe:
+            rep = Report()
+            check_network(rep, "custom", False)
+            probe.assert_not_called()
+            self.assertTrue(any(level == "skip" for _, level, _, _, _ in rep.items))
+
+            rep = Report()
+            check_network(rep, "custom", False, allow_profile_network=True)
+            probe.assert_called_once_with("internal.example")
 
 
 class NetworkFailure(unittest.TestCase):
