@@ -1515,6 +1515,13 @@ class ProxyPanel:
         def impl(h):
             return h.application._proxy_panel_impl
 
+        def allowed_hosts():
+            names = {"127.0.0.1", "localhost", "[::1]", (ctx.options.web_host or "127.0.0.1").lower()}
+            return names | {f"{n}:{ctx.options.web_port}" for n in names}
+
+        def allowed_origins():
+            return {f"http://{h}" for h in allowed_hosts() if ":" in h.rsplit("]", 1)[-1]}
+
         class ProxyIndex(webapp.IndexHandler):
             def finish(self, chunk=None):
                 if chunk is not None:
@@ -1578,11 +1585,37 @@ class ProxyPanel:
                 self.redirect("/")
 
         class Api(webapp.RequestHandler):
+            def _refuse_cross_site(self):
+                """F-04: SameSite=Strict is per site, not per port, so a page on another 127.0.0.1 port could plant the
+                xsrf cookie. Require what a browser only sends for our own page: a JSON body, the XSRF header (never
+                the ?_xsrf= form, which needs no CORS preflight), and our own Origin / same-origin fetch metadata."""
+                h = self.request.headers
+                if "_xsrf" in self.request.query_arguments or "_xsrf" in self.request.body_arguments:
+                    return "the _xsrf parameter form is not accepted"
+                if not h.get("X-XSRFToken"):
+                    return "missing X-XSRFToken header"
+                if (h.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
+                    return "Content-Type must be application/json"
+                origin = h.get("Origin")
+                if origin is not None and origin not in allowed_origins():
+                    return "cross-origin request"
+                if h.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+                    return "cross-site request"
+                return None
+
             def get(self, op):
                 if op != "state":
                     raise webapp.APIError(404, "unknown")
                 self.set_header("Content-Type", "application/json")
                 self.write(json.dumps(impl(self).state()))
+
+            def prepare(self):
+                # before mitmweb's own prepare, whose fetch-metadata refusal surfaces as a 500
+                if self.request.method not in ("GET", "HEAD", "OPTIONS"):
+                    refused = self._refuse_cross_site()
+                    if refused:
+                        raise tornado.web.HTTPError(403, refused)
+                return super().prepare()
 
             def post(self, op):
                 self.set_header("Content-Type", "application/json")
@@ -1594,6 +1627,18 @@ class ProxyPanel:
                 except (PanelError, AttributeError, KeyError, TypeError, ValueError, OSError, re.error) as e:
                     self.set_status(400)
                     self.write(json.dumps({"error": str(e)}))
+
+        # B2 (DNS rebinding): a page on evil.example that re-resolves to 127.0.0.1 is same-origin to itself, so the
+        # browser sends Host: evil.example. Every UI request (mitmweb's own routes, the websocket and ours) must name
+        # this listener by a loopback name.
+        original_find_handler = app.find_handler
+
+        def find_handler(request, **kw):
+            if (request.host or "").lower() not in allowed_hosts():
+                return app.get_handler_delegate(request, tornado.web.ErrorHandler, {"status_code": 403})
+            return original_find_handler(request, **kw)
+
+        app.find_handler = find_handler
 
         app.add_handlers(r".*", [
             (r"/", ProxyIndex),

@@ -50,13 +50,37 @@ class Auth(LiveCase):
         self.assertTrue(auth, cookies)
         self.assertIn("httponly", auth[0].lower())
 
-    @unittest.expectedFailure
     def test_dns_rebinding_host_header_is_refused(self):
-        """FOUND-BUGS B2: mitmweb/panel do not validate the Host header (STANDARDS §2)."""
-        for host in ("evil.example", "evil.example:%d" % self.inst.web_port, "127.0.0.1.evil.example"):
-            req_headers = {"Host": host, "Cookie": "; ".join("%s=%s" % (c.name, c.value) for c in self.panel.jar)}
-            status = raw_http(self.inst.web_port, "GET", "/proxy/api/state", req_headers)[0]
-            self.assertEqual(status, 403, host)
+        """FOUND-BUGS B2 (fixed): every UI route refuses a Host that is not a loopback name for this port (STANDARDS §2)."""
+        cookie = "; ".join("%s=%s" % (c.name, c.value) for c in self.panel.jar)
+        for path in ("/proxy/api/state", "/flows", "/", "/proxy/panel.js"):
+            for host in ("evil.example", "evil.example:%d" % self.inst.web_port, "127.0.0.1.evil.example",
+                         "127.0.0.1:%d" % (self.inst.web_port + 1)):
+                status = raw_http(self.inst.web_port, "GET", path, {"Host": host, "Cookie": cookie})[0]
+                self.assertEqual(status, 403, (path, host))
+        for host in ("127.0.0.1:%d" % self.inst.web_port, "localhost:%d" % self.inst.web_port):   # control
+            self.assertEqual(raw_http(self.inst.web_port, "GET", "/proxy/api/state", {"Host": host, "Cookie": cookie})[0],
+                             200, host)
+
+    def test_panel_api_refuses_cross_site_writes(self):
+        """F-04: a page on another local port can plant the xsrf cookie; the API must still refuse its writes."""
+        import urllib.request
+        good = {"Content-Type": "application/json", "X-XSRFToken": self.panel.xsrf}
+        port = self.inst.web_port
+        cases = [
+            ("text/plain body", "/proxy/api/view", {**good, "Content-Type": "text/plain"}),
+            ("foreign Origin", "/proxy/api/view", {**good, "Origin": "http://127.0.0.1:%d" % (port + 1)}),
+            ("evil Origin", "/proxy/api/view", {**good, "Origin": "http://evil.example"}),
+            ("cross-site fetch", "/proxy/api/view", {**good, "Sec-Fetch-Site": "cross-site"}),
+            ("same-site fetch", "/proxy/api/view", {**good, "Sec-Fetch-Site": "same-site"}),
+            ("_xsrf query form", "/proxy/api/view?_xsrf=" + self.panel.xsrf, {"Content-Type": "application/json"}),
+        ]
+        for label, path, headers in cases:
+            req = urllib.request.Request(self.panel.base + path, data=b"{}", method="POST", headers=headers)
+            self.assertEqual(self.panel._do(req)[0], 403, label)
+        own = {**good, "Origin": "http://127.0.0.1:%d" % port, "Sec-Fetch-Site": "same-origin"}
+        req = urllib.request.Request(self.panel.base + "/proxy/api/view", data=b"{}", method="POST", headers=own)
+        self.assertEqual(self.panel._do(req)[0], 200)   # control: what the real page sends
 
     def test_security_headers_on_the_page(self):
         status, body, headers = raw_http(self.inst.web_port, "GET", "/?token=" + self.inst.password)
