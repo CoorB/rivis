@@ -105,13 +105,61 @@ Environment variables are named from `product.json`: `<PREFIX>_PORT`, `_WEB_PORT
 
 ## Panel
 
-Open the mitmweb UI and click the project-labelled button. Tabs provide This call, Compose, Map Local,
+Open the mitmweb UI and click the **Tools** button at the right end of the toolbar. Tabs provide This call, Compose, Map Local,
 Breakpoints, Network, Collections, Compare, Sessions, Scripts, and Rules. The header shows `Rivis · <project label>` and has
 a project selector. That selector changes only the host view; restart with `--project ID` to load a different
 rules file.
 
 Saved data is owner-only. Rules hot-reload within about one second. A malformed file leaves the previous good
 configuration active, and a bad individual rule is skipped and shown in the panel.
+
+### Top bar, filter and right-click
+
+- **Always-visible filter** (top bar, after the tabs; `⌘F` / `Ctrl+F` focuses it, `Esc` clears). Plain words filter
+  by URL — `postman-echo`, `/v2/cards`, `get?user=42` all work literally, several words must all match. Anything
+  with a `~` (`~m POST`, `~c 500`, `~q`, `~u /api & ~c 404`) is passed through as a mitmproxy filter. A filter is
+  checked with the server's own parser before it is applied (an invalid one would drop mitmweb's connection), so
+  half-typed `~` filters show a red outline and the list keeps the last good result. It drives mitmweb's own filter:
+  the Search box on mitmweb's *Calls* tab is hidden while the bar is active, and `?s=…` in the address still works.
+- **Why did my call vanish?** A strip under the toolbar lists everything that hides calls — an active filter, "Only
+  <project> calls", "Only <host>", a GraphQL operation — each with an ✕ to undo it. If *everything* is hidden, the
+  list explains why and offers one button to clear it.
+- **Clear all calls**: the trash button next to the filter (asks first; saved sessions, rules and scripts stay).
+- **Right-click a call** for Map Local, Breakpoint, Repeat, Edit & Repeat, Compare as A, Copy as cURL / URL, Show
+  only this host, decrypt / stop decrypting the host, and Delete.
+- **One-row toolbar:** mitmweb's 95 px ribbon is a single 42 px row; below ~900 px (e.g. with the Tools drawer open)
+  it shows icons only, with the names in tooltips. mitmweb's *Flow List* / *Flow* tabs read **Calls** / **Selected call**.
+- **First run:** an empty list explains the next step (`rivis ios on` / `rivis android on`, with `--project` when a
+  project is active).
+
+### Themes
+
+Rivis ships a skin (`addons/theme.css`) for the mitmweb UI and the panel: a shared set of design tokens,
+method/status pills in the call list, tag chips for mocked/rule/script/composed calls, a "not decrypted"
+marker for TLS tunnels, and a cleaner details pane and chrome. It is served at `/proxy/theme.css` and injected
+by a tiny same-origin boot script in `<head>` (the page CSP forbids inline scripts).
+
+- **Light / dark** follow the OS by default; the brand bar (top-right) has a theme toggle, remembered per
+  browser.
+- **Compact rows** and the **skin on/off** switch live in the panel's **Settings** (the gear / `?` → Settings).
+- **List tags:** MOCK / RULE / SCRIPT / COMPOSED / NOT DECRYPTED show as a one-letter glyph in the first column (the word
+  appears when the list is wide); a GraphQL response with `errors` shows `200 !`. Plain `http://` calls get an amber edge.
+- **Project switch:** the **Show** menu in the drawer header picks *All traffic* or *<project> only* (list view; rules still load via `--project`).
+- **Kill switch:** add `?theme=off` to the URL (or turn the skin off in Settings) to fall back to stock mitmweb;
+  `?theme=on` restores it. Both are remembered in `localStorage`, so stock mode persists until you turn it back on.
+- Press **`?`** for the keyboard-shortcut sheet. First-time users get a dismissible **"Coming from Proxyman?"**
+  card, always reachable again from the Help (`?`) button.
+
+The skin never replaces mitmweb's own React-managed DOM — it only adds attributes/classes to existing nodes — so
+a mitmproxy upgrade can at worst drop styling, never break the UI. The selectors it relies on are listed in one
+commented "mitmweb DOM contract" block at the top of `addons/theme.css`; re-check it after a mitmproxy upgrade.
+
+### Coming from Proxyman
+
+Most of the tools you know carry over under the same generic names (Map Local, Breakpoints, Network Conditions,
+Compose, Diff, Copy as cURL, SSL proxying, Scripting, Sessions). See
+[`docs/COMING-FROM-PROXYMAN.md`](docs/COMING-FROM-PROXYMAN.md) for the full task-by-task mapping, the shortcut
+list, and the three biggest differences. The same table is in the UI under Help (`?`) → **Coming from Proxyman?**
 
 ### Compose
 
@@ -144,10 +192,11 @@ HTTP/2 pseudo-headers, hop-by-hop headers and `Content-Length` are dropped; repe
 the snippet will not leave your machine; the note under the menu says so. Snippets get pasted into tickets and
 chats, and tokens must not be.
 
-### TLS decryption list
+### HTTPS decryption (TLS list)
 
-Network → **TLS decryption** (or `rivis tls ...`) chooses which hosts are decrypted, like Proxyman's
-SSL Proxying list. It is stored per project in `rules.json`:
+Network → **HTTPS decryption** (or `rivis tls ...`) chooses which hosts are decrypted, like Proxyman's
+SSL Proxying list. In the UI the three modes read *Every host*, *Only listed hosts* and *All except listed*;
+the lists are *Hosts to decrypt* and *Hosts to leave alone*. It is stored per project in `rules.json`:
 
 ```json
 "tls": {"mode": "all", "allow": ["*.example.test"], "ignore": []}

@@ -1,0 +1,496 @@
+/* Rivis theme — design tokens + skin for mitmweb.  Served at /proxy/theme.css.
+ *
+ * Two consumers:
+ *   1. the mitmweb page (<link> written into <head> by the boot snippet in proxy_panel.py, unless the skin is off)
+ *   2. the panel's shadow root (panel.js always links it, so the panel stays styled when the skin is off —
+ *      mitmweb selectors simply never match inside a shadow root).
+ *
+ * Theme selection (set on <html> by the boot snippet / panel, mirrored onto the panel host as data-theme):
+ *   data-theme="light" | "dark"   manual choice (remembered: localStorage rivis-theme)
+ *   (absent)                      follow the OS via prefers-color-scheme
+ *   data-density="compact"        tighter rows (remembered: rivis-compact)
+ *   data-skin="off"               kill switch: this file is not loaded at all (?theme=off, panel Settings)
+ *
+ * ───────────────────────────────────────────────────────────────────────────────────────────────
+ * mitmweb DOM contract (re-check after mitmproxy upgrades)   — verified against mitmproxy 12.2.3
+ *   Layout        #container, #container > header, .main-view, .splitter, footer, .label(-success|-danger|-default|-primary)
+ *   Top menu      header nav.nav-tabs-lg > a (.special = File, .active), .connection-indicator,
+ *                 .flow-menu, .main-menu, .menu-group, .menu-content, .menu-legend, .menu-entry, .btn, .btn-default, .btn-sm, .btn-xs
+ *   Inputs        .filter-input, .input-group-addon, .form-control, input[type=text], input[type=checkbox], select
+ *   Flow list     .flow-table, table, thead tr, th (.col-*), tbody tr (.selected .highlighted .intercepted .has-request .has-response),
+ *                 td.col-tls(-https) .col-icon .col-path .col-method .col-status .col-size .col-time .col-quickactions,
+ *                 .resource-icon, .marker, .quickaction, .fa
+ *                 + attributes WE add on <td>/<tr> (never children): td[data-m] td[data-s] td[data-code] td[data-gql-error]
+ *                   td.col-path[style*=--hl] td.col-path[data-tag] tr[data-tunnel]
+ *                 + React fiber (read-only) on a td: memoizedProps.flow {id, comment, modified, type, request, response}
+ *   Flow details  .flow-detail, .nav-tabs-sm (a, a.active), .close-button, section.request, section.response, .first-line,
+ *                 .inline-input, .kv-editor, .kv-row (key span, literal ": ", value span — do not display:contents),
+ *                 .kv-key, .kv-value, .kv-add-row, .contentview, .controls, .caret, pre
+ *                 JSON body is plain <div> lines (no token classes). Coloured via ::highlight(rv-key|rv-str|rv-num|rv-lit)
+ *   Event log     .eventlog, .eventlog > div, .fa-* level icons
+ *   Modal/options .modal, .modal-dialog, .modal-content, .modal-header, .modal-body, .modal-footer, .form-group, .help-block
+ *   Dropdowns     .dropdown-menu (File / Mark / Download / Export). The header is z-index 10 so they stay above the table header (z 3);
+ *                 panel.js fixed bars sit at 11 (search, brand, Tools), the filter strip at 2, Bootstrap modals at 1050.
+ *
+ * Pass 2 — everything below is read or driven by panel.js (a mitmproxy upgrade can break these; check them first):
+ *   Redux store   found read-only through the React root: #mitmproxy → key __reactContainer$… → fiber walk to memoizedProps.store.
+ *                 state read:   ui.filter.search, flows.list, flows.view
+ *                 action sent:  {type: "ui/filters/setFilter", payload: <filter string>}   (the store forwards it to the server;
+ *                               an INVALID filter makes the server close the websocket, so panel.js validates with its own
+ *                               POST /proxy/api/filter_check first). The address bar mirrors it as  #/flows/<id>/<tab>?s=<filter>
+ *   Endpoints     POST ./clear (Clear all calls, needs X-XSRFToken), DELETE ./flows/<id> (Delete a call, same token), GET ./flows
+ *   Selectors     .main-view > div[style*="padding: 1em 2em"]      mitmweb's own "mitmproxy is running" first-run placeholder (hidden)
+ *                 .filter-input:has(> input[placeholder="Search"])   mitmweb's Search box (hidden while the panel's bar is active)
+ *                 .filter-input input[placeholder="Highlight"|"Intercept"]   placeholders reworded by panel.js
+ *                 #container > header > div (the toolbar row, 42px) and header nav (the tabs row)
+ *   Label text    header nav a text "Flow List" → "Calls", "Flow" → "Selected call" (data-rv + CSS ::before; React text untouched)
+ *                 footer .label text  /^N of M flows? selected$/ , /^Intercept:/ , "ssl_insecure" , "<mode>@<port>"
+ *   Attributes WE add on <html>: data-sbar data-fstrip data-ribbon data-rv-empty data-narrow data-wide data-theme data-density data-skin
+ * ───────────────────────────────────────────────────────────────────────────────────────────────
+ */
+
+/* ============================ DESIGN TOKENS ============================ */
+/* @tokens:start */
+:root, :host {
+  color-scheme: light;
+  /* surfaces */
+  --rv-bg: #f4f6f8;            /* app background / chrome */
+  --rv-surface: #ffffff;       /* panels, list */
+  --rv-surface-2: #eef2f5;     /* raised / header rows / code */
+  --rv-surface-3: #e4eaee;     /* pressed / hover on surface-2 */
+  --rv-row-alt: #f8fafb;       /* zebra */
+  --rv-row-hover: #eaf4f5;
+  --rv-row-sel: #d6ecee;
+  --rv-overlay: rgba(14, 22, 30, .42);
+  /* borders */
+  --rv-border: #dbe2e8;
+  --rv-border-strong: #c3ced7;
+  --rv-control: #8393a0;       /* input / select outline: >= 3:1 on the surface (WCAG 1.4.11) */
+  /* text tiers (all ≥ 4.5:1 on --rv-surface) */
+  --rv-text: #14202b;
+  --rv-text-2: #44525f;
+  --rv-text-3: #56656f;
+  --rv-host: #56656f;          /* dimmed host in the list */
+  /* accent: "river" teal — own identity */
+  --rv-accent: #0a7280;
+  --rv-accent-hover: #085d69;
+  --rv-accent-fg: #ffffff;
+  --rv-accent-soft: #dff1f3;
+  --rv-accent-text: #076371;
+  --rv-focus: #0a7280;
+  /* semantic */
+  --rv-ok: #11693f;      --rv-ok-soft: #dff3e8;
+  --rv-warn: #8f4f00;    --rv-warn-soft: #fdecd0;
+  --rv-danger: #b3262d;  --rv-danger-soft: #fbe2e3;
+  --rv-warn-fg: #ffffff; --rv-danger-fg: #ffffff;   /* text on a solid warn / danger fill */
+  --rv-info: #1f55b4;    --rv-info-soft: #e0eafa;
+  /* methods */
+  --rv-m-get: #11693f;   --rv-m-post: #1f55b4;  --rv-m-put: #8f4f00;
+  --rv-m-patch: #a2410a; --rv-m-delete: #b3262d; --rv-m-other: #56656f;
+  /* status classes */
+  --rv-s-1: #56656f;  --rv-s-2: #11693f;  --rv-s-3: #1f55b4;
+  --rv-s-4: #8f4f00;  --rv-s-5: #b3262d;  --rv-s-none: #56656f;
+  /* call tags */
+  --rv-t-mock: #076371;      /* mocked / answered locally */
+  --rv-t-rule: #8f4f00;      /* modified by a rule */
+  --rv-t-script: #1f55b4;    /* touched by a script */
+  --rv-t-composed: #a1245f;  /* composed / edit & retry */
+  --rv-t-tunnel: #6b5a1f;    /* TLS not decrypted */
+  /* shape, space, depth, motion */
+  --rv-r-sm: 4px; --rv-r-md: 6px; --rv-r-lg: 10px; --rv-r-pill: 999px;
+  --rv-sp-1: 4px; --rv-sp-2: 8px; --rv-sp-3: 12px; --rv-sp-4: 16px; --rv-sp-5: 24px; --rv-sp-6: 32px;
+  --rv-shadow-1: 0 1px 2px rgba(14,22,30,.08);
+  --rv-shadow-2: 0 6px 20px rgba(14,22,30,.14), 0 1px 3px rgba(14,22,30,.1);
+  --rv-shadow-3: 0 24px 64px rgba(14,22,30,.28), 0 2px 6px rgba(14,22,30,.12);
+  --rv-ease: cubic-bezier(.2, .7, .2, 1);
+  --rv-dur: 140ms;
+  /* type */
+  --rv-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --rv-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+  --rv-row-h: 34px;            /* comfortable default */
+}
+:root[data-density="compact"], :host([data-density="compact"]) { --rv-row-h: 26px; }   /* tighter rows */
+/* compact also tightens the list's type and shrinks mitmweb's fixed 32px row icons (the real height floor) */
+:root[data-density="compact"] .flow-table table { font-size: 12px; }
+:root[data-density="compact"] .flow-table td { padding-top: 0; padding-bottom: 0; }
+:root[data-density="compact"] .flow-table thead tr { line-height: 24px; }
+:root[data-density="compact"] .flow-table .resource-icon { width: 18px; height: 18px; background-size: contain; background-repeat: no-repeat; background-position: center; }
+:root[data-density="compact"] .flow-table .col-quickactions > div, :root[data-density="compact"] .flow-table .quickaction { height: 18px; line-height: 18px; }
+
+:root[data-theme="dark"], :host([data-theme="dark"]) {
+  color-scheme: dark;
+  --rv-bg: #0c1217; --rv-surface: #121a21; --rv-surface-2: #19232b; --rv-surface-3: #223039;
+  --rv-row-alt: #151e25; --rv-row-hover: #172a30; --rv-row-sel: #12414a; --rv-overlay: rgba(0,0,0,.6);
+  --rv-border: #25323b; --rv-border-strong: #364753; --rv-control: #647889;
+  --rv-text: #e8eef2; --rv-text-2: #b0bcc6; --rv-text-3: #9aa8b3; --rv-host: #9aa8b3;
+  --rv-accent: #35c2cf; --rv-accent-hover: #5ad2dd; --rv-accent-fg: #04252a; --rv-accent-soft: #11363c;
+  --rv-accent-text: #5cd0db; --rv-focus: #5cd0db;
+  --rv-ok: #4fd08a; --rv-ok-soft: #12311f; --rv-warn: #f0b24a; --rv-warn-soft: #3a2a0d;
+  --rv-danger: #ff7b81; --rv-danger-soft: #3d1a1d; --rv-warn-fg: #2a1a00; --rv-danger-fg: #2b0a0c; --rv-info: #7fb0ff; --rv-info-soft: #14284a;
+  --rv-m-get: #4fd08a; --rv-m-post: #7fb0ff; --rv-m-put: #f0b24a; --rv-m-patch: #ff9a5c; --rv-m-delete: #ff7b81; --rv-m-other: #9aa8b3;
+  --rv-s-1: #9aa8b3; --rv-s-2: #4fd08a; --rv-s-3: #7fb0ff; --rv-s-4: #f0b24a; --rv-s-5: #ff7b81; --rv-s-none: #9aa8b3;
+  --rv-t-mock: #5cd0db; --rv-t-rule: #f0b24a; --rv-t-script: #7fb0ff; --rv-t-composed: #ff8fc1; --rv-t-tunnel: #d8c36a;
+  --rv-shadow-1: 0 1px 2px rgba(0,0,0,.5);
+  --rv-shadow-2: 0 8px 24px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
+  --rv-shadow-3: 0 24px 64px rgba(0,0,0,.65), 0 2px 6px rgba(0,0,0,.4);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]), :host(:not([data-theme])) {
+    color-scheme: dark;
+    --rv-bg: #0c1217; --rv-surface: #121a21; --rv-surface-2: #19232b; --rv-surface-3: #223039;
+    --rv-row-alt: #151e25; --rv-row-hover: #172a30; --rv-row-sel: #12414a; --rv-overlay: rgba(0,0,0,.6);
+    --rv-border: #25323b; --rv-border-strong: #364753; --rv-control: #647889;
+    --rv-text: #e8eef2; --rv-text-2: #b0bcc6; --rv-text-3: #9aa8b3; --rv-host: #9aa8b3;
+    --rv-accent: #35c2cf; --rv-accent-hover: #5ad2dd; --rv-accent-fg: #04252a; --rv-accent-soft: #11363c;
+    --rv-accent-text: #5cd0db; --rv-focus: #5cd0db;
+    --rv-ok: #4fd08a; --rv-ok-soft: #12311f; --rv-warn: #f0b24a; --rv-warn-soft: #3a2a0d;
+    --rv-danger: #ff7b81; --rv-danger-soft: #3d1a1d; --rv-warn-fg: #2a1a00; --rv-danger-fg: #2b0a0c; --rv-info: #7fb0ff; --rv-info-soft: #14284a;
+    --rv-m-get: #4fd08a; --rv-m-post: #7fb0ff; --rv-m-put: #f0b24a; --rv-m-patch: #ff9a5c; --rv-m-delete: #ff7b81; --rv-m-other: #9aa8b3;
+    --rv-s-1: #9aa8b3; --rv-s-2: #4fd08a; --rv-s-3: #7fb0ff; --rv-s-4: #f0b24a; --rv-s-5: #ff7b81; --rv-s-none: #9aa8b3;
+    --rv-t-mock: #5cd0db; --rv-t-rule: #f0b24a; --rv-t-script: #7fb0ff; --rv-t-composed: #ff8fc1; --rv-t-tunnel: #d8c36a;
+    --rv-shadow-1: 0 1px 2px rgba(0,0,0,.5);
+    --rv-shadow-2: 0 8px 24px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
+    --rv-shadow-3: 0 24px 64px rgba(0,0,0,.65), 0 2px 6px rgba(0,0,0,.4);
+  }
+}
+/* @tokens:end */
+
+@media (prefers-reduced-motion: reduce) {
+  :root, :host { --rv-dur: 0ms; }
+}
+
+/* ============================ MITMWEB SKIN ============================ */
+html, body { background: var(--rv-bg); }
+body { font-family: var(--rv-font); color: var(--rv-text); font-size: 13px; -webkit-font-smoothing: antialiased; }
+#mitmproxy, #container { background: var(--rv-bg); color: var(--rv-text); }
+#container a { color: var(--rv-accent-text); }
+#container ::selection { background: color-mix(in srgb, var(--rv-accent) 30%, transparent); }
+#container * { scrollbar-width: thin; scrollbar-color: var(--rv-border-strong) transparent; }
+#container ::-webkit-scrollbar { width: 10px; height: 10px; }
+#container ::-webkit-scrollbar-thumb { background: var(--rv-border-strong); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+#container ::-webkit-scrollbar-thumb:hover { background: var(--rv-text-3); background-clip: content-box; border: 2px solid transparent; }
+#container ::-webkit-scrollbar-track { background: transparent; }
+#container ::-webkit-scrollbar-corner { background: transparent; }
+:focus-visible { outline: 2px solid var(--rv-focus); outline-offset: 1px; }
+
+/* ---- top menu ---- */
+#container > header { background: var(--rv-surface); border-bottom: 1px solid var(--rv-border); box-shadow: var(--rv-shadow-1); position: relative; z-index: 10;   /* above the table header (z 3) so File / Mark / Export dropdowns are never clipped; panel.js bars sit at 11, below Bootstrap modals (1050) */ }
+header nav.nav-tabs { border: 0; background: var(--rv-bg); padding: 6px 10px 0; display: flex; gap: 2px; align-items: flex-end; }
+/* #container-scoped so these beat the broad `#container a` link colour (one ID), which would otherwise
+   repaint the accent "File" tab's text in accent-text on its accent background → invisible (WCAG fail) */
+#container header nav.nav-tabs-lg a, #container header nav.nav-tabs-lg a.special {
+  float: none; border: 0 !important; border-radius: var(--rv-r-md) var(--rv-r-md) 0 0; padding: 7px 14px; margin: 0;
+  color: var(--rv-text-2); background: transparent; font-weight: 500; font-size: 13px; line-height: 1.2;
+  transition: background var(--rv-dur) var(--rv-ease), color var(--rv-dur) var(--rv-ease);
+}
+#container header nav.nav-tabs-lg a:hover { background: var(--rv-surface-2); color: var(--rv-text); text-decoration: none; }
+#container header nav.nav-tabs-lg a.active { background: var(--rv-surface); color: var(--rv-accent-text); box-shadow: inset 0 -2px 0 var(--rv-accent); }
+#container header nav.nav-tabs-lg a.special { background: transparent; color: var(--rv-text); font-weight: 600; margin-right: 4px; border-radius: var(--rv-r-md); margin-bottom: 3px; padding: 5px 12px; box-shadow: inset 0 0 0 1px var(--rv-border-strong); }
+#container header nav.nav-tabs-lg a.special:hover { background: var(--rv-surface-2); color: var(--rv-text); }
+#container header nav.nav-tabs-lg a.special.active { box-shadow: none; }
+.connection-indicator { display: none !important; }
+.flow-menu, .main-menu, header > div { background: var(--rv-surface); }
+.menu-group { border-right: 1px solid var(--rv-border); }
+.menu-content { gap: 2px; }
+.menu-legend { color: var(--rv-text-3); font-size: 11px; letter-spacing: .02em; text-transform: none; font-weight: 500; }
+.menu-entry label { color: var(--rv-text-2); font-size: 12.5px; }
+.btn, .btn-default {
+  font-family: var(--rv-font); background: transparent; color: var(--rv-text); border: 1px solid transparent; border-radius: var(--rv-r-md);
+  box-shadow: none; text-shadow: none; transition: background var(--rv-dur) var(--rv-ease), border-color var(--rv-dur) var(--rv-ease);
+}
+.btn:hover, .btn-default:hover, .btn:focus, .btn-default:focus { background: var(--rv-surface-2); border-color: var(--rv-border); color: var(--rv-text); }
+.btn:active, .btn-default:active { background: var(--rv-surface-3); }
+.btn[disabled], .btn-default[disabled] { opacity: .4; background: transparent; }
+.menu-content .fa.text-primary { color: var(--rv-accent) !important; }
+.menu-content .fa.text-info { color: var(--rv-info) !important; }
+.menu-content .fa.text-warning { color: var(--rv-warn) !important; }
+.menu-content .fa.text-danger { color: var(--rv-danger) !important; }
+.menu-content .fa.text-success { color: var(--rv-ok) !important; }
+.btn-xs, .btn-sm { font-size: 12px; }
+.contentview .controls .btn { background: var(--rv-surface); border-color: var(--rv-border); }
+.contentview .controls .btn:hover { border-color: var(--rv-accent); }
+
+/* filter + intercept inputs */
+.filter-input { background: transparent; }
+.filter-input .input-group-addon { background: var(--rv-surface-2); border: 1px solid var(--rv-control); border-right: 0; border-radius: var(--rv-r-md) 0 0 var(--rv-r-md); color: var(--rv-text-3); }
+.filter-input .input-group-addon .fa { color: var(--rv-text-3) !important; }
+.filter-input.has-error .input-group-addon, .has-error .form-control { border-color: var(--rv-danger) !important; }
+.form-control, input[type="text"], input[type="number"], input[type="search"], textarea, select {
+  font-family: var(--rv-mono); font-size: 12.5px; background: var(--rv-surface); color: var(--rv-text); border: 1px solid var(--rv-control);
+  border-radius: 0 var(--rv-r-md) var(--rv-r-md) 0; box-shadow: none; transition: border-color var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease);
+}
+.form-control::placeholder, input::placeholder { color: var(--rv-text-3); font-family: var(--rv-font); opacity: 1; }
+.form-control:focus, input[type="text"]:focus, textarea:focus, select:focus { outline: none; border-color: var(--rv-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rv-accent) 22%, transparent); }
+input[type="checkbox"] { accent-color: var(--rv-accent); }
+
+/* ---- flow list ---- */
+.flow-table { background: var(--rv-surface); }
+.flow-table table { font-size: 12.5px; font-family: var(--rv-font); }
+.flow-table thead tr { background: var(--rv-surface-2); border-bottom: 1px solid var(--rv-border); line-height: 28px; }
+/* no position:sticky here: mitmweb already pins the header with a scroll transform, and the two add up (header floats mid-list) */
+.flow-table thead th { background: var(--rv-surface-2); }
+.flow-table thead { position: relative; z-index: 3; }   /* mitmweb pins it with a transform; keep it above the positioned path cells */
+.flow-table th { color: var(--rv-text-3); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; padding-left: 8px; }
+.flow-table th.col-size, .flow-table th.col-time { text-align: right; padding-right: 8px; }
+.flow-table th.sort-asc, .flow-table th.sort-desc { background: var(--rv-surface-3); color: var(--rv-text); }
+.flow-table th.sort-asc:after, .flow-table th.sort-desc:after { background: transparent; color: var(--rv-accent); }
+.flow-table tbody tr { height: var(--rv-row-h); background: transparent; color: var(--rv-text); border-bottom: 1px solid transparent; transition: background var(--rv-dur) var(--rv-ease); }
+.flow-table tr:nth-child(2n) { background-color: var(--rv-row-alt); }
+.flow-table tbody tr:hover, .flow-table tr:nth-child(2n):hover { background-color: var(--rv-row-hover); }
+.flow-table tr.highlighted, .flow-table tr.highlighted:nth-child(2n) { background-color: var(--rv-warn-soft); }
+.flow-table tr.selected, .flow-table tr.selected:nth-child(2n), .flow-table tr.selected:hover,
+.flow-table tr.selected.highlighted, .flow-table tr.selected.highlighted:nth-child(2n) { background-color: var(--rv-row-sel) !important; }
+.flow-table tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--rv-accent); }
+.flow-table tbody tr.intercepted, .flow-table tbody tr.intercepted:nth-child(2n) { background-color: var(--rv-warn-soft) !important; }
+.flow-table tr.intercepted:not(.has-response) .col-path, .flow-table tr.intercepted:not(.has-response) .col-method,
+.flow-table tr.intercepted.has-response .col-status, .flow-table tr.intercepted.has-response .col-size, .flow-table tr.intercepted.has-response .col-time { color: var(--rv-warn) !important; }
+.flow-table td { padding: 0 8px; vertical-align: middle; }
+.flow-table td.col-tls, .flow-table th.col-tls { padding: 0; width: 3px; min-width: 3px !important; }
+/* https is the norm: no strip (mitmweb paints it green). Plain http is the exception worth seeing */
+.flow-table td.col-tls.col-tls-https { background-color: transparent; }
+.flow-table tbody tr.has-request td.col-tls:not(.col-tls-https) { background-color: var(--rv-warn); }
+.flow-table td.col-icon, .flow-table th.col-icon { width: 30px; min-width: 30px !important; padding: 0 0 0 6px; overflow: visible; text-overflow: clip; }
+.flow-table .resource-icon { opacity: .75; filter: saturate(.8); border-radius: var(--rv-r-sm); }
+:root[data-theme="dark"] .flow-table .resource-icon { filter: invert(.88) hue-rotate(180deg) saturate(.8); opacity: .8; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .flow-table .resource-icon { filter: invert(.88) hue-rotate(180deg) saturate(.8); opacity: .8; } }
+.flow-table .col-path .fa-repeat { color: var(--rv-ok); }
+.flow-table td.col-path:has(> .fa) { padding-right: 24px; }
+.flow-table td.col-path > .fa { position: absolute; right: 6px; top: 50%; margin-top: -7px; float: none; text-indent: 0; }
+.flow-table .col-path .fa-pause, .flow-table .col-path .fa-exclamation, .flow-table .col-path .fa-times { color: var(--rv-warn); }
+.flow-table .col-path .fa-exclamation, .flow-table .col-path .fa-times { color: var(--rv-danger); }
+.flow-table .col-path { font-family: var(--rv-mono); font-size: 12px; color: var(--rv-text); position: relative; }
+/* host dimmed + path emphasised: React owns the text node, so colour ranges with the CSS Highlight API (panel.js paintURLs) */
+.flow-table td.col-path { color: var(--rv-text); }
+::highlight(rv-url-host) { color: var(--rv-host); }
+::highlight(rv-url-scheme) { color: var(--rv-text-3); }
+::highlight(rv-url-query) { color: var(--rv-text-3); }
+.flow-table td.col-path .marker { color: var(--rv-warn); }
+.flow-table td.col-method, .flow-table th.col-method { width: 66px; min-width: 66px !important; overflow: visible; padding-left: 4px; padding-right: 4px; }
+.flow-table td.col-status, .flow-table th.col-status { width: 56px; min-width: 56px !important; padding-left: 4px; padding-right: 4px; }
+.flow-table td.col-size, .flow-table td.col-time { width: 58px; text-align: right; color: var(--rv-text-3); font-variant-numeric: tabular-nums; font-size: 12px; font-family: var(--rv-mono); }
+
+.flow-table td.col-quickactions { width: 28px; padding: 0 4px; }
+.flow-table .quickaction { color: var(--rv-text-3); }
+.flow-table .quickaction .fa { color: var(--rv-text-3) !important; }
+
+/* method + status pills: the cell text is hidden (font-size 0) and redrawn from the data-* attribute */
+.flow-table td.col-method[data-m], .flow-table td.col-status[data-code] { font-size: 0; }
+.flow-table td.col-method[data-m]::before, .flow-table td.col-status[data-code]::before {
+  display: inline-block; font: 700 10.5px/18px var(--rv-font); letter-spacing: .02em; padding: 0 6px; border-radius: var(--rv-r-pill);
+  min-width: 40px; text-align: center; color: var(--c, var(--rv-m-other)); background: color-mix(in srgb, var(--c, var(--rv-m-other)) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c, var(--rv-m-other)) 28%, transparent);
+}
+.flow-table td.col-method[data-m]::before { content: attr(data-m); }
+.flow-table td[data-m="GET"] { --c: var(--rv-m-get); }
+.flow-table td[data-m="POST"] { --c: var(--rv-m-post); }
+.flow-table td[data-m="PUT"] { --c: var(--rv-m-put); }
+.flow-table td[data-m="PATCH"] { --c: var(--rv-m-patch); }
+.flow-table td[data-m="DELETE"] { --c: var(--rv-m-delete); }
+.flow-table td.col-status[data-code]::before { content: attr(data-code); font-variant-numeric: tabular-nums; min-width: 38px; }
+.flow-table td.col-status[data-s="1"] { --c: var(--rv-s-1); } .flow-table td.col-status[data-s="2"] { --c: var(--rv-s-2); }
+.flow-table td.col-status[data-s="3"] { --c: var(--rv-s-3); } .flow-table td.col-status[data-s="4"] { --c: var(--rv-s-4); }
+.flow-table td.col-status[data-s="5"] { --c: var(--rv-s-5); } .flow-table td.col-status[data-s="x"] { --c: var(--rv-s-none); }
+/* a 200 whose GraphQL body carries "errors": keep the status, tint the pill, add "!" (the word ERR when there is room) */
+.flow-table td.col-status[data-gql-error="1"] { --c: var(--rv-danger); }
+.flow-table td.col-status[data-gql-error="1"]::before { content: attr(data-code) " !"; }
+:root[data-wide="1"] .flow-table td.col-status[data-gql-error="1"]::before { content: attr(data-code) " ERR"; }
+/* the mitmweb inline colour on the status cell (style="color: darkgreen") loses to this */
+.flow-table td.col-status { color: var(--c, var(--rv-text-2)) !important; }
+
+/* call tags. Narrow list: a one-letter glyph in the (otherwise blank) type-icon column. Wide list: the word as a
+   chip at the right end of the path cell. Both come from attributes we set on <td>/<tr>; React children are never touched. */
+.flow-table td.col-icon[data-tag]::before, .flow-table tbody tr[data-tunnel="1"] td.col-icon::before {
+  content: attr(data-tag-glyph); display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: var(--rv-r-sm);
+  font: 800 10px/1 var(--rv-font); color: var(--tc); background: color-mix(in srgb, var(--tc) 15%, var(--rv-surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tc) 32%, transparent);
+}
+.flow-table tbody tr[data-tunnel="1"] td.col-icon { --tc: var(--rv-t-tunnel); }
+.flow-table tbody tr[data-tunnel="1"] td.col-icon::before { content: "⇄"; font-size: 12px; font-weight: 600; }
+.flow-table td[data-tag="mock"] { --tc: var(--rv-t-mock); }
+.flow-table td[data-tag="rule"] { --tc: var(--rv-t-rule); }
+.flow-table td[data-tag="script"] { --tc: var(--rv-t-script); }
+.flow-table td[data-tag="composed"] { --tc: var(--rv-t-composed); }
+:root[data-wide="1"] .flow-table td.col-path[data-tag] { padding-right: 84px; }
+:root[data-wide="1"] .flow-table td.col-path[data-tag]::after {
+  content: attr(data-tag-text); position: absolute; right: 8px; top: 50%; transform: translateY(-50%); text-indent: 0;
+  font: 700 9.5px/16px var(--rv-font); letter-spacing: .05em; padding: 0 6px; border-radius: var(--rv-r-sm); -webkit-text-fill-color: var(--tc); color: var(--tc);
+  background: color-mix(in srgb, var(--tc) 14%, var(--rv-surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tc) 30%, transparent);
+}
+:root[data-wide="1"] .flow-table td.col-icon[data-tag]::before { display: none; }
+:root[data-wide="1"] .flow-table td.col-path[data-tag]:has(> .fa)::after { right: 30px; }
+/* TLS tunnel rows (host-only, not decrypted): the attribute lives on the <tr> */
+.flow-table tbody tr[data-tunnel="1"] td { opacity: .8; font-style: italic; }
+.flow-table tbody tr[data-tunnel="1"] td.col-icon { opacity: 1; font-style: normal; }
+:root[data-wide="1"] .flow-table tbody tr[data-tunnel="1"] td.col-path { padding-right: 130px; }
+:root[data-wide="1"] .flow-table tbody tr[data-tunnel="1"] td.col-path::after {
+  content: "NOT DECRYPTED"; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font: 700 9.5px/16px var(--rv-font); font-style: normal;
+  letter-spacing: .05em; padding: 0 6px; border-radius: var(--rv-r-sm); color: var(--rv-t-tunnel); -webkit-text-fill-color: var(--rv-t-tunnel);
+  background: color-mix(in srgb, var(--rv-t-tunnel) 14%, var(--rv-surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rv-t-tunnel) 30%, transparent);
+}
+
+/* ---- splitter + detail pane ---- */
+.splitter { background: var(--rv-border); transition: background var(--rv-dur); }
+.splitter:hover, .splitter:active { background: var(--rv-accent); }
+.splitter-x { width: 1px; }
+.flow-detail { background: var(--rv-surface); color: var(--rv-text); }
+.flow-detail nav.nav-tabs-sm {
+  display: flex; align-items: center; gap: 2px; margin: 10px 12px 6px; padding: 3px; background: var(--rv-surface-2); border: 1px solid var(--rv-border);
+  border-radius: var(--rv-r-md); width: fit-content; max-width: calc(100% - 24px); flex-wrap: wrap;
+}
+.flow-detail nav.nav-tabs-sm a {
+  border: 0 !important; border-radius: calc(var(--rv-r-md) - 2px); padding: 4px 7px; font-size: 12px; font-weight: 500; color: var(--rv-text-2); background: transparent;
+  float: none; margin: 0; line-height: 1.3; transition: background var(--rv-dur) var(--rv-ease), color var(--rv-dur) var(--rv-ease);
+}
+.flow-detail nav.nav-tabs-sm a:hover { color: var(--rv-text); text-decoration: none; background: var(--rv-surface-3); }
+.flow-detail nav.nav-tabs-sm a.active { background: var(--rv-surface); color: var(--rv-accent-text); box-shadow: var(--rv-shadow-1), inset 0 0 0 1px var(--rv-border); }
+.close-button { color: var(--rv-text-3); background: transparent; border: 0; padding: 0 6px; }
+.close-button:hover { color: var(--rv-danger); }
+.flow-detail section { padding: 0 12px 16px; }
+.first-line {
+  background: var(--rv-surface-2) !important; color: var(--rv-text) !important; border: 1px solid var(--rv-border); border-left: 3px solid var(--rv-accent);
+  border-radius: var(--rv-r-md); padding: 8px 12px; margin: 4px 0 10px; font-family: var(--rv-mono); font-size: 13px; font-weight: 600; word-break: break-all;
+}
+.first-line[data-s="2"] { border-left-color: var(--rv-s-2); } .first-line[data-s="3"] { border-left-color: var(--rv-s-3); }
+.first-line[data-s="4"] { border-left-color: var(--rv-s-4); } .first-line[data-s="5"] { border-left-color: var(--rv-s-5); }
+.inline-input { border-radius: var(--rv-r-sm); }
+.inline-input:hover { background: var(--rv-accent-soft); }
+.inline-input.has-success, .inline-input.has-error { border-color: transparent; }
+.inline-input:focus { outline: 2px solid var(--rv-focus); background: var(--rv-surface); }
+/* headers: one row per header. mitmweb's markup is key-span, a literal ": ", value-span —
+   that text node is a flex/grid item, so display:contents + a 2-column grid shuffles keys and values. */
+.kv-editor { display: flex; flex-direction: column; font-family: var(--rv-mono); font-size: 12px; margin: 4px 0 10px; border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); overflow: hidden; }
+.kv-editor .kv-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--rv-border); background: var(--rv-surface); }
+.kv-editor .kv-key, .kv-editor .kv-value { word-break: break-all; }
+.kv-editor .kv-key { flex: 0 0 38%; color: var(--rv-accent-text); font-weight: 600; background: transparent; text-align: left; border-radius: 0; }
+/* mitmweb paints editable inline-inputs white; keep both cells on the token surface */
+.kv-editor .inline-input { background: transparent; color: inherit; border-radius: 0; }
+.kv-editor .kv-value { flex: 1; min-width: 0; color: var(--rv-text); }
+.kv-editor .kv-row:last-of-type { border-bottom: 0; }
+.kv-editor .kv-add-row { padding: 4px 10px; color: var(--rv-text-3); background: var(--rv-surface-2); border-top: 1px solid var(--rv-border); cursor: pointer; }
+.kv-editor .kv-add-row:hover { color: var(--rv-accent); }
+/* bodies: code surface */
+.contentview { margin-top: 8px; }
+.contentview .controls { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+.contentview .controls h5 { margin: 0 auto 0 0; color: var(--rv-text-3); font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+.contentview pre, .flow-detail pre {
+  background: var(--rv-surface-2); color: var(--rv-text); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 10px 12px;
+  font-family: var(--rv-mono); font-size: 12px; line-height: 1.55; tab-size: 2;
+}
+.contentview pre code, .contentview pre div { font-family: var(--rv-mono); }
+/* JSON syntax colours: mitmweb's content view emits these span classes */
+.contentview .cm-string, .contentview .token.string, .contentview span.string { color: var(--rv-ok); }
+.contentview .cm-number, .contentview .token.number, .contentview span.number { color: var(--rv-info); }
+.contentview .cm-property, .contentview .token.property, .contentview .cm-attribute, .contentview span.key { color: var(--rv-accent-text); }
+.contentview .cm-keyword, .contentview .token.boolean, .contentview .token.null, .contentview span.boolean, .contentview span.null { color: var(--rv-t-composed); }
+.contentview .cm-comment, .contentview .token.comment { color: var(--rv-text-3); font-style: italic; }
+/* mitmproxy 12.2.3's JSON view is plain text in <div>s (no token spans). panel.js paints these
+   with the CSS Custom Highlight API — ranges over the existing text nodes, never replacing them. */
+::highlight(rv-key) { color: var(--rv-accent-text); }
+::highlight(rv-str) { color: var(--rv-ok); }
+::highlight(rv-num) { color: var(--rv-info); }
+::highlight(rv-lit) { color: var(--rv-t-composed); }
+.flow-detail table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.flow-detail table td, .flow-detail table th { padding: 5px 8px; border-bottom: 1px solid var(--rv-border); }
+.flow-detail table th { color: var(--rv-text-3); font-weight: 600; text-align: left; }
+.flow-detail h4, .flow-detail h5 { color: var(--rv-text-2); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700; margin: 14px 0 6px; }
+.flow-detail .alert { border-radius: var(--rv-r-md); }
+.flow-detail .text-muted { color: var(--rv-text-3); }
+
+/* ---- footer / event log ---- */
+footer { background: var(--rv-surface); border-top: 1px solid var(--rv-border); padding: 4px 8px; display: flex; gap: 6px; align-items: center; min-height: 28px; }
+footer .pull-right { margin-left: auto; display: flex; gap: 6px; }
+footer .label { font-family: var(--rv-mono); font-size: 11px; font-weight: 600; letter-spacing: 0; padding: 2px 8px; border-radius: var(--rv-r-pill); color: var(--rv-text-2); background: var(--rv-surface-2); box-shadow: inset 0 0 0 1px var(--rv-border); text-shadow: none; }
+footer .label-success { color: var(--rv-ok); background: var(--rv-ok-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rv-ok) 30%, transparent); }
+footer .label-danger { color: var(--rv-danger); background: var(--rv-danger-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rv-danger) 30%, transparent); }
+footer .label-primary { color: var(--rv-accent-text); background: var(--rv-accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rv-accent) 30%, transparent); }
+.eventlog { background: var(--rv-surface); border-top: 1px solid var(--rv-border); font-family: var(--rv-mono); font-size: 11.5px; color: var(--rv-text-2); }
+.eventlog > div { padding: 2px 10px; border-bottom: 1px solid color-mix(in srgb, var(--rv-border) 60%, transparent); }
+.eventlog .fa, .eventlog i { color: var(--rv-text-3); }
+.eventlog .log-error, .eventlog .fa-ban { color: var(--rv-danger); }
+.eventlog .log-warn, .eventlog .fa-exclamation-triangle { color: var(--rv-warn); }
+
+/* ---- modal (options editor) ---- */
+.modal-backdrop, .modal-backdrop.in { background: var(--rv-overlay); opacity: 1; }
+.modal-content { background: var(--rv-surface); color: var(--rv-text); border: 1px solid var(--rv-border); border-radius: var(--rv-r-lg); box-shadow: var(--rv-shadow-3); }
+.modal-header, .modal-footer { border-color: var(--rv-border); }
+.modal-header .close, .close { color: var(--rv-text-2); text-shadow: none; opacity: .8; }
+.help-block { color: var(--rv-text-3); }
+.dropdown-menu { background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); box-shadow: var(--rv-shadow-2); color: var(--rv-text); }
+.dropdown-menu > li > a { color: var(--rv-text); }
+.dropdown-menu > li > a:hover { background: var(--rv-accent-soft); color: var(--rv-accent-text); }
+
+/* ---- the whole UI honours reduced motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  #container *, #container *::before, #container *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
+}
+
+/* ===== polish pass (2026-10-14 night) ===== */
+/* toolbar: one calm monochrome icon style; mitmweb sets per-icon colours inline/with text-* classes */
+#container > header .menu-entry .fa, #container > header .btn .fa, #container > header .input-group-addon .fa {
+  color: var(--rv-text-2) !important;
+}
+#container > header .btn:not([disabled]):hover .fa, #container > header .menu-entry:hover .fa { color: var(--rv-accent-text) !important; }
+#container > header .btn[disabled] .fa, #container > header .btn.disabled .fa { color: var(--rv-text-3) !important; opacity: .55; }
+/* size/time never truncate */
+.flow-table td.col-size, .flow-table th.col-size { width: 58px; min-width: 58px !important; }
+.flow-table td.col-time, .flow-table th.col-time { width: 64px; min-width: 64px !important; }
+.flow-table td.col-size, .flow-table td.col-time { overflow: visible; text-overflow: clip; white-space: nowrap; }
+/* row clutter: quieter type icons, slim https strip */
+/* the blank type icons carried no information: the icon column now only holds call tags */
+.flow-table .resource-icon { display: none; }
+/* status bar: mitmweb's "HTTP Proxy Server Address" shows the default listen_port (8080) even when Rivis listens
+   elsewhere via --mode regular@PORT, so it is misleading; the mode label already shows the real port */
+footer .label[title="HTTP Proxy Server Address"] { display: none !important; }
+/* hide the scheme text (React keeps the node; we only shift it): the left strip shows https vs http */
+:root:not([data-skin="off"]) .flow-table td.col-path[style*="--sch"] { text-indent: calc(var(--sch) * -1ch); padding-left: 0; }
+.flow-table td.col-icon { padding-right: 8px; }
+.flow-table td.col-path .marker { text-indent: 0; }
+
+/* narrow list (details pane open next to the tools drawer): the path is what matters, so size and the hover quick-action give way */
+:root[data-narrow="1"] .flow-table .col-size, :root[data-narrow="1"] .flow-table .col-quickactions { display: none; }
+:root[data-narrow="1"] .flow-table td.col-time, :root[data-narrow="1"] .flow-table th.col-time { width: 60px; min-width: 60px !important; }
+
+/* status bar: plain-language labels (attributes set by panel.js footerLabels; React's text stays underneath) */
+footer .label[data-rv] { font-size: 0; font-family: var(--rv-font); }
+footer .label[data-rv]::before { content: attr(data-rv); font-size: 11.5px; font-weight: 600; }
+footer .label[data-rv-tone="warn"] { color: var(--rv-warn); background: var(--rv-warn-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rv-warn) 30%, transparent); }
+
+/* ===== pass 2: slim top bar (tabs row + one-row toolbar instead of mitmweb's 95px ribbon) ===== */
+:root { --rv-bar-h: 40px; --rv-tool-h: 42px; }
+#container > header { padding-top: 0; }
+#container > header nav.nav-tabs { height: var(--rv-bar-h); padding: 0 12px; align-items: stretch; background: var(--rv-bg); border-bottom: 1px solid var(--rv-border); }
+#container header nav.nav-tabs-lg a, #container header nav.nav-tabs-lg a.special {
+  display: inline-flex; align-items: center; padding: 0 12px; margin: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: 13px;
+}
+#container header nav.nav-tabs-lg a.special { font-weight: 600; color: var(--rv-text); margin-right: 4px; }
+#container header nav.nav-tabs-lg a.active, #container header nav.nav-tabs-lg a.special.active { background: transparent; box-shadow: inset 0 -2px 0 var(--rv-accent); }
+#container header nav.nav-tabs-lg a:hover { background: transparent; color: var(--rv-text); box-shadow: inset 0 -2px 0 var(--rv-border-strong); }
+#container header nav.nav-tabs-lg a.active:hover { box-shadow: inset 0 -2px 0 var(--rv-accent); }
+#container > header > div:not(:empty) { height: auto; min-height: var(--rv-tool-h); display: flex; align-items: center; padding: 0 8px; border-bottom: 1px solid var(--rv-border); box-shadow: none; background: var(--rv-surface); overflow: visible; }
+.flow-menu, .main-menu, header > div > div { display: flex; align-items: center; flex-wrap: wrap; width: 100%; }
+.menu-group, .main-menu .menu-group { height: auto; width: auto; margin: 0; padding: 4px 6px; display: flex; align-items: center; border-right: 0; }
+.menu-group + .menu-group { border-left: 1px solid var(--rv-border); }
+.menu-group + .menu-group:before { display: none; }
+.menu-legend { display: none; }                                  /* the group captions ("Flow Modification"…) carried no information the buttons don't */
+.menu-content { height: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.menu-content > .btn, .menu-content > a > .btn { height: 30px; margin: 0; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; text-align: left; border-radius: var(--rv-r-md); }
+.menu-content > .btn i, .menu-content > a > .btn i { display: inline-block; font-size: 14px; margin: 0; }
+.menu-content > .btn.btn-sm { height: 30px; padding: 0 9px; }
+.main-menu .btn-sm { margin-top: 0; }
+.filter-input { margin: 0 4px 0 0; width: 220px; height: 30px; display: flex; align-items: stretch; }
+.filter-input .input-group-addon { display: flex; align-items: center; width: 30px; padding: 0 0 0 9px; }
+.filter-input input.form-control { flex: 1; min-width: 0; height: 30px; padding: 0 8px; font-size: 12px; }
+.menu-entry { height: auto; padding: 4px 10px; }
+.menu-entry label { display: inline-flex; align-items: center; gap: 4px; }
+/* narrow window or drawer open: icons only, labels live in the tooltips (panel.js sets title on every button) */
+:root[data-ribbon="icons"] .menu-content > .btn, :root[data-ribbon="icons"] .menu-content > a > .btn { font-size: 0; gap: 0; width: 32px; padding: 0; justify-content: center; }
+:root[data-ribbon="icons"] .menu-content > .btn i, :root[data-ribbon="icons"] .menu-content > a > .btn i { font-size: 15px; }
+/* the always-visible search bar (panel.js) replaces mitmweb's own Search box, which only exists on the "Flow List" tab */
+:root[data-sbar="1"]:not([data-skin="off"]) .filter-input:has(> input[placeholder="Search"]) { display: none; }
+:root[data-sbar="1"][data-fstrip="1"]:not([data-skin="off"]) #container > header { margin-bottom: 28px; }
+/* first run: mitmweb's own "mitmproxy is running…" placeholder is replaced by the panel's centred hint */
+:root[data-rv-empty="1"] .main-view > div[style*="padding: 1em 2em"] { visibility: hidden; }
+/* plain-language tab names ("Flow List" → Calls …): panel.js sets data-rv; React's text stays underneath */
+#container header nav.nav-tabs-lg a[data-rv] { font-size: 0; }
+#container header nav.nav-tabs-lg a[data-rv]::before { content: attr(data-rv); font-size: 13px; }
+/* room for the Tools button (panel.js, fixed at the right end of this row) */
+:root:not([data-skin="off"]) #container > header > div:not(:empty) { padding-right: 132px; }
