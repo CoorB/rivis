@@ -98,6 +98,22 @@ class PanelError(Exception):
     pass
 
 
+
+HOST_NAME = re.compile(r"[A-Za-z0-9._:\[\]-]{1,253}")      # DNS names, IPv4, IPv6 (with or without brackets)
+
+def _session_meta(doc, fallback_name):
+    """Only the typed fields the panel shows: a shared or planted .meta.json must not inject markup (F-15)."""
+    if not isinstance(doc, dict):
+        return None
+    name = doc.get("name") if isinstance(doc.get("name"), str) and SAFE_NAME.fullmatch(doc.get("name")) else fallback_name
+    if not SAFE_NAME.fullmatch(name or ""):
+        return None
+    number = lambda v: v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else 0
+    hosts = doc.get("hosts") if isinstance(doc.get("hosts"), list) else []
+    return {"name": name, "note": doc.get("note") if isinstance(doc.get("note"), str) else "",
+            "count": int(number(doc.get("count"))), "created": float(number(doc.get("created"))),
+            "hosts": [h for h in hosts if isinstance(h, str)][:8]}
+
 class ProxyPanel:
     def __init__(self):
         self.project_only = False
@@ -572,10 +588,12 @@ class ProxyPanel:
                     try:
                         path = confined_path(STATE_DIR, os.path.join(SESS_DIR, fn))   # B5
                         with open(path) as fh:
-                            out.append(json.load(fh))
-                    except (OSError, ValueError):
+                            meta = _session_meta(json.load(fh), fn[:-len(".meta.json")])
+                        if meta:
+                            out.append(meta)
+                    except (OSError, ValueError, TypeError):
                         pass
-        return sorted(out, key=lambda m: m.get("created", 0), reverse=True)
+        return sorted(out, key=lambda m: m["created"], reverse=True)
 
     @staticmethod
     def sess_paths(name):
@@ -604,7 +622,7 @@ class ProxyPanel:
             http_part = "( ~http | ~tcp )" if self._tls_tunnels else "~http"
             base = f"{http_part} & ({pf})" if self.project_only and pf else http_part
         if self.focused_host:
-            h = "~d '^" + re.escape(self.focused_host).replace("\\", "\\\\") + "$'"
+            h = "~d '^" + re.escape(self.focused_host).replace("\\", "\\\\").replace("'", "\\'") + "$'"
             base = f"{base} & {h}" if base else h
         if self.graphql_operation:
             q = re.escape(self.graphql_operation).replace("\\", "\\\\").replace("'", "\\'")
@@ -1128,7 +1146,10 @@ class ProxyPanel:
                 return {"ok": False, "error": str(e).replace("Invalid filter expression: ", "")[:200]}
             return {"ok": True}
         elif op == "focus_host":       # "show only this host" / clear it
-            self.focused_host = a.get("host") or None
+            host = a.get("host") or None
+            if host is not None and not (isinstance(host, str) and HOST_NAME.fullmatch(host)):
+                raise PanelError("host: a hostname or IP address")   # F-16: it becomes part of a filter expression
+            self.focused_host = host
             self._write_view_filter()
         elif op == "export":           # Copy URL / Copy cURL
             f = self.flow(a["flow_id"])

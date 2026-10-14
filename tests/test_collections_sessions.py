@@ -279,6 +279,15 @@ class Sessions(LiveCase):
         self.assertFalse(raw["redacted"])
         self.assertIn(upstream.JWT_FRESH, json.dumps(raw["har"]))
 
+    def test_a_planted_session_meta_file_cannot_inject_markup(self):
+        """F-15: /proxy/api/state returns only typed fields of sessions/*.meta.json."""
+        os.makedirs(self.inst.path("sessions"), exist_ok=True)
+        with open(self.inst.path("sessions", "shared.meta.json"), "w") as fh:
+            json.dump({"name": "shared", "count": "<img src=x onerror=alert(1)>", "created": "<b>", "note": 5,
+                       "hosts": ["ok.example", {"x": "<i>"}], "evil": "<script>"}, fh)
+        meta = next(m for m in self.panel.state()["sessions"] if m["name"] == "shared")
+        self.assertEqual(meta, {"name": "shared", "count": 0, "created": 0.0, "note": "", "hosts": ["ok.example"]})
+
     def test_save_does_not_include_paused_calls_and_visible_only(self):
         self.fetch("/json/small")
         self.assertGreaterEqual(self.panel.ok("sess_save", {"name": "v", "visible_only": True})["count"], 1)
