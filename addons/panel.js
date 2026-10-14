@@ -1064,15 +1064,16 @@
   // mitmweb's status-bar badges are developer jargon ("regular@8094", "ssl_insecure"). Relabel through attributes + CSS; the React text stays.
   // mitmweb calls a request/response pair a "flow"; this tool says "call" everywhere
   const TAB_NAMES = { "Flow List": "Calls", Flow: "Selected call" };
-  const PLACEHOLDERS = { Highlight: "Highlight calls matching…", Intercept: "Pause calls matching… (e.g. ~u /pay)" };
+  const PLACEHOLDERS = { Highlight: "Highlight calls matching…", Intercept: "Pause calls matching…" };
   function relabelChrome() {
     document.querySelectorAll("#container > header nav a").forEach((a) => { const n = TAB_NAMES[a.textContent.trim()]; setAttr(a, "data-rv", n || null); });
-    document.querySelectorAll("#container > header .filter-input input").forEach((i) => { const ph = i.getAttribute("placeholder"); if (PLACEHOLDERS[ph]) { i.setAttribute("placeholder", PLACEHOLDERS[ph]); i.setAttribute("aria-label", ph); } });
+    document.querySelectorAll("#container > header .filter-input input").forEach((i) => { const ph = i.getAttribute("placeholder"); if (PLACEHOLDERS[ph]) { i.setAttribute("placeholder", PLACEHOLDERS[ph]); i.setAttribute("aria-label", ph); i.title = ph === "Intercept" ? "A filter such as ~u /pay — matching calls stop and wait until you press Resume (or use Breakpoints in the Tools drawer)" : "A filter such as ~u /pay or ~c 500 — matching calls are highlighted"; } });
   }
   function footerLabels() {
     relabelChrome();
     document.querySelectorAll("footer .label").forEach((el) => {
       const t = el.textContent.trim(); let m;
+      if (/^Intercept:/.test(t)) { setAttr(el, "data-rv", "Breakpoints on — matching calls pause"); setAttr(el, "title", t); setAttr(el, "data-rv-tone", "warn"); return; }
       if ((m = t.match(/^(\d+) of (\d+) flows? selected$/))) { setAttr(el, "data-rv", m[1] === "0" ? `${m[2]} call${m[2] === "1" ? "" : "s"}` : `${m[1]} selected · ${m[2]} calls`); return; }
       if ((m = t.match(/^(?:regular|local|transparent|socks5|upstream|reverse)[^@]*@(?:.*:)?(\d+)$/))) {
         setAttr(el, "data-rv", `Proxy 127.0.0.1:${m[1]}` + (state && state.project.label ? ` · ${state.project.label}` : ""));
@@ -1890,7 +1891,7 @@
     ["Filter by host / app", "The filter box at the top (" + kb(KMOD, "F") + "): type a host or part of a URL. Or <b>right-click → Show only this host</b>", "filter"],
     ["Clear the session", "The trash button next to the filter box (asks first)", "filter"],
     ["Right-click a call", "Map Local, Breakpoint, Repeat, Copy as cURL, Show only this host…", "call"],
-    ["SSL Proxying list", "<b>Network → TLS decryption</b> (decrypt all, or an allow / deny list)", "net"],
+    ["SSL Proxying list", "<b>Network → HTTPS decryption</b> (every host, only the hosts you list, or all except the ones you list)", "net"],
     ["Scripting", "<b>Scripts</b> tab (JavaScript or Python, per project)", "scripts"],
     ["Save a session", "<b>Sessions</b> tab → save, add a note, reopen later", "sess"],
     ["Copy as cURL", "<b>This call → Copy cURL</b> or <b>Copy as…</b> (many languages)", "call"],
