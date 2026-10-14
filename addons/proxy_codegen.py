@@ -254,7 +254,8 @@ def _ps(method, url, headers, raw, text, binary):
         else:
             lines.append("$body = %s" % _powershell(text))
         body_arg = " -Body $body"
-    lines.append("Invoke-RestMethod -Method %s -Uri %s -Headers $headers%s" % (method, _powershell(url), body_arg))
+    lines.append("Invoke-RestMethod -Method %s -Uri %s -Headers $headers%s" % (
+        _powershell(method), _powershell(url), body_arg))
     return "\n".join(lines)
 
 

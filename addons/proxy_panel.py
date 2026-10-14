@@ -717,7 +717,7 @@ class ProxyPanel:
         r = mhttp.Request.make(req["method"], req["url"], b"", [])
         headers = [(k, v) for k, v in req["headers"] if k.lower() not in ("content-length", "host")]
         host_header = next((v for k, v in req["headers"] if k.lower() == "host"), None)
-        r.headers = mhttp.Headers([(str(k).encode("latin-1", "replace"), str(v).encode("latin-1", "replace"))
+        r.headers = mhttp.Headers([(str(k).encode("ascii"), str(v).encode("utf-8"))
                                    for k, v in [("Host", host_header or urlsplit(req["url"]).netloc)] + headers])
         if req["body"]:
             r.content = req["body"]        # also sets Content-Length

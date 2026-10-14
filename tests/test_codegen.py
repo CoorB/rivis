@@ -116,6 +116,7 @@ class PostJson(Tools):
     def test_powershell_and_swift_quotes(self):
         out = generate(req("POST", headers=[("X-Q", "it's ‘curly’ ’")], body=b"x"), "powershell")
         self.assertIn("'it''s ‘‘curly’’ ’’'", out)
+        self.assertIn("-Method 'POST'", out)
         swift = generate(req("POST", headers=[("X-U", "a\u0001b")], body=b"x"), "swift")
         self.assertIn("\\u{0001}", swift)
         self.assertNotIn("\\u0001", swift)

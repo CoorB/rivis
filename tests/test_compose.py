@@ -48,6 +48,25 @@ class Normalize(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_request({"url": "https://h.test/", "body_mode": "json", "body": "{nope"})
 
+    def test_nonempty_body_without_mode_is_never_dropped(self):
+        raw = normalize_request({"method": "POST", "url": "https://h.test/", "body": "plain"})
+        self.assertEqual((raw["body_mode"], raw["body"]), ("raw", b"plain"))
+        js = normalize_request({"method": "POST", "url": "https://h.test/", "body": '{"x": 1}'})
+        self.assertEqual((js["body_mode"], json.loads(js["body"])), ("json", {"x": 1}))
+        form = normalize_request({"method": "POST", "url": "https://h.test/", "body": "a=1&b=x%20y",
+                                  "headers": [["Content-Type", "application/x-www-form-urlencoded"]]})
+        self.assertEqual((form["body_mode"], form["body"]), ("form", b"a=1&b=x+y"))
+        with self.assertRaisesRegex(ValueError, "JSON body is invalid"):
+            normalize_request({"url": "https://h.test/", "body": "not-json",
+                               "headers": [["Content-Type", "application/json"]]})
+
+    def test_header_names_and_values_are_safe_and_unicode_is_preserved(self):
+        out = normalize_request({"url": "https://h.test/", "headers": [["X-Name", "Jalapeño 😃"]]})
+        self.assertIn(("X-Name", "Jalapeño 😃"), out["headers"])
+        for headers in ([["Bad Name", "x"]], [["X-Test", "ok\r\nInjected: yes"]], [["X-Test", "bad\x00"]]):
+            with self.assertRaises(ValueError):
+                normalize_request({"url": "https://h.test/", "headers": headers})
+
     def test_rejects(self):
         for bad in ({"url": "ftp://h.test/"}, {"url": "/relative"}, {"url": "https://h.test/", "method": "BAD METHOD"},
                     {"url": "https://h.test/", "body_mode": "xml"}, {"url": "https://h.test/", "headers": [["only-name"]]},

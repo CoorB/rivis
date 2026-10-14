@@ -299,6 +299,17 @@ class Ops(LiveCase):
         self.assertEqual(fl["response"]["status_code"], 200)
         self.assertEqual(len(self.up.hits_for("/json/small")), 1)
 
+    def test_compose_send_infers_body_and_does_not_replace_unicode_header_bytes(self):
+        doc = self.panel.ok("compose_send", {"spec": {"method": "POST", "url": self.up.url("/echo"),
+                                                       "headers": [["X-Name", "Jalapeño"]],
+                                                       "body": "plain body"}})
+        wait_for(lambda: self.find_flow(doc["id"]) and self.find_flow(doc["id"]).get("response"),
+                 10, 0.2, "composed response")
+        hit = self.up.hits_for("/echo")[-1]
+        self.assertEqual(hit["body"], b"plain body")
+        value = next(v for k, v in hit["headers"] if k.lower() == "x-name")
+        self.assertEqual(value.encode("latin-1"), "Jalapeño".encode("utf-8"))
+
     def comment_after(self, path):
         self.fetch(path)
         return self.inst.flow_for(path)["comment"] or ""
