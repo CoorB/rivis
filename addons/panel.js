@@ -142,7 +142,7 @@
     .sbox input#sq { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; box-shadow: none; padding: 0; min-height: 0; height: 26px; font: 12.5px var(--rv-mono); color: var(--rv-text); border-radius: 0; }
     .sbox input#sq::placeholder { font-family: var(--rv-font); }
     .sbox kbd { font-size: 10.5px; padding: 0 5px; border-bottom-width: 1px; color: var(--rv-text-3); }
-    .sbox:focus-within kbd, .sbox.has kbd { display: none; }
+    .sbox:focus-within kbd, .sbox.has kbd, :host([data-tight]) .sbox kbd { display: none; }
     .sbox .ib { width: 22px; height: 22px; flex: none; }
     .sbox .ib[hidden], .sbox kbd[hidden] { display: none; }
     .spop { position: fixed; z-index: 2147482500; top: 42px; left: var(--sb-left, 360px); width: max(var(--sb-w, 300px), 340px); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-lg); box-shadow: var(--rv-shadow-2);
@@ -1318,7 +1318,9 @@
     const links = [...nav.querySelectorAll("a")], last = links[links.length - 1];
     const left = Math.round((last.dataset.rv === "Selected call" ? last.getBoundingClientRect().right : last.getBoundingClientRect().right + 112) + 16), room = brandL - left - 12;
     host.style.setProperty("--sb-left", left + "px");
-    host.style.setProperty("--sb-w", Math.max(200, Math.min(440, room - 34)) + "px");   // 34 = the clear-list button
+    const sbw = Math.max(200, Math.min(440, room - 34));   // 34 = the clear-list button
+    host.style.setProperty("--sb-w", sbw + "px");
+    if (host.hasAttribute("data-tight") !== (sbw < 270)) { if (sbw < 270) host.setAttribute("data-tight", ""); else host.removeAttribute("data-tight"); }
     host.style.setProperty("--hb", hb + "px");
     const rib = hdr.querySelector(":scope > div"), rr = rib ? rib.getBoundingClientRect() : null;
     host.style.setProperty("--fab-top", Math.round(rr && rr.height > 4 ? rr.top + (rr.height - 32) / 2 : hb + 8) + "px");
@@ -1649,6 +1651,7 @@
     if (a === "json_patch") return "changes " + Object.keys(r.set || {}).join(", ") + " in the JSON reply";
     if (a === "set_header") return (r.value == null ? "removes the " : "sets the ") + r.header + " header";
     if (a === "map_remote") return "sends it to " + r.with;
+    if (a === "block" || a === "drop") return "blocks the call (the app gets a network error)";
     return a;
   }
   function renderRules(m) {
