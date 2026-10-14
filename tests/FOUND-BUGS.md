@@ -127,3 +127,10 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Expected:** exit non-zero with `loss must be 0–100` (same limits as the panel).
 - **Tests:** `test_cli.py::Throttle::test_out_of_range_and_non_finite_numbers_are_refused`,
   `test_powershell.py::Commands::test_throttle_rejects_out_of_range_and_non_finite_numbers` (expectedFailure).
+
+## B15 — the panel's open tab does not refresh when state changes elsewhere (low)
+- **Repro:** open the panel on the *Rules* tab; run `rivis rules add …` (or call `add` from another browser tab). The tab badge
+  updates (`Rules 2`) but the list keeps showing 1 rule until you switch tabs and come back (screenshot:
+  `tests/.artifacts/ui-dbg.png` when the test is run with a failing wait). Same for CLI edits to throttle/breakpoints etc.
+- **Expected:** the visible tab re-renders when the polled state changed (and no input has focus), so CLI and UI never disagree on screen.
+- **Test:** `tests/ui/test_ui.py::UiSmoke::test_open_rules_tab_refreshes_when_a_rule_is_added_elsewhere` (expectedFailure).
