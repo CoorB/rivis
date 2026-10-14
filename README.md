@@ -220,11 +220,28 @@ Supported actions are `respond`, `map_local`, `status`, `json_patch`, `delay`, `
 `block`. CLI-added rules append in file order; quick panel errors are inserted first so they can override an
 older local response. Breakpoints pause requests/responses in mitmweb for editing and continuation.
 
-Unit tests (stdlib only, no mitmproxy needed): `/usr/bin/python3 -I -m unittest discover -s tests`.
+Tests: see [Testing](#testing).
 
 Traffic profiles include 3G Urban, congested LTE, high-latency VPN, packet loss, manual values, and legacy
 profiles. Collection replay keys calls by method, host, path, canonical query, then request-body hash; repeated
 calls replay in recorded order and stick on the last result.
+
+## Testing
+
+```bash
+tests/run.sh            # everything (CLI, PowerShell, rules, profiles, breakpoints, collections, panel, scripts, viewers,
+                        # TLS, installer, security, perf budgets, browser UI)
+tests/run.sh --fast     # same without the browser UI and the perf budgets
+tests/run.sh --ui       # only the browser UI smoke
+tests/run.sh -k tls     # select by name; --jobs N sets parallelism (default 4)
+```
+
+The suite is hermetic: every module gets a fake `HOME`, a private CA, a shim directory first on `PATH`, random ports
+and a local upstream test server; it never touches `~/.rivis`, `~/.mitmproxy`, the system proxy or devices. It needs only
+`/usr/bin/python3` with `pytest`, `mitmweb`, `node` and `curl`. The run ends with a table of pass/fail/xfail/skip
+counts plus a check that nothing was left behind. Known product bugs live in `tests/FOUND-BUGS.md`; their tests are
+marked `expectedFailure`, so fixing a bug turns its test into an "unexpected success" failure (delete the marker then).
+The browser tests need Playwright: `pip3 install --user playwright && python3 -m playwright install chromium`.
 
 ## Rename the placeholder
 
