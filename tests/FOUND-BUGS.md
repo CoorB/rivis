@@ -81,3 +81,20 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
   A script with only an `on_response` hook keeps its error, which is what the passing tests use.
 - **Expected:** error shown until the next *successful run of that same hook* (or the file is edited).
 - **Test:** `test_scripts.py::PythonScripts::test_request_hook_error_stays_in_state` (expectedFailure).
+
+## B9 — `make-release.sh` is a deny-list: `.git/`, `.env`, key files and `tests/` artifacts ship in the tarball
+- **Where:** `install/mirror/make-release.sh` excludes a fixed list of names (rules.json, web-token, *.har, *.snapshot …) and
+  tars everything else under `next/`.
+- **Repro:** in a checkout that has a `.git/` dir (which `next/` does), a stray `.env` / `id_rsa` / `server.pem`, or
+  `tests/.artifacts/*.log` (those logs contain the test run's web-UI tokens), run `install/mirror/make-release.sh out/` and
+  `tar -tzf out/*.tar.gz` → all of them are inside, plus the whole git history. The planted denied names are correctly excluded.
+- **Expected (STANDARDS §2 supply chain):** an allow-list (or `git archive`) so only tracked product files ship; at minimum
+  exclude `.git`, `tests/`, `.env*`, `*.pem`, `*.key`, `id_*`.
+- **Test:** `test_installer.py::Release::test_release_has_no_vcs_history_env_files_keys_or_test_artifacts` (expectedFailure).
+  The deny-list itself and the "no private keys / developer paths in shipped files" scans pass.
+
+## B10 — installer cosmetics (low)
+- `install.sh` self-check prints `redirector    enabled]` (`awk '{print $NF}'` on `[activated enabled]`).
+  Test: `Cosmetics::test_self_check_redirector_state_has_no_stray_bracket` (skipped when the extension is not installed).
+- install appends a blank line before the managed rc block; uninstall removes the block but not that blank line, so
+  install/uninstall cycles grow the user's rc file. Test: `Cosmetics::test_install_then_uninstall_restores_the_rc_file_byte_for_byte`.

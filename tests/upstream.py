@@ -164,8 +164,9 @@ class Upstream:
     def __init__(self, workdir):
         self.hits = []
         self.counter = 0
-        self.cert = os.path.join(workdir, "upstream-cert.pem")
-        key = os.path.join(workdir, "upstream-key.pem")
+        tag = os.urandom(4).hex()           # several upstreams share one workdir: never share a cert file
+        self.cert = os.path.join(workdir, "upstream-cert-%s.pem" % tag)
+        key = os.path.join(workdir, "upstream-key-%s.pem" % tag)
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", self.cert,
                         "-days", "2", "-subj", "/CN=rivis-test-upstream",
                         "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
