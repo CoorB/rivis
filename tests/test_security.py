@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
-from harness import LiveCase
+from harness import LiveCase, raw_http
 
 LSOF = "/usr/sbin/lsof"
 NETWORKSETUP = "/usr/sbin/networksetup"
@@ -122,6 +122,22 @@ class Network(LiveCase):
         self.assertEqual(proxy_state(), before)
         new = self.suite.shim_log("networksetup.log")[len(shim_before):]
         self.assertNotRegex(new, r"(?m)^-set|REFUSED")
+
+
+class PrivateRelay(LiveCase):
+    """Starts without the harness's explicit private-upstream allow-list."""
+    INSTANCE_KW = {"start_args": ("--insecure",), "allow_private": False}
+
+    def setUp(self):
+        self.up.reset_hits()  # do not use LiveCase.reset_state: its sync endpoint is intentionally private
+
+    def test_plain_proxy_refuses_origin_form_host_header_relay(self):
+        """F-01: GET /path + Host must not relay to a local/VPN destination."""
+        status, body, _ = raw_http(self.inst.proxy_port, "GET", "/secret",
+                                   {"Host": "127.0.0.1:%d" % self.up.http_port, "Connection": "close"})
+        self.assertEqual(status, 403)
+        self.assertEqual(self.up.hits_for("/secret"), [], "origin-form request reached the Host destination")
+        self.assertNotIn(b"RivisUpstream", body)
 
 
 class FreshCa(LiveCase):

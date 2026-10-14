@@ -37,8 +37,10 @@ import mimetypes
 import os
 import random
 import re
+import socket
 import sys
 import time
+import ipaddress
 
 from mitmproxy import ctx, http
 
@@ -182,10 +184,13 @@ class ProxyRules:
         self._intercept_set = _UNSET
         self.tls = tls_config({})
         self._tls_set = _UNSET
+        self.private_hosts_re = None
+        self._address_cache = {}
 
     def load(self, loader):
         loader.add_option("proxy_rules_file", str, DEFAULT_FILE, "project rules file (JSON, hot-reloaded)")
         loader.add_option("proxy_project", str, "default", "active project profile ID")
+        loader.add_option("proxy_private_hosts", str, "", "explicit regex allow-list for private upstream hosts")
 
     def running(self):
         # Poll once a second even with no traffic, so CLI breakpoints
@@ -201,6 +206,8 @@ class ProxyRules:
             self.path = os.path.expanduser(ctx.options.proxy_rules_file)
             self.mtime = None
             self._reload(force=True)
+        if "proxy_private_hosts" in updated:
+            self.private_hosts_re = re.compile(ctx.options.proxy_private_hosts) if ctx.options.proxy_private_hosts else None
 
     # ── file handling ────────────────────────────────────────────
     def _reload(self, force=False):
@@ -313,6 +320,38 @@ class ProxyRules:
 
     def _throttled(self, flow):
         return self.throttle and (self.throttle_re is None or self.throttle_re.search(flow.request.pretty_url))
+
+    def requestheaders(self, flow: http.HTTPFlow):
+        """Keep the loopback listener from becoming a relay into local/VPN networks.
+
+        Mitmproxy 12.2.3 normalizes absolute-form to origin-form before addon hooks, so
+        the original request-target form cannot be distinguished here.  Enforcing the
+        security boundary on the resolved destination closes both the origin-form and
+        DNS-rebinding variants. Private test services require an explicit allow-list.
+        """
+        host = flow.request.host
+        if not host or (self.private_hosts_re and self.private_hosts_re.fullmatch(host)):
+            return
+        now = time.monotonic()
+        cached = self._address_cache.get(host)
+        if cached and now - cached[0] < 60:
+            addresses = cached[1]
+        else:
+            try:
+                addresses = {row[4][0] for row in socket.getaddrinfo(host, flow.request.port, type=socket.SOCK_STREAM)}
+            except OSError:
+                return  # mitmproxy reports the normal DNS error; no destination was reached
+            self._address_cache[host] = (now, addresses)
+        unsafe = []
+        for address in addresses:
+            ip = ipaddress.ip_address(address)
+            if not ip.is_global:
+                unsafe.append(address)
+        if unsafe:
+            ctx.log.warn(f"proxy_rules: refused private upstream {host} -> {', '.join(sorted(unsafe))}; "
+                         "use --allow-private-hosts for an intentional local test service")
+            flow.response = http.Response.make(403, b"Private upstream destinations are blocked by Rivis.\n",
+                                               {"Content-Type": "text/plain"})
 
     @staticmethod
     def _body(r):
