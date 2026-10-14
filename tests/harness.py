@@ -233,6 +233,10 @@ class Panel:
 
     def login(self):
         self.opener.open(self.base + "/?token=" + self.token, timeout=10).read()
+        if not self.xsrf:      # mitmweb 12 does not issue the cookie; tornado only needs a matching cookie/header pair
+            self.jar.set_cookie(http.cookiejar.Cookie(
+                0, "_mitmproxy_xsrf", os.urandom(16).hex(), None, False, "127.0.0.1", True, False, "/", True,
+                False, None, False, None, None, {}))
 
     @property
     def xsrf(self):
@@ -466,6 +470,49 @@ class Instance:
                     os.unlink(p)
                 else:
                     shutil.rmtree(p)
+
+
+class LiveCase(unittest.TestCase):
+    """One throw-away Rivis per class (started via the real CLI) plus two deterministic upstreams.
+    Every test starts from a clean, provably-reloaded rules file."""
+    PROJECT = None
+    INSTANCE_KW = {}
+
+    @classmethod
+    def make_instance(cls):
+        return Instance(cls.suite, cls.__name__.lower(), project=cls.PROJECT, **cls.INSTANCE_KW)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.suite = Suite.get()
+        cls.up = cls.suite.upstream()
+        cls.up2 = cls.suite.upstream()
+        cls.inst = cls.make_instance().start()
+        cls.panel = cls.inst.panel
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.inst.stop()
+
+    def setUp(self):
+        self.reset_state()
+
+    def reset_state(self, **cfg):
+        self.inst.reset(**cfg)
+        self.up.reset_hits()
+        self.up2.reset_hits()
+
+    # tiny helpers
+    def rule(self, name, action, match=".", **kw):
+        d = {"name": name, "enabled": True, "match": match, "action": action}
+        d.update(kw)
+        return d
+
+    def fetch(self, path, up=None, tls=False, **kw):
+        return self.inst.fetch((up or self.up).url(path, tls=tls), **kw)
+
+    def comment(self, path):
+        return self.inst.flow_for(path)["comment"]
 
 
 def node_ok():

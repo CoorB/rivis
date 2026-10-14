@@ -144,6 +144,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, b"", ctype="application/json")
         if p == "/text":
             return self._send(200, "not json at all", ctype="text/plain")
+        if p == "/deep":
+            n = int((q.get("n") or ["2000"])[0])
+            return self._send(200, "[" * n + "]" * n)
         if p == "/hits":
             return self._send(200, {"n": len(srv.hits)})
         return self._send(404, {"error": "no such path", "path": p})
