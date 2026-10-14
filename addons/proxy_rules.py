@@ -56,7 +56,7 @@ if HERE not in sys.path:
 import proxy_common
 importlib.reload(proxy_common)
 from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PROFILE_VALUES, STATE_ROOT, breakpoints,
-                          confined_path, tls_config, tls_options)
+                          rule_file_path, tls_config, tls_options)
 
 # Traffic profiles: latency ms, jitter ms, down kbps, up kbps, loss %, extra response delay ms.
 # The first four named ones are FRTMProxy's built-ins, same numbers, so teams see the same thing.
@@ -134,6 +134,13 @@ def _tag_rule(flow, rule, suffix="", modified=True):
     _tag(flow, f"{kind}:{rule['name']}{suffix}")
 
 
+def _confdir():
+    try:
+        return ctx.options.confdir
+    except (AttributeError, KeyError):
+        return None
+
+
 def _compile_rule(source, state_dir, fallback_name=None):
     if not isinstance(source, dict):
         raise TypeError("rule must be an object")
@@ -155,11 +162,11 @@ def _compile_rule(source, state_dir, fallback_name=None):
     elif action == "respond":
         int(rule.get("status", 200))
         if rule.get("body_file"):
-            rule["body_file"] = confined_path(state_dir, rule["body_file"], "body_file")
+            rule["body_file"] = rule_file_path(state_dir, rule["body_file"], "body_file", (_confdir(),))
     elif action == "status":
         int(rule["status"])
         if rule.get("body_file"):
-            rule["body_file"] = confined_path(state_dir, rule["body_file"], "body_file")
+            rule["body_file"] = rule_file_path(state_dir, rule["body_file"], "body_file", (_confdir(),))
     elif action == "delay":
         rule["ms"] = float(rule["ms"])
         if rule["ms"] < 0:
@@ -176,9 +183,9 @@ def _compile_rule(source, state_dir, fallback_name=None):
         if not isinstance(rule["file"], str):
             raise TypeError("map_local file must be text")
         # A shared rules file must not turn the proxy into a reader for arbitrary
-        # local files: confine to the project state dir (symlinks resolved), or skip
-        # the rule with this error (it shows as disabled/error in the panel).
-        rule["file"] = confined_path(state_dir, rule["file"], "map_local file")
+        # local files: confine to the project state dir (symlinks resolved) unless the
+        # user trusted that file on this machine, or skip the rule with this error.
+        rule["file"] = rule_file_path(state_dir, rule["file"], "map_local file", (_confdir(),))
     if "headers" in rule and not isinstance(rule["headers"], dict):
         raise TypeError("headers must be an object")
     return rule

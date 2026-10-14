@@ -18,7 +18,7 @@
 #                                 --ios-filter local-capture process filter (default CoreSimulator)
 #   <cli> projects list|use ID|show ID|new ID --label L --hosts REGEX
 #   <cli> ui | stop | status | cert
-#   <cli> rules list|on NAME|off NAME|show NAME|rm NAME|edit
+#   <cli> rules list|on NAME|off NAME|show NAME|rm NAME|edit|allow-file PATH|disallow-file PATH|trusted-files
 #   <cli> rules add NAME match=REGEX action=ACTION [key=value ...]
 #                                 Proxyman-style rules, hot-reloaded, kept across restarts:
 #                                 respond | map_local | status | json_patch | delay |

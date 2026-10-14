@@ -693,5 +693,42 @@ class Migration(CliBase):
         self.assertTrue(os.path.isdir(os.path.join(self.state, "projects", "neo")))
 
 
+
+class TrustedFiles(CliBase):
+    """Item 0 of SEC2: a Map Local rule typed on this machine may read the user's own file outside the project."""
+
+    def trust_list(self):
+        p = os.path.join(self.state, "projects", "default", "trusted-files.json")
+        if not os.path.exists(p):
+            return []
+        self.assertEqual(os.stat(p).st_mode & 0o777, 0o600)
+        with open(p) as fh:
+            return json.load(fh)["files"]
+
+    def test_rules_add_with_an_outside_file_trusts_it_and_says_so(self):
+        mine = os.path.join(self.home, "Desktop", "mock.json")
+        os.makedirs(os.path.dirname(mine))
+        with open(mine, "w") as fh:
+            fh.write("{}")
+        out = self.ok("rules", "add", "m", "match=/x", "action=map_local", "file=" + mine).stdout
+        self.assertIn("outside the project", out)
+        self.assertEqual(self.trust_list(), [os.path.realpath(mine)])
+        self.ok("rules", "disallow-file", mine)
+        self.assertEqual(self.trust_list(), [])
+        self.ok("rules", "allow-file", mine)
+        self.assertIn(os.path.realpath(mine), self.ok("rules", "trusted-files").stdout)
+
+    def test_keys_and_credential_stores_are_refused(self):
+        for rel in (".ssh/id_rsa", ".mitmproxy/mitmproxy-ca.pem", ".aws/credentials", "certs/client.p12"):
+            p = os.path.join(self.home, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as fh:
+                fh.write("secret")
+            self.fail("rules", "allow-file", p, msg="refusing")
+            self.fail("rules", "add", "k" + str(abs(hash(rel)) % 1000), "match=/x", "action=map_local", "file=" + p,
+                      msg="refusing")
+        self.assertEqual(self.trust_list(), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

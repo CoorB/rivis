@@ -233,6 +233,18 @@ class ProxyPanel:
         return os.path.join(MOCK_DIR, name + ".json")
 
     # ── state for the drawer ──────────────────────────────────────────────────
+    def _rules_outside(self, cfg):
+        """Names of rules that read a file outside the project (allowed only because the user trusted it here)."""
+        base = os.path.realpath(os.path.dirname(os.path.abspath(self.rules_path)))
+        out = []
+        for r in cfg.get("rules", []):
+            f = isinstance(r, dict) and (r.get("file") or r.get("body_file"))
+            if isinstance(f, str) and f:
+                real = os.path.realpath(os.path.expanduser(f))
+                if real != base and not real.startswith(base + os.sep):
+                    out.append(r.get("name"))
+        return out
+
     def state(self):
         cfg = self.load_cfg()
         tls_cfg = self._bad_cfg if self._rules_error and isinstance(self._bad_cfg, dict) and "tls" in self._bad_cfg else cfg
@@ -252,6 +264,7 @@ class ProxyPanel:
             "rules_file": self.rules_path,
             "rules_error": self._rules_error,
             "rules": cfg["rules"],
+            "rules_outside": self._rules_outside(cfg),
             "throttle": cfg.get("throttle", "off"),
             "throttle_match": cfg.get("throttle_match", ""),
             "loss": cfg.get("loss", 0),

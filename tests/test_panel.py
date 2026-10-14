@@ -546,6 +546,50 @@ class Confinement(LiveCase):
         self.reset_state(rules=[self.rule("b", "respond", "/echo", body_file=outside)])
         self.assertNotIn("TOP-SECRET-BODYFILE", self.fetch("/echo").text)
 
+    def _trust(self, *paths):
+        with open(self.inst.path("trusted-files.json"), "w") as fh:
+            json.dump({"files": [os.path.realpath(p) for p in paths]}, fh)
+        self.addCleanup(lambda: os.path.exists(self.inst.path("trusted-files.json"))
+                        and os.unlink(self.inst.path("trusted-files.json")))
+
+    def test_a_file_the_user_trusted_on_this_machine_is_served_and_flagged(self):
+        """Item 0: users map their OWN files anywhere, as in Proxyman — once trusted locally."""
+        mine = os.path.join(self.suite.root, "my-mock.json")
+        with open(mine, "w") as fh:
+            fh.write('{"mine": true}')
+        self._trust(mine)
+        self.reset_state(rules=[self.rule("mine", "map_local", "/echo", file=mine),
+                                self.rule("body", "respond", "/text", body_file=mine)])
+        self.assertEqual(self.fetch("/echo").json(), {"mine": True})
+        self.assertIn('"mine"', self.fetch("/text").text)
+        self.assertEqual(sorted(self.panel.state()["rules_outside"]), ["body", "mine"])
+
+    def test_a_rules_file_cannot_trust_itself(self):
+        """A shared rules.json may carry any flag it likes; only the separate local trust list counts."""
+        outside = os.path.join(self.suite.root, "outside-selftrust.txt")
+        with open(outside, "w") as fh:
+            fh.write("TOP-SECRET-SELFTRUST")
+        self.reset_state(rules=[self.rule("x", "map_local", "/echo", file=outside, allow_outside=True, trusted=True)],
+                         trusted_files=[outside])
+        self.assertNotIn("TOP-SECRET-SELFTRUST", self.fetch("/echo").text)
+        self.assertIn("allow-file", json.dumps(self.panel.state()))   # the skipped-rule error says how to trust it
+
+    def test_keys_and_rivis_secrets_are_refused_even_when_trusted(self):
+        fake_ssh = os.path.join(self.inst.home, ".ssh")    # the instance's fake HOME, never the real one
+        os.makedirs(fake_ssh, exist_ok=True)
+        key = os.path.join(fake_ssh, "id_test")
+        pem = os.path.join(self.suite.root, "client.pem")
+        for path, text in ((key, "TOP-SECRET-SSH"), (pem, "TOP-SECRET-PEM")):
+            with open(path, "w") as fh:
+                fh.write(text)
+        token = self.inst.path("web-token") if os.path.exists(self.inst.path("web-token")) else None
+        trusted = [key, pem] + ([token] if token else [])
+        self._trust(*trusted)
+        self.reset_state(rules=[self.rule("ssh", "map_local", "/echo", file=key),
+                                self.rule("pem", "map_local", "/text", file=pem)])
+        self.assertNotIn("TOP-SECRET-SSH", self.fetch("/echo").text)
+        self.assertNotIn("TOP-SECRET-PEM", self.fetch("/text").text)
+
 
 class MalformedInput(LiveCase):
     """Invalid input must come back as a JSON error, never a 500 (brief §8)."""

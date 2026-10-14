@@ -127,6 +127,10 @@ configuration active, and a bad individual rule is skipped and shown in the pane
 - **Clear all calls**: the trash button next to the filter (asks first; saved sessions, rules and scripts stay).
 - **Right-click a call** for Map Local, Breakpoint, Repeat, Edit & Repeat, Compare as A, Copy as cURL / URL, Show
   only this host, decrypt / stop decrypting the host, and Delete.
+- **Map Local to your own file anywhere** (e.g. `~/Desktop/mock.json`): `rivis rules add NAME match=REGEX action=map_local
+  file=PATH` trusts that file on this machine; for a hand-edited rule run `rivis rules allow-file PATH`
+  (`disallow-file`, `trusted-files` to review). Files from shared or imported rules are only read inside the project,
+  and keys (`~/.mitmproxy`, `~/.ssh`, `*.pem`, …) and Rivis's own login files are never served.
 - **One-row toolbar:** mitmweb's 95 px ribbon is a single 42 px row; below ~900 px (e.g. with the Tools drawer open)
   it shows icons only, with the names in tooltips. mitmweb's *Flow List* / *Flow* tabs read **Calls** / **Selected call**.
 - **First run:** an empty list explains the next step (`rivis ios on` / `rivis android on`, with `--project` when a
