@@ -11,3 +11,4 @@ tests/.artifacts/
 *.har
 web-token
 current-project
+.playwright-mcp/
