@@ -8,7 +8,7 @@
 (() => {
   if (window.__proxyPanel) return;
   window.__proxyPanel = true;
-  const W = 460;
+  const drawerW = () => Math.round(Math.min(460, Math.max(380, window.innerWidth * 0.32)));   // laptop screens keep more room for the list
 
   const xsrf = () => (document.cookie.match(/(?:^|;\s*)_mitmproxy_xsrf=([^;]+)/) || [])[1] || "";
   const api = async (op, body) => {
@@ -127,7 +127,7 @@
     .ib.on { background: var(--rv-accent-soft); color: var(--rv-accent-text); }
 
     /* drawer */
-    .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: ${W}px; max-width: 100vw; z-index: 2147483001; background: var(--rv-surface); color: var(--rv-text);
+    .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: var(--drawer-w, 460px); max-width: 100vw; z-index: 2147483001; background: var(--rv-surface); color: var(--rv-text);
               border-left: 1px solid var(--rv-border); box-shadow: var(--rv-shadow-2); display: none; flex-direction: column; font-size: 13px; }
     .drawer.open { display: flex; animation: slide var(--rv-dur) var(--rv-ease); }
     @keyframes slide { from { transform: translateX(18px); opacity: .4; } }
@@ -138,15 +138,17 @@
     header b small { font-weight: 500; color: var(--rv-text-2); font-size: 13px; }
     .x { border: 0; background: transparent; font-size: 20px; line-height: 1; cursor: pointer; color: var(--rv-text-2); width: 26px; height: 26px; border-radius: var(--rv-r-md); }
     .x:hover { background: var(--rv-surface-2); color: var(--rv-text); }
-    nav { display: flex; flex-wrap: wrap; gap: 0 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--rv-border); background: var(--rv-surface); }   /* wraps: every tab stays visible, no hidden scroll */
+    nav { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--rv-border); background: var(--rv-surface); }   /* 5 x 2: every tab visible, even widths */
     nav::-webkit-scrollbar { display: none; }
-    nav button { flex: none; display: flex; align-items: center; gap: 5px; border: 0; background: none; padding: 8px 9px 9px; cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--rv-text-2);
-                 border-bottom: 2px solid transparent; border-radius: var(--rv-r-md) var(--rv-r-md) 0 0; white-space: nowrap; transition: color var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease); }
+    nav button { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; border: 0; background: none; padding: 7px 2px 7px; cursor: pointer; font-size: 11.5px; font-weight: 500; color: var(--rv-text-2);
+                 border-bottom: 2px solid transparent; border-radius: var(--rv-r-md) var(--rv-r-md) 0 0; white-space: nowrap; min-width: 0; transition: color var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease); }
+    nav button svg.i { width: 17px; height: 17px; }
     nav button:hover { color: var(--rv-text); background: var(--rv-surface-2); }
     nav button.on { color: var(--rv-accent-text); border-bottom-color: var(--rv-accent); font-weight: 600; }
+    label.pj { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rv-text-3); }
     .info { color: var(--rv-text-3); cursor: help; font-size: 11px; }
     nav .cnt:empty { display: none; }
-    nav .cnt { background: var(--rv-accent-soft); color: var(--rv-accent-text); border-radius: var(--rv-r-pill); padding: 0 6px; font-size: 10.5px; font-weight: 700; line-height: 16px; font-variant-numeric: tabular-nums; }
+    nav .cnt { position: absolute; top: 3px; right: calc(50% - 24px); background: var(--rv-accent-soft); color: var(--rv-accent-text); border-radius: var(--rv-r-pill); padding: 0 6px; font-size: 10.5px; font-weight: 700; line-height: 16px; font-variant-numeric: tabular-nums; }
     nav .cnt.err { background: var(--rv-danger-soft); color: var(--rv-danger); }
     main { flex: 1; overflow: auto; padding: 14px; }
     h4 { margin: 18px 0 7px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--rv-text-3); font-weight: 700; display: flex; align-items: center; gap: 8px; }
@@ -260,21 +262,24 @@
     .map { width: 100%; border-collapse: collapse; font-size: 12.5px; }
     .map th { text-align: left; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--rv-text-3); padding: 4px 8px; }
     .map td { padding: 7px 8px; border-top: 1px solid var(--rv-border); vertical-align: top; }
-    .map td:first-child { color: var(--rv-text-2); width: 42%; }
-    .map a { color: var(--rv-accent-text); cursor: pointer; text-decoration: none; font-weight: 600; }
-    .map a:hover { text-decoration: underline; }
+    .map td:first-child { color: var(--rv-text-2); width: 36%; }
+    .map td.go { width: 64px; white-space: nowrap; text-align: right; }
+    .map .lnk, .lnk { border: 0; background: none; padding: 2px 4px; border-radius: var(--rv-r-sm); color: var(--rv-accent-text); cursor: pointer; font-weight: 600; font-size: 12.5px; }
+    .map .lnk:hover { text-decoration: underline; background: var(--rv-accent-soft); }
     code.cmd { display: block; font: 12px/1.5 var(--rv-mono); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 6px 10px; margin: 4px 0; text-align: left; user-select: all; color: var(--rv-text); }
 
     /* floating cards over mitmweb: welcome + empty list */
-    .welcome { position: fixed; left: 50%; top: 72px; transform: translateX(-50%); z-index: 2147483002; width: min(680px, 94vw); max-height: min(78vh, 720px); overflow: auto;
+    .wscrim { position: fixed; inset: 0; z-index: 2147483001; background: var(--rv-overlay); display: none; }
+    .welcome.open + .wscrim { display: block; }
+    .welcome { position: fixed; left: calc((100vw - var(--open-w, 0px)) / 2); top: 50%; transform: translate(-50%, -50%); z-index: 2147483002; width: min(700px, calc(100vw - var(--open-w, 0px) - 32px)); max-height: min(88vh, 760px); overflow: auto;
                background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: 14px;
-               box-shadow: 0 0 0 100vmax var(--rv-overlay), var(--rv-shadow-3); padding: 18px 20px; display: none; animation: pop var(--rv-dur) var(--rv-ease); }
+               box-shadow: var(--rv-shadow-3); padding: 18px 20px; display: none; animation: pop var(--rv-dur) var(--rv-ease); }
     .welcome.open { display: block; }
     .welcome h3 { margin: 0 0 4px; font-size: 16px; display: flex; align-items: center; gap: 10px; }
     .welcome h3 .mark { width: 26px; height: 26px; border-radius: 8px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; }
     .welcome h3 .mark svg { width: 16px; height: 16px; stroke-width: 2.2; }
     .welcome p { margin: 6px 0 12px; color: var(--rv-text-2); line-height: 1.5; }
-    .emptylist { position: fixed; z-index: 2147482100; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; display: none; align-items: center; justify-content: center; }
+    .emptylist { position: fixed; z-index: 2147482100; left: 0; top: 0; width: calc(100vw - var(--open-w, 0px)); height: 100vh; pointer-events: none; display: none; align-items: center; justify-content: center; }
     .emptylist.open { display: flex; }
     .emptylist .box { pointer-events: auto; width: min(560px, 90vw); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: 14px; box-shadow: var(--rv-shadow-2); padding: 18px 20px; margin-top: 40px; }
     .emptylist h3 { margin: 0 0 4px; font-size: 15px; }
@@ -291,7 +296,7 @@
   <div class="brand" id="brand"><span class="mark">${ico("mark")}</span><b id="bname">Rivis</b><span class="proj" id="bproj"></span>
     <button class="ib" id="btheme" title="Theme">${ico("auto")}</button><button class="ib" id="bhelp" title="Help, shortcuts and settings  (?)">${ico("help")}</button></div>
   <div class="drawer" id="drawer">
-    <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><select id="project" title="Changes the list view only; restart to load another project's rules"></select><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button></header>
+    <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><label class="pj" title="Choose which project's calls the list shows">Show<select id="project" aria-label="Project shown in the call list"></select></label><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button></header>
     <nav>
       <button data-t="call" class="on">${ico("call", "sm")}This call</button>
       <button data-t="compose">${ico("compose", "sm")}Compose</button>
@@ -308,7 +313,7 @@
   </div>
   <div class="pause" id="pause"><div class="sheet" id="sheet"></div></div>
   <div class="pause" id="help"><div class="sheet" id="hsheet"></div></div>
-  <div class="welcome" id="welcome"></div>
+  <div class="welcome" id="welcome" role="dialog" aria-label="Coming from Proxyman?"></div><div class="wscrim" id="wscrim"></div>
   <div class="emptylist" id="emptylist"></div>
   <div class="toast" id="toast"></div>`;
 
@@ -413,10 +418,11 @@
     $("fab").classList.toggle("paused", state.paused.length > 0);
     const label = state.project.label || state.view_project;
     const product = state.product.name || "Proxy";
-    $("ptitle").innerHTML = `${esc(product)} <small>/ ${esc(label)}</small>`;
+    $("ptitle").textContent = product;
     $("bname").textContent = product; $("bproj").textContent = label;
     document.title = product + " · " + label;
-    const options = state.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === state.view_project ? "selected" : ""}>${esc(p.label || p.id)}</option>`).join("");
+    const options = `<option value="__all" ${state.project_only ? "" : "selected"}>All traffic</option>` +
+      state.projects.map((p) => `<option value="${esc(p.id)}" ${state.project_only && p.id === state.view_project ? "selected" : ""}>${esc(p.label || p.id)} only</option>`).join("");
     if ($("project").innerHTML !== options) $("project").innerHTML = options;
     $("fablabel").textContent = state.paused.length ? `${label} · ${state.paused.length} paused` : label;
   }
@@ -959,15 +965,36 @@
       const flow = flowOf(path);
       const tags = flow ? tagsOf(flow.comment) : new Set();
       const top = ["mock", "rule", "script", "composed"].find((t) => tags.has(t));
+      const icon = tr.querySelector("td.col-icon");
       setAttr(path, "data-tag", top || null);
       setAttr(path, "data-tag-text", top ? TAG_TEXT[top] + (tags.size > 1 ? " +" + (tags.size - 1) : "") : null);
       setAttr(path, "title", top ? flow.comment : null);
-      if (status) setAttr(status, "data-gql-error", flow && errors.has(flow.id) ? "1" : "0");
+      if (icon) {                                          // narrow list: the same tag as a one-letter glyph in the type-icon column
+        setAttr(icon, "data-tag", top || null);
+        setAttr(icon, "data-tag-glyph", top ? TAG_TEXT[top][0] : null);
+        setAttr(icon, "title", top ? TAG_TEXT[top] + " — " + flow.comment : (tr.dataset.tunnel === "1" ? "TLS tunnel — not decrypted (add the host to the decrypt list in Network)" : null));
+      }
+      if (status) { const g = flow && errors.has(flow.id); setAttr(status, "data-gql-error", g ? "1" : "0"); setAttr(status, "title", g ? "GraphQL: the response body contains errors" : null); }
     });
     const line = document.querySelector(".flow-detail section.response .first-line");   // status line colour in the details pane
     if (line) { const m = line.textContent.match(/\b([1-5])\d\d\b/); setAttr(line, "data-s", m ? m[1] : null); }
     paintURLs();
     paintJSONBody();
+    footerLabels();
+  }
+  // mitmweb's status-bar badges are developer jargon ("regular@8094", "ssl_insecure"). Relabel through attributes + CSS; the React text stays.
+  function footerLabels() {
+    document.querySelectorAll("footer .label").forEach((el) => {
+      const t = el.textContent.trim(); let m;
+      if ((m = t.match(/^(?:regular|local|transparent|socks5|upstream|reverse)[^@]*@(?:.*:)?(\d+)$/))) {
+        setAttr(el, "data-rv", `Proxy 127.0.0.1:${m[1]}` + (state && state.project.label ? ` · ${state.project.label}` : ""));
+        setAttr(el, "title", "Point the device or simulator at this address (the tool prints the exact setup commands)");
+      } else if (t === "ssl_insecure") {
+        setAttr(el, "data-rv", "Server certificates not verified");
+        setAttr(el, "title", "ssl_insecure is on: upstream (server) certificates are not checked. Fine for internal test environments.");
+        setAttr(el, "data-rv-tone", "warn");
+      }
+    });
   }
   // Flow-list URLs: scheme + host muted, path in full colour, query muted. Ranges over React's text node (never replaced).
   function paintURLs() {
@@ -982,8 +1009,9 @@
       const t = node.nodeValue, at = t.indexOf("://");
       const cut = t.indexOf("/", at + 3), end = cut < 0 ? t.length : cut, q = cut < 0 ? -1 : t.indexOf("?", cut);
       add(node, 0, at + 3, "rv-url-scheme");
-      const sch = String(at + 3);                       // CSS shifts the scheme out of view (the strip already shows https)
-      if (cell.style.getPropertyValue("--sch") !== sch) cell.style.setProperty("--sch", sch);
+      // CSS shifts an https:// scheme out of view (https is the norm); plain http:// stays visible next to the amber strip
+      if (/^https:/i.test(t)) { const sch = String(at + 3); if (cell.style.getPropertyValue("--sch") !== sch) cell.style.setProperty("--sch", sch); }
+      else if (cell.style.getPropertyValue("--sch")) cell.style.removeProperty("--sch");
       add(node, at + 3, end, "rv-url-host");
       if (q >= 0) add(node, q, t.length, "rv-url-query");
     });
@@ -1047,7 +1075,14 @@
       else CSS.highlights.delete(cssName[kind]);
     });
   }
-  new MutationObserver(() => { clearTimeout(tagCells._t); tagCells._t = setTimeout(tagCells, 60); })
+  // list width buckets for theme.css: narrow (< 520px) drops size; wide (> 640px) shows the word chips
+  const sizeBuckets = () => {
+    const t = document.querySelector(".flow-table"); if (!t) return;
+    const w = t.getBoundingClientRect().width;
+    if (w) { setAttr(DOC, "data-narrow", w < 520 ? "1" : null); setAttr(DOC, "data-wide", w > 640 ? "1" : null); }
+  };
+  window.addEventListener("resize", sizeBuckets);
+  new MutationObserver(() => { clearTimeout(tagCells._t); tagCells._t = setTimeout(() => { tagCells(); sizeBuckets(); }, 60); })
     .observe(document.body, { childList: true, subtree: true, characterData: true });
 
   // ───────────── Edit & Retry (request editor in the sheet) ─────────────
@@ -1440,7 +1475,7 @@
       const s = await api("state");
       state = s; badges();
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
-      await refreshFlows(); tagCells();
+      await refreshFlows(); tagCells(); sizeBuckets();
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
       if (!pausedOpen && waiting.length && !$("pause").classList.contains("open")) openPaused(waiting[0].id);
       if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) { pausedOpen = null; $("pause").classList.remove("open"); }
@@ -1451,12 +1486,15 @@
   }
 
   const setOpen = (open) => {
+    const W = drawerW();
+    host.style.setProperty("--drawer-w", W + "px"); host.style.setProperty("--open-w", open ? W + "px" : "0px");
     $("drawer").classList.toggle("open", open);
     $("brand").style.right = open ? W + 12 + "px" : "";
     document.body.style.marginRight = open ? W + "px" : "";   // push mitmweb over instead of covering it
     document.body.style.width = open ? `calc(100% - ${W}px)` : "";
     window.dispatchEvent(new Event("resize"));
   };
+  window.addEventListener("resize", () => { if ($("drawer").classList.contains("open") && host.style.getPropertyValue("--drawer-w") !== drawerW() + "px") setOpen(true); });
   $("fab").onclick = () => {
     if (state && state.paused.length && !pausedOpen) { dismissed.clear(); return openPaused(state.paused[0].id); }
     setOpen(!$("drawer").classList.contains("open")); state = null; render(); refreshViewerSummaries().then(() => {
@@ -1465,7 +1503,11 @@
   };
   $("close").onclick = () => setOpen(false);
   $("pause").onclick = (e) => { if (e.target === $("pause")) { dismissed.add(pausedOpen && pausedOpen.id); pausedOpen = null; $("pause").classList.remove("open"); toast("Still paused — reopen from the project button"); } };
-  $("project").onchange = () => run("view", { project: $("project").value, project_only: state.project_only, show_dns: state.show_dns }, "View changed; restart to load this project's rules");
+  $("project").onchange = () => {
+    const v = $("project").value, label = $("project").selectedOptions[0].textContent.replace(/ only$/, "");
+    if (v === "__all") return run("view", { project_only: false, show_dns: state.show_dns }, "Showing all traffic");
+    run("view", { project: v, project_only: true, show_dns: false }, `Showing only ${label} calls. Its rules load when you start with --project ${v}`);
+  };
   root.querySelectorAll("nav button").forEach((b) => (b.onclick = () => { tab = b.dataset.t; editing = null; render(); }));
   // mitmweb changes the selection with history.replaceState, which fires no "hashchange" —
   // so watch the selected call id ourselves
@@ -1546,8 +1588,8 @@
     ["Copy as cURL", "<b>This call → Copy cURL</b> or <b>Copy as…</b> (many languages)", "call"],
   ];
   const goTo = (t) => { closeHelp(); if (t === "filter") focusFilter(); else openDrawer(t); };
-  const mapTable = (rows) => `<table class="map"><tr><th>In Proxyman you did</th><th>Here</th></tr>${rows.map(([a, b, g]) =>
-    `<tr><td>${a}</td><td>${b} <a data-go="${g}">Open →</a></td></tr>`).join("")}</table>`;
+  const mapTable = (rows) => `<table class="map"><tr><th>In Proxyman you did</th><th>Here</th><th></th></tr>${rows.map(([a, b, g]) =>
+    `<tr><td>${a}</td><td>${b}</td><td class="go"><button class="lnk" data-go="${g}">Open →</button></td></tr>`).join("")}</table>`;
   const closeHelp = () => $("help").classList.remove("open");
   function openHelp(which) {
     const tabs = { map: "Coming from Proxyman?", keys: "Shortcuts", settings: "Settings" };
@@ -1581,6 +1623,8 @@
   $("gear").onclick = () => openHelp("settings");
   $("btheme").onclick = () => applyTheme({ system: "light", light: "dark", dark: "system" }[themeMode()]);
 
+  const closeWelcome = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); };
+  $("wscrim").onclick = closeWelcome;
   function showWelcome() {
     if (LS.get("rivis-welcome", "") === "done") return;
     const name = (state && state.product.name) || "Rivis";
@@ -1591,9 +1635,9 @@
       ${mapTable(MAPPING)}
       <div class="btns" style="justify-content:flex-end;margin-top:12px"><button class="b" id="w-keys">Shortcuts</button><button class="b p" id="w-ok">Got it</button></div>`;
     $("welcome").classList.add("open");
-    $("w-ok").onclick = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); };
-    $("w-keys").onclick = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); openHelp("keys"); };
-    root.querySelectorAll("#welcome [data-go]").forEach((a) => (a.onclick = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); goTo(a.dataset.go); }));
+    $("w-ok").onclick = closeWelcome;
+    $("w-keys").onclick = () => { closeWelcome(); openHelp("keys"); };
+    root.querySelectorAll("#welcome [data-go]").forEach((a) => (a.onclick = () => { closeWelcome(); goTo(a.dataset.go); }));
   }
 
   // empty list → teach how to connect, with the exact commands for the active project
@@ -1624,6 +1668,7 @@
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Enter" && !typing) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
     if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey && !typing) { e.preventDefault(); e.stopPropagation(); openHelp("keys"); return; }
     if (e.key === "Escape" && $("help").classList.contains("open")) { e.stopPropagation(); closeHelp(); }
+    else if (e.key === "Escape" && $("welcome").classList.contains("open")) { e.stopPropagation(); closeWelcome(); }
   }, true);
   setInterval(() => { try { drawEmptyList(); } catch (err) { /* cosmetic */ } }, 1500);
   setTimeout(showWelcome, 900);
