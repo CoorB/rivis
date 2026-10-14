@@ -475,3 +475,5 @@ footer .label[data-rv-tone="warn"] { color: var(--rv-warn); background: var(--rv
 /* plain-language tab names ("Flow List" → Calls …): panel.js sets data-rv; React's text stays underneath */
 #container header nav.nav-tabs-lg a[data-rv] { font-size: 0; }
 #container header nav.nav-tabs-lg a[data-rv]::before { content: attr(data-rv); font-size: 13px; }
+/* room for the Tools button (panel.js, fixed at the right end of this row) */
+:root:not([data-skin="off"]) #container > header > div:not(:empty) { padding-right: 132px; }

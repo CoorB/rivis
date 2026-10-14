@@ -103,12 +103,13 @@
     :focus-visible { outline: 2px solid var(--rv-focus); outline-offset: 1px; }
 
     /* launcher */
-    .fab { position: fixed; right: 18px; bottom: 38px; z-index: 2147483000; display: flex; align-items: center; gap: 8px; background: var(--rv-accent); color: var(--rv-accent-fg);
-           border: 0; border-radius: var(--rv-r-pill); padding: 8px 16px 8px 10px; font-weight: 600; font-size: 13px; cursor: pointer; box-shadow: var(--rv-shadow-2);
-           transition: transform var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease); }
+    /* the tools button lives in the toolbar row (placeBars sets --fab-top): a floating button used to cover the time column of the last rows */
+    .fab { position: fixed; top: var(--fab-top, 46px); right: calc(var(--open-w, 0px) + 12px); z-index: 2147483000; display: flex; align-items: center; gap: 7px; height: 32px; background: var(--rv-accent); color: var(--rv-accent-fg);
+           border: 0; border-radius: var(--rv-r-pill); padding: 0 13px 0 5px; font-weight: 600; font-size: 12.5px; cursor: pointer; box-shadow: var(--rv-shadow-1);
+           transition: transform var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease), right var(--rv-dur) var(--rv-ease); }
     .fab:hover { background: var(--rv-accent-hover); transform: translateY(-1px); }
     .fab:active { transform: none; }
-    .fab .mark { width: 22px; height: 22px; border-radius: 7px; background: var(--rv-accent-fg); color: var(--rv-accent); display: grid; place-items: center; }
+    .fab .mark { width: 22px; height: 22px; border-radius: 50%; background: var(--rv-accent-fg); color: var(--rv-accent); display: grid; place-items: center; }
     .fab .mark svg { width: 15px; height: 15px; stroke-width: 2.2; }
     .fab .dot { width: 8px; height: 8px; border-radius: 50%; background: #ffd166; box-shadow: 0 0 0 2px color-mix(in srgb, #ffd166 35%, transparent); }
     .fab.paused { background: var(--rv-warn); color: var(--rv-warn-fg); }
@@ -159,6 +160,18 @@
     .fstrip .fchip button:hover { background: color-mix(in srgb, var(--rv-accent) 22%, transparent); }
     .fstrip .cnt2 { margin-left: auto; font-variant-numeric: tabular-nums; }
     .fstrip .lnk { font-size: 12px; }
+
+
+    /* right-click menu on a call */
+    .cmenu { position: fixed; z-index: 2147483004; min-width: 232px; display: none; padding: 4px; background: var(--rv-surface); color: var(--rv-text); border: 1px solid var(--rv-border); border-radius: var(--rv-r-lg); box-shadow: var(--rv-shadow-3); font-size: 12.5px; }
+    .cmenu.open { display: block; animation: pop var(--rv-dur) var(--rv-ease); }
+    .cmenu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 10px; border: 0; background: none; border-radius: var(--rv-r-md); color: inherit; text-align: left; cursor: pointer; }
+    .cmenu button:hover, .cmenu button:focus-visible { background: var(--rv-accent-soft); color: var(--rv-accent-text); outline: none; }
+    .cmenu button:disabled { opacity: .4; pointer-events: none; }
+    .cmenu button.d:hover, .cmenu button.d:focus-visible { background: var(--rv-danger-soft); color: var(--rv-danger); }
+    .cmenu button kbd { margin-left: auto; font-size: 10.5px; }
+    .cmenu hr { border: 0; border-top: 1px solid var(--rv-border); margin: 4px 2px; }
+    .cmenu .hd { padding: 4px 10px 6px; color: var(--rv-text-3); font-size: 11px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     /* drawer */
     .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: var(--drawer-w, 460px); max-width: 100vw; z-index: 2147483001; background: var(--rv-surface); color: var(--rv-text);
@@ -352,7 +365,7 @@
     code { font-family: var(--rv-mono); font-size: 11.5px; background: var(--rv-surface-2); border-radius: 4px; padding: 1px 5px; }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0ms !important; transition-duration: 0ms !important; } }
   </style>
-  <button class="fab" id="fab" aria-label="Open the tools drawer"><span class="mark">${ico("mark")}</span><span id="fablabel">Rivis</span><span class="dot" id="fabdot" style="display:none"></span></button>
+  <button class="fab" id="fab" aria-label="Tools: Map Local, breakpoints, network conditions, scripts" title="Tools — Map Local, breakpoints, network conditions, scripts (Alt+Shift+P)"><span class="mark">${ico("sliders")}</span><span id="fablabel">Tools</span><span class="dot" id="fabdot" style="display:none"></span></button>
   <div class="brand" id="brand"><span class="mark">${ico("mark")}</span><b id="bname">Rivis</b><span class="proj" id="bproj"></span>
     <button class="ib" id="btheme" title="Theme">${ico("auto")}</button><button class="ib" id="bhelp" title="Help, shortcuts and settings  (?)">${ico("help")}</button></div>
   <div class="sbar" id="sbar"><div class="sbox" id="sbox">${ico("search", "sm")}<input id="sq" type="text" placeholder="Filter: host, path or ~filter" aria-label="Filter calls: host or part of a URL, or a ~filter expression" spellcheck="false" autocomplete="off" autocapitalize="off">
@@ -360,6 +373,7 @@
     <button class="ib" id="strash" aria-label="Clear all calls" title="Clear all calls from the list">${ico("trash")}</button></div>
   <div class="spop" id="spop" role="status"></div>
   <div class="fstrip" id="fstrip"></div>
+  <div class="cmenu" id="cmenu" role="menu" aria-label="Call actions"></div>
   <div class="drawer" id="drawer">
     <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><label class="pj" title="Choose which project's calls the list shows">Show<select id="project" aria-label="Project shown in the call list"></select></label><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button></header>
     <nav>
@@ -489,7 +503,8 @@
     const options = `<option value="__all" ${state.project_only ? "" : "selected"}>All traffic</option>` +
       state.projects.filter((p) => p.id !== "default").map((p) => `<option value="${esc(p.id)}" ${state.project_only && p.id === state.view_project ? "selected" : ""}>${esc(p.label || p.id)} only</option>`).join("");
     if ($("project").innerHTML !== options) $("project").innerHTML = options;
-    $("fablabel").textContent = state.paused.length ? `${label} · ${state.paused.length} paused` : label;
+    $("fablabel").textContent = state.paused.length ? `${state.paused.length} paused` : "Tools";
+    $("fab").title = active ? "Tools — rules, breakpoints or network conditions are switched on (Alt+Shift+P)" : "Tools — Map Local, breakpoints, network conditions, scripts (Alt+Shift+P)";
   }
 
   // ───────────── This call ─────────────
@@ -1305,10 +1320,69 @@
     host.style.setProperty("--sb-left", left + "px");
     host.style.setProperty("--sb-w", Math.max(200, Math.min(440, room - 34)) + "px");   // 34 = the clear-list button
     host.style.setProperty("--hb", hb + "px");
+    const rib = hdr.querySelector(":scope > div"), rr = rib ? rib.getBoundingClientRect() : null;
+    host.style.setProperty("--fab-top", Math.round(rr && rr.height > 4 ? rr.top + (rr.height - 32) / 2 : hb + 8) + "px");
     $("sbar").style.top = Math.round(nr.top + (nr.height - 30) / 2) + "px";
     $("spop").style.top = Math.round(nr.top + (nr.height - 30) / 2 + 36) + "px";
   }
   wireSearch();
+
+
+  // ───────────── Right-click on a call (the place Proxyman users reach for first) ─────────────
+  const closeCallMenu = () => $("cmenu").classList.remove("open");
+  async function openCallMenu(x, y, tr) {
+    const mf = flowOf(tr); if (!mf) return;
+    if (!tr.classList.contains("selected")) tr.click();                  // select it first, exactly like a left click
+    const f = await flowsById(mf.id);
+    const m = $("cmenu"), mod = KMOD;
+    const isHttp = !!f && f.type === "http", hostName = isHttp ? f.request.pretty_host : ((f && (f.server_conn || {}).sni) || ((f && f.server_conn && f.server_conn.address) || [""])[0] || "");
+    const item = (k, label, icon, extra = "", cls = "", dis = false) => `<button role="menuitem" data-k="${k}" class="${cls}" ${dis ? "disabled" : ""}>${ico(icon, "sm")}${label}${extra}</button>`;
+    const focused = state && isHttp && state.focus_host === hostName;
+    m.innerHTML = (isHttp
+      ? `<div class="hd">${esc(f.request.method)} ${esc(hostName)}${esc(f.request.path.split("?")[0])}</div>` +
+        item("map", "Map Local this call…", "map", "", "", !f.response) + item("bp", "Pause on this call (Breakpoint)", "bp") +
+        `<hr>` + item("repeat", "Repeat", "retry", `<kbd>${mod} ↵</kbd>`) + item("retry", "Edit &amp; Repeat…", "compose", `<kbd>${KALT} ${KSHIFT} ↵</kbd>`) + item("cmpA", "Compare: set as A", "cmp") +
+        `<hr>` + item("curl", "Copy as cURL", "call") + item("url", "Copy URL", "call") +
+        `<hr>` + item("host", focused ? "Show all hosts again" : "Show only this host", "search") + item("tls", "Stop decrypting this host", "lock")
+      : `<div class="hd">${esc(hostName || "Host-only row")} — not decrypted</div>` + item("tlson", "Decrypt this host", "unlock")) +
+      `<hr>` + item("del", "Delete this call", "trash", "", "d");
+    m.classList.add("open"); openCallMenu.at = Date.now();
+    const w = m.offsetWidth, h = m.offsetHeight;
+    m.style.left = Math.max(6, Math.min(x, window.innerWidth - w - 6)) + "px"; m.style.top = Math.max(6, Math.min(y, window.innerHeight - h - 6)) + "px";
+    const first = m.querySelector("button:not(:disabled)"); if (first) first.focus();
+    m.querySelectorAll("button").forEach((b) => (b.onclick = async () => {
+      closeCallMenu();
+      const k = b.dataset.k, id = mf.id;
+      if (k === "map") { const res = await run("mock", { flow_id: id }, (r) => (r.existing ? "Opened existing Map Local '" : "Map Local '") + r.name + "' is on"); if (res) { if (!$("drawer").classList.contains("open")) { setOpen(true); } openEditor(res.name); } }
+      else if (k === "bp") run("bp_add", { flow_id: id, request: true, response: true }, "Breakpoint on — matching calls will pause");
+      else if (k === "repeat") run("retry", { flow_id: id, edits: {} }, "Repeated — the new call is at the bottom of the list");
+      else if (k === "retry") openRetry(id);
+      else if (k === "cmpA") { cmpA = { id, label: f.request.method + " " + hostName + f.request.path }; openDrawer("cmp"); toast("Now select another call and press Compare"); }
+      else if (k === "curl" || k === "url") copyExport(id, k);
+      else if (k === "host") run("focus_host", { host: focused ? null : hostName }, focused ? "Showing all hosts" : "Showing only " + hostName);
+      else if (k === "tls" || k === "tlson") run("tls_host", { flow_id: id, host: hostName, decrypt: k === "tlson" }, (r) => r.message);
+      else if (k === "del" && confirm("Delete this call from the list?")) {
+        try { const r = await fetch("./flows/" + id, { method: "DELETE", credentials: "same-origin", headers: { "X-XSRFToken": xsrf() } }); if (!r.ok) throw new Error("HTTP " + r.status); toast("Call deleted"); }
+        catch (err) { toast("Could not delete: " + err.message, true); }
+      }
+    }));
+  }
+  document.addEventListener("contextmenu", (e) => {
+    const tr = e.target.closest && e.target.closest(".flow-table tbody tr");
+    if (!tr || !flowOf(tr)) { closeCallMenu(); return; }
+    e.preventDefault(); openCallMenu(e.clientX, e.clientY, tr);
+  }, true);
+  // selecting the row scrolls / re-lays-out the list for a moment: only outside clicks, a real scroll later, or leaving the window close the menu
+  ["mousedown", "scroll", "blur", "resize"].forEach((t) => window.addEventListener(t, (e) => {
+    if (t === "mousedown" ? e.composedPath().includes($("cmenu")) : Date.now() - openCallMenu.at < 700) return;
+    closeCallMenu();
+  }, true));
+  $("cmenu").addEventListener("keydown", (e) => {
+    const bs = [...$("cmenu").querySelectorAll("button:not(:disabled)")], i = bs.indexOf(root.activeElement);
+    if (e.key === "Escape") { closeCallMenu(); e.preventDefault(); }
+    else if (e.key === "ArrowDown") { bs[(i + 1) % bs.length].focus(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { bs[(i - 1 + bs.length) % bs.length].focus(); e.preventDefault(); }
+  });
 
   // ───────────── Edit & Retry (request editor in the sheet) ─────────────
   async function openRetry(id) {
@@ -1787,10 +1861,12 @@
       [kb(KALT, KSHIFT, "E"), "TLS decryption list (SSL proxying)"],
       [kb(KALT, KSHIFT, "S"), "Scripts"],
       [kb(KALT, KSHIFT, "D"), "Compare (diff) two calls"],
-      [kb(KALT, KSHIFT, "F"), "Search / filter the list"],
+      [kb(KMOD, "F"), "Filter the list — Esc clears"],
+      [kb(KALT, KSHIFT, "F"), "Filter the list (same)"],
       [kb(KMOD, "↵"), "Repeat the selected call"],
       [kb(KALT, KSHIFT, "↵"), "Edit & Repeat the selected call"],
       [kb("?"), "This sheet"],
+      ["Right-click a call", "Map Local, Breakpoint, Repeat, Copy as cURL, Delete…"],
     ]],
     ["Built-in list shortcuts (click the list first)", [
       [kb("↑") + " " + kb("↓") + " or " + kb("k") + " " + kb("j"), "Previous / next call"],
@@ -1808,7 +1884,9 @@
     ["Repeat / Edit & Repeat", "Repeat: " + kb(KMOD, "↵") + " or " + kb("r") + ". Edit: <b>This call → Edit &amp; Retry…</b>", "call"],
     ["Diff two requests", "<b>Compare</b> tab: <i>Compare: set as A</i> on a call, then select another", "cmp"],
     ["Export HAR", "<b>Sessions</b> or <b>Collections</b> → <i>HAR</i>", "sess"],
-    ["Filter by host / app", "<b>This call → Show only host</b>, or the search box " + kb(KALT, KSHIFT, "F"), "filter"],
+    ["Filter by host / app", "The filter box at the top (" + kb(KMOD, "F") + "): type a host or part of a URL. Or <b>right-click → Show only this host</b>", "filter"],
+    ["Clear the session", "The trash button next to the filter box (asks first)", "filter"],
+    ["Right-click a call", "Map Local, Breakpoint, Repeat, Copy as cURL, Show only this host…", "call"],
     ["SSL Proxying list", "<b>Network → TLS decryption</b> (decrypt all, or an allow / deny list)", "net"],
     ["Scripting", "<b>Scripts</b> tab (JavaScript or Python, per project)", "scripts"],
     ["Save a session", "<b>Sessions</b> tab → save, add a note, reopen later", "sess"],
