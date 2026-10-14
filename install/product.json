@@ -1,0 +1,6 @@
+{
+  "name": "Rivis",
+  "cli": "rivis",
+  "env_prefix": "RIVIS",
+  "state_dir": "~/.rivis"
+}
