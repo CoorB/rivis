@@ -9,6 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import LiveCase, Instance, wait_for
+import upstream
 
 
 def seed_profile(inst):
@@ -259,6 +260,24 @@ class Sessions(LiveCase):
         self.assertTrue(any(u.endswith("/json/small") for u in urls), urls)
         e = next(e for e in doc["har"]["log"]["entries"] if e["request"]["url"].endswith("/json/small"))
         self.assertEqual(json.loads(e["response"]["content"]["text"])["flag"], False)
+
+    def test_har_export_redacts_secrets_unless_explicitly_included(self):
+        # F-08: a HAR goes to Downloads and from there to tickets, so credentials are redacted by default
+        for p in ("/jwt/setcookie", "/jwt/body", "/jwt/header"):
+            self.fetch(p)
+        self.panel.ok("sess_save", {"name": "sec"})
+        doc = self.panel.ok("sess_har", {"name": "sec"})
+        self.assertTrue(doc["redacted"])
+        dumped = json.dumps(doc["har"])
+        self.assertNotIn(upstream.JWT_FRESH, dumped)
+        self.assertNotIn(upstream.JWT_EXPIRED, dumped)
+        body = next(e for e in doc["har"]["log"]["entries"] if e["request"]["url"].endswith("/jwt/body"))
+        self.assertEqual(json.loads(body["response"]["content"]["text"])["access_token"], "<redacted>")
+        # the opt-in is per request and must be exactly true
+        self.assertTrue(self.panel.ok("sess_har", {"name": "sec", "include_secrets": "yes"})["redacted"])
+        raw = self.panel.ok("sess_har", {"name": "sec", "include_secrets": True})
+        self.assertFalse(raw["redacted"])
+        self.assertIn(upstream.JWT_FRESH, json.dumps(raw["har"]))
 
     def test_save_does_not_include_paused_calls_and_visible_only(self):
         self.fetch("/json/small")

@@ -823,19 +823,14 @@
       <h4>Import</h4>
       <div class="btns" style="margin-top:0"><input type="file" id="chf" accept=".har,application/json" aria-label="HAR file">
         <input type="text" id="chn" placeholder="name" style="width:120px"><button class="b" id="cimp">Import HAR</button></div>
+      ${harSecretsBox("chsec")}
       <p class="sub">Stored in ${esc(state.project_state)}/collections · recordings stay on this machine (no Git sync).</p>`;
     $("crec") && ($("crec").onclick = () => run("coll_record", { name: $("cname").value, record_match: $("cmatch").value }, "Recording into " + $("cname").value));
     $("cstop") && ($("cstop").onclick = () => run("coll_stop", {}, "Recording stopped"));
     $("cstrict").onchange = () => run("coll_strict", { strict: $("cstrict").checked }, $("cstrict").checked ? "Strict replay on" : "Strict replay off");
     m.querySelectorAll("[data-ci]").forEach((cb) => (cb.onchange = () => run("coll_replay", { name: c.items[cb.dataset.ci].name, enabled: cb.checked }, cb.checked ? "Replaying " + c.items[cb.dataset.ci].name : "Replay off")));
     m.querySelectorAll("[data-cdel]").forEach((b) => (b.onclick = () => { const n = c.items[b.dataset.cdel].name; if (confirm("Delete collection '" + n + "'?")) run("coll_delete", { name: n }, "Deleted " + n); }));
-    m.querySelectorAll("[data-cexp]").forEach((b) => (b.onclick = async () => {
-      const r = await run("coll_export", { name: c.items[b.dataset.cexp].name });
-      if (!r) return;
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([JSON.stringify(r.har, null, 2)], { type: "application/json" }));
-      a.download = r.filename; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    }));
+    m.querySelectorAll("[data-cexp]").forEach((b) => (b.onclick = () => downloadHar("coll_export", c.items[b.dataset.cexp].name, "chsec")));
     m.querySelectorAll("[data-cview]").forEach((b) => (b.onclick = () => { const n = c.items[b.dataset.cview].name; collOpen = collOpen === n ? null : n; render(); }));
     $("cimp").onclick = async () => {
       const file = $("chf").files[0];
@@ -885,6 +880,21 @@
     }
   }
 
+  // ───────────── HAR download (secrets redacted unless ticked for this one export; never remembered) ─────────────
+  const harSecretsBox = (id) => `<div class="btns"><label class="sub"><input type="checkbox" id="${id}"> Include secrets in the next HAR
+    ${info("By default a HAR export replaces Authorization, cookies, API keys, JWTs and fields such as password, otp, pin and token with <redacted>. Tick this only for an export that stays on this machine; it resets after each download.")}</label></div>`;
+  async function downloadHar(op, name, boxId) {
+    const box = $(boxId), withSecrets = !!(box && box.checked);
+    if (withSecrets && !confirm("This HAR will contain tokens, cookies and passwords in clear text.\n\nKeep it on this machine — never attach it to a ticket or chat. Continue?")) return;
+    const r = await run(op, { name, include_secrets: withSecrets });
+    if (!r) return;
+    if (box) box.checked = false;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(r.har, null, 2)], { type: "application/json" }));
+    a.download = r.filename; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast(r.redacted ? "HAR saved to Downloads (secrets redacted)" : "HAR saved to Downloads — contains secrets!", !r.redacted);
+  }
+
   // ───────────── Sessions: save / reload whole captures ─────────────
   function renderSess(m) {
     const ss = state.sessions || [];
@@ -901,6 +911,7 @@
             <div class="sub" data-note="${i}" title="click to edit" style="cursor:text;white-space:normal">${x.note ? ico("note", "sm") + " " + esc(x.note) : "<i>add a note…</i>"}</div></div>
           <button class="b" data-sload="${i}">Open</button><button class="b" data-shar="${i}">HAR</button><button class="b d" data-sdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
       : emptyState("sess", "No saved sessions yet", "Name the capture above and <b>Save session</b>. Open brings it back into the list; HAR exports it.")}
+      ${harSecretsBox("shsec")}
       <p class="sub">Stored in ${esc(state.project_state)}/sessions ${info("Open adds the saved calls to the list (you can choose to replace it first). Per-call notes and bookmarks: use the Comment tab and the Mark button on a call — they are saved with the session.")}</p>`;
     $("ssave").onclick = () => run("sess_save", { name: $("sn").value.trim(), note: $("snote").value, visible_only: $("svis").checked }, (x) => "Saved " + x.count + " calls");
     m.querySelectorAll("[data-sload]").forEach((b) => (b.onclick = () => {
@@ -913,13 +924,7 @@
       const x = ss[d.dataset.note]; const note = prompt("Note for " + x.name, x.note || "");
       if (note !== null) run("sess_note", { name: x.name, note }, "Note saved");
     }));
-    m.querySelectorAll("[data-shar]").forEach((b) => (b.onclick = async () => {
-      const r = await run("sess_har", { name: ss[b.dataset.shar].name });
-      if (!r) return;
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([JSON.stringify(r.har, null, 2)], { type: "application/json" }));
-      a.download = r.filename; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    }));
+    m.querySelectorAll("[data-shar]").forEach((b) => (b.onclick = () => downloadHar("sess_har", ss[b.dataset.shar].name, "shsec")));
   }
 
   // ───────────── Per-project scripts ─────────────
