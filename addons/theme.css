@@ -436,3 +436,37 @@ footer .label[title="HTTP Proxy Server Address"] { display: none !important; }
 footer .label[data-rv] { font-size: 0; font-family: var(--rv-font); }
 footer .label[data-rv]::before { content: attr(data-rv); font-size: 11.5px; font-weight: 600; }
 footer .label[data-rv-tone="warn"] { color: var(--rv-warn); background: var(--rv-warn-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rv-warn) 30%, transparent); }
+
+/* ===== pass 2: slim top bar (tabs row + one-row toolbar instead of mitmweb's 95px ribbon) ===== */
+:root { --rv-bar-h: 40px; --rv-tool-h: 42px; }
+#container > header { padding-top: 0; }
+#container > header nav.nav-tabs { height: var(--rv-bar-h); padding: 0 12px; align-items: stretch; background: var(--rv-bg); border-bottom: 1px solid var(--rv-border); }
+#container header nav.nav-tabs-lg a, #container header nav.nav-tabs-lg a.special {
+  display: inline-flex; align-items: center; padding: 0 12px; margin: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: 13px;
+}
+#container header nav.nav-tabs-lg a.special { font-weight: 600; color: var(--rv-text); margin-right: 4px; }
+#container header nav.nav-tabs-lg a.active, #container header nav.nav-tabs-lg a.special.active { background: transparent; box-shadow: inset 0 -2px 0 var(--rv-accent); }
+#container header nav.nav-tabs-lg a:hover { background: transparent; color: var(--rv-text); box-shadow: inset 0 -2px 0 var(--rv-border-strong); }
+#container header nav.nav-tabs-lg a.active:hover { box-shadow: inset 0 -2px 0 var(--rv-accent); }
+#container > header > div:not(:empty) { height: auto; min-height: var(--rv-tool-h); display: flex; align-items: center; padding: 0 8px; border-bottom: 1px solid var(--rv-border); box-shadow: none; background: var(--rv-surface); overflow: visible; }
+.flow-menu, .main-menu, header > div > div { display: flex; align-items: center; flex-wrap: wrap; width: 100%; }
+.menu-group, .main-menu .menu-group { height: auto; width: auto; margin: 0; padding: 4px 6px; display: flex; align-items: center; border-right: 0; }
+.menu-group + .menu-group { border-left: 1px solid var(--rv-border); }
+.menu-group + .menu-group:before { display: none; }
+.menu-legend { display: none; }                                  /* the group captions ("Flow Modification"…) carried no information the buttons don't */
+.menu-content { height: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.menu-content > .btn, .menu-content > a > .btn { height: 30px; margin: 0; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; text-align: left; border-radius: var(--rv-r-md); }
+.menu-content > .btn i, .menu-content > a > .btn i { display: inline-block; font-size: 14px; margin: 0; }
+.menu-content > .btn.btn-sm { height: 30px; padding: 0 9px; }
+.main-menu .btn-sm { margin-top: 0; }
+.filter-input { margin: 0 4px 0 0; width: 220px; height: 30px; display: flex; align-items: stretch; }
+.filter-input .input-group-addon { display: flex; align-items: center; width: 30px; padding: 0 0 0 9px; }
+.filter-input input.form-control { flex: 1; min-width: 0; height: 30px; padding: 0 8px; font-size: 12px; }
+.menu-entry { height: auto; padding: 4px 10px; }
+.menu-entry label { display: inline-flex; align-items: center; gap: 4px; }
+/* narrow window or drawer open: icons only, labels live in the tooltips (panel.js sets title on every button) */
+:root[data-ribbon="icons"] .menu-content > .btn, :root[data-ribbon="icons"] .menu-content > a > .btn { font-size: 0; gap: 0; width: 32px; padding: 0; justify-content: center; }
+:root[data-ribbon="icons"] .menu-content > .btn i, :root[data-ribbon="icons"] .menu-content > a > .btn i { font-size: 15px; }
+/* the always-visible search bar (panel.js) replaces mitmweb's own Search box, which only exists on the "Flow List" tab */
+:root[data-sbar="1"]:not([data-skin="off"]) .filter-input:has(> input[placeholder="Search"]) { display: none; }
+:root[data-sbar="1"][data-fstrip="1"]:not([data-skin="off"]) #container > header { margin-bottom: 28px; }

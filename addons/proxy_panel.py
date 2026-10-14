@@ -1018,6 +1018,13 @@ class ProxyPanel:
             self.project_only = bool(a.get("project_only"))
             self.show_dns = bool(a.get("show_dns"))
             self._write_view_filter()
+        elif op == "filter_check":     # the list filter is evaluated here: an invalid one closes mitmweb's websocket, so the panel asks first
+            from mitmproxy import flowfilter
+            try:
+                flowfilter.parse(str(a.get("filter") or ""))
+            except ValueError as e:
+                return {"ok": False, "error": str(e).replace("Invalid filter expression: ", "")[:200]}
+            return {"ok": True}
         elif op == "focus_host":       # "show only this host" / clear it
             self.focused_host = a.get("host") or None
             self._write_view_filter()

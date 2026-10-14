@@ -72,6 +72,8 @@
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     back: '<path d="M15 5l-7 7 7 7"/>',
     unlock: '<path d="M6 11h12v9H6z"/><path d="M9 11V8a3 3 0 0 1 5.8-1"/>',
+    search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
+    trash: '<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>',
   };
   const ico = (n, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ""}</svg>`;
   const LS = {   // remembered per browser; wrapped because localStorage throws in some private windows
@@ -115,7 +117,7 @@
     @keyframes pulse { 50% { opacity: .35; } }
 
     /* brand bar over mitmweb's header (product + project label, theme, help) */
-    .brand { position: fixed; top: 6px; right: 12px; z-index: 2147482000; display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 4px 0 10px;
+    .brand { position: fixed; top: 4px; right: 12px; z-index: 2147482000; display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 4px 0 10px;
              background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-pill); box-shadow: var(--rv-shadow-1); color: var(--rv-text); font-size: 12.5px; transition: right var(--rv-dur) var(--rv-ease); }
     .brand .mark { width: 18px; height: 18px; border-radius: 6px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; margin-right: 4px; }
     .brand .mark svg { width: 12px; height: 12px; stroke-width: 2.4; }
@@ -126,6 +128,37 @@
           transition: background var(--rv-dur) var(--rv-ease), color var(--rv-dur) var(--rv-ease); }
     .ib:hover { background: var(--rv-surface-2); color: var(--rv-text); }
     .ib.on { background: var(--rv-accent-soft); color: var(--rv-accent-text); }
+
+
+    /* always-visible search: sits in mitmweb's top row after the tabs, wired to mitmweb's own filter (see "Search bar" below) */
+    .sbar { position: fixed; z-index: 2147482000; top: 5px; left: var(--sb-left, 360px); width: var(--sb-w, 300px); height: 30px; display: flex; align-items: center; gap: 4px; }
+    :host([data-skin="off"]) .sbar, :host([data-skin="off"]) .fstrip, :host(:not([data-sbar])) .sbar, :host(:not([data-sbar])) .fstrip { display: none; }
+    .sbox { flex: 1; min-width: 0; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 10px; background: var(--rv-surface); border: 1px solid var(--rv-control); border-radius: var(--rv-r-pill); color: var(--rv-text-3);
+            transition: border-color var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease); }
+    .sbox:focus-within { border-color: var(--rv-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rv-accent) 22%, transparent); color: var(--rv-accent-text); }
+    .sbox.bad { border-color: var(--rv-danger); }
+    .sbox.bad:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--rv-danger) 22%, transparent); }
+    .sbox input#sq { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; box-shadow: none; padding: 0; min-height: 0; height: 26px; font: 12.5px var(--rv-mono); color: var(--rv-text); border-radius: 0; }
+    .sbox input#sq::placeholder { font-family: var(--rv-font); }
+    .sbox kbd { font-size: 10.5px; padding: 0 5px; border-bottom-width: 1px; color: var(--rv-text-3); }
+    .sbox:focus-within kbd, .sbox.has kbd { display: none; }
+    .sbox .ib { width: 22px; height: 22px; flex: none; }
+    .sbox .ib[hidden], .sbox kbd[hidden] { display: none; }
+    .spop { position: fixed; z-index: 2147482500; top: 42px; left: var(--sb-left, 360px); width: max(var(--sb-w, 300px), 340px); background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-lg); box-shadow: var(--rv-shadow-2);
+            padding: 10px 12px; display: none; font-size: 12px; color: var(--rv-text-2); }
+    .spop.open { display: block; animation: pop var(--rv-dur) var(--rv-ease); }
+    .spop.err { border-color: var(--rv-danger); color: var(--rv-danger); background: var(--rv-surface); }
+    .spop h5 { margin: 0 0 6px; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--rv-text-3); }
+    .spop button.ex { display: flex; width: 100%; align-items: baseline; gap: 10px; border: 0; background: none; padding: 3px 4px; border-radius: var(--rv-r-sm); cursor: pointer; text-align: left; color: var(--rv-text-2); font-size: 12px; }
+    .spop button.ex:hover { background: var(--rv-accent-soft); color: var(--rv-accent-text); }
+    .spop button.ex code { background: transparent; padding: 0; min-width: 112px; color: var(--rv-text); font-size: 12px; }
+    .fstrip { position: fixed; z-index: 2147481900; left: 0; right: var(--open-w, 0px); top: var(--hb, 80px); height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 12px; background: var(--rv-surface-2); border-bottom: 1px solid var(--rv-border); font-size: 12px; color: var(--rv-text-2); overflow: hidden; white-space: nowrap; transition: right var(--rv-dur) var(--rv-ease); }
+    .fstrip .fchip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 4px 0 9px; border-radius: var(--rv-r-pill); background: var(--rv-accent-soft); color: var(--rv-accent-text); font-weight: 600; max-width: 260px; }
+    .fstrip .fchip span { overflow: hidden; text-overflow: ellipsis; }
+    .fstrip .fchip button { border: 0; background: none; color: inherit; width: 16px; height: 16px; border-radius: 50%; padding: 0; display: grid; place-items: center; cursor: pointer; flex: none; }
+    .fstrip .fchip button:hover { background: color-mix(in srgb, var(--rv-accent) 22%, transparent); }
+    .fstrip .cnt2 { margin-left: auto; font-variant-numeric: tabular-nums; }
+    .fstrip .lnk { font-size: 12px; }
 
     /* drawer */
     .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: var(--drawer-w, 460px); max-width: 100vw; z-index: 2147483001; background: var(--rv-surface); color: var(--rv-text);
@@ -312,6 +345,11 @@
   <button class="fab" id="fab" aria-label="Open the tools drawer"><span class="mark">${ico("mark")}</span><span id="fablabel">Rivis</span><span class="dot" id="fabdot" style="display:none"></span></button>
   <div class="brand" id="brand"><span class="mark">${ico("mark")}</span><b id="bname">Rivis</b><span class="proj" id="bproj"></span>
     <button class="ib" id="btheme" title="Theme">${ico("auto")}</button><button class="ib" id="bhelp" title="Help, shortcuts and settings  (?)">${ico("help")}</button></div>
+  <div class="sbar" id="sbar"><div class="sbox" id="sbox">${ico("search", "sm")}<input id="sq" type="text" placeholder="Filter: host, path or ~filter" aria-label="Filter calls: host or part of a URL, or a ~filter expression" spellcheck="false" autocomplete="off" autocapitalize="off">
+      <button class="ib" id="sclear" hidden aria-label="Clear filter" title="Clear filter (Esc)">${ico("x", "sm")}</button><kbd>${/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "") ? "⌘F" : "Ctrl F"}</kbd></div>
+    <button class="ib" id="strash" aria-label="Clear all calls" title="Clear all calls from the list">${ico("trash")}</button></div>
+  <div class="spop" id="spop" role="status"></div>
+  <div class="fstrip" id="fstrip"></div>
   <div class="drawer" id="drawer">
     <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><label class="pj" title="Choose which project's calls the list shows">Show<select id="project" aria-label="Project shown in the call list"></select></label><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button></header>
     <nav>
@@ -907,7 +945,7 @@
   const skinOn = () => LS.get("rivis-skin", LS.get("proxy-restyle", "on")) !== "off";
   const themeMode = () => { const v = LS.get("rivis-theme", "system"); return v === "light" || v === "dark" ? v : "system"; };
   const compactOn = () => LS.get("rivis-compact", "off") === "on";
-  const syncHost = () => ["data-theme", "data-density"].forEach((a) => { const v = DOC.getAttribute(a); if (v) host.setAttribute(a, v); else host.removeAttribute(a); });
+  const syncHost = () => ["data-theme", "data-density", "data-skin"].forEach((a) => { const v = DOC.getAttribute(a); if (v) host.setAttribute(a, v); else host.removeAttribute(a); });
   const THEME_ICON = { system: "auto", light: "sun", dark: "moon" };
   function applyTheme(mode) {
     LS.set("rivis-theme", mode);
@@ -1097,9 +1135,159 @@
     const w = t.getBoundingClientRect().width;
     if (w) { setAttr(DOC, "data-narrow", w < 520 ? "1" : null); setAttr(DOC, "data-wide", w > 640 ? "1" : null); }
   };
-  window.addEventListener("resize", sizeBuckets);
-  new MutationObserver(() => { clearTimeout(tagCells._t); tagCells._t = setTimeout(() => { tagCells(); sizeBuckets(); }, 60); })
+  window.addEventListener("resize", () => { sizeBuckets(); placeBars(); });
+  new MutationObserver(() => { clearTimeout(tagCells._t); tagCells._t = setTimeout(() => { tagCells(); sizeBuckets(); placeBars(); }, 60); })
     .observe(document.body, { childList: true, subtree: true, characterData: true });
+
+
+  // ───────────── Search bar: always visible, drives mitmweb's own list filter ─────────────
+  // mitmweb keeps the filter in its redux store (ui.filter.search) and sends it to the server, which evaluates it.
+  // Its own Search box only exists on the "Flow List" tab (it vanishes as soon as a call is selected), so this bar
+  // finds the store through the React root (read-only fiber walk, like flowOf) and dispatches the same action the
+  // stock box does.  An INVALID filter makes the server close the websocket, so every filter is checked with the
+  // server's own parser first (op filter_check).  Plain words become  ~u 'word'  (URL contains).
+  const reFilter = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\/g, "\\\\").replace(/'/g, "\\'");   // regex-escape, then the filter parser's own un-escaping (HANDOVER §6 #3)
+  const isExpr = (t) => /~[A-Za-z]/.test(t) || /^[!(]/.test(t) || /\s[&|]\s/.test(t);
+  const toFilter = (text) => {
+    const t = text.trim();
+    if (!t) return "";
+    if (isExpr(t)) return t;
+    return t.split(/\s+/).map((w) => "~u '" + reFilter(w) + "'").join(" & ");
+  };
+  let storeRef = null;
+  const mwStore = () => {
+    if (storeRef) return storeRef;
+    const root = document.getElementById("mitmproxy"), key = root && Object.keys(root).find((k) => k.startsWith("__reactContainer$"));
+    if (!key) return null;
+    const stack = [root[key]];
+    for (let n = 0; stack.length && n < 800; n++) {
+      const f = stack.pop(); if (!f) continue;
+      const pr = f.memoizedProps;
+      if (pr && pr.store && typeof pr.store.getState === "function" && typeof pr.store.dispatch === "function") { storeRef = pr.store; return storeRef; }
+      if (f.sibling) stack.push(f.sibling);
+      if (f.child) stack.push(f.child);
+    }
+    return null;
+  };
+  const storeSearch = () => { const st = mwStore(); try { return (st && st.getState().ui.filter.search) || ""; } catch (e) { return ""; } };
+  const checked = new Map();                 // filter text → {ok, error}
+  let sbSeq = 0, lastSent = "", lastTyped = "";
+  const sq = () => $("sq");
+  function spop(html, err) { const p = $("spop"); p.innerHTML = html || ""; p.classList.toggle("open", !!html); p.classList.toggle("err", !!err); }
+  function examplesHTML() {
+    const ex = [["~m POST", "only POST calls"], ["~c 500", "status 500"], ["~q", "no response yet"], ["~u /api & ~m GET", "combine with  &  |  !"], ["~b token", "body contains a word"], ["~h x-request-id", "a header contains…"]];
+    return `<h5>Type a host or part of a URL</h5><div class="sub" style="margin-bottom:8px">e.g. <code>postman-echo</code> or <code>/v2/cards</code> — it filters as you type. For more, use a <code>~</code> filter:</div>` +
+      ex.map(([c, d]) => `<button class="ex" data-ex="${esc(c)}"><code>${esc(c)}</code><span>${esc(d)}</span></button>`).join("");
+  }
+  async function commitSearch(raw) {
+    const seq = ++sbSeq, text = raw.trim(), f = toFilter(text), st = mwStore();
+    if (!st) { toast("Can't reach mitmweb's filter (version changed?). Use the Search box on the Flow List tab.", true); return; }
+    let res = f ? checked.get(f) : { ok: true };
+    if (!res) {
+      try { const r = await api("filter_check", { filter: f }); res = { ok: r.ok !== false, error: r.error }; }
+      catch (e) { res = { ok: false, error: e.message }; }
+      checked.set(f, res);
+      if (checked.size > 200) checked.delete(checked.keys().next().value);
+    }
+    if (seq !== sbSeq) return;                      // a newer keystroke is already in flight
+    $("sbox").classList.toggle("bad", !res.ok);
+    if (!res.ok) { spop(`Not a valid filter yet — the list keeps the last good one. Plain words always work; for a <code>~</code> filter, see <button class="lnk" data-ex-help>the examples</button>.`, true); $("spop").title = res.error || ""; return; }
+    spop(document.activeElement === host && !text ? examplesHTML() : "");
+    if (f !== lastSent) { lastSent = f; st.dispatch({ type: "ui/filters/setFilter", payload: f }); }
+    drawStrip();
+  }
+  let sqTimer = null;
+  const sbSync = () => {
+    const v = sq().value; $("sclear").hidden = !v; $("sbox").classList.toggle("has", !!v);
+  };
+  function wireSearch() {
+    const input = sq();
+    input.addEventListener("input", () => {
+      sbSync(); lastTyped = input.value; clearTimeout(sqTimer);
+      if (!input.value.trim()) { spop(examplesHTML()); }
+      sqTimer = setTimeout(() => commitSearch(input.value), 150);
+    });
+    input.addEventListener("focus", () => { if (!input.value.trim() && !$("sbox").classList.contains("bad")) spop(examplesHTML()); input.select(); });
+    input.addEventListener("blur", () => setTimeout(() => { if (root.activeElement !== input && !$("spop").matches(":hover")) spop(""); }, 120));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { clearTimeout(sqTimer); commitSearch(input.value); }
+      else if (e.key === "Escape") { e.preventDefault(); if (input.value) { input.value = ""; sbSync(); clearTimeout(sqTimer); commitSearch(""); spop(examplesHTML()); } else { input.blur(); spop(""); } }
+    });
+    $("sclear").onclick = () => { input.value = ""; sbSync(); commitSearch(""); input.focus(); };
+    $("spop").onmousedown = (e) => e.preventDefault();      // keep focus in the box while clicking an example
+    $("spop").onclick = (e) => {
+      if (e.target.closest("[data-ex-help]")) { spop(examplesHTML()); return; }
+      const b = e.target.closest("[data-ex]"); if (!b) return;
+      input.value = b.dataset.ex + " "; sbSync(); input.focus(); commitSearch(input.value);
+    };
+    $("strash").onclick = async () => {
+      const n = (mwStore() && mwStore().getState().flows.list.length) || 0;
+      if (!n) return toast("The list is already empty");
+      if (!confirm(`Clear all ${n} calls from the list?\n\nSaved sessions, rules and scripts are not affected.`)) return;
+      try { const r = await fetch("./clear", { method: "POST", credentials: "same-origin", headers: { "X-XSRFToken": xsrf() } }); if (!r.ok) throw new Error("HTTP " + r.status); toast("List cleared"); }
+      catch (err) { toast("Could not clear the list: " + err.message, true); }
+    };
+  }
+  const focusSearch = () => { const i = sq(); i.focus(); i.select(); };
+  // mitmweb (or the URL ?s=…) changed the filter behind our back → show it, unless the user is typing
+  function pullSearch() {
+    const st = mwStore(); if (!st) return;
+    const cur = storeSearch();
+    if (cur === lastSent) return;
+    lastSent = cur;
+    if (root.activeElement !== sq()) { sq().value = cur; lastTyped = cur; sbSync(); $("sbox").classList.remove("bad"); }
+    drawStrip();
+  }
+  // chips for everything that hides calls, so "my call vanished" has a visible answer (and a one-click undo)
+  function drawStrip() {
+    const el = $("fstrip"), st = mwStore();
+    const chips = [];
+    if (state) {
+      const label = (state.project && state.project.label) || state.view_project;
+      if (state.project_only) chips.push(["project", `Only ${label} calls`]);
+      if (state.focus_host) chips.push(["host", `Only ${state.focus_host}`]);
+      if (state.graphql_operation) chips.push(["gql", `GraphQL: ${state.graphql_operation}`]);
+    }
+    const searching = !!(st && storeSearch());
+    let counts = "";
+    if (st) { try { const f = st.getState().flows; counts = searching ? `${f.view.length} of ${f.list.length} calls match` : ""; } catch (e) { /* cosmetic */ } }
+    const sig = JSON.stringify([chips, searching, counts]);
+    const show = chips.length > 0 || searching;
+    if (drawStrip._sig !== sig) {
+      drawStrip._sig = sig;
+      el.innerHTML = (chips.length ? `<span>Showing</span>` : "") + chips.map(([k, t]) => `<span class="fchip"><span title="${esc(t)}">${esc(t)}</span><button data-un="${k}" aria-label="Show everything again: ${esc(t)}" title="Remove this limit">${ico("x", "sm")}</button></span>`).join("") +
+        (counts ? `<span class="cnt2">${esc(counts)} · <button class="lnk" data-un="search">Clear filter</button></span>` : "");
+      el.querySelectorAll("[data-un]").forEach((b) => (b.onclick = () => {
+        const k = b.dataset.un;
+        if (k === "search") { sq().value = ""; sbSync(); commitSearch(""); }
+        else if (k === "host") run("focus_host", { host: null }, "Showing all hosts");
+        else if (k === "gql") run("graphql_filter", { name: null }, "GraphQL filter cleared");
+        else run("view", { project_only: false, show_dns: state.show_dns }, "Showing all traffic");
+      }));
+    }
+    if (DOC.getAttribute("data-fstrip") !== (show ? "1" : null) && (show || DOC.hasAttribute("data-fstrip"))) { setAttr(DOC, "data-fstrip", show ? "1" : null); window.dispatchEvent(new Event("resize")); }
+    el.style.display = show ? "" : "none";
+  }
+  // fixed bars follow mitmweb's header: left edge after the tabs, right edge before the brand pill
+  function placeBars() {
+    const hdr = document.querySelector("#container > header");
+    const ready = !!hdr && !!mwStore();
+    if (host.hasAttribute("data-sbar") !== ready) { if (ready) host.setAttribute("data-sbar", ""); else host.removeAttribute("data-sbar"); setAttr(DOC, "data-sbar", ready ? "1" : null); }
+    if (!ready) return;
+    if (!placeBars._sub) { placeBars._sub = true; mwStore().subscribe(() => { clearTimeout(placeBars._t); placeBars._t = setTimeout(() => { pullSearch(); drawStrip(); }, 80); }); }
+    const nav = hdr.querySelector("nav"), nr = nav.getBoundingClientRect();
+    const hb = Math.round(hdr.getBoundingClientRect().bottom);
+    const brandL = $("brand").getBoundingClientRect().left;
+    setAttr(DOC, "data-ribbon", hdr.getBoundingClientRect().width < 900 ? "icons" : null);
+    hdr.querySelectorAll(".btn:not([title])").forEach((b) => { const t = b.textContent.replace(/[▾\s]+$/, "").trim(); if (t) b.title = t; });   // icon-only toolbar needs its names
+    const left = 356, room = brandL - left - 12;
+    host.style.setProperty("--sb-left", left + "px");
+    host.style.setProperty("--sb-w", Math.max(200, Math.min(440, room - 34)) + "px");   // 34 = the clear-list button
+    host.style.setProperty("--hb", hb + "px");
+    $("sbar").style.top = Math.round(nr.top + (nr.height - 30) / 2) + "px";
+    $("spop").style.top = Math.round(nr.top + (nr.height - 30) / 2 + 36) + "px";
+  }
+  wireSearch();
 
   // ───────────── Edit & Retry (request editor in the sheet) ─────────────
   async function openRetry(id) {
@@ -1492,7 +1680,7 @@
       const s = await api("state");
       state = s; badges();
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
-      await refreshFlows(); tagCells(); sizeBuckets();
+      await refreshFlows(); tagCells(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
       if (!pausedOpen && waiting.length && !$("pause").classList.contains("open")) openPaused(waiting[0].id);
       if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) { pausedOpen = null; $("pause").classList.remove("open"); }
@@ -1509,7 +1697,7 @@
     $("brand").style.right = open ? W + 12 + "px" : "";
     document.body.style.marginRight = open ? W + "px" : "";   // push mitmweb over instead of covering it
     document.body.style.width = open ? `calc(100% - ${W}px)` : "";
-    window.dispatchEvent(new Event("resize"));
+    window.dispatchEvent(new Event("resize")); placeBars();
   };
   window.addEventListener("resize", () => { if ($("drawer").classList.contains("open") && host.style.getPropertyValue("--drawer-w") !== drawerW() + "px") setOpen(true); });
   $("fab").onclick = () => {
@@ -1550,6 +1738,7 @@
     run("retry", { flow_id: id, edits: {} }, "Repeated — the new call is at the bottom of the list");
   };
   const focusFilter = () => {
+    if (skinOn() && host.hasAttribute("data-sbar")) return focusSearch();
     const link = [...document.querySelectorAll("header nav a")].find((a) => a.textContent.trim() === "Flow List");
     if (link) link.click();
     setTimeout(() => { const i = document.querySelector('.filter-input input[placeholder="Search"]'); if (i) { i.focus(); i.select(); } }, 80);
@@ -1681,6 +1870,7 @@
   window.addEventListener("keydown", (e) => {
     const t = e.composedPath ? e.composedPath()[0] : e.target;
     const typing = !!t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.code === "KeyF" && skinOn() && host.hasAttribute("data-sbar")) { e.preventDefault(); e.stopPropagation(); focusSearch(); return; }
     if (e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && CHORDS[e.code]) { e.preventDefault(); e.stopPropagation(); CHORDS[e.code][1](); return; }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Enter" && !typing) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
     if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey && !typing) { e.preventDefault(); e.stopPropagation(); openHelp("keys"); return; }
