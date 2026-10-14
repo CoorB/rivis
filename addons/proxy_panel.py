@@ -51,6 +51,7 @@ from proxy_common import (ACTIONS, PANEL_PROFILES, PRODUCT, SAFE_NAME, STATE_ROO
                           confined_path, project_profile, project_profiles, project_state,
                           tls_config, tls_covering, tls_update)
 from proxy_codegen import TARGETS, generate
+import proxy_redact
 from proxy_compose import ComposerStore, normalize_request
 from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, find_jwts)
 
@@ -1259,7 +1260,7 @@ class ProxyPanel:
                                 "status": f.response.status_code,
                                 "headers": [[k, v] for k, v in f.response.headers.items(multi=True)],
                                 "recorded_at": f.request.timestamp_start, **body})
-            return {"har": self.to_har({"entries": entries}), "filename": a["name"] + ".har"}
+            return self._har_reply(self.to_har({"entries": entries}), a)
         # ── collections ──
         elif op == "coll_record":
             name = (a.get("name") or "").strip()
@@ -1321,7 +1322,7 @@ class ProxyPanel:
             self.flush_collection(a["name"])
             with open(self.coll_file(a["name"])) as fh:
                 doc = json.load(fh)
-            return {"har": self.to_har(doc), "filename": a["name"] + ".har"}
+            return self._har_reply(self.to_har(doc), a)
         elif op == "coll_import":
             name = (a.get("name") or "").strip()
             self.coll_file(name)
@@ -1371,6 +1372,13 @@ class ProxyPanel:
             json.dump(doc, fh, ensure_ascii=False)
         os.chmod(tmp, 0o600)
         os.replace(tmp, self.coll_file(doc["name"]))
+
+    @staticmethod
+    def _har_reply(har, a):
+        """HAR for the browser to download: secrets redacted unless the user ticked "Include secrets" (F-08)."""
+        secrets_in = a.get("include_secrets") is True
+        return {"har": har if secrets_in else proxy_redact.har(har), "redacted": not secrets_in,
+                "filename": a["name"] + ".har"}
 
     @staticmethod
     def to_har(doc):
