@@ -29,6 +29,7 @@
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const emptyState = (icon, title, hint) =>
     `<div class="empty">${ico(icon)}<b>${esc(title)}</b><span class="sub">${hint}</span></div>`;
+  const info = (t) => `<span class="info" tabindex="0" role="img" aria-label="${esc(t)}" title="${esc(t)}">ⓘ</span>`;
   const hostPath = (u) => { try { const x = new URL(u); return [x.host, x.pathname]; } catch (e) { return ["", u]; } };
   // a rule's match regex → readable "host/path" for lists
   const pretty = (r) => {
@@ -232,6 +233,20 @@
     .set { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--rv-border); }
     .set > div:first-child { flex: 1; } .set b { font-weight: 600; display: block; }
 
+    button.b.sm { min-height: 24px; padding: 2px 9px; font-size: 12px; box-shadow: none; background: transparent; }
+    button.b.sm.d { background: transparent; }
+    .call .dim { color: var(--rv-text-3); }
+    .call .m { display: inline-block; font-size: 10.5px; padding: 0 7px; line-height: 18px; border-radius: var(--rv-r-pill); background: var(--rv-accent-soft); color: var(--rv-accent-text); margin-right: 8px; vertical-align: 1px; }
+    .call .lnk { font-size: 11.5px; padding: 0 2px; }
+    .lnk:hover { text-decoration: underline; }
+    .info { display: inline-block; padding: 0 2px; border-radius: var(--rv-r-sm); }
+    .info:hover, .info:focus-visible { color: var(--rv-accent-text); }
+    .btns > .seg { margin: 0; }
+    input[type=file] { font-size: 12px; color: var(--rv-text-2); max-width: 100%; }
+    input[type=file]::file-selector-button { font: inherit; font-weight: 500; border: 1px solid var(--rv-border-strong); background: var(--rv-surface); color: var(--rv-text); border-radius: var(--rv-r-md); padding: 4px 10px; margin-right: 8px; cursor: pointer; }
+    input[type=file]::file-selector-button:hover { background: var(--rv-accent-soft); border-color: var(--rv-accent); color: var(--rv-accent-text); }
+    .chip { font-family: inherit; }
+
     /* paused-call sheet / dialogs */
     .pause { position: fixed; inset: 0; z-index: 2147483002; background: var(--rv-overlay); display: none; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
     .pause.open { display: flex; }
@@ -245,6 +260,7 @@
     .sheet main { padding: 14px 16px; }
     .sheet footer { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 16px; border-top: 1px solid var(--rv-border); align-items: center; background: var(--rv-surface-2); }
     .sheet textarea { height: 38vh; }
+    .sheet textarea.nobody { height: 120px; min-height: 120px; }
     .banner { background: var(--rv-warn-soft); color: var(--rv-warn); border: 1px solid color-mix(in srgb, var(--rv-warn) 35%, transparent); border-radius: var(--rv-r-md); padding: 8px 11px; display: flex; align-items: center; gap: 8px; }
     .banner.bad { background: var(--rv-danger-soft); color: var(--rv-danger); border-color: color-mix(in srgb, var(--rv-danger) 35%, transparent); }
     .banner .sub { color: inherit; opacity: .85; }
@@ -350,7 +366,7 @@
   };
   const readHeaders = (idp) => [...root.getElementById(idp).querySelectorAll(".hrow")]
     .map((r) => [...r.querySelectorAll("input")].map((i) => i.value)).filter(([k]) => k.trim());
-  const jsonCheck = (ta, out) => { try { JSON.parse(ta.value); out.textContent = "Valid JSON"; return true; } catch (x) { out.textContent = ta.value.trim() ? "Not JSON: " + x.message : ""; return !ta.value.trim(); } };
+  const jsonCheck = (ta, out) => { try { JSON.parse(ta.value); out.textContent = ta.value.trim() ? "Valid JSON" : ""; return true; } catch (x) { out.textContent = ta.value.trim() ? "Not JSON — sent as plain text" : ""; out.title = x.message; return !ta.value.trim(); } };
 
   const flowCache = { at: 0, byId: new Map(), pending: null };
   async function refreshFlows() {
@@ -422,7 +438,7 @@
     $("bname").textContent = product; $("bproj").textContent = label;
     document.title = product + " · " + label;
     const options = `<option value="__all" ${state.project_only ? "" : "selected"}>All traffic</option>` +
-      state.projects.map((p) => `<option value="${esc(p.id)}" ${state.project_only && p.id === state.view_project ? "selected" : ""}>${esc(p.label || p.id)} only</option>`).join("");
+      state.projects.filter((p) => p.id !== "default").map((p) => `<option value="${esc(p.id)}" ${state.project_only && p.id === state.view_project ? "selected" : ""}>${esc(p.label || p.id)} only</option>`).join("");
     if ($("project").innerHTML !== options) $("project").innerHTML = options;
     $("fablabel").textContent = state.paused.length ? `${label} · ${state.paused.length} paused` : label;
   }
@@ -454,34 +470,30 @@
       viewer.grpc.builtin_request = decoded[0]; viewer.grpc.builtin_response = decoded[1];
     }
     if (seq !== renderSeq) return;
+    const focused = state.focus_host === r.pretty_host;
     m.innerHTML = `
-      <div class="call"><span class="m">${esc(r.method)}</span>${esc(r.scheme + "://" + r.pretty_host + r.path)}
-        <div class="sub">${s ? "→ " + s.status_code : "no response yet"}</div></div>
-      <h4>Map Local</h4>
-      <div class="sub">Save this response and serve it instead of the server. Edit body, status and headers.</div>
-      <div class="btns"><button class="b p" id="mock" ${s ? "" : "disabled"}>Map Local this call…</button></div>
-      <h4>Breakpoint</h4>
-      <div class="btns">
-        <span class="chip ${bpFor && bpFor.request ? "on" : ""}" data-ph="request">Request</span>
-        <span class="chip ${bpFor && bpFor.response ? "on" : ""}" data-ph="response">Response</span>
-        <span class="sub">${bpFor ? "breakpoint ON for this endpoint" : "click to pause this endpoint"}</span></div>
-      <h4>Request</h4>
-      <div class="btns"><button class="b" id="retry">Edit &amp; Retry…</button>
-        <button class="b" id="curl">Copy cURL</button><button class="b" id="curlurl">Copy URL</button>
+      <div class="call"><span class="m">${esc(r.method)}</span><span class="dim">${esc(r.pretty_host)}</span>${esc(r.path)}
+        <div class="sub">${s ? "→ " + s.status_code : "no response yet"} · <button class="lnk" id="focus">${focused ? "Showing only this host — show all" : "Show only this host"}</button></div></div>
+      <h4>Map Local ${info("Saves this response and serves it instead of the server's. You can edit its body, status and headers.")}</h4>
+      <div class="btns" style="margin-top:0"><button class="b p" id="mock" ${s ? "" : "disabled"}>Map Local this call…</button>${s ? "" : '<span class="sub">needs a response first</span>'}</div>
+      <h4>Breakpoint ${info("Pause calls to this endpoint so you can edit them. Request = before it reaches the server; Response = before the app gets it.")}</h4>
+      <div class="btns" style="margin-top:0"><span class="sub">Pause at</span>
+        <div class="seg" style="margin:0"><button data-ph="request" class="${bpFor && bpFor.request ? "on" : ""}" aria-pressed="${!!(bpFor && bpFor.request)}">Request</button><button data-ph="response" class="${bpFor && bpFor.response ? "on" : ""}" aria-pressed="${!!(bpFor && bpFor.response)}">Response</button></div>
+        <span class="sub">${bpFor ? "on for this endpoint" : "off"}</span></div>
+      <h4>Edit &amp; repeat</h4>
+      <div class="btns" style="margin-top:0"><button class="b" id="retry">Edit &amp; Retry…</button>
+        <button class="b" id="compose">Compose from this call</button>
         <button class="b" id="cmpA">Compare: set as A</button></div>
-      <div class="btns"><button class="b" id="compose">Compose from this call</button></div>
-      <h4>Copy as</h4>${copyAsHTML("ca")}
-      <div class="btns">${state.focus_host === r.pretty_host
-          ? `<button class="b p" id="focus">Showing only ${esc(r.pretty_host)} — show all</button>`
-          : `<button class="b" id="focus">Show only ${esc(r.pretty_host)}</button>`}</div>
-      <h4>Quick errors</h4>
-      <div class="btns">
-        <select id="code">${[500, 503, 504, 401, 403, 404, 400, 429].map((c) => `<option>${c}</option>`).join("")}</select>
+      <h4>Copy</h4>
+      <div class="btns" style="margin-top:0"><button class="b" id="curl">Copy cURL</button><button class="b" id="curlurl">Copy URL</button></div>
+      ${copyAsHTML("ca")}
+      <h4>Simulate a failure ${info("Adds a rule for this endpoint (same method and path, any query). Turn it off in the Rules tab.")}</h4>
+      <div class="btns" style="margin-top:0">
+        <select id="code" aria-label="Status code">${[500, 503, 504, 401, 403, 404, 400, 429].map((c) => `<option>${c}</option>`).join("")}</select>
         <button class="b" id="force">Force status</button>
         <button class="b" id="block">Block (network error)</button></div>
-      <div class="btns"><input type="number" id="ms" value="8000" step="1000" style="width:90px"> ms
+      <div class="btns"><span class="sub">Delay by</span><input type="number" id="ms" value="8000" step="1000" style="width:84px" aria-label="Delay in milliseconds"><span class="sub">ms</span>
         <button class="b" id="delay">Delay this call</button></div>
-      <p class="sub" title="Same method + path, any query, until you turn them off in Rules.">Applies to every future call to this endpoint. <span class="info" aria-label="details">ⓘ</span></p>
       ${tlsQuickHTML(r.pretty_host)}
       ${viewerHTML(viewer)}${viewerListsHTML()}`;
     $("mock").onclick = async () => {
@@ -629,19 +641,20 @@
       <h4>New breakpoint</h4>
       <div class="btns" style="margin-top:0"><input type="text" id="bh" class="grow" placeholder="Host (or paste a full URL)">
         <input type="text" id="bpth" class="grow" placeholder="Path" value="/*"></div>
-      <div class="btns"><select id="bm"><option value="">ANY</option>${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((x) => `<option>${x}</option>`).join("")}</select>
-        <span class="chip on" data-nph="request">Request</span><span class="chip on" data-nph="response">Response</span>
-        <button class="b" id="bsel">Use selected call</button><button class="b p" id="badd">Add breakpoint</button></div>
-      <div class="sub">Request = pause before it reaches the server · Response = pause before the app gets it.</div>
+      <div class="btns"><select id="bm" aria-label="Method"><option value="">ANY</option>${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((x) => `<option>${x}</option>`).join("")}</select>
+        <span class="sub">Pause at</span>
+        <div class="seg" style="margin:0"><button class="on" data-nph="request" aria-pressed="true">Request</button><button class="on" data-nph="response" aria-pressed="true">Response</button></div></div>
+      <div class="btns"><button class="b" id="bsel">Use selected call</button><button class="b p" id="badd">Add breakpoint</button>
+        ${info("Request = pause before it reaches the server. Response = pause before the app gets it.")}</div>
       <h4>Breakpoints (${bps.length})</h4>
       ${bps.length ? bps.map((b, i) => `
         <div class="row">${sw(`data-bi="${i}"`, b.enabled !== false)}
           <div class="n"><div><b>${esc(pretty(b))}</b></div><div class="sub">${esc(b.method || "Any HTTP method")}</div></div>
-          <span class="chip ${b.request ? "on" : ""}" data-bph="${i}:request">Req</span>
-          <span class="chip ${b.response ? "on" : ""}" data-bph="${i}:response">Resp</span>
+          <button class="chip ${b.request ? "on" : ""}" data-bph="${i}:request" aria-pressed="${!!b.request}" title="Pause at request">Req</button>
+          <button class="chip ${b.response ? "on" : ""}" data-bph="${i}:response" aria-pressed="${!!b.response}" title="Pause at response">Resp</button>
           <button class="b d" data-bdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
       : emptyState("bp", "No breakpoints", "Add one above, or open a call and turn on <b>Request</b> or <b>Response</b>. A match pauses and this sheet opens on its own.")}`;
-    root.querySelectorAll("[data-nph]").forEach((c) => (c.onclick = () => c.classList.toggle("on")));
+    root.querySelectorAll("[data-nph]").forEach((c) => (c.onclick = () => { c.classList.toggle("on"); c.setAttribute("aria-pressed", c.classList.contains("on")); }));
     const ph = (p) => root.querySelector(`[data-nph=${p}]`).classList.contains("on");
     const split = () => { const v = $("bh").value.trim(); if (/^https?:\/\//.test(v)) { const [h, p] = hostPath(v); $("bh").value = h; $("bpth").value = p; } };
     $("bh").onchange = split;
@@ -671,8 +684,9 @@
     const mn = state.manual;
     m.innerHTML = `
       <h4>Traffic profiles</h4>
-      <div class="sub" style="margin-bottom:8px">Simulate degraded networks on the proxy. Applies to calls matching
-        <input type="text" id="tm" value="${esc(state.throttle_match)}" style="width:150px" placeholder="all calls"></div>
+      <div class="row" style="border:0;padding:0 0 8px;flex-wrap:wrap"><label class="sub" for="tm" style="white-space:nowrap">Slow down URLs matching</label>
+        <input type="text" id="tm" class="grow" value="${esc(state.throttle_match)}" placeholder="empty = every call" title="Regular expression matched against the URL, e.g. neo\\.sa. Empty slows down every call."></div>
+      <div class="sub" style="margin:-2px 0 10px">${cur === "off" ? "Pick a profile — it only slows calls whose URL matches this pattern." : `<b>Active</b> for ${state.throttle_match ? "URLs matching <code>" + esc(state.throttle_match) + "</code>" : "every call"}.`}</div>
       ${state.profiles.map((p) => `
         <div class="card ${p.id === cur ? "on" : ""}" data-prof="${p.id}"><div class="ic">${ico(icons[p.id] || "net")}</div>
           <div><div class="t">${esc(p.name)}</div><div class="sub">${esc(desc(p))}</div></div>${p.id === cur ? `<div class="ok">${ico("check")}</div>` : ""}</div>`).join("")}
@@ -690,8 +704,7 @@
       </div>
       ${tlsSectionHTML()}
       <h4>List view</h4>
-      <div class="row">${sw('id="project-filter"', state.project_only)}<div class="n">Only ${esc(state.project.label)} calls <div class="sub">uses this profile's hosts regex</div></div></div>
-      <div class="sub">View profile: ${esc(state.project.label)}. Switching here changes only the list view; restart with <code>--project ${esc(state.view_project)}</code> to load that project's rules.</div>
+      <div class="row">${sw('id="project-filter"', state.project_only)}<div class="n">Only ${esc(state.project.label)} calls <div class="sub">Also in the “Show” menu at the top</div></div></div>
       <div class="row">${sw('id="dns"', state.show_dns)}<div class="n">Show DNS / UDP rows <div class="sub">off = HTTP(S) requests only</div></div></div>
       <div class="row"><div class="n">Appearance <div class="sub">Theme, compact rows and the skin switch are in Settings (this browser only)</div></div><button class="b" id="openset">${ico("gear", "sm")}Settings</button></div>`;
     wireTlsSection();
@@ -725,13 +738,13 @@
     m.innerHTML = `
       <h4>Record</h4>
       ${c.recording
-        ? `<div class="call"><span class="rec"><i class="reddot"></i>Recording</span> into <b>${esc(c.recording)}</b> — use the app now; every matching call is saved with its real response.
+        ? `<div class="call"><span class="rec"><i class="reddot"></i>Recording</span> into <b>${esc(c.recording)}</b> — use the app now.
              <div class="btns"><button class="b warn" id="cstop">Stop recording</button></div></div>`
         : `<div class="btns" style="margin-top:0"><input type="text" id="cname" class="grow" placeholder="Collection name, e.g. cards-journey-sit">
              <button class="b p" id="crec">Start recording</button></div>
            <div class="btns">Record calls matching <input type="text" id="cmatch" class="grow" value="${esc(c.record_match)}"></div>`}
       <h4>Replay</h4>
-      <div class="row">${sw('id="cstrict"', c.strict)}<div class="n">Strict replay <div class="sub">matching calls not in an enabled collection get 404 instead of reaching the server</div></div></div>
+      <div class="row">${sw('id="cstrict"', c.strict)}<div class="n">Strict replay <div class="sub">Calls not in a replayed collection get a 404</div></div></div>
       <h4>Collections (${c.items.length})</h4>
       ${c.items.length ? c.items.map((x, i) => `
         <div class="row">${sw(`data-ci="${i}"`, x.replay, c.recording === x.name ? "disabled" : "")}
@@ -742,9 +755,9 @@
         ${collOpen === x.name ? `<div id="centries" class="sub">loading…</div>` : ""}`).join("")
       : emptyState("coll", "No collections yet", "Name a journey above and <b>Start recording</b>, use the app, then stop. Switch a collection on to replay those responses as mocks.")}
       <h4>Import</h4>
-      <div class="btns" style="margin-top:0"><input type="file" id="chf" accept=".har,application/json" style="font-size:11px">
+      <div class="btns" style="margin-top:0"><input type="file" id="chf" accept=".har,application/json" aria-label="HAR file">
         <input type="text" id="chn" placeholder="name" style="width:120px"><button class="b" id="cimp">Import HAR</button></div>
-      <p class="sub">Collections stay in ${esc(state.project_state)}/collections. No Git sync — recordings must not leave the workstation.</p>`;
+      <p class="sub">Stored in ${esc(state.project_state)}/collections · recordings stay on this machine (no Git sync).</p>`;
     $("crec") && ($("crec").onclick = () => run("coll_record", { name: $("cname").value, record_match: $("cmatch").value }, "Recording into " + $("cname").value));
     $("cstop") && ($("cstop").onclick = () => run("coll_stop", {}, "Recording stopped"));
     $("cstrict").onchange = () => run("coll_strict", { strict: $("cstrict").checked }, $("cstrict").checked ? "Strict replay ON" : "Strict replay off");
@@ -811,7 +824,7 @@
       <h4>Save the current capture</h4>
       <div class="btns" style="margin-top:0"><input type="text" id="sn" class="grow" placeholder="Session name, e.g. ticket-1234-repro"></div>
       <div class="btns"><input type="text" id="snote" class="grow" placeholder="Note (optional): what this capture shows"></div>
-      <div class="btns"><label class="sub"><input type="checkbox" id="svis"> only calls visible with the current filter</label>
+      <div class="btns"><label class="sub"><input type="checkbox" id="svis"> Only calls visible with the current filter</label>
         <button class="b p" id="ssave">Save session</button></div>
       <h4>Saved sessions (${ss.length})</h4>
       ${ss.length ? ss.map((x, i) => `
@@ -820,8 +833,7 @@
             <div class="sub" data-note="${i}" title="click to edit" style="cursor:text;white-space:normal">${x.note ? ico("note", "sm") + " " + esc(x.note) : "<i>add a note…</i>"}</div></div>
           <button class="b" data-sload="${i}">Open</button><button class="b" data-shar="${i}">HAR</button><button class="b d" data-sdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
       : emptyState("sess", "No saved sessions yet", "Name the capture above and <b>Save session</b>. Open brings it back into the list; HAR exports it.")}
-      <p class="sub">Open adds the saved calls to the list (choose “replace” to clear it first). Sessions stay in ${esc(state.project_state)}/sessions.
-        Per-call notes and bookmarks: use mitmweb’s <b>Comment</b> tab and <b>Mark</b> button — they are saved with the session.</p>`;
+      <p class="sub">Stored in ${esc(state.project_state)}/sessions ${info("Open adds the saved calls to the list (you can choose to replace it first). Per-call notes and bookmarks: use the Comment tab and the Mark button on a call — they are saved with the session.")}</p>`;
     $("ssave").onclick = () => run("sess_save", { name: $("sn").value.trim(), note: $("snote").value, visible_only: $("svis").checked }, (x) => "Saved " + x.count + " calls");
     m.querySelectorAll("[data-sload]").forEach((b) => (b.onclick = () => {
       const x = ss[b.dataset.sload];
@@ -850,12 +862,13 @@
       ${error.traceback ? `<pre class="code errtext">${esc(error.traceback)}</pre>` : ""}` : "";
     m.innerHTML = `${status.node_message ? `<div class="errbox">${esc(status.node_message)}. Python scripts still work.</div>` : ""}
       <h4>New script</h4>
-      <div class="btns" style="margin-top:0"><input id="sn" type="text" class="grow" placeholder="name">
+      <div class="btns" style="margin-top:0"><input id="sn" type="text" class="grow" placeholder="Script name" aria-label="Script name">
         <select id="sl"><option value="js">JavaScript</option><option value="py">Python</option></select></div>
-      <div class="btns"><select id="stpl"><option value="header">Request header</option><option value="json">JSON response field</option><option value="mock">Local mock</option><option value="latency">Endpoint latency</option><option value="token">Log token refresh</option></select>
-        <input id="smatch" type="text" class="grow" value="." placeholder="URL regex"><select id="smethod"><option value="">ANY</option>${["GET","POST","PUT","PATCH","DELETE"].map((x) => `<option>${x}</option>`).join("")}</select>
+      <div class="btns"><select id="stpl" aria-label="Template"><option value="header">Request header</option><option value="json">JSON response field</option><option value="mock">Local mock</option><option value="latency">Endpoint latency</option><option value="token">Log token refresh</option></select>
+        <select id="smethod" aria-label="Method"><option value="">Any method</option>${["GET","POST","PUT","PATCH","DELETE"].map((x) => `<option>${x}</option>`).join("")}</select></div>
+      <div class="btns"><label class="sub" for="smatch" style="white-space:nowrap">On URLs matching</label><input id="smatch" type="text" class="grow" value="." placeholder="URL regex" title="Regular expression matched against the URL. A single dot matches every call.">
         <button class="b p" id="snew">New</button></div>
-      <p class="sub">Rules run first, then enabled scripts in filename order. Python and JavaScript are trusted user code and run with your user rights. The Node VM omits process, require and network helpers to prevent accidents, but it is NOT a security boundary.</p>
+      <p class="sub">Rules run first, then scripts. Scripts are trusted code with your user rights — not a sandbox. ${info("Python and JavaScript scripts run with your user rights. The Node VM omits process, require and network helpers to prevent accidents, but it is NOT a security boundary.")}</p>
       <h4>Scripts (${scripts.length})</h4>${scripts.length ? scripts.map((s, i) => `<div class="row">${sw(`data-si="${i}"`, s.enabled !== false)}
         <div class="n"><div><b>${esc(s.name)}</b><span class="tag">${esc(s.lang)}</span></div><div class="sub">${esc(s.method || "ANY")} · ${esc(s.match || ".")} · ${esc(s.file)}${s.exists ? "" : " · FILE MISSING"}${errorHTML(status.errors && status.errors[s.file])}</div></div>
         <button class="b" data-sedit="${i}">Edit</button><button class="b d" data-sdelete="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") : emptyState("scripts", "No scripts yet", "Pick a template above and click <b>New</b>. Rules run first; enabled scripts run after them, in filename order.")}`;
@@ -1119,16 +1132,16 @@
   const lastTarget = () => { try { return localStorage.getItem("proxy-copyas") || "curl"; } catch (e) { return "curl"; } };
   const remember = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* private window */ } };
   const copyAsHTML = (idp) => `
-    <div class="btns"><select id="${idp}-t">${(state.codegen_targets || []).map((t) =>
+    <div class="btns"><span class="sub">As</span><select id="${idp}-t" aria-label="Copy as language">${(state.codegen_targets || []).map((t) =>
         `<option value="${esc(t.id)}" ${t.id === lastTarget() ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select>
       <button class="b p" id="${idp}-go">Copy</button>
       <label class="sub" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="${idp}-mask" ${maskOn() ? "checked" : ""}> Mask secrets</label></div>
-    <div class="sub" id="${idp}-note">${maskOn() ? "Authorization and cookie values become &lt;redacted&gt;." : "Tokens and cookies WILL be included — do not paste into tickets or chats."}</div>`;
+    <div class="sub" id="${idp}-note">${maskOn() ? "Authorization and cookie values become &lt;redacted&gt;." : "⚠ Tokens and cookies will be included — keep this out of tickets and chats."}</div>`;
   function wireCopyAs(idp, payload) {
     $(idp + "-mask").onchange = () => {
       remember("proxy-mask", $(idp + "-mask").checked ? "on" : "off");
       $(idp + "-note").innerHTML = $(idp + "-mask").checked ? "Authorization and cookie values become &lt;redacted&gt;."
-        : "Tokens and cookies WILL be included — do not paste into tickets or chats.";
+        : "⚠ Tokens and cookies will be included — keep this out of tickets and chats.";
     };
     $(idp + "-go").onclick = async () => {
       const target = $(idp + "-t").value, mask = $(idp + "-mask").checked;
@@ -1160,10 +1173,10 @@
   function tlsQuickHTML(host) {
     const v = tlsVerdict(host);
     return `<h4>TLS</h4>
-      <div class="sub">${ico(v.on ? "unlock" : "lock", "sm")} ${v.on ? "decrypted" : "NOT decrypted (tunnel only)"} — ${esc(v.why)}</div>
+      <div class="sub">${ico(v.on ? "unlock" : "lock", "sm")} ${v.on ? "Decrypted" : "Not decrypted (tunnel only)"} · ${esc(v.why)}</div>
       <div class="btns"><button class="b" id="tlsdec" ${v.on ? "disabled" : ""}>Decrypt ${esc(host)}</button>
         <button class="b" id="tlsno" ${v.on ? "" : "disabled"}>Don't decrypt ${esc(host)}</button></div>
-      <div class="sub" title="${esc((state.tls || {}).note || "")}">Takes effect for new connections, no restart. Not-decrypted hosts skip rules and mocks. <span class="info" aria-label="details">ⓘ</span></div>`;
+      <div class="sub">New connections only · rules and mocks skip hosts that are not decrypted ${info((state.tls || {}).note || "Takes effect for new connections, no restart.")}</div>`;
   }
   function wireTlsQuick(flowId, host) {
     const go = (decrypt) => run("tls_host", { flow_id: flowId, host, decrypt }, (x) => x.message);
@@ -1172,7 +1185,7 @@
   }
   function tlsSectionHTML() {
     const t = state.tls || { mode: "all", allow: [], ignore: [] };
-    const modes = [["all", "Decrypt all hosts"], ["allow", "Only the allow list"], ["ignore", "All except the ignore list"]];
+    const modes = [["all", "Decrypt all"], ["allow", "Allow list only"], ["ignore", "All but ignore list"]];
     const list = (which, title) => `
       <div class="sub" style="margin-top:8px"><b>${title}</b>${t.mode === which ? " · active" : ""}</div>
       <div class="btns" style="margin-top:4px">${t[which].map((p) => `<span class="chip">${esc(p)} <span data-tlsrm="${which}" data-p="${esc(p)}" title="Remove">${ico("x", "sm")}</span></span>`).join("") || '<span class="sub">(none)</span>'}</div>
@@ -1181,7 +1194,7 @@
       <div class="seg" id="tlsmode">${modes.map(([id, label]) => `<button data-tm="${id}" class="${t.mode === id ? "on" : ""}">${label}</button>`).join("")}</div>
       ${t.error ? `<div class="errbox">${esc(t.error)}</div>` : ""}
       ${list("allow", "Allow list")}${list("ignore", "Ignore list")}
-      <div class="sub" style="margin-top:6px">${esc(t.note || "")}</div>`;
+      <div class="sub" style="margin-top:6px">New connections only, no restart. ${info(t.note || "")}</div>`;
   }
   function wireTlsSection() {
     const t = state.tls;
@@ -1289,20 +1302,21 @@
     const count = { params: draft.query.filter((r) => r[2] !== false).length, headers: draft.headers.filter((r) => r[2] !== false).length };
     const subs = [["params", "Params"], ["headers", "Headers"], ["body", "Body"], ["vars", "Variables"]];
     m.innerHTML = `
-      <div class="btns" style="margin-top:0"><select id="cs"><option value="">Saved requests…</option>${names.map((n) => `<option ${n === draft.name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
-        <button class="b" id="cload">Load</button><button class="b" id="csave">Save</button><button class="b" id="csaveas">Save as…</button>
-        <button class="b" id="cren" ${names.includes(draft.name) ? "" : "disabled"}>Rename</button>
-        <button class="b d" id="cdel" ${names.includes(draft.name) ? "" : "disabled"}>Delete</button><button class="b" id="cnew">New</button></div>
+      <div class="btns" style="margin-top:0"><select id="cs" class="grow" aria-label="Saved requests"><option value="">Saved requests…</option>${names.map((n) => `<option ${n === draft.name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+        <button class="b" id="cload">Load</button><button class="b" id="cnew">New</button></div>
+      <div class="btns" style="margin-top:4px"><button class="b sm" id="csave">Save</button><button class="b sm" id="csaveas">Save as…</button>
+        <button class="b sm" id="cren" ${names.includes(draft.name) ? "" : "disabled"}>Rename</button>
+        <button class="b sm d" id="cdel" ${names.includes(draft.name) ? "" : "disabled"}>Delete</button></div>
       ${draft.name ? `<div class="sub">Saved request: <b>${esc(draft.name)}</b> · CLI: <code>${esc((state.product || {}).cli || "proxy")} compose send ${esc(draft.name)}</code></div>` : ""}
       ${draft.note ? `<div class="sub">${esc(draft.note)}</div>` : ""}
       ${(state.composer || {}).error ? `<div class="errbox">${esc(state.composer.error)}</div>` : ""}
-      <div class="btns"><input type="text" id="cm" list="cmlist" value="${esc(draft.method)}" style="width:96px" placeholder="METHOD">
+      <div class="btns"><input type="text" id="cm" list="cmlist" value="${esc(draft.method)}" style="width:84px" placeholder="METHOD" aria-label="Method">
         <datalist id="cmlist">${METHODS.map((x) => `<option value="${x}">`).join("")}</datalist>
-        <input type="text" id="cu" class="grow" value="${esc(draft.url)}" placeholder="https://host/path?x=1  or  {{edge}}/path"></div>
+        <input type="text" id="cu" class="grow" value="${esc(draft.url)}" placeholder="https://host/path?x=1  or  {{edge}}/path" aria-label="URL"><button class="b p" id="csend">Send</button></div>
       <div class="seg">${subs.map(([id, l]) => `<button data-cs="${id}" class="${composeSub === id ? "on" : ""}">${l}${count[id] ? " (" + count[id] + ")" : ""}</button>`).join("")}</div>
       <div id="carea"></div>
-      <div class="btns"><button class="b p" id="csend">Send</button><span class="sub">goes through your rules and scripts; appears at the bottom of the list as “composed”</span></div>
-      <h4>Copy as</h4>${copyAsHTML("cc")}`;
+      <div class="sub" style="margin-top:6px">Runs through your rules and scripts · appears at the bottom of the list as COMPOSED.</div>
+      <h4>Copy</h4>${copyAsHTML("cc")}`;
     drawSection();
     $("cm").oninput = () => (draft.method = $("cm").value.trim().toUpperCase());
     $("cu").oninput = () => { draft.url = $("cu").value; rowsFromUrl(); if (composeSub === "params") drawSection(); };
@@ -1426,7 +1440,7 @@
                  : `<div class="btns" style="margin-top:0"><select id="pm">${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((x) => `<option ${x === p.method ? "selected" : ""}>${x}</option>`).join("")}</select>
                     <input type="text" id="pu" class="grow" value="${esc(p.url)}"></div>`}
         <div class="seg"><button data-psub="body" class="${p.sub === "body" ? "on" : ""}">Body</button><button data-psub="headers" class="${p.sub === "headers" ? "on" : ""}">Headers</button></div>
-        <div id="ppb" style="${p.sub === "body" ? "" : "display:none"}"><textarea id="pb" spellcheck="false" ${(isResp ? p.resp_body_editable : p.req_body_editable) ? "" : "readonly"}>${esc(isResp ? p.resp_body : p.req_body)}</textarea>
+        <div id="ppb" style="${p.sub === "body" ? "" : "display:none"}"><textarea id="pb" spellcheck="false" placeholder="No body" class="${(isResp ? p.resp_body : p.req_body) ? "" : "nobody"}" ${(isResp ? p.resp_body_editable : p.req_body_editable) ? "" : "readonly"}>${esc(isResp ? p.resp_body : p.req_body)}</textarea>
           <div class="btns"><button class="b" id="pfmt">Format JSON</button><span class="sub" id="pjs"></span></div></div>
         <div id="pph" style="${p.sub === "headers" ? "" : "display:none"}">${headersHTML(isResp ? p.resp_headers : p.req_headers, "phd")}</div>
       </main>
