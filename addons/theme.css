@@ -86,9 +86,15 @@
   /* type */
   --rv-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   --rv-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
-  --rv-row-h: 32px;
+  --rv-row-h: 34px;            /* comfortable default */
 }
-:root[data-density="compact"], :host([data-density="compact"]) { --rv-row-h: 32px; }
+:root[data-density="compact"], :host([data-density="compact"]) { --rv-row-h: 26px; }   /* tighter rows */
+/* compact also tightens the list's type and shrinks mitmweb's fixed 32px row icons (the real height floor) */
+:root[data-density="compact"] .flow-table table { font-size: 12px; }
+:root[data-density="compact"] .flow-table td { padding-top: 0; padding-bottom: 0; }
+:root[data-density="compact"] .flow-table thead tr { line-height: 24px; }
+:root[data-density="compact"] .flow-table .resource-icon { width: 18px; height: 18px; background-size: contain; background-repeat: no-repeat; background-position: center; }
+:root[data-density="compact"] .flow-table .col-quickactions > div, :root[data-density="compact"] .flow-table .quickaction { height: 18px; line-height: 18px; }
 
 :root[data-theme="dark"], :host([data-theme="dark"]) {
   color-scheme: dark;
@@ -149,16 +155,18 @@ body { font-family: var(--rv-font); color: var(--rv-text); font-size: 13px; -web
 /* ---- top menu ---- */
 #container > header { background: var(--rv-surface); border-bottom: 1px solid var(--rv-border); box-shadow: var(--rv-shadow-1); position: relative; z-index: 3; }
 header nav.nav-tabs { border: 0; background: var(--rv-bg); padding: 6px 10px 0; display: flex; gap: 2px; align-items: flex-end; }
-header nav.nav-tabs-lg a, header nav.nav-tabs-lg a.special {
+/* #container-scoped so these beat the broad `#container a` link colour (one ID), which would otherwise
+   repaint the accent "File" tab's text in accent-text on its accent background → invisible (WCAG fail) */
+#container header nav.nav-tabs-lg a, #container header nav.nav-tabs-lg a.special {
   float: none; border: 0 !important; border-radius: var(--rv-r-md) var(--rv-r-md) 0 0; padding: 7px 14px; margin: 0;
   color: var(--rv-text-2); background: transparent; font-weight: 500; font-size: 13px; line-height: 1.2;
   transition: background var(--rv-dur) var(--rv-ease), color var(--rv-dur) var(--rv-ease);
 }
-header nav.nav-tabs-lg a:hover { background: var(--rv-surface-2); color: var(--rv-text); text-decoration: none; }
-header nav.nav-tabs-lg a.active { background: var(--rv-surface); color: var(--rv-accent-text); box-shadow: inset 0 -2px 0 var(--rv-accent); }
-header nav.nav-tabs-lg a.special { background: var(--rv-accent); color: var(--rv-accent-fg); margin-right: 6px; border-radius: var(--rv-r-md); margin-bottom: 3px; padding: 5px 14px; }
-header nav.nav-tabs-lg a.special:hover { background: var(--rv-accent-hover); color: var(--rv-accent-fg); }
-header nav.nav-tabs-lg a.special.active { box-shadow: none; }
+#container header nav.nav-tabs-lg a:hover { background: var(--rv-surface-2); color: var(--rv-text); text-decoration: none; }
+#container header nav.nav-tabs-lg a.active { background: var(--rv-surface); color: var(--rv-accent-text); box-shadow: inset 0 -2px 0 var(--rv-accent); }
+#container header nav.nav-tabs-lg a.special { background: var(--rv-accent); color: var(--rv-accent-fg); margin-right: 6px; border-radius: var(--rv-r-md); margin-bottom: 3px; padding: 5px 14px; }
+#container header nav.nav-tabs-lg a.special:hover { background: var(--rv-accent-hover); color: var(--rv-accent-fg); }
+#container header nav.nav-tabs-lg a.special.active { box-shadow: none; }
 .connection-indicator { display: none !important; }
 .flow-menu, .main-menu, header > div { background: var(--rv-surface); }
 .menu-group { border-right: 1px solid var(--rv-border); }
@@ -312,7 +320,8 @@ input[type="checkbox"] { accent-color: var(--rv-accent); }
 .kv-editor .kv-row { display: contents; }
 .kv-editor .kv-key, .kv-editor .kv-value { padding: 4px 10px; border-bottom: 1px solid var(--rv-border); word-break: break-all; }
 .kv-editor .kv-key { color: var(--rv-accent-text); font-weight: 600; background: var(--rv-surface-2); text-align: left; border-radius: 0; }
-.kv-editor .kv-value { color: var(--rv-text); }
+/* mitmweb paints editable inline-inputs white; give the value cell the token surface so it isn't bright-white in dark */
+.kv-editor .kv-value { color: var(--rv-text); background: var(--rv-surface); }
 .kv-editor .kv-row:last-of-type > * { border-bottom: 0; }
 .kv-editor .kv-add-row { grid-column: 1 / -1; padding: 4px 10px; color: var(--rv-text-3); background: var(--rv-surface-2); border-top: 1px solid var(--rv-border); cursor: pointer; }
 .kv-editor .kv-add-row:hover { color: var(--rv-accent); }

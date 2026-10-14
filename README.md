@@ -113,6 +113,32 @@ rules file.
 Saved data is owner-only. Rules hot-reload within about one second. A malformed file leaves the previous good
 configuration active, and a bad individual rule is skipped and shown in the panel.
 
+### Themes
+
+Rivis ships a skin (`addons/theme.css`) for the mitmweb UI and the panel: a shared set of design tokens,
+method/status pills in the call list, tag chips for mocked/rule/script/composed calls, a "not decrypted"
+marker for TLS tunnels, and a cleaner details pane and chrome. It is served at `/proxy/theme.css` and injected
+by a tiny same-origin boot script in `<head>` (the page CSP forbids inline scripts).
+
+- **Light / dark** follow the OS by default; the brand bar (top-right) has a theme toggle, remembered per
+  browser.
+- **Compact rows** and the **skin on/off** switch live in the panel's **Settings** (the gear / `?` → Settings).
+- **Kill switch:** add `?theme=off` to the URL (or turn the skin off in Settings) to fall back to stock mitmweb;
+  `?theme=on` restores it. Both are remembered in `localStorage`, so stock mode persists until you turn it back on.
+- Press **`?`** for the keyboard-shortcut sheet. First-time users get a dismissible **"Coming from Proxyman?"**
+  card, always reachable again from the Help (`?`) button.
+
+The skin never replaces mitmweb's own React-managed DOM — it only adds attributes/classes to existing nodes — so
+a mitmproxy upgrade can at worst drop styling, never break the UI. The selectors it relies on are listed in one
+commented "mitmweb DOM contract" block at the top of `addons/theme.css`; re-check it after a mitmproxy upgrade.
+
+### Coming from Proxyman
+
+Most of the tools you know carry over under the same generic names (Map Local, Breakpoints, Network Conditions,
+Compose, Diff, Copy as cURL, SSL proxying, Scripting, Sessions). See
+[`docs/COMING-FROM-PROXYMAN.md`](docs/COMING-FROM-PROXYMAN.md) for the full task-by-task mapping, the shortcut
+list, and the three biggest differences. The same table is in the UI under Help (`?`) → **Coming from Proxyman?**
+
 ### Compose
 
 The **Compose** tab builds a request from scratch (or from the selected call: **Compose from this call**).
