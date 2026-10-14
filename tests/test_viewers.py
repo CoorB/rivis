@@ -189,6 +189,8 @@ class LiveViewers(LiveCase):
         bad = json.dumps({"query": "query Failing { fail }"})
         v = self.view("/graphql", method="POST", data=bad, headers={"Content-Type": "application/json"})
         self.assertEqual(v["graphql_response"]["errors"][0]["message"], "boom")
+        failed_flow = self.inst.flow_for("/graphql")
+        self.assertIn("graphql:error", failed_flow["comment"])
         v = self.view("/graphql?query=query%20FromGet%20%7B%20x%20%7D")
         self.assertEqual(v["graphql"][0]["name"], "FromGet")
         v = self.view("/rest?query=shoes")

@@ -175,9 +175,9 @@ class Semantics(LiveCase):
                                 self.rule("third", "map_local", "/echo", file="/nonexistent")])
         self.assertEqual(self.fetch("/echo").text, "one")
         c = self.comment("/echo")
-        self.assertIn("rule:first", c)
-        self.assertNotIn("rule:second", c)
-        self.assertNotIn("rule:third", c)
+        self.assertIn("mock:first", c)
+        self.assertNotIn("mock:second", c)
+        self.assertNotIn("mock:third", c)
 
     def test_disabled_rule_is_skipped(self):
         self.reset_state(rules=[self.rule("off", "respond", "/echo", body="one", enabled=False),
@@ -196,7 +196,7 @@ class Semantics(LiveCase):
     def test_unnamed_rule_gets_a_fallback_name(self):
         self.reset_state(rules=[{"enabled": True, "match": "/echo", "action": "respond", "body": "anon"}])
         self.assertEqual(self.fetch("/echo").text, "anon")
-        self.assertIn("rule:rule #2", self.comment("/echo"))   # #1 is the harness sync-marker rule
+        self.assertIn("mock:rule #2", self.comment("/echo"))   # #1 is the harness sync-marker rule
 
     def test_bad_rules_are_skipped_and_listed_while_the_rest_still_apply(self):
         self.reset_state(rules=[
@@ -246,7 +246,6 @@ class HotReload(LiveCase):
         self.suite.rivis("rules", "off", "viacli", home=self.inst.home, env=self.inst.env)
         wait_for(lambda: self.fetch("/echo").text != "from-cli", 8, 0.3, "CLI rule off")
 
-    @unittest.expectedFailure   # B16: /proxy/api/state returns 500 while rules.json is broken
     def test_broken_rules_json_keeps_previous_rules_and_never_kills_mitmweb(self):
         self.reset_state(rules=[self.rule("r", "respond", "/echo", body="keep")])
         for broken in ("{ not json", "", "[]", '{"rules": 5}', '{"rules": [1, 2]}', '{"throttle": "warp"}',
@@ -256,7 +255,11 @@ class HotReload(LiveCase):
             time.sleep(2.2)
             self.assertEqual(self.fetch("/echo").text, "keep", "after rules.json = %r" % broken)
             self.assertIsNone(self.inst.proc.poll(), "mitmweb died on %r" % broken)
-            self.assertEqual(self.panel.get("/proxy/api/state")[0], 200)    # panel still serves
+            code, body = self.panel.get("/proxy/api/state")
+            state = json.loads(body)
+            self.assertEqual(code, 200)                                    # panel still serves
+            self.assertTrue(state["rules_error"])
+            self.assertIn("r", [rule["name"] for rule in state["rules"]]) # last good state stays visible
         self.inst.write_cfg({"rules": [self.rule("r", "respond", "/echo", body="fixed")]})
         self.assertEqual(self.fetch("/echo").text, "fixed")                 # recovers once the file is valid again
 

@@ -1018,7 +1018,8 @@
   function tagsOf(comment) {
     const out = new Set(), mockNames = new Set(((state && state.rules) || []).filter((r) => r.action === "map_local").map((r) => r.name));
     for (const part of String(comment || "").split(" | ")) {
-      if (part.startsWith("rule:")) out.add(mockNames.has(part.slice(5).split(" ")[0]) ? "mock" : "rule");
+      if (part.startsWith("mock:")) out.add("mock");
+      else if (part.startsWith("rule:")) out.add(mockNames.has(part.slice(5).split(" ")[0]) ? "mock" : "rule");
       else if (part.startsWith("script:")) out.add("script");
       else if (part === "composed" || part.startsWith("edit & retry")) out.add("composed");
     }
@@ -1055,7 +1056,7 @@
         setAttr(icon, "data-tag-glyph", top ? TAG_TEXT[top][0] : null);
         setAttr(icon, "title", top ? TAG_TEXT[top] + " — " + flow.comment : (tr.dataset.tunnel === "1" ? "TLS tunnel — not decrypted (add the host to the decrypt list in Network)" : null));
       }
-      if (status) { const g = flow && errors.has(flow.id); setAttr(status, "data-gql-error", g ? "1" : "0"); setAttr(status, "title", g ? "GraphQL: the response body contains errors" : null); }
+      if (status) { const g = flow && (errors.has(flow.id) || String(flow.comment || "").split(" | ").includes("graphql:error")); setAttr(status, "data-gql-error", g ? "1" : "0"); setAttr(status, "title", g ? "GraphQL: the response body contains errors" : null); }
     });
     const line = document.querySelector(".flow-detail section.response .first-line");   // status line colour in the details pane
     if (line) { const m = line.textContent.match(/\b([1-5])\d\d\b/); setAttr(line, "data-s", m ? m[1] : null); }
@@ -1662,7 +1663,7 @@
   function renderRules(m) {
     const skipped = state.skipped_rules || [];
     if (!state.rules.length && !skipped.length) { m.innerHTML = emptyState("rules", "No rules yet", "Select a call and use <b>This call</b> — Map Local, a forced status, a block or a delay all become rules here."); return; }
-    m.innerHTML = (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") + state.rules.map((r, i) => `
+    m.innerHTML = (state.rules_error ? `<div class="banner bad"><b>${ico("warn", "sm")} rules.json has an error:</b> ${esc(state.rules_error)}</div>` : "") + (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") + state.rules.map((r, i) => `
       <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
         <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(ACTION_NAME[r.action] || r.action)}</span></div>
           <div class="sub">${esc(r.method ? r.method + " " : "")}${esc(pretty(r))} — ${esc(describe(r))}</div></div>
