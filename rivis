@@ -65,8 +65,8 @@ STATE_ROOT="${STATE_ROOT/#\~/$HOME}"
 env_value() {
   local suffix="$1" fallback="$2" var value=""
   var="${ENV_PREFIX}_${suffix}"
-  eval 'value=${'"$var"'-}'
-  [ -n "$value" ] || eval 'value=${NEO_MITM_'"$suffix"'-}'
+  value="$(printenv "$var" 2>/dev/null || true)"
+  [ -n "$value" ] || value="$(printenv "NEO_MITM_${suffix}" 2>/dev/null || true)"
   printf '%s' "${value:-$fallback}"
 }
 

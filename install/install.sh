@@ -51,6 +51,28 @@ conf() {  # conf KEY — value from mirror.conf (plain KEY=VALUE, never sourced)
   sed -n "s/^$1=//p" "$CONF" | head -1
 }
 
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/rivis-inst.XXXXXX") || die "cannot create a private temporary directory"
+trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
+verify() {  # verify FILE EXPECTED_SHA LABEL
+  [ -n "$2" ] || die "$3: no pinned SHA-256 in mirror.conf — refusing to use an unverified file"
+  local got; got=$(sha_of "$1")
+  [ "$got" = "$2" ] || die "$3: SHA-256 MISMATCH — refusing.
+   expected $2
+   got      $got"
+  info "$3: sha256 OK"
+}
+
+# A tool archive is untrusted until its release pin matches.  Copy it first to
+# close the local-file TOCTOU window, then verify before reading even product.json.
+VERIFIED_TOOL_TARBALL=""
+if [ -n "$TOOL_TARBALL" ]; then
+  [ -f "$TOOL_TARBALL" ] || die "no such file: $TOOL_TARBALL"
+  cp "$TOOL_TARBALL" "$TMP/tool-local.tar.gz" || die "cannot copy tool tarball"
+  verify "$TMP/tool-local.tar.gz" "$(conf TOOL_SHA256)" "tool tarball"
+  VERIFIED_TOOL_TARBALL="$TMP/tool-local.tar.gz"
+fi
+
 [ "$(uname -s)" = Darwin ] || die "this installer is for macOS; on Windows use install.ps1"
 [ "$(id -u)" -ne 0 ] || die "do not run as root — everything installs in your home directory"
 
@@ -58,8 +80,8 @@ conf() {  # conf KEY — value from mirror.conf (plain KEY=VALUE, never sourced)
 product_json=""
 for c in "$HERE/product.json" "$SRC_ROOT/product.json" "$HOME"/.local/*/current/product.json; do [ -f "$c" ] && { product_json="$c"; break; }; done
 if [ -z "$product_json" ] && [ -n "$TOOL_TARBALL" ]; then
-  tmp_pj=$(mktemp -d); trap 'rm -rf "$tmp_pj"' EXIT HUP INT TERM
-  tar -xzf "$TOOL_TARBALL" -C "$tmp_pj" --include='*/product.json' 2>/dev/null
+  tmp_pj="$TMP/product"; mkdir "$tmp_pj"
+  tar -xzf "$VERIFIED_TOOL_TARBALL" -C "$tmp_pj" --include='*/product.json' 2>/dev/null
   product_json=$(find "$tmp_pj" -mindepth 2 -maxdepth 2 -type f -name product.json | head -1)
 fi
 [ -n "$product_json" ] || die "cannot find product.json (run from a checkout, or pass --tool-tarball)"
@@ -77,11 +99,11 @@ TOOL_DIR="$ROOT/tool-$TOOL_VERSION"
 RECEIPT="$ROOT/install-receipt"                  # records what WE installed, so uninstall removes only that
 CONFDIR="$HOME/.mitmproxy"
 PREFIX_VAR=$(plutil -extract env_prefix raw -o - "$product_json" 2>/dev/null || echo RIVIS)
-echo "$CLI" | grep -Eq '^[a-z0-9][a-z0-9._-]{0,63}$' || die "product.json has an invalid cli"
-echo "$PREFIX_VAR" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$' || die "product.json has an invalid env_prefix"
+echo "$CLI" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || die "product.json has an invalid cli"
+echo "$PREFIX_VAR" | grep -Eq '^[A-Z][A-Z0-9_]{0,30}$' || die "product.json has an invalid env_prefix"
 conf_var="${PREFIX_VAR}_CONFDIR"; _c="${!conf_var:-}"; [ -n "$_c" ] && CONFDIR="$_c"
 STATE_DIR=$(plutil -extract state_dir raw -o - "$product_json" 2>/dev/null); STATE_DIR="${STATE_DIR/#\~/$HOME}"
-[ -z "${tmp_pj:-}" ] || { rm -rf "$tmp_pj"; trap - EXIT HUP INT TERM; }
+[ -z "${tmp_pj:-}" ] || rm -rf "$tmp_pj"
 
 # ---- uninstall -------------------------------------------------------------------------------------------------
 strip_rc_block() {  # strip_rc_block FILE — removes only our marked block
@@ -169,16 +191,6 @@ info "no sudo, no system proxy changes, nothing listens beyond 127.0.0.1"
 [ "$DRY" = 1 ] && { echo; info "dry run finished — nothing changed"; exit 0; }
 
 # ---- helpers (real run) ----------------------------------------------------------------------------------------
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/rivis-inst.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
-sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
-verify() {  # verify FILE EXPECTED_SHA LABEL
-  [ -n "$2" ] || die "$3: no pinned SHA-256 in mirror.conf — refusing to use an unverified file"
-  local got; got=$(sha_of "$1")
-  [ "$got" = "$2" ] || die "$3: SHA-256 MISMATCH — refusing.
-   expected $2
-   got      $got"
-  info "$3: sha256 OK"
-}
 fetch() {  # fetch URL DEST
   curl -fL --proto '=https' --tlsv1.2 --retry 2 -sS -o "$2" "$1" \
     || die "download failed: $1  (blocked by the web filter? use --from-mirror or a local tarball)"
@@ -215,10 +227,7 @@ fi
 mkdir -p "$ROOT"
 rm -rf "$TMP/tool-x"; mkdir "$TMP/tool-x"
 if [ -n "$TOOL_TARBALL" ]; then
-  [ -f "$TOOL_TARBALL" ] || die "no such file: $TOOL_TARBALL"
-  cp "$TOOL_TARBALL" "$TMP/tool-local.tar.gz"
-  verify "$TMP/tool-local.tar.gz" "$T_SHA" "tool tarball"
-  tar -xzf "$TMP/tool-local.tar.gz" -C "$TMP/tool-x" --strip-components=1 || die "cannot extract tool tarball"
+  tar -xzf "$VERIFIED_TOOL_TARBALL" -C "$TMP/tool-x" --strip-components=1 || die "cannot extract tool tarball"
 elif [ -f "$SRC_ROOT/$CLI" ]; then
   # running from our own checkout: copy it, leaving out state and snapshots
   ( cd "$SRC_ROOT" && tar -cf - --exclude './install' --exclude '.DS_Store' --exclude '*.pyc' --exclude '__pycache__' . ) | tar -xf - -C "$TMP/tool-x"
