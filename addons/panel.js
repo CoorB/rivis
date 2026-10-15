@@ -2188,10 +2188,11 @@
   // you are looking at stay put while calls keep arriving (or old ones are trimmed). The anchor is the first visible
   // row's call id and its offset; after each list update the scroll position is corrected before the next paint.
   (function anchorList() {
-    let ft = null, anchor = null, mo = null;
+    let ft = null, anchor = null, mo = null, correctedScroll = null, observedScroll = null, recordTimer = null, missTimer = null;
     const rows = () => ft.querySelectorAll("tbody tr");
     const headH = () => { const h = ft.querySelector("thead"); return h ? h.getBoundingClientRect().height : 0; };
     const record = () => {
+      clearTimeout(missTimer); missTimer = null;
       anchor = null;
       if (!ft || ft.scrollTop <= 0) return;                 // at the top: follow the newest calls
       const top = ft.getBoundingClientRect().top + headH();
@@ -2200,18 +2201,36 @@
         if (r.height && r.bottom > top + 1) { const f = flowOf(tr); if (f) anchor = { id: f.id, off: r.top - top }; return; }
       }
     };
+    const scheduleRecord = (replace) => {
+      if (replace) { clearTimeout(recordTimer); recordTimer = null; }
+      if (recordTimer !== null) return;
+      recordTimer = setTimeout(() => { recordTimer = null; record(); }, 50);
+    };
+    const onScroll = () => {
+      // A corrective scroll must keep the existing anchor. A user's scroll gets a brief debounce so mitmweb's
+      // virtual rows represent the new scrollTop before we choose the anchor (the scroll event itself is too early).
+      if (correctedScroll !== null && Math.abs(ft.scrollTop - correctedScroll) < 1) { correctedScroll = null; return; }
+      correctedScroll = null;
+      if (observedScroll !== null && Math.abs(ft.scrollTop - observedScroll) < 1 && recordTimer !== null) return;
+      observedScroll = ft.scrollTop;
+      scheduleRecord(true);
+    };
     const correct = () => {
-      if (!anchor || !ft) return record();
+      if (!ft) return;
+      if (!anchor) { scheduleRecord(false); return; }
       const top = ft.getBoundingClientRect().top + headH();
       for (const tr of rows()) {
         const f = flowOf(tr);
         if (f && f.id === anchor.id) {
+          clearTimeout(missTimer); missTimer = null;
           const d = tr.getBoundingClientRect().top - top - anchor.off;
-          if (Math.abs(d) >= 1) ft.scrollTop += d;
-          break;
+          if (Math.abs(d) >= 1) { correctedScroll = ft.scrollTop + d; ft.scrollTop = correctedScroll; }
+          return;                                             // keep this anchor across every partial React render
         }
       }
-      record();
+      // The anchor may be absent for one virtual-list render. Only replace it if it stays gone (for example, the
+      // retention cap removed it), never in the middle of a list update.
+      if (!missTimer) missTimer = setTimeout(record, 100);
     };
     const attach = () => {
       const now = document.querySelector(".flow-table");
@@ -2220,10 +2239,11 @@
       ft = now; anchor = null;
       if (!ft) return;
       ft.style.overflowAnchor = "none";                    // ours, not the browser's: rows are virtualized
-      ft.addEventListener("scroll", record, { passive: true });
+      ft.addEventListener("scroll", onScroll, { passive: true });
       mo = new MutationObserver(correct);
       mo.observe(ft, { childList: true, subtree: true });
     };
+    new MutationObserver(attach).observe(document.body, { childList: true, subtree: true });
     setInterval(attach, 1000); attach();
   })();
   setTimeout(showWelcome, 900);

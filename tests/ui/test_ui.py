@@ -151,6 +151,7 @@ class UiSmoke(UiBase):
         self.many_flows(150)
         page = self.open()
         wait_for(lambda: "sort-desc" in (page.locator(".flow-table th.col-timestamp").get_attribute("class") or ""), 10, 0.1, "newest first")
+        wait_for(lambda: "/text" in (self.first_visible(page) or ""), 10, 0.1, "initial flows fully rendered")
         page.evaluate("document.querySelector('.flow-table').scrollTop = 1600")
         page.wait_for_timeout(400)
         gap = page.evaluate("Math.abs(document.querySelector('.flow-table thead').getBoundingClientRect().top - "
@@ -160,6 +161,9 @@ class UiSmoke(UiBase):
         self.many_flows(12)                                     # 12 newer calls arrive above the visible rows
         page.wait_for_timeout(1200)
         self.assertEqual(self.first_visible(page), before, "rows under the pointer must not move")
+        self.many_flows(7)                                      # a second render burst must retain the same original anchor
+        page.wait_for_timeout(1200)
+        self.assertEqual(self.first_visible(page), before, "the scroll anchor must survive repeated stream updates")
         page.evaluate("document.querySelector('.flow-table').scrollTop = 0")   # at the top: newest calls come into view
         page.wait_for_timeout(300)
         self.fetch("/text?newest=1")
