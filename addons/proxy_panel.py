@@ -254,6 +254,15 @@ class ProxyPanel:
 
     def save_cfg(self, cfg):
         atomic_json(self.rules_path, migrate_rules(cfg))
+        # Apply now, not on the proxy's next once-a-second poll: a breakpoint set in the panel must catch the very next
+        # call (on a quiet app that is the only call; seen with the NEO app, 2026-10-15).
+        for addon in self._addons():
+            if addon.__class__.__name__ == "ProxyRules":
+                try:
+                    addon.mtime = None
+                    addon._reload(force=True)
+                except Exception as e:  # noqa: BLE001 - the file is saved; the proxy still picks it up within a second
+                    ctx.log.warn(f"panel: could not apply the rules change at once: {e}")
 
     @staticmethod
     def _check_input(value):

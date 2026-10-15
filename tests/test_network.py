@@ -120,6 +120,19 @@ class Breakpoints(LiveCase):
                                      if p["id"] == flow_id and (phase is None or p["phase"] == phase)), None),
                         10, 0.1, "replayed call paused")
 
+    def test_a_breakpoint_set_in_the_panel_catches_the_very_next_call(self):
+        """Live NEO app, 2026-10-15: a breakpoint set and then triggered at once missed the call, because the proxy
+        re-read rules at most once a second. No sleep between setting it and the call, for each phase."""
+        for phase in ("request", "response"):
+            self.reset_state()
+            self.fetch("/json/small")                                  # the proxy has just checked the rules file
+            self.panel.ok("bp_add", {"host": "127.0.0.1", "path": "/echo", phase: True, "name": "now-" + phase})
+            call = self.bg("/echo?now=" + phase)
+            got = self.paused()[0]
+            self.assertEqual(got["phase"], phase)
+            self.panel.ok("paused_skip", {"id": got["id"]})
+            self.assertEqual(call.result().status, 200)
+
     def test_request_pause_continue_with_edits(self):
         self.reset_state(breakpoints=[bp()])
         call = self.bg("/echo?q=1", method="POST", data="orig")
