@@ -617,6 +617,13 @@ class MalformedInput(LiveCase):
                 code, doc, _ = self.panel.post(op, raw=raw)
                 self.assertEqual(code, 400, "%s %r -> %s" % (op, raw, code))
 
+    def test_panel_operations_have_request_and_field_size_limits(self):
+        code, doc, _ = self.panel.post("view", raw=b" " * (8 * 1024 * 1024 + 1), timeout=30)
+        self.assertEqual(code, 413)
+        code, doc, _ = self.panel.post("view", {"oversized": "x" * (2 * 1024 * 1024 + 1)}, timeout=30)
+        self.assertEqual(code, 400)
+        self.assertIn("2 MiB", doc["error"])
+
     def test_wrongly_typed_names_give_json_error_not_500(self):
         """FOUND-BUGS B1: name/host given as number, list, object or bool → HTTP 500."""
         for op, key in (("sess_save", "name"), ("coll_record", "name"), ("coll_import", "name"),

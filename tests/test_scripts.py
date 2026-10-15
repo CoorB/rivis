@@ -113,6 +113,10 @@ def on_request(context, url, request):
         self.assertEqual((r.status, r.json(), r.header("x-m")), (202, {"mocked": True}, "1"))
         self.assertEqual(self.up.hits_for("/echo"), [])
 
+    def test_mock_preserves_duplicate_set_cookie_headers(self):
+        self.install("cookies.py", 'def on_request(context, url, request):\n    return mock(200, "ok", {"Set-Cookie": ["a=1; Path=/", "b=2; Path=/"]})\n', match="/echo")
+        self.assertEqual(self.fetch("/echo").header_all("set-cookie"), ["a=1; Path=/", "b=2; Path=/"])
+
     def test_method_and_match_filters(self):
         self.install("only_post.py", '''
 def on_request(context, url, request):

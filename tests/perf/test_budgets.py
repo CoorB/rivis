@@ -72,7 +72,8 @@ class Budgets(unittest.TestCase):
         self.assertLess(statistics.median(times), 3.0, "startup times: %s" % times)
 
     def test_proxy_adds_under_5ms_median_with_no_rules_and_panel_scales_to_5000_flows(self):
-        inst = Instance(self.suite, "perf").start()
+        # the retention cap (default 5,000, trims to 90%) would keep this list below 5,000 — measure the panel itself
+        inst = Instance(self.suite, "perf", extra_env={"RIVIS_MAX_FLOWS": "20000"}).start()
         try:
             host = "127.0.0.1:%d" % self.up.http_port
             url = "http://%s/json/small" % host

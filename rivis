@@ -46,6 +46,7 @@
 #                                 read-only health check: versions, CA, ports, system proxy,
 #                                 sim/emulator trust, running state, host reachability, disk.
 #                                 --fix-safe does only safe, reversible fixes (asks y/N)
+#   <cli> bug-report [--output PATH]     create a redacted support bundle (no flows or tokens)
 #   <cli> status | cert
 set -uo pipefail
 umask 077
@@ -129,6 +130,9 @@ PROJECT_STATE="$STATE_ROOT/projects/$PROJECT"
 
 PORT="$(env_value PORT 8080)"
 WEB_PORT="$(env_value WEB_PORT 8083)"
+MAX_FLOWS="$(env_value MAX_FLOWS 5000)"
+[[ "$MAX_FLOWS" =~ ^[0-9]+$ ]] && [ "$MAX_FLOWS" -ge 1 ] && [ "$MAX_FLOWS" -le 1000000 ] || \
+  { echo "$CLI: ${ENV_PREFIX}_MAX_FLOWS must be an integer from 1 to 1000000" >&2; exit 1; }
 CONFDIR="$(env_value CONFDIR "$HOME/.mitmproxy")"
 CA_PEM="$CONFDIR/mitmproxy-ca-cert.pem"
 ADB="${ADB:-$(command -v adb || echo "$HOME/Library/Android/sdk/platform-tools/adb")}"
@@ -140,6 +144,16 @@ AUTH_ADDON="$SCRIPT_DIR/addons/proxy_auth.py"
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0" | sed "s/<cli>/$CLI/g; s/<ProductName>/$PRODUCT_NAME/g"; }
 die()   { echo "$CLI: $*" >&2; exit 1; }
 info()  { echo "• $*"; }
+
+atomic_private_text() {
+  local path="$1" text="$2" dir tmp
+  dir=$(dirname "$path")
+  (umask 077; mkdir -p "$dir") || return 1
+  tmp=$(mktemp "$dir/.write.XXXXXX") || return 1
+  if ! printf '%s\n' "$text" > "$tmp"; then rm -f "$tmp"; return 1; fi
+  chmod 600 "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$path" || { rm -f "$tmp"; return 1; }
+}
 
 ensure_ca() {
   [ -f "$CA_PEM" ] && return
@@ -159,9 +173,11 @@ ca_sha256() { openssl x509 -in "$CA_PEM" -noout -fingerprint -sha256 | cut -d= -
 CA_HISTORY="$STATE_ROOT/ca-history"
 ca_history_add() {
   [ -f "$CA_PEM" ] || return 0
-  local entry; entry="$(ca_sha256) $(ca_hash)"
-  (umask 077; mkdir -p "$STATE_ROOT"; touch "$CA_HISTORY")
-  grep -qxF "$entry" "$CA_HISTORY" 2>/dev/null || printf '%s\n' "$entry" >> "$CA_HISTORY"
+  local entry old=""; entry="$(ca_sha256) $(ca_hash)"
+  grep -qxF "$entry" "$CA_HISTORY" 2>/dev/null && return 0
+  [ ! -f "$CA_HISTORY" ] || old=$(cat "$CA_HISTORY")
+  atomic_private_text "$CA_HISTORY" "${old:+$old
+}$entry"
 }
 ca_history_field() {  # 1 = sha256, 2 = android hash; current CA first, then every recorded one
   { [ -f "$CA_PEM" ] && { [ "$1" = 1 ] && ca_sha256 || ca_hash; }
@@ -230,7 +246,7 @@ PY
   fi
   info "copied legacy ~/.neo-mitm state into $target (the original was left unchanged)"
   if [ ! -f "$STATE_ROOT/current-project" ]; then   # neo-mitm users keep working on their rules without --project
-    (umask 077; printf '%s\n' neo > "$STATE_ROOT/current-project") && info "current project: neo (change with: $CLI projects use ID)"
+    atomic_private_text "$STATE_ROOT/current-project" neo && info "current project: neo (change with: $CLI projects use ID)"
   fi
 }
 
@@ -240,8 +256,8 @@ ensure_rules() {
   [ -f "$RULES" ] && return
   local example="$PROJECT_PROFILE/rules.example.json"
   [ -f "$example" ] || die "rules example not found: $example"
-  cp "$example" "$RULES" || die "cannot create $RULES"
-  chmod 600 "$RULES"
+  local tmp; tmp=$(mktemp "$PROJECT_STATE/.rules.XXXXXX") || die "cannot create temporary rules file"
+  cp "$example" "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$RULES" || { rm -f "$tmp"; die "cannot create $RULES"; }
   info "created $RULES from project '$PROJECT' (all rules off)"
 }
 
@@ -271,8 +287,7 @@ PY
       [ $# -eq 1 ] || die "usage: $CLI projects use ID"
       valid_id "$1" || die "invalid project ID '$1'"
       profile_dir "$1" >/dev/null || die "unknown project '$1'"
-      (umask 077; mkdir -p "$STATE_ROOT"; printf '%s\n' "$1" > "$STATE_ROOT/current-project")
-      chmod 600 "$STATE_ROOT/current-project"
+      atomic_private_text "$STATE_ROOT/current-project" "$1" || die "could not save current project"
       info "current project: $1 (restart a running proxy to load its rules)"
       ;;
     show)
@@ -350,17 +365,17 @@ cmd_start() {
   # UI login: one token per run (or the product-prefixed WEB_PASSWORD). We open the browser ourselves
   # WITH the token — mitmweb's own auto-open lands on a "403 Authentication Required" page.
   local token="${WEB_PASSWORD:-$(openssl rand -hex 16)}"
-  (umask 077; echo "$token" > "$STATE_ROOT/web-token")
+  atomic_private_text "$STATE_ROOT/web-token" "$token" || die "could not save private UI password"
   local bootstrap; bootstrap=$(openssl rand -hex 16)
-  (umask 077; echo "$bootstrap" > "$STATE_ROOT/web-bootstrap")
+  atomic_private_text "$STATE_ROOT/web-bootstrap" "$bootstrap" || die "could not save one-time UI login"
   local url="http://127.0.0.1:$WEB_PORT/"
   local bootstrap_url="http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap"
   local args=(--listen-host 127.0.0.1 --mode "regular@$PORT"
               --set web_host=127.0.0.1 --set "web_port=$WEB_PORT" --set web_open_browser=false
               --set confdir="$CONFDIR" --set connection_strategy=lazy
-              -s "$AUTH_ADDON" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_panel.py"
+              -s "$AUTH_ADDON" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_panel.py" -s "$SCRIPT_DIR/addons/proxy_retention.py" -s "$SCRIPT_DIR/addons/proxy_operability.py"
               --set "proxy_auth_token_file=$STATE_ROOT/web-token" --set "proxy_bootstrap_file=$STATE_ROOT/web-bootstrap"
-              --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT")
+              --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT" --set "proxy_max_flows=$MAX_FLOWS" --set "proxy_log_dir=$STATE_ROOT/logs")
   [ -n "$private_hosts" ] && args+=(--set "proxy_private_hosts=$private_hosts")
   # local capture: the iOS Simulator shares the Mac network stack and has no proxy
   # setting of its own. Scoping capture to simulator processes keeps us off the
@@ -413,11 +428,9 @@ cmd_stop() {   # stop mitmweb on our ports (only mitmweb — never another app)
 cmd_ui() {
   [ -n "$(port_owner "$WEB_PORT")" ] || die "mitmweb is not running — $CLI start"
   [ -f "$STATE_ROOT/web-token" ] || die "no token file — restart with $CLI start"
-  local bootstrap tmp
+  local bootstrap
   bootstrap=$(openssl rand -hex 16) || die "could not generate a one-time UI login"
-  tmp="$STATE_ROOT/.web-bootstrap.$$"
-  (umask 077; printf '%s\n' "$bootstrap" > "$tmp") || die "could not create one-time UI login"
-  mv "$tmp" "$STATE_ROOT/web-bootstrap" || { rm -f "$tmp"; die "could not save one-time UI login"; }
+  atomic_private_text "$STATE_ROOT/web-bootstrap" "$bootstrap" || die "could not save one-time UI login"
   open "http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap"
 }
 
@@ -728,6 +741,20 @@ cmd_doctor() {
     --adb "$ADB" "$@"
 }
 
+cmd_bug_report() {
+  local out=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --output) [ $# -ge 2 ] || die "bug-report: --output needs a path"; out=(--output "$2"); shift ;;
+      *) die "bug-report: unknown option $1" ;;
+    esac
+    shift
+  done
+  /usr/bin/python3 -I "$SCRIPT_DIR/addons/bug_report.py" \
+    --state-root "$STATE_ROOT" --project "$PROJECT" --rules "$RULES" --confdir "$CONFDIR" \
+    --port "$PORT" --web-port "$WEB_PORT" --script-dir "$PROJECT_STATE/scripts" --adb "$ADB" "${out[@]}"
+}
+
 cmd_cert() {
   ensure_ca
   echo "CA:        $CA_PEM"
@@ -736,7 +763,7 @@ cmd_cert() {
   openssl x509 -in "$CA_PEM" -noout -enddate
 }
 
-case "${1:-}" in -h|--help|help|""|cert|doctor) ;; *) migrate_legacy || exit 1 ;; esac
+case "${1:-}" in -h|--help|help|""|cert|doctor|bug-report) ;; *) migrate_legacy || exit 1 ;; esac
 
 case "${1:-}" in
   projects)  shift; cmd_projects "$@" ;;
@@ -755,6 +782,7 @@ case "${1:-}" in
   breakpoint) shift; cmd_breakpoint "$@" ;;
   mock)      shift; cmd_mock "$@" ;;
   doctor)    shift; cmd_doctor "$@" ;;
+  bug-report) shift; cmd_bug_report "$@" ;;
   cert)      cmd_cert ;;
   -h|--help|help|"") usage ;;
   *) die "unknown command '$1' ($CLI --help)" ;;

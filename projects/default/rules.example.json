@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "throttle": "off",
   "throttle_match": ".",
   "loss": 0,

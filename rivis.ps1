@@ -24,6 +24,7 @@ system proxy, one CA per workstation, removed again with `off`.
                                             read-only health check. Runs the shared Python checker when
                                             Python is installed; otherwise a reduced native subset
                                             (ports, WinINET/WinHTTP proxy, adb, mitmproxy version)
+  .\<cli>.ps1 bug-report [-Output PATH]      create a redacted support bundle (no flows or tokens)
 
 No openssl needed: the Android hash name (subject_hash_old) is computed here.
 Environment names come from product.json; legacy NEO_MITM_* names remain fallbacks.
@@ -37,6 +38,7 @@ param(
   [string]$Match = "",
   [string]$Label = "",
   [string]$Hosts = "",
+  [string]$Output = "",
   [ValidateSet("py","js")][string]$Lang = "",
   [double]$Loss,
   [Alias("Dev")][switch]$Insecure,
@@ -57,6 +59,12 @@ $ProductConfig = Get-Content -Raw (Join-Path $PSScriptRoot "product.json") | Con
 $ProductName = $ProductConfig.name
 $Cli = $ProductConfig.cli
 $EnvPrefix = $ProductConfig.env_prefix
+$PinnedMitmproxy = "12.2.3"
+$MirrorConf = Join-Path $PSScriptRoot "install\mirror.conf"
+if (Test-Path $MirrorConf) {
+  $pin = Get-Content $MirrorConf | Where-Object { $_ -match '^MITMPROXY_VERSION=' } | Select-Object -First 1
+  if ($pin -and $pin -match '^MITMPROXY_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$') { $PinnedMitmproxy = $Matches[1] }
+}
 function Config-Env($suffix, $fallback) {
   $value = [Environment]::GetEnvironmentVariable("${EnvPrefix}_$suffix")
   if (-not $value) { $value = [Environment]::GetEnvironmentVariable("NEO_MITM_$suffix") }
@@ -89,6 +97,11 @@ if (-not $ProfileDir) { throw "unknown project '$Project'" }
 $ProjectConfig = Get-Content -Raw (Join-Path $ProfileDir "project.json") | ConvertFrom-Json
 $Port    = Config-Env "PORT" 8080
 $WebPort = Config-Env "WEB_PORT" 8083
+$MaxFlowsText = Config-Env "MAX_FLOWS" 5000
+$MaxFlows = 0
+if (-not [int]::TryParse($MaxFlowsText, [ref]$MaxFlows) -or $MaxFlows -lt 1 -or $MaxFlows -gt 1000000) {
+  throw "${EnvPrefix}_MAX_FLOWS must be an integer from 1 to 1000000"
+}
 $ConfDir = Config-Env "CONFDIR" (Join-Path $HOME ".mitmproxy")
 $CaPem   = Join-Path $ConfDir "mitmproxy-ca-cert.pem"
 $CaCer   = Join-Path $ConfDir "mitmproxy-ca-cert.cer"
@@ -98,15 +111,20 @@ $TokenPath = Join-Path $StateRoot "web-token"
 $BootstrapPath = Join-Path $StateRoot "web-bootstrap"
 
 function Write-PrivateFile([string]$path, [string]$text) {
-  # create empty, restrict to the current user, then write: the secret never exists with wider access
-  [IO.File]::WriteAllText($path, "", $Utf8NoBom)
-  if (($PSVersionTable.PSEdition -eq "Desktop") -or $IsWindows) {
-    & icacls.exe $path /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
-    if ($LASTEXITCODE -ne 0) { Remove-Item -Force $path; Die "could not restrict access to $path" }
-  } else {
-    & chmod 600 $path
-  }
-  [IO.File]::WriteAllText($path, $text + [Environment]::NewLine, $Utf8NoBom)
+  # Write a private sibling and rename it into place: readers see the old or new complete file, never a partial one.
+  $dir = Split-Path -Parent $path
+  if (-not $dir) { $dir = "." }
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $tmp = Join-Path $dir (".write-" + [Guid]::NewGuid().ToString("N"))
+  try {
+    [IO.File]::WriteAllText($tmp, "", $Utf8NoBom)
+    if (($PSVersionTable.PSEdition -eq "Desktop") -or $IsWindows) {
+      & icacls.exe $tmp /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+      if ($LASTEXITCODE -ne 0) { Die "could not restrict access to $path" }
+    } else { & chmod 600 $tmp }
+    [IO.File]::WriteAllText($tmp, $text + [Environment]::NewLine, $Utf8NoBom)
+    Move-Item -Force $tmp $path
+  } finally { if (Test-Path $tmp) { Remove-Item -Force $tmp } }
 }
 
 $CaHistoryPath = Join-Path $StateRoot "ca-history"
@@ -116,7 +134,8 @@ function Add-CaHistory([string]$hash) {
   New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
   if ((Get-CaHistoryHashes) -contains $hash) { return }
   if (-not (Test-Path $CaHistoryPath)) { Write-PrivateFile $CaHistoryPath "- $hash"; return }
-  Add-Content -Path $CaHistoryPath -Value "- $hash" -Encoding ascii
+  $lines = @((Get-Content $CaHistoryPath) + "- $hash")
+  Write-PrivateFile $CaHistoryPath ($lines -join [Environment]::NewLine)
 }
 function Get-CaHistoryHashes {
   if (-not (Test-Path $CaHistoryPath)) { return @() }
@@ -134,7 +153,7 @@ function Protect-StateRoot {
   } else {
     & chmod 700 $StateRoot
   }
-  [IO.File]::WriteAllText($marker, "", $Utf8NoBom)
+  Write-PrivateFile $marker ""
 }
 
 function New-UiBootstrap {
@@ -236,7 +255,7 @@ function Migrate-Legacy {
             }
           }
         }
-        if ($changed) { [IO.File]::WriteAllText($migratedRules, (($cfg | ConvertTo-Json -Depth 20) + [Environment]::NewLine), $Utf8NoBom) }
+        if ($changed) { Write-PrivateFile $migratedRules ($cfg | ConvertTo-Json -Depth 20) }
       } catch { Info "legacy rules copied unchanged because they are not valid JSON" }
     }
     Move-Item $temp $target
@@ -251,6 +270,10 @@ function Migrate-Legacy {
 function Read-RulesConfig {
   try { $cfg = Get-Content -Raw $RulesPath | ConvertFrom-Json }
   catch { Die "invalid rules JSON in ${RulesPath}: $($_.Exception.Message)" }
+  if ($null -eq $cfg.schema_version) { $cfg | Add-Member -NotePropertyName schema_version -NotePropertyValue 1 }
+  elseif (($cfg.schema_version -isnot [int] -and $cfg.schema_version -isnot [long]) -or $cfg.schema_version -lt 0) { Die "rules.json schema_version must be a non-negative integer" }
+  elseif ($cfg.schema_version -gt 1) { Die "rules.json schema version $($cfg.schema_version) is newer than this Rivis supports (1); upgrade Rivis" }
+  elseif ($cfg.schema_version -eq 0) { $cfg.schema_version = 1 }
   if ($null -eq $cfg.rules) { $cfg | Add-Member -NotePropertyName rules -NotePropertyValue @() }
   else { $cfg.rules = @($cfg.rules) }
   return $cfg
@@ -259,16 +282,9 @@ function Read-RulesConfig {
 function Save-RulesConfig($cfg) {
   $cfg.rules = @($cfg.rules)
   if ($null -ne $cfg.scripts) { $cfg.scripts = @($cfg.scripts) }
-  $dir = Split-Path -Parent $RulesPath
-  if (-not $dir) { $dir = "." }
-  $tmp = Join-Path $dir (".rules-{0}.json" -f ([Guid]::NewGuid().ToString("N")))
-  try {
-    $json = $cfg | ConvertTo-Json -Depth 20
-    [IO.File]::WriteAllText($tmp, $json + [Environment]::NewLine, $Utf8NoBom)
-    Move-Item -Force $tmp $RulesPath
-  } finally {
-    if (Test-Path $tmp) { Remove-Item -Force $tmp }
-  }
+  if ($null -eq $cfg.schema_version) { $cfg | Add-Member -NotePropertyName schema_version -NotePropertyValue 1 }
+  $json = $cfg | ConvertTo-Json -Depth 20
+  Write-PrivateFile $RulesPath $json
 }
 
 function Find-Rule($cfg, $ruleName) {
@@ -367,10 +383,10 @@ function Test-StaleLocalProxy($spec) {
   return $true
 }
 
-if ($Command -notin @("help","cert","doctor","-h","--help","")) { Migrate-Legacy }
+if ($Command -notin @("help","cert","doctor","bug-report","-h","--help","")) { Migrate-Legacy }
 
 $unexpected = @()
-if ($Command -in @("start","ui","net-reset","doctor","status","cert","help")) {
+if ($Command -in @("start","ui","net-reset","doctor","bug-report","status","cert","help")) {
   if ($Action) { $unexpected += $Action }; if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif ($Action -eq "list" -and $Command -in @("projects","rules","scripts","compose")) {
   if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
@@ -400,7 +416,7 @@ switch ($Command) {
       $id = $Name
       if (-not $id -or $id -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$' -or -not (Profile-Dir $id)) { Die "unknown project '$id'" }
       New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
-      [IO.File]::WriteAllText($currentProject, $id + [Environment]::NewLine, $Utf8NoBom)
+      Write-PrivateFile $currentProject $id
       Info "current project: $id (restart a running proxy to load its rules)"
     } elseif ($subcommand -eq "show") {
       $id = if ($Name) { $Name } else { $Project }
@@ -450,8 +466,8 @@ switch ($Command) {
               "--set","web_host=127.0.0.1","--set","web_port=$WebPort","--set","web_open_browser=false",
               "-s",(Join-Path $PSScriptRoot "addons\proxy_auth.py"),
               "--set","proxy_auth_token_file=$TokenPath","--set","proxy_bootstrap_file=$BootstrapPath",
-              "--set","confdir=$ConfDir","--set","connection_strategy=lazy","-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),
-              "--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project")
+              "--set","confdir=$ConfDir","--set","connection_strategy=lazy","-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_retention.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_operability.py"),
+              "--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project","--set","proxy_max_flows=$MaxFlows","--set","proxy_log_dir=$(Join-Path $StateRoot 'logs')")
     if ($Insecure) { $margs += @("--set","ssl_insecure=true"); Info "TLS: upstream verification OFF" }
     if ($ProjectOnly -and $ProjectConfig.hosts) {
       $escapedHosts = $ProjectConfig.hosts.Replace('\','\\').Replace("'","\'")
@@ -541,7 +557,7 @@ switch ($Command) {
         Write-Host "no longer trusted: $full"
       }
       $trustDoc = ConvertTo-Json -InputObject @{ files = @($files | Sort-Object) } -Depth 3
-      [IO.File]::WriteAllText($trustPath, $trustDoc, $Utf8NoBom)
+      Write-PrivateFile $trustPath $trustDoc
       if (Test-Path $RulesPath) { (Get-Item $RulesPath).LastWriteTime = Get-Date }   # hot reload
     } elseif ($subcommand -in @("on","off","show","rm")) {
       $ruleName = if ($Name) { $Name } elseif ($args.Count -gt 0) { [string]$args[0] } else { "" }
@@ -591,7 +607,7 @@ switch ($Command) {
       } else {
         'async function onRequest(context, url, request) {' + "`n" + '  request.headers["X-QA"] = "enabled";' + "`n" + '  return request;' + "`n" + '}' + "`n"
       }
-      [IO.File]::WriteAllText($path, $source, $Utf8NoBom)
+      Write-PrivateFile $path $source.TrimEnd("`r","`n")
       $cfg.scripts += [PSCustomObject]@{name=$Name;file=$filename;lang=$Lang;enabled=$true;match=$(if ($Match) {$Match} else {"."});method=$null}
       Save-RulesConfig $cfg; Write-Host "created $path"
     } elseif (-not $script) { Die "no script named '$Name'" }
@@ -801,13 +817,18 @@ switch ($Command) {
   }
   "doctor" {
     # Prefer the shared Python checker (same logic as macOS). Read-only.
-    $py = $null
+    $pythonExe = $null
+    $pyArgs = @()
     foreach ($cand in @("py","python3","python")) {
       $c = Get-Command $cand -ErrorAction SilentlyContinue
-      if ($c) { $py = if ($cand -eq "py") { @($c.Source,"-3") } else { @($c.Source) }; break }
+      if ($c) {
+        $pythonExe = $c.Source
+        if ($cand -eq "py") { $pyArgs = @("-3") }
+        break
+      }
     }
     $doctorPy = Join-Path $PSScriptRoot "addons\doctor.py"
-    if ($py -and (Test-Path $doctorPy)) {
+    if ($pythonExe -and (Test-Path $doctorPy)) {
       $adbPath = (Get-Command adb -ErrorAction SilentlyContinue).Source
       $argv = @($doctorPy, "--project", $Project, "--rules", $RulesPath, "--confdir", $ConfDir,
                 "--port", $Port, "--web-port", $WebPort, "--script-dir", (Join-Path $ProjectState "scripts"))
@@ -817,30 +838,32 @@ switch ($Command) {
       if ($AllowProfileNetwork) { $argv += "--allow-profile-network" }
       if ($FixSafe) { $argv += "--fix-safe" }
       if ($Yes)     { $argv += "--yes" }
-      & $py[0] @($py[1..($py.Count-1)]) @argv
+      & $pythonExe @pyArgs @argv
       exit $LASTEXITCODE
     }
     # Reduced native subset when Python is unavailable.
     Write-Host "doctor (native subset — install Python for the full check)"
+    $doctorExit = 0
     $mitm = Get-Command mitmdump -ErrorAction SilentlyContinue
     if ($mitm) {
       $v = (& $mitm.Source --version 2>&1 | Select-String -Pattern 'itmproxy:?\s*v?([0-9.]+)')
       $ver = if ($v) { $v.Matches[0].Groups[1].Value } else { "unknown" }
-      $mark = if ($ver -eq "12.2.3") { "ok" } else { "warn" }
+      $mark = if ($ver -eq $PinnedMitmproxy) { "ok" } else { $doctorExit = [Math]::Max($doctorExit, 1); "warn" }
       Write-Host ("  [{0}] mitmproxy {1} at {2}" -f $mark, $ver, $mitm.Source)
     } else {
-      Write-Host "  [error] mitmproxy not found (brew/choco install mitmproxy, pinned 12.2.3)"
+      $doctorExit = 2
+      Write-Host "  [error] mitmproxy not found (install the pinned $PinnedMitmproxy build from the internal mirror)"
     }
     foreach ($pp in @(@("proxy",$Port),@("web UI",$WebPort))) {
       $o = Port-Owner $pp[1]
-      if ($o) { Write-Host ("  [warn] {0} port :{1} owned by {2}" -f $pp[0],$pp[1],$o) }
+      if ($o) { $doctorExit = [Math]::Max($doctorExit, 1); Write-Host ("  [warn] {0} port :{1} owned by {2}" -f $pp[0],$pp[1],$o) }
       else    { Write-Host ("  [ok] {0} port :{1} is free" -f $pp[0],$pp[1]) }
     }
     $cur = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction SilentlyContinue
     if ($cur.ProxyEnable -eq 1) {
       $stale = Test-StaleLocalProxy $cur.ProxyServer
-      if ($stale) { Write-Host ("  [error] stale WinINET proxy {0} — run: {1}.ps1 net-reset" -f $cur.ProxyServer,$Cli) }
-      else        { Write-Host ("  [warn] WinINET system proxy set: {0} (steals emulator traffic)" -f $cur.ProxyServer) }
+      if ($stale) { $doctorExit = 2; Write-Host ("  [error] stale WinINET proxy {0} — run: {1}.ps1 net-reset" -f $cur.ProxyServer,$Cli) }
+      else        { $doctorExit = [Math]::Max($doctorExit, 1); Write-Host ("  [warn] WinINET system proxy set: {0} (steals emulator traffic)" -f $cur.ProxyServer) }
     } else { Write-Host "  [ok] no WinINET system proxy" }
     $whLine = (netsh winhttp show proxy 2>$null | Select-String 'Proxy Server')
     if ($whLine) { Write-Host ("  [info] WinHTTP: {0}" -f ($whLine.ToString().Trim())) }
@@ -851,7 +874,24 @@ switch ($Command) {
         Write-Host ("  [info] android {0}: http_proxy={1}" -f $e, ((& adb -s $e shell settings get global http_proxy) -replace "`r",''))
       }
     } else { Write-Host "  [info] adb not found" }
-    exit 0
+    exit $doctorExit
+  }
+  "bug-report" {
+    $pythonExe = $null
+    $pyArgs = @()
+    foreach ($cand in @("py","python3","python")) {
+      $c = Get-Command $cand -ErrorAction SilentlyContinue
+      if ($c) { $pythonExe = $c.Source; if ($cand -eq "py") { $pyArgs = @("-3") }; break }
+    }
+    if (-not $pythonExe) { Die "Python is required to create a bug report" }
+    $argv = @((Join-Path $PSScriptRoot "addons\bug_report.py"), "--state-root", $StateRoot,
+              "--project", $Project, "--rules", $RulesPath, "--confdir", $ConfDir,
+              "--port", $Port, "--web-port", $WebPort, "--script-dir", (Join-Path $ProjectState "scripts"))
+    $adbPath = (Get-Command adb -ErrorAction SilentlyContinue).Source
+    if ($adbPath) { $argv += @("--adb", $adbPath) }
+    if ($Output) { $argv += @("--output", $Output) }
+    & $pythonExe @pyArgs @argv
+    exit $LASTEXITCODE
   }
   "status" {
     Ensure-Rules

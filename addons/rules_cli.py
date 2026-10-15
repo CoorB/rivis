@@ -15,13 +15,12 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
-from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PRODUCT, SAFE_NAME, breakpoints, confined_path, forbidden_file,
-                           set_trusted_file, trusted_files, user_regex)
+from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PRODUCT, SAFE_NAME, atomic_json, breakpoints, confined_path,
+                           forbidden_file, migrate_rules, set_trusted_file, trusted_files, user_regex)
 
 ACTIONS = ACTION_REQUIREMENTS
 
@@ -33,17 +32,11 @@ def die(msg):
 
 def load(path):
     with open(path) as f:
-        return json.load(f)
+        return migrate_rules(json.load(f))
 
 
 def save(path, cfg):
-    # write-then-rename so the running proxy never reads a half-written file
-    d = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".rules-", suffix=".json")
-    with os.fdopen(fd, "w") as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    os.replace(tmp, path)
+    atomic_json(path, migrate_rules(cfg))
 
 
 def value(v):

@@ -5,10 +5,11 @@ import unittest
 from unittest import mock
 
 import _paths  # noqa: F401
+import doctor
 from doctor import (
-    Report, _cert_dates, _trusted_panel_listener, check_ca, check_network,
+    Report, _cert_dates, _trusted_panel_listener, check_ca, check_network, check_running,
     classify_network_failure, classify_system_proxy, executable_is_safe, is_loopback,
-    parse_lsof_listener, parse_networksetup_proxy, summarize_state,
+    parse_lsof_listener, parse_netstat_listener, parse_networksetup_proxy, summarize_state,
 )
 
 
@@ -34,6 +35,20 @@ class Lsof(unittest.TestCase):
                "Proxyman 42 me 10u IPv4 0x1 0t0 TCP *:8080 (LISTEN)\n")
         rows = parse_lsof_listener(out)
         self.assertEqual(rows[0]["command"], "Proxyman")
+
+
+class Netstat(unittest.TestCase):
+    def test_parses_only_the_requested_windows_listener(self):
+        sample = ("  TCP    127.0.0.1:18083    0.0.0.0:0    LISTENING    42\n"
+                  "  TCP    [::1]:18083        [::]:0       LISTENING    43\n"
+                  "  TCP    127.0.0.1:18080    0.0.0.0:0    LISTENING    44\n")
+        self.assertEqual([r["pid"] for r in parse_netstat_listener(sample, 18083)], ["42", "43"])
+
+    def test_windows_port_owner_adds_the_process_name(self):
+        netstat = "TCP 127.0.0.1:18083 0.0.0.0:0 LISTENING 42\n"
+        tasklist = '"mitmweb.exe","42","Console","1","12,000 K"\n'
+        with mock.patch("doctor.WIN", True), mock.patch("doctor.run", side_effect=[(0, netstat, ""), (0, tasklist, "")]):
+            self.assertEqual(doctor.port_owner(18083)[0]["command"], "mitmweb.exe")
 
 
 class NetworksetupParser(unittest.TestCase):
@@ -124,6 +139,53 @@ class RunningInstanceTrust(unittest.TestCase):
             self.assertFalse(_trusted_panel_listener(owner, "/tmp/other.json")[0])
             remote = [dict(owner[0], name="*:18083")]
             self.assertFalse(_trusted_panel_listener(remote, "/tmp/rules.json")[0])
+
+    def test_windows_listener_command_line_is_verified_without_unix_ps(self):
+        owner = [{"command": "mitmweb.exe", "pid": "42", "name": "127.0.0.1:18083"}]
+        rules = os.path.abspath("C:/state/rules.json")
+        command = "mitmweb.exe -s %s --set proxy_rules_file=%s" % (
+            os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "addons", "proxy_panel.py")), rules)
+        with mock.patch("doctor.WIN", True), mock.patch("doctor.run", return_value=(0, command, "")) as run:
+            self.assertTrue(_trusted_panel_listener(owner, rules)[0])
+            self.assertEqual(run.call_args[0][0][0], "powershell.exe")
+
+    def test_different_project_is_a_warning_and_token_is_not_read(self):
+        rep = Report()
+        with mock.patch("doctor.port_owner", return_value=[{"command": "mitmweb", "pid": "42", "name": "127.0.0.1:18083"}]), \
+             mock.patch("doctor._trusted_panel_listener", return_value=(False, "listener serves a different rules file")), \
+             mock.patch("doctor.open", side_effect=AssertionError("must not read token"), create=True):
+            check_running(rep, 18083, "/tmp/other.json")
+        self.assertTrue(any(level == "warn" and "project" in title for _, level, title, _, _ in rep.items))
+        self.assertFalse(any(level == "error" for _, level, _, _, _ in rep.items))
+
+    def test_unreadable_token_is_reported_and_special_characters_are_url_encoded(self):
+        class Reply:
+            def __init__(self, body=b"x"):
+                self.body = body
+            def read(self, _n=None):
+                return self.body
+        class Opener:
+            def __init__(self):
+                self.urls = []
+            def open(self, url, timeout=None):
+                self.urls.append(url)
+                return Reply(b'{}' if "/proxy/api/state" in url else b"x")
+        with tempfile.TemporaryDirectory() as state:
+            token_path = os.path.join(state, "web-token")
+            with open(token_path, "w") as fh:
+                fh.write("a+b&c")
+            opener = Opener()
+            rep = Report()
+            common = [mock.patch("doctor.STATE_ROOT", state), mock.patch("doctor.port_owner", return_value=[{"pid": "42"}]),
+                      mock.patch("doctor._trusted_panel_listener", return_value=(True, "pid 42"))]
+            with common[0], common[1], common[2], mock.patch("urllib.request.build_opener", return_value=opener):
+                check_running(rep, 18083, "/tmp/rules.json")
+            self.assertTrue(opener.urls)
+            self.assertTrue(all("token=a%2Bb%26c" in u for u in opener.urls))
+            rep = Report()
+            with common[0], common[1], common[2], mock.patch("doctor.open", side_effect=PermissionError("denied"), create=True):
+                check_running(rep, 18083, "/tmp/rules.json")
+            self.assertTrue(any(level == "warn" and "unreadable" in title for _, level, title, _, _ in rep.items))
 
 
 class ProfileNetworkConsent(unittest.TestCase):

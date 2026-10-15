@@ -263,6 +263,13 @@ class HotReload(LiveCase):
         self.inst.write_cfg({"rules": [self.rule("r", "respond", "/echo", body="fixed")]})
         self.assertEqual(self.fetch("/echo").text, "fixed")                 # recovers once the file is valid again
 
+    def test_semantically_bad_rule_is_reported_as_skipped_not_structural_corruption(self):
+        self.inst.write_cfg({"rules": [{"action": "respond", "match": "/echo", "body": "unnamed"},
+                                        {"name": "missing-with", "action": "map_remote", "match": "/x"}]})
+        state = wait_for(lambda: self.panel.state(), 5, 0.2, "panel state")
+        self.assertIsNone(state["rules_error"])
+        self.assertTrue(any(s.get("name") == "missing-with" for s in state["skipped_rules"]))
+
     def test_deleting_rules_json_turns_rules_off_and_restoring_turns_them_on(self):
         self.reset_state(rules=[self.rule("r", "respond", "/echo", body="here")])
         self.assertEqual(self.fetch("/echo").text, "here")

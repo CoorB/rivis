@@ -55,7 +55,7 @@ class CliBase(unittest.TestCase):
 class Help(CliBase):
     def test_help_lists_commands(self):
         out = self.ok("--help").stdout
-        for word in ("start", "projects", "rules", "scripts", "throttle", "tls", "compose", "breakpoint", "net-reset", "android", "ios"):
+        for word in ("start", "projects", "rules", "scripts", "throttle", "tls", "compose", "breakpoint", "net-reset", "bug-report", "android", "ios"):
             self.assertIn(word, out)
         self.assertIn("rivis", out)
 
