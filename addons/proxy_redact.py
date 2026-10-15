@@ -40,14 +40,20 @@ def secret_key(key):
     return isinstance(key, str) and bool(_SECRET_KEY.search(key))
 
 
-def _value(obj):
-    """Redact secret-named fields and JWT-shaped strings inside parsed JSON."""
+def _value(obj, depth=0):
+    """Redact secret-named fields and JWT-shaped strings inside parsed JSON (and JSON nested in strings)."""
     if isinstance(obj, dict):
-        return {k: (REDACTED if secret_key(k) and v not in (None, "") and not isinstance(v, (dict, list)) else _value(v))
+        return {k: (REDACTED if secret_key(k) and v not in (None, "") and not isinstance(v, (dict, list)) else _value(v, depth))
                 for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_value(v) for v in obj]
+        return [_value(v, depth) for v in obj]
     if isinstance(obj, str):
+        stripped = obj.strip()
+        if depth < 4 and stripped[:1] in ("{", "[") and len(stripped) <= 2_000_000:
+            try:   # JSON sent as a string inside JSON (echoed bodies, wrapped payloads): redact it by field name too
+                return json.dumps(_value(json.loads(stripped), depth + 1), ensure_ascii=False)
+            except (ValueError, RecursionError):
+                pass
         return _JWT.sub(REDACTED, obj)
     return obj
 
@@ -108,3 +114,26 @@ def har(doc):
             content["size"] = len(content["text"])
     doc.setdefault("log", {})["comment"] = "Secrets redacted by Rivis (credential headers, cookies, secret fields, JWTs)."
     return doc
+
+
+_HEADER_LINE = re.compile(r"^([A-Za-z0-9!#$%&'*+.^_`|~-]+):[ \t]*(.*)$")
+
+
+def raw_text(raw):
+    """Redact raw HTTP text (request and/or response): secret header lines, then JWT-shaped values anywhere."""
+    out, in_head, ctype = [], True, ""
+    for line in raw.splitlines(keepends=True):
+        bare = line.rstrip("\r\n")
+        if not bare:
+            in_head = False
+        m = _HEADER_LINE.match(bare)
+        if m and (in_head or secret_header(m.group(1))):
+            in_head = True                                    # the response head of a combined request + response
+            if m.group(1).lower() == "content-type":
+                ctype = m.group(2)
+            if secret_header(m.group(1)):
+                line = "%s: %s%s" % (m.group(1), REDACTED, line[len(bare):])
+        elif not in_head and bare.lstrip()[:1] in ("{", "["):
+            line = text(bare, ctype) + line[len(bare):]       # a JSON body line: redact by field name too
+        out.append(line)
+    return _JWT.sub(REDACTED, "".join(out))

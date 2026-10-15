@@ -252,6 +252,10 @@
                padding: 10px; resize: vertical; background: var(--rv-surface-2); color: var(--rv-text); tab-size: 2; }
     textarea[readonly] { opacity: .75; }
     .hrow input, .krow input[type=text], td input { font-family: var(--rv-mono); }
+    .lostbar { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 2147483004; display: none; max-width: min(720px, 92vw);
+               background: var(--rv-danger, #b42318); color: #fff; padding: 8px 14px; border-radius: var(--rv-r-md); font-size: 13px; box-shadow: var(--rv-shadow-2, 0 4px 14px rgba(0,0,0,.25)); }
+    .lostbar.open { display: block; }
+    .lostbar code { background: rgba(255,255,255,.18); color: #fff; padding: 0 4px; border-radius: 3px; }
     .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 26px; z-index: 2147483003; background: var(--rv-text); color: var(--rv-surface); padding: 9px 16px; border-radius: var(--rv-r-md);
              font-size: 12.5px; font-weight: 500; display: none; align-items: center; gap: 12px; max-width: 80vw; box-shadow: var(--rv-shadow-2); animation: toast var(--rv-dur) var(--rv-ease); }
     .toast.err { background: var(--rv-danger); color: var(--rv-danger-fg); }
@@ -401,7 +405,8 @@
   <div class="pause" id="help"><div class="sheet" id="hsheet"></div></div>
   <div class="welcome" id="welcome" role="dialog" aria-label="Coming from Proxyman?"></div><div class="wscrim" id="wscrim"></div>
   <div class="emptylist" id="emptylist"></div>
-  <div class="toast" id="toast"></div>`;
+  <div class="toast" id="toast"></div>
+  <div class="lostbar" id="lostbar" role="alert"></div>`;
 
   const $ = (id) => root.getElementById(id);
   let tab = "call", state = null, editing = null, pausedOpen = null, dismissed = new Set();
@@ -898,7 +903,7 @@
              <button class="b p" id="crec">Start recording</button></div>
            <div class="btns">Record calls matching <input type="text" id="cmatch" class="grow" value="${esc(c.record_match)}"></div>`}
       <h4>Replay</h4>
-      <div class="row">${sw('id="cstrict"', c.strict)}<div class="n">Strict replay <div class="sub">Calls not in a replayed collection get a 404</div></div></div>
+      <div class="row">${sw('id="cstrict"', c.strict)}<div class="n">Strict replay <div class="sub">Calls matching <code>${esc(c.record_match || ".")}</code> that are not in a replayed collection get a 404. ${c.record_match && c.record_match !== "." ? "Other calls still go to the real server." : "That is every call."}</div></div></div>
       <h4>Collections (${c.items.length})</h4>
       ${c.items.length ? c.items.map((x, i) => `
         <div class="row">${sw(`data-ci="${i}"`, x.replay, c.recording === x.name ? "disabled" : "")}
@@ -917,7 +922,7 @@
     $("cstop") && ($("cstop").onclick = () => run("coll_stop", {}, "Recording stopped"));
     $("cstrict").onchange = () => run("coll_strict", { strict: $("cstrict").checked }, $("cstrict").checked ? "Strict replay on" : "Strict replay off");
     m.querySelectorAll("[data-ci]").forEach((cb) => (cb.onchange = () => run("coll_replay", { name: c.items[cb.dataset.ci].name, enabled: cb.checked }, cb.checked ? "Replaying " + c.items[cb.dataset.ci].name : "Replay off")));
-    m.querySelectorAll("[data-cdel]").forEach((b) => (b.onclick = () => { const n = c.items[b.dataset.cdel].name; if (confirm("Delete collection '" + n + "'?")) run("coll_delete", { name: n }, "Deleted " + n); }));
+    m.querySelectorAll("[data-cdel]").forEach((b) => (b.onclick = () => { const n = c.items[b.dataset.cdel].name; if (confirm("Delete collection '" + n + "'?")) { if (collOpen === n) collOpen = null; run("coll_delete", { name: n }, "Deleted " + n); } }));
     m.querySelectorAll("[data-cexp]").forEach((b) => (b.onclick = () => downloadHar("coll_export", c.items[b.dataset.cexp].name, "chsec")));
     m.querySelectorAll("[data-cview]").forEach((b) => (b.onclick = () => { const n = c.items[b.dataset.cview].name; collOpen = collOpen === n ? null : n; render(); }));
     $("cimp").onclick = async () => {
@@ -1004,7 +1009,9 @@
     $("ssave").onclick = () => run("sess_save", { name: $("sn").value.trim(), note: $("snote").value, visible_only: $("svis").checked }, (x) => "Saved " + x.count + " calls");
     m.querySelectorAll("[data-sload]").forEach((b) => (b.onclick = () => {
       const x = ss[b.dataset.sload];
-      const replace = confirm("Open '" + x.name + "'.\n\nOK = replace the current list\nCancel = add to the current list");
+      // two plain questions, so Cancel can always mean "do nothing" (it used to mean "add to the list")
+      let replace = confirm("Open '" + x.name + "' and REPLACE the current list?\n\nCancel to choose 'add' instead, or to stop.");
+      if (!replace && !confirm("ADD the calls of '" + x.name + "' to the current list?\n\nCancel = do nothing.")) return;
       run("sess_load", { name: x.name, replace }, (r) => "Opened " + r.count + " calls");
     }));
     m.querySelectorAll("[data-sdel]").forEach((b) => (b.onclick = () => { const x = ss[b.dataset.sdel]; if (confirm("Delete session '" + x.name + "'?")) run("sess_delete", { name: x.name }, "Deleted"); }));
@@ -1286,7 +1293,8 @@
     const t = text.trim();
     if (!t) return "";
     if (isExpr(t)) return t;
-    return t.split(/\s+/).map((w) => "~u '" + reFilter(w) + "'").join(" & ");
+    // a 3-digit status code (500, 404…) also matches the response status — what a tester typing "500" means
+    return t.split(/\s+/).map((w) => /^[1-5]\d\d$/.test(w) ? "( ~u '" + w + "' | ~c " + w + " )" : "~u '" + reFilter(w) + "'").join(" & ");
   };
   let storeRef = null;
   const mwStore = () => {
@@ -1813,8 +1821,9 @@
     $("save").onclick = async () => {
       if (!jsonCheck(ta, $("jsonok")) && !confirm("This is not valid JSON. Save anyway?")) return;
       const headers = readHeaders("hd");
-      const r = await run("mockfile_put", { name: e.name, content: ta.value, status: $("st").value, headers }, "Saved — next call gets it");
-      if (r) editing = { ...editing, content: ta.value, status: $("st").value, headers };
+      const saved = { content: ta.value, status: $("st").value, headers };
+      editing = { ...editing, ...saved };                  // before run(): it re-renders, which must show what was saved
+      await run("mockfile_put", { name: e.name, ...saved }, "Saved — next call gets it");   // a failure toasts its own error
     };
   }
 
@@ -1838,7 +1847,8 @@
           <div class="btns"><button class="b" id="pfmt">Format JSON</button><span class="sub" id="pjs"></span></div></div>
         <div id="pph" style="${p.sub === "headers" ? "" : "display:none"}">${headersHTML(isResp ? p.resp_headers : p.req_headers, "phd")}</div>
       </main>
-      <footer><span class="sub" style="margin-right:auto">The app is waiting — continue within its timeout (~30–60 s).</span>
+      <footer><span class="sub" style="margin-right:auto">The app is waiting — continue within its timeout (~30–60 s).<br>
+        ${q > 1 ? `<button class="lnk" id="pall">Resume all ${q}</button> · ` : ""}<button class="lnk" id="pbpoff">Turn off this breakpoint</button></span>
         <button class="b d" id="pabort">Abort</button><button class="b" id="pskip">Skip (send unchanged)</button>
         <button class="b p" id="pcont">Continue</button></footer>`;
     $("pause").classList.add("open");
@@ -1866,6 +1876,29 @@
     };
     $("pskip").onclick = () => done("paused_skip");
     $("pabort").onclick = () => done("paused_abort");
+    // A breakpoint on a busy endpoint queues a sheet per call (twice with request + response): give a way out
+    const resumeAll = async () => {
+      let n = 0;
+      try { n = (await api("paused_resume_all", {})).resumed || 0; } catch (e) { toast(e.message, true); }
+      pausedOpen = null; $("pause").classList.remove("open");
+      return n;
+    };
+    if ($("pall")) $("pall").onclick = async () => toast("Resumed " + await resumeAll() + " paused call(s) unchanged");
+    $("pbpoff").onclick = async () => {
+      const hits = (state.breakpoints || []).filter((b) => b.enabled !== false && (!b.method || b.method === p.method) &&
+        (() => { try { return new RegExp(b.match).test(p.url); } catch (e) { return false; } })());
+      for (const b of hits) await run("bp_update", { name: b.name, enabled: false });
+      let n = await resumeAll();
+      // the proxy picks the change up within a second: a call released at its request can still stop at its
+      // response under the old filter, so sweep a few more times
+      for (let i = 0; i < 4 && hits.length; i++) {
+        await new Promise((ok) => setTimeout(ok, 800));
+        const left = ((await api("state").catch(() => ({}))).paused || []).length;
+        if (!left) break;
+        n += await resumeAll();
+      }
+      toast((hits.length ? "Breakpoint off" : "No matching breakpoint found") + (n ? " — resumed " + n + " waiting call(s)" : ""));
+    };
   }
 
   // poll for paused calls so the sheet opens by itself, like FRTMProxy / Proxyman
@@ -1878,9 +1911,18 @@
     }).catch(() => {}).finally(() => { viewerPoll = null; });
     return viewerPoll;
   }
+  // A proxy that died or froze must not look healthy: a hung request never fails, so the check has a deadline,
+  // and two missed checks in a row (~10 s) raise a banner until it answers again.
+  let lostSince = 0, missed = 0;
+  const showLost = (on) => {
+    const bar = $("lostbar"), cli = (state && state.product && state.product.cli) || "rivis";
+    if (on) bar.innerHTML = `Can't reach ${esc((state && state.product && state.product.name) || "Rivis")} for ${Math.round((Date.now() - lostSince) / 1000)} s — calls are <b>not</b> being captured. Check it with <code>${esc(cli)} status</code>; start it with <code>${esc(cli)} start --background</code>.`;
+    bar.classList.toggle("open", on);
+  };
   async function poll() {
     try {
-      const s = await api("state");
+      const s = await Promise.race([api("state"), new Promise((_, no) => setTimeout(() => no(new Error("no answer")), 4000))]);
+      missed = 0; lostSince = 0; showLost(false);
       state = s; badges();
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
       await refreshFlows(); tagCells(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
@@ -1889,7 +1931,10 @@
       if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) { pausedOpen = null; $("pause").classList.remove("open"); }
       if ($("drawer").classList.contains("open") && tab === "coll" && !editing && !root.activeElement && s.collections.recording) render();
       if ($("drawer").classList.contains("open") && !editing && (tab === "bp" || tab === "rules" || tab === "map" || tab === "scripts") && !root.activeElement) render();
-    } catch (e) { /* mitmweb restarting: try again */ }
+    } catch (e) {          // mitmweb restarting, stopped or frozen: say so after two misses, keep trying
+      if (!lostSince) lostSince = Date.now();
+      if (++missed >= 2) showLost(true);
+    }
     setTimeout(poll, 1200);
   }
 

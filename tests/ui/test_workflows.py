@@ -207,6 +207,61 @@ class Workflows(UiBase):
         wait_for(lambda: "on" in (btn.get_attribute("class") or "").split(), 5, 0.2, "Request shown as on")
         self.assertIn("on for this endpoint", self.panel_text())
 
+    def test_mock_editor_shows_what_was_saved(self):
+        """Manual QA: after Save with status 200 the editor showed the old 500, so the save looked lost."""
+        self.fetch("/json/small?wfk=1")
+        self.open()
+        self.select("wfk=1")
+        self.tab("call")
+        self.P("#mock").click()
+        self.P("#st").wait_for(timeout=10000)
+        self.P("#st").fill("299")
+        self.P("#body").fill('{"saved": 1}')
+        self.P("#save").click()
+        self.page.wait_for_timeout(2500)                       # a poll re-render or two
+        self.assertEqual(self.P("#st").input_value(), "299")
+        self.assertEqual(self.fetch("/json/small?wfk=1").status, 299)
+
+    def test_typing_a_status_code_finds_calls_with_that_status(self):
+        """Manual QA: '503' only matched URLs containing 503, not a 503 returned by /text."""
+        self.reset_state(rules=[self.rule("force", "respond", "/text", status=503, body={"down": True})])
+        wait_for(lambda: self.fetch("/text?wfl=1").status == 503, 10, 0.3, "the 503 rule applies")
+        self.fetch("/json/small?wfl=2")
+        page = self.open()
+        self.P("#sq").click(); page.keyboard.type("503"); page.keyboard.press("Enter")
+        try:
+            wait_for(lambda: self.row("wfl=1").count() == 1 and self.row("wfl=2").count() == 0, 10, 0.3, "only the 503 listed")
+        except AssertionError:
+            shot(page, "wf-status-filter")
+            print("FILTERDEBUG", self.row("wfl=1").count(), self.row("wfl=2").count(),
+                  page.evaluate("document.querySelector('#proxy-panel-host').shadowRoot.querySelector('#sq').value"),
+                  page.evaluate("[...document.querySelectorAll('.flow-table tbody tr td.col-path')].slice(0,8).map(t=>t.textContent)"))
+            raise
+
+    def test_a_breakpoint_on_a_busy_endpoint_can_be_turned_off_from_the_paused_sheet(self):
+        """Manual QA: a breakpoint on a call the app makes every few seconds queued sheet after sheet, covering the
+        whole UI (incl. the Breakpoints tab). The sheet now offers 'Turn off this breakpoint'."""
+        self.fetch("/text?wfm=1")
+        self.open()
+        self.breakpoint_from_call("wfm=1", phase="request")
+        stop = threading.Event()
+        def app():
+            while not stop.is_set():
+                self.fetch("/text?wfm=1", timeout=10)
+        workers = [threading.Thread(target=app, daemon=True) for _ in range(3)]
+        for w in workers:
+            w.start()
+        try:
+            self.sheet()
+            wait_for(lambda: len(self.panel.state()["paused"]) >= 2, 10, 0.2, "calls queue up")
+            self.P("#pbpoff").click()
+            wait_for(lambda: not any(b.get("enabled", True) for b in self.panel.state()["breakpoints"]), 10, 0.2, "breakpoint off")
+            wait_for(lambda: not self.panel.state()["paused"] and not self.P("#pause.open").count(), 15, 0.3,
+                     "nothing paused and the sheet closed while calls keep coming")
+        finally:
+            stop.set()
+        self.assertEqual(self.errors, [])
+
     def test_breakpoint_off_lets_calls_through(self):
         self.fetch("/text?wfi=1")
         self.open()

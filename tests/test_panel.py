@@ -230,6 +230,25 @@ class Ops(LiveCase):
         self.assertTrue(har["redacted"])
         self.assertTrue(any(e["request"]["url"].endswith("/deep") for e in har["har"]["log"]["entries"]))
 
+    def test_mitmwebs_own_export_menu_masks_secrets(self):
+        """Manual QA: the toolbar's Export ▾ → Copy as cURL / HTTPie / raw copied the Bearer token and cookies in clear."""
+        token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJxYSJ9.c2lnbmF0dXJl"
+        self.fetch("/echo?exp=1", headers={"Authorization": "Bearer " + token, "Cookie": "session=abc123"})
+        fid = self.flow_id("exp=1")
+        import urllib.request
+        for fmt in ("curl", "httpie", "raw_request", "raw_response", "raw"):
+            req = urllib.request.Request("http://127.0.0.1:%d/commands/export" % self.inst.web_port, method="POST",
+                                         data=json.dumps({"arguments": [fmt, "@" + fid]}).encode(),
+                                         headers={"Content-Type": "application/json", "X-XSRFToken": self.panel.xsrf})
+            doc = json.load(self.panel.opener.open(req, timeout=10))
+            text = doc.get("value") or ""
+            self.assertTrue(text, (fmt, doc))
+            self.assertNotIn(token, text, fmt)
+            if fmt not in ("raw_response", "raw"):   # /echo returns the request headers inside its JSON body, as [name, value] pairs
+                self.assertNotIn("abc123", text, fmt)
+            if fmt in ("curl", "httpie", "raw_request", "raw"):
+                self.assertIn("exp=1", text, fmt)
+
     def test_devices_tab_lists_and_runs_the_cli_as_one_background_job(self):
         st = self.panel.ok("devices", {})
         self.assertIn("ios", st)

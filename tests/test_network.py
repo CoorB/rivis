@@ -234,6 +234,16 @@ class Breakpoints(LiveCase):
         self.panel.ok("paused_abort", {"id": self.paused()[0]["id"]})
         self.assertNotEqual(call.result().status, 201)
 
+    def test_resume_all_releases_every_paused_call_unchanged(self):
+        """The paused sheet's 'Resume all' / 'Turn off this breakpoint' way out of a busy breakpoint."""
+        self.reset_state(breakpoints=[bp(match="/echo")])
+        calls = [self.bg("/echo?all=%d" % i) for i in range(3)]
+        self.paused(3)
+        self.assertEqual(self.panel.ok("paused_resume_all", {})["resumed"], 3)
+        self.assertEqual([c.result().status for c in calls], [200, 200, 200])
+        self.assertEqual(self.panel.state()["paused"], [])
+        self.assertEqual(self.panel.ok("paused_resume_all", {})["resumed"], 0)
+
     def test_method_filter_and_disabled(self):
         self.reset_state(breakpoints=[bp(method="DELETE"), bp("off", "/json", enabled=False)])
         self.assertEqual(self.fetch("/echo").status, 200)             # GET, not paused

@@ -90,6 +90,20 @@ class Contract(unittest.TestCase):
         self.assertIn("redacted", out["log"]["comment"])
 
 
+class JsonInsideStrings(unittest.TestCase):
+    def test_json_echoed_as_a_string_inside_json_is_redacted_by_field_name(self):
+        """Manual QA RIV-MAN-003: an API echoing the request body as a JSON string leaked password/otp/token."""
+        inner = json.dumps({"password": "PW-LEAK", "otp": "654321", "token": "TOK-LEAK", "user": "qa"})
+        out = R.text(json.dumps({"method": "POST", "body": inner}), "application/json")
+        for leak in ("PW-LEAK", "654321", "TOK-LEAK"):
+            self.assertNotIn(leak, out)
+        self.assertIn("qa", out)                       # non-secret fields survive
+
+    def test_plain_strings_that_only_look_like_json_are_left_alone(self):
+        out = R.text(json.dumps({"note": "[draft] {not json"}), "application/json")
+        self.assertIn("[draft] {not json", out)
+
+
 class DeepJson(unittest.TestCase):
     def test_json_nested_past_the_recursion_limit_is_redacted_as_text(self):
         body = "[" * 5000 + '"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln"' + "]" * 5000

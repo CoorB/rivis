@@ -1148,6 +1148,13 @@ class ProxyPanel:
                            resp_headers=[[k, v] for k, v in f.response.headers.items(multi=True)],
                            resp_body=rb, resp_body_editable=rok)
             return out
+        elif op == "paused_resume_all":             # the paused sheet's way out of a busy breakpoint
+            flows = [f for f in self.all_flows() if getattr(f, "intercepted", False)]
+            for f in flows:
+                f.comment = (f.comment + " | " if f.comment else "") + "breakpoint: skipped (sent unchanged)"
+                f.resume()
+            ctx.master.view.update(flows)
+            return {"resumed": len(flows)}
         elif op in ("paused_continue", "paused_skip", "paused_abort"):
             from mitmproxy import http as mhttp
             f = self.flow(a["id"])
@@ -1694,6 +1701,26 @@ class ProxyPanel:
                 self.set_header("Cache-Control", "no-store")
                 self.write(patch_mitmweb_js(source, ctx.log.warn))
 
+        class MitmwebExport(webapp.RequestHandler):
+            """mitmweb's own toolbar menu Export ▾ (Copy as cURL / HTTPie / raw) copied tokens and cookies in clear text,
+            next to our masked Copy as. Same masking here; unmasked copies stay a deliberate choice in Copy as."""
+
+            def post(self):
+                try:
+                    fmt, ref = (json.loads(self.request.body or b"{}").get("arguments") or [None, None])[:2]
+                    flow = impl(self).flow(str(ref or "").lstrip("@"))
+                    if fmt in ("curl", "httpie"):
+                        text = generate(impl(self)._flow_request(flow), fmt, True)
+                    elif fmt in ("raw_request", "raw_response", "raw"):
+                        from mitmproxy.addons import export as mexport
+                        raw = getattr(mexport, fmt)(flow)
+                        text = proxy_redact.raw_text(raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw))
+                    else:
+                        raise ValueError("unknown export format %r" % fmt)
+                    self.write({"value": text})
+                except (PanelError, ValueError, KeyError, TypeError) as e:
+                    self.write({"error": str(e)})
+
         class ThemeCSS(webapp.RequestHandler):
             def get(self):
                 with open(os.path.join(HERE, "theme.css"), "rb") as fh:
@@ -1811,6 +1838,7 @@ class ProxyPanel:
             (r"/", ProxyIndex),
             (r"/proxy/panel\.js", PanelJS),
             (r"/proxy/theme\.css", ThemeCSS),
+            (r"/commands/export", MitmwebExport),
             (r"/static/(index-[A-Za-z0-9_-]+\.js)", MitmwebIndexJS),
             (r"/proxy/boot\.js", BootJS),
             (r"/proxy/bootstrap/([0-9a-f]{32})", Bootstrap),
