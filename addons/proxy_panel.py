@@ -103,6 +103,14 @@ def wildcard_regex(host, path):
     return r"^https?://" + wc(host, r"[^/:]*") + r"(:\d+)?" + wc(path, ".*") + r"(\?|$)"
 
 
+def http_status(value):
+    """A status code a client can read: 100..599, else a clear error (0, -1 or 70000 gave the app an empty reply)."""
+    text = str(value).strip()
+    if not text.isdigit() or not 100 <= int(text) <= 599:
+        raise PanelError("status must be a number from 100 to 599")
+    return int(text)
+
+
 class PanelError(ValueError):
     """A user-facing 400. A ValueError on purpose: after a hot reload the API route (registered once) still holds the
     OLD module's PanelError while the swapped-in implementation raises the NEW one; both are ValueErrors."""
@@ -412,6 +420,28 @@ class ProxyPanel:
             if addon.__class__.__name__ == "ProxyRetention":
                 return {"limit": int(ctx.options.proxy_max_flows), "trimmed": int(getattr(addon, "trimmed", 0))}
         return {"limit": 5000, "trimmed": 0}
+
+    def release_held(self, cfg, changed):
+        """A breakpoint that was deleted or switched off lets go of the calls it is holding (unless another still holds them)."""
+        def hits(bp, f, phase):
+            if bp.get("enabled") is False or not bp.get(phase) or (bp.get("method") and bp["method"] != f.request.method):
+                return False
+            try:
+                return bool(user_regex(bp.get("match") or ".").search(f.request.pretty_url))
+            except re.error:
+                return False
+        flows = []
+        for f in self.all_flows():
+            if not getattr(f, "intercepted", False) or not getattr(f, "request", None):
+                continue
+            phase = "response" if f.response else "request"
+            if any(hits(b, f, phase) for b in changed) and not any(hits(b, f, phase) for b in cfg.get("breakpoints") or []):
+                f.comment = (f.comment + " | " if f.comment else "") + "breakpoint removed: sent unchanged"
+                f.resume()
+                flows.append(f)
+        if flows:
+            ctx.master.view.update(flows)
+        return len(flows)
 
     @staticmethod
     def script_syntax(filename, content):
@@ -1117,7 +1147,7 @@ class ProxyPanel:
             kind = a["kind"]
             r = {"enabled": True, "match": self.flow_regex(f), "method": f.request.method}
             if kind == "status":
-                r.update(action="respond", status=int(a["status"]),
+                r.update(action="respond", status=http_status(a["status"]),
                          body={"message": f"forced {a['status']} by {PRODUCT['name']}"})
             elif kind == "block":
                 r.update(action="block")
@@ -1167,11 +1197,12 @@ class ProxyPanel:
         elif op == "bp_update":
             for b in cfg.get("breakpoints") or []:
                 if b.get("name") == a["name"]:
+                    before = dict(b)
                     for k in ("enabled", "request", "response"):
                         if k in a:
                             b[k] = bool(a[k])
                     self.save_cfg(cfg)
-                    break
+                    return {"resumed": self.release_held(cfg, [before])}
             else:
                 if a["name"] == "legacy":
                     cfg.pop("breakpoint", None)
@@ -1181,8 +1212,10 @@ class ProxyPanel:
         elif op == "bp_delete":
             if a.get("name") == "legacy":
                 cfg.pop("breakpoint", None)
+            gone = [b for b in cfg.get("breakpoints") or [] if b.get("name") == a.get("name")]
             cfg["breakpoints"] = [b for b in cfg.get("breakpoints") or [] if b.get("name") != a.get("name")]
             self.save_cfg(cfg)
+            return {"resumed": self.release_held(cfg, gone)}
         elif op == "paused_get":
             f = self.flow(a["id"])
             if not f.intercepted:
@@ -1221,7 +1254,7 @@ class ProxyPanel:
                     hdr = lambda rows: mhttp.Headers([(str(k).encode(), str(v).encode()) for k, v in rows if str(k).strip()])
                     if f.response:
                         if "status" in e:
-                            f.response.status_code = int(e["status"])
+                            f.response.status_code = http_status(e["status"])
                         if "headers" in e:
                             f.response.headers = hdr(e["headers"])
                         if e.get("body") is not None:
@@ -1274,7 +1307,7 @@ class ProxyPanel:
             path = self.mock_path(name)
             atomic_write_text(path, a.get("body") or "{}\n")
             r = {"name": name, "enabled": True, "match": wildcard_regex(a.get("host"), a.get("path")),
-                 "action": "map_local", "file": path, "status": int(a.get("status") or 200),
+                 "action": "map_local", "file": path, "status": http_status(200 if a.get("status") in (None, "") else a["status"]),
                  "headers": {"Content-Type": "application/json"},
                  "note": f"manual: {a.get('host')}{a.get('path') or '/'}"}
             if a.get("method"):
@@ -1541,8 +1574,8 @@ class ProxyPanel:
                 raise PanelError("only files in the active project's state directory can be edited here")
             self.mock_path(os.path.basename(path)[:-5])   # name check
             atomic_write_text(path, a["content"])
-            if str(a.get("status", "")).isdigit():
-                r["status"] = int(a["status"])
+            if str(a.get("status", "")).strip():
+                r["status"] = http_status(a["status"])
             if isinstance(a.get("headers"), list):
                 r["headers"] = {str(k): str(v) for k, v in a["headers"] if str(k).strip()}
             self.save_cfg(cfg)

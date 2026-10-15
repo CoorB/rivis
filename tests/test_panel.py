@@ -286,6 +286,8 @@ class Ops(LiveCase):
         self.assertEqual(self.fetch("/echoo").status, 404)
         self.bad("maplocal_add", {"path": "/x"}, "host")
         self.assertEqual(self.panel.post("maplocal_add", {"host": "h", "status": "abc"})[0], 400)
+        for bad_status in (0, -1, 70000, 999):                          # MQ-16: these gave the app an empty reply
+            self.bad("maplocal_add", {"host": "h", "path": "/s", "status": bad_status}, "100 to 599")
         self.panel.ok("add", {"rule": {"name": "plain", "match": ".", "action": "block"}})
         self.bad("mockfile_get", {"name": "plain"}, "not a map local")
         self.bad("mockfile_put", {"name": "plain", "content": "x"}, "not a map local")

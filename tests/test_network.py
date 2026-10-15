@@ -248,6 +248,18 @@ class Breakpoints(LiveCase):
         self.assertEqual(self.panel.state()["paused"], [])
         self.assertEqual(self.panel.ok("paused_resume_all", {})["resumed"], 0)
 
+    def test_deleting_or_switching_off_a_breakpoint_lets_go_of_its_calls(self):
+        """MQ-22: delete used to leave the call paused until the app timed out; another breakpoint still holds its own."""
+        self.reset_state(breakpoints=[bp("a", "/echo"), bp("b", "/json")])
+        held, other = self.bg("/echo?del=1"), self.bg("/json/small?del=2")
+        self.paused(2)
+        self.assertEqual(self.panel.ok("bp_delete", {"name": "a"})["resumed"], 1)
+        self.assertEqual(held.result().status, 200)
+        self.assertEqual(len(self.panel.state()["paused"]), 1)
+        self.assertEqual(self.panel.ok("bp_update", {"name": "b", "enabled": False})["resumed"], 1)
+        self.assertEqual(other.result().status, 200)
+        self.assertEqual(self.panel.state()["paused"], [])
+
     def test_method_filter_and_disabled(self):
         self.reset_state(breakpoints=[bp(method="DELETE"), bp("off", "/json", enabled=False)])
         self.assertEqual(self.fetch("/echo").status, 200)             # GET, not paused

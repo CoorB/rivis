@@ -60,6 +60,7 @@ class Actions(LiveCase):
         self.reset_state(rules=[self.rule("s", "status", "/json/small", status=503)])
         r = self.fetch("/json/small")
         self.assertEqual((r.status, r.json()), (503, SMALL_JSON))     # body kept
+        self.assertEqual(self.inst.flow_for("/json/small")["response"]["reason"], "Service Unavailable")   # not "503 OK"
         self.assertEqual(len(self.up.hits_for("/json/small")), 1)
         self.reset_state(rules=[self.rule("s", "status", "/json/small", status=418, body={"x": 1})])
         r = self.fetch("/json/small")

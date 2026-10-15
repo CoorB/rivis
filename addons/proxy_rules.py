@@ -49,6 +49,7 @@ import time
 import ipaddress
 
 from mitmproxy import ctx, flowfilter, http
+from mitmproxy.net.http import status_codes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -491,6 +492,7 @@ class ProxyRules:
         self._intercept_replay(flow)
         for r in self._matching(flow, {"status"}):
             flow.response.status_code = int(r["status"])
+            flow.response.reason = status_codes.RESPONSES.get(flow.response.status_code, "")   # not "503 OK"
             if r.get("body") is not None or r.get("body_file"):
                 flow.response.content = self._body(r)
             _tag_rule(flow, r)
