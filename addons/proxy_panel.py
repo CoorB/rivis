@@ -1557,6 +1557,15 @@ class ProxyPanel:
             return {f"http://{h}" for h in allowed_hosts() if ":" in h.rsplit("]", 1)[-1]}
 
         class ProxyIndex(webapp.IndexHandler):
+            # F-19: mitmweb's ?token= login would set a ~13-month cookie; keep the login to this browser session.
+            def set_signed_cookie(self, name, value, expires_days=None, **kw):
+                kw.pop("expires", None)
+                kw.setdefault("httponly", True)
+                kw.setdefault("samesite", "Strict")
+                return super().set_signed_cookie(name, value, expires_days=None, **kw)
+
+            set_secure_cookie = set_signed_cookie
+
             def finish(self, chunk=None):
                 if chunk is not None:
                     s = chunk.decode() if isinstance(chunk, bytes) else chunk

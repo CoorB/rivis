@@ -49,6 +49,8 @@ class Auth(LiveCase):
         auth = [x for x in cookies if x.startswith("mitmproxy-auth-%d=" % self.inst.web_port)]
         self.assertTrue(auth, cookies)
         self.assertIn("httponly", auth[0].lower())
+        self.assertNotIn("expires", auth[0].lower())      # F-19: a browser-session cookie, not ~13 months
+        self.assertNotIn("max-age", auth[0].lower())
 
     def test_dns_rebinding_host_header_is_refused(self):
         """FOUND-BUGS B2 (fixed): every UI route refuses a Host that is not a loopback name for this port (STANDARDS §2)."""
@@ -463,7 +465,8 @@ class Ops(LiveCase):
 
 class Confinement(LiveCase):
     """Names with ../, absolute paths and symlink tricks never leave the project's state dir."""
-    TRAVERSAL = ("../x", "../../x", "/etc/hosts", "/tmp/x", "a/b", "x\x00y", "x%2e%2e%2fy", "a b", "~/x", "C:\\x", "")
+    TRAVERSAL = ("../x", "../../x", "/etc/hosts", "/tmp/x", "a/b", "x\x00y", "x%2e%2e%2fy", "a b", "~/x", "C:\\x", "",
+                 "CON", "nul.json", "com1", ".hidden", "trailing.", "..")   # F-18: Windows device names, dot edges
 
     def test_names_are_refused_by_every_name_taking_op(self):
         for name in self.TRAVERSAL:
