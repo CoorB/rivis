@@ -978,8 +978,6 @@ class ProxyPanel:
             self.save_cfg(cfg)
         elif op == "mock":          # Map Local from the selected call
             f = self.flow(a["flow_id"])
-            if not f.response:
-                raise PanelError("this call has no response yet")
             match = self.flow_regex(f)
             for r in cfg["rules"]:   # one mock per endpoint: reopen it instead of duplicating
                 if r.get("action") == "map_local" and r.get("match") == match and r.get("method") == f.request.method:
@@ -989,14 +987,15 @@ class ProxyPanel:
             name = self.unique(cfg, a.get("name") or self.default_name(f, "mock"))
             path = self.mock_path(name)
             os.makedirs(MOCK_DIR, exist_ok=True)
-            body = f.response.get_content(strict=False) or b""
+            # a call that never got an answer (server down, unreachable) is mocked from an empty JSON template
+            body = (f.response.get_content(strict=False) or b"") if f.response else b"{}\n"
             try:   # pretty-print JSON so it is easy to edit
                 body = (json.dumps(json.loads(body), indent=2, ensure_ascii=False) + "\n").encode()
             except ValueError:
                 pass
             atomic_write_bytes(path, body)
             r = {"name": name, "enabled": True, "match": self.flow_regex(f), "method": f.request.method,
-                 "action": "map_local", "file": path, "status": f.response.status_code,
+                 "action": "map_local", "file": path, "status": f.response.status_code if f.response else 200,
                  "note": f"from {f.request.method} {f.request.pretty_url[:120]}"}
             cfg["rules"].append(r)
             self.save_cfg(cfg)
@@ -1544,6 +1543,14 @@ class ProxyPanel:
         }
 
     # ── wiring into mitmweb ───────────────────────────────────────────────────
+    @staticmethod
+    def _show_start_time_column():
+        """The list opens newest first (panel.js sorts "Start time" descending), and mitmweb can only sort by a column
+        it shows. Set here, not in the launchers, so it also reaches an instance already running when this reloads."""
+        cols = list(getattr(ctx.options, "web_columns", None) or [])    # mitmweb-only option
+        if cols and "timestamp" not in cols:
+            ctx.options.update(web_columns=cols + ["timestamp"])
+
     def running(self):
         try:
             self.active_project = ctx.options.proxy_project
@@ -1556,6 +1563,7 @@ class ProxyPanel:
             m = re.search(r"~d '\^([^']*)\$'", vf)
             self.focused_host = m.group(1).replace("\\", "") if m else None
             self._register()
+            self._show_start_time_column()
         except Exception as e:   # never take mitmweb down
             ctx.log.warn(f"proxy_panel: not available ({type(e).__name__}: {e})")
 

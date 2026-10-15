@@ -94,6 +94,45 @@ class UiSmoke(LiveCase):
         self.assertEqual(welcome.count(), 0, "welcome must not come back after it was closed")
         self.assertEqual(self.errors, [])
 
+    def many_flows(self, n):
+        """n plain-HTTP calls in one curl process (fast enough for a few hundred rows)."""
+        argv = ["curl", "-sS", "--noproxy", "", "-x", "http://127.0.0.1:%d" % self.inst.proxy_port, "-o", "/dev/null"]
+        for i in range(n):
+            argv += [self.up.url("/json/small?n=%d" % i)] + (["-o", "/dev/null"] if i < n - 1 else [])
+        harness.subprocess.run(argv, timeout=120, check=False)
+
+    def test_rows_are_exactly_mitmwebs_row_height_and_scrolling_to_the_end_does_not_crash(self):
+        """mitmweb's virtual list assumes 32px rows; any other height loops setState near the bottom (React #185)."""
+        self.many_flows(300)
+        page = self.open()
+        wait_for(lambda: page.locator(".flow-table tbody tr td.col-path").count() > 20, 15, 0.2, "rows rendered")
+        for density in ("comfortable", "compact"):
+            page.evaluate("d => d === 'compact' ? document.documentElement.setAttribute('data-density', 'compact')"
+                          " : document.documentElement.removeAttribute('data-density')", density)
+            heights = page.evaluate("[...document.querySelectorAll('.flow-table tbody tr')]"
+                                    ".filter(r => r.querySelector('td')).map(r => r.getBoundingClientRect().height)")
+            self.assertTrue(heights and all(abs(h - 32) < 0.01 for h in heights), (density, sorted(set(heights))))
+            for _ in range(3):   # bounce between the ends: this is where a wrong row height made the list loop
+                page.evaluate("const v = document.querySelector('.flow-table'); v.scrollTop = v.scrollHeight")
+                page.wait_for_timeout(300)
+                page.evaluate("document.querySelector('.flow-table').scrollTop = 0")
+                page.wait_for_timeout(100)
+            self.assertEqual(page.locator("text=mitmproxy has crashed").count(), 0)
+        self.assertEqual(self.errors, [])
+
+    def test_the_list_opens_newest_first_and_the_user_can_still_re_sort(self):
+        page = self.open()
+        th = page.locator(".flow-table th.col-timestamp")
+        wait_for(lambda: "sort-desc" in (th.get_attribute("class") or ""), 10, 0.1, "Start time sorted descending")
+        first = page.locator(".flow-table tbody tr td.col-path").first.text_content()
+        self.assertIn("/text", first)                    # open() fetched /json/small, /echo, then /text
+        page.locator(".flow-table th.col-path").click()
+        wait_for(lambda: "sort-asc" in (page.locator(".flow-table th.col-path").get_attribute("class") or ""), 5, 0.1,
+                 "user re-sorted by path")
+        page.wait_for_timeout(500)
+        self.assertNotIn("sort", th.get_attribute("class") or "", "the default must not fight the user's own sort")
+        self.assertEqual(self.errors, [])
+
     def test_open_the_panel_and_click_every_tab(self):
         page = self.open()
         page.locator("#fab").click()

@@ -541,7 +541,7 @@
       <div class="call"><span class="m">${esc(r.method)}</span><span class="dim">${esc(r.pretty_host)}</span>${esc(r.path)}
         <div class="sub">${s ? "→ " + s.status_code : "no response yet"} · <button class="lnk" id="focus">${focused ? "Showing only this host — show all" : "Show only this host"}</button></div></div>
       <h4>Map Local ${info("Saves this response and serves it instead of the server's. You can edit its body, status and headers.")}</h4>
-      <div class="btns" style="margin-top:0"><button class="b p" id="mock" ${s ? "" : "disabled"}>Map Local this call…</button>${s ? "" : '<span class="sub">needs a response first</span>'}</div>
+      <div class="btns" style="margin-top:0"><button class="b p" id="mock">Map Local this call…</button>${s ? "" : '<span class="sub">no response yet — starts from 200 {}</span>'}</div>
       <h4>Breakpoint ${info("Pause calls to this endpoint so you can edit them. Request = before it reaches the server; Response = before the app gets it.")}</h4>
       <div class="btns" style="margin-top:0"><span class="sub">Pause at</span>
         <div class="seg" style="margin:0"><button data-ph="request" class="${bpFor && bpFor.request ? "on" : ""}" aria-pressed="${!!(bpFor && bpFor.request)}">Request</button><button data-ph="response" class="${bpFor && bpFor.response ? "on" : ""}" aria-pressed="${!!(bpFor && bpFor.response)}">Response</button></div>
@@ -1356,7 +1356,7 @@
     const focused = state && isHttp && state.focus_host === hostName;
     m.innerHTML = (isHttp
       ? `<div class="hd">${esc(f.request.method)} ${esc(hostName)}${esc(f.request.path.split("?")[0])}</div>` +
-        item("map", "Map Local this call…", "map", "", "", !f.response) + item("bp", "Pause on this call (Breakpoint)", "bp") +
+        item("map", "Map Local this call…", "map") + item("bp", "Pause on this call (Breakpoint)", "bp") +
         `<hr>` + item("repeat", "Repeat", "retry", `<kbd>${mod} ↵</kbd>`) + item("retry", "Edit &amp; Repeat…", "compose", `<kbd>${KALT} ${KSHIFT} ↵</kbd>`) + item("cmpA", "Compare: set as A", "cmp") +
         `<hr>` + item("curl", "Copy as cURL", "call") + item("url", "Copy URL", "call") +
         `<hr>` + item("host", focused ? "Show all hosts again" : "Show only this host", "search") + item("tls", "Stop decrypting this host", "lock")
@@ -2027,5 +2027,16 @@
   }, true);
   setInterval(() => { try { drawEmptyList(); } catch (err) { /* cosmetic */ } }, 1500);
   setTimeout(showWelcome, 900);
+
+  // Newest call first, like Proxyman. mitmweb has no default sort, so once per page load sort "Start time"
+  // descending. A header click cycles asc → desc → off and reads the sort from the last render, so the two
+  // clicks are a frame apart. Any column the user already sorted wins; after this they sort as usual.
+  (function newestFirst(tries) {
+    const sorted = document.querySelector(".flow-table th.sort-asc, .flow-table th.sort-desc");
+    const th = document.querySelector(".flow-table th.col-timestamp");
+    if (sorted && !(sorted === th && sorted.classList.contains("sort-asc"))) return;
+    if (th) th.click();
+    if (tries > 0) setTimeout(() => newestFirst(tries - 1), th ? 50 : 300);
+  })(40);
   poll();
 })();

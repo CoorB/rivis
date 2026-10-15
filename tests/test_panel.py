@@ -203,6 +203,21 @@ class Ops(LiveCase):
         self.bad("mockfile_get", {"name": "ghost"}, "no rule")
         self.bad("mock", {"flow_id": "nope"}, "no longer")
 
+    def test_mock_from_a_call_that_never_got_a_response(self):
+        """An unreachable server is exactly when you want Map Local: start from a 200 {} template."""
+        url = "http://127.0.0.1:9/unreachable-mock"          # discard port: nothing listens, the call errors
+        self.inst.fetch(url, timeout=5)
+        f = self.inst.flow_for("/unreachable-mock")
+        self.assertIsNone(f.get("response"))
+        name = self.panel.ok("mock", {"flow_id": f["id"]})["name"]
+        rule = next(r for r in self.rules() if r["name"] == name)
+        self.assertEqual((rule["action"], rule["status"]), ("map_local", 200))
+        self.assertEqual(json.loads(self.panel.ok("mockfile_get", {"name": name})["content"]), {})
+        self.widen_match(name, "/unreachable-mock")
+        r = wait_for(lambda: (lambda x: x if x.status == 200 else None)(self.inst.fetch(url, timeout=5)), 8, 0.3,
+                     "mock served for an unreachable host")
+        self.assertEqual(r.json(), {})
+
     def test_rules_built_from_a_call_match_that_call_on_a_non_default_port(self):
         """FOUND-BUGS B3: flow_regex drops ':port', so mock/quick/breakpoint-from-call never match a call to host:port."""
         self.fetch("/json/small")

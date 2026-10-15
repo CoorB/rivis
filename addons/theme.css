@@ -107,9 +107,9 @@
   /* type */
   --rv-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   --rv-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
-  --rv-row-h: 34px;            /* comfortable default */
+  --rv-row-h: 32px;            /* MUST equal mitmweb's FlowTable rowHeight (32): its virtual scroll assumes it, and any other height loops on scroll (React #185) */
 }
-:root[data-density="compact"], :host([data-density="compact"]) { --rv-row-h: 26px; }   /* tighter rows */
+:root[data-density="compact"], :host([data-density="compact"]) { --rv-row-h: 32px; }   /* compact = smaller type only; the row height is fixed at 32px (see above) */
 /* compact also tightens the list's type and shrinks mitmweb's fixed 32px row icons (the real height floor) */
 :root[data-density="compact"] .flow-table table { font-size: 12px; }
 :root[data-density="compact"] .flow-table td { padding-top: 0; padding-bottom: 0; }
@@ -234,7 +234,7 @@ input[type="checkbox"] { accent-color: var(--rv-accent); }
 .flow-table th.col-size, .flow-table th.col-time { text-align: right; padding-right: 8px; }
 .flow-table th.sort-asc, .flow-table th.sort-desc { background: var(--rv-surface-3); color: var(--rv-text); }
 .flow-table th.sort-asc:after, .flow-table th.sort-desc:after { background: transparent; color: var(--rv-accent); }
-.flow-table tbody tr { height: var(--rv-row-h); background: transparent; color: var(--rv-text); border-bottom: 1px solid transparent; transition: background var(--rv-dur) var(--rv-ease); }
+.flow-table tbody tr { height: var(--rv-row-h); background: transparent; color: var(--rv-text); border-bottom: 0;   /* no row border: it would add 1px to the 32px row */ transition: background var(--rv-dur) var(--rv-ease); }
 .flow-table tr:nth-child(2n) { background-color: var(--rv-row-alt); }
 .flow-table tbody tr:hover, .flow-table tr:nth-child(2n):hover { background-color: var(--rv-row-hover); }
 .flow-table tr.highlighted, .flow-table tr.highlighted:nth-child(2n) { background-color: var(--rv-warn-soft); }
