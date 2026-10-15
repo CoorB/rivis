@@ -10,6 +10,7 @@ Snapshot: 2026-10-15. Scope: repository commit `75aa15a` and the pinned runtime 
 | mitmproxy / mitmweb | 12.2.3 | Proxy engine and local web UI | Pinned in `install/mirror.conf`; official macOS arm64 and x86_64 archives have reviewed SHA-256 values there. The Windows archive must not be published until its currently-empty SHA-256 pin is filled. |
 | Python standard library | System Python 3.9+ for CLI helpers; bundled Python in the mitmproxy binary | JSON/state helpers, doctor, bug-report, tests | Rivis runtime helpers import only the standard library. The inspected macOS mitmproxy 12.2.3 binary reports bundled Python 3.14.4. |
 | OpenSSL | Bundled with the mitmproxy artifact | TLS implementation | The inspected macOS mitmproxy 12.2.3 binary reports OpenSSL 3.5.5. |
+| Magisk | 30.7 (optional) | One-time CA install on Google Play Android emulators, which refuse `adb root` (same approach as Proxyman 6.14) | Official upstream release APK and `scripts/host_patch.sh` at commit e8a5877, GPLv3, pinned by SHA-256 in `addons/android/magisk.pins` and verified at install and before each use. Never linked into Rivis; runs only on the emulator, on a temporary ramdisk copy, after explicit consent. Rivis adds a one-shot boot service that copies the CA and grants root to nothing else. |
 | Node.js | Optional, version not pinned | Runs user-authored JavaScript interception scripts | No npm packages are installed or shipped. If Node is absent, Python scripts and all non-script proxy features continue to work. |
 
 ## Python and npm inventories

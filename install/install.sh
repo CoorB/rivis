@@ -132,7 +132,7 @@ if [ "$UNINSTALL" = 1 ]; then
   else
     info "mitmproxy was not installed by us (or no receipt) — left alone"
   fi
-  for d in "$ROOT"/tool-*; do [ -d "$d" ] && do_ rm -rf "$d"; done
+  for d in "$ROOT"/tool-* "$ROOT"/magisk-*; do [ -d "$d" ] && do_ rm -rf "$d"; done
   do_ rm -f "$ROOT/current" "$RECEIPT"
   [ "$DRY" = 1 ] || rmdir "$ROOT" 2>/dev/null
   for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.config/fish/config.fish"; do strip_rc_block "$rc"; done
@@ -273,6 +273,36 @@ chmod +x "$TMP/tool-x/$CLI" 2>/dev/null
 rm -rf "$TOOL_DIR"; mv "$TMP/tool-x" "$TOOL_DIR"
 ln -sfn "$TOOL_DIR" "$ROOT/current"
 info "installed tool $TOOL_VERSION → $TOOL_DIR"
+
+# ---- 2b. Magisk (optional): one-click CA on Google Play Android emulators -------------------------------------
+# Official Magisk files (GPLv3), pinned in the tool's own addons/android/magisk.pins and verified like everything else.
+# Not in the bundle / mirror = skipped: `<cli> android on` then drives the Settings screens instead.
+MAGISK_PINS="$TOOL_DIR/addons/android/magisk.pins"
+if [ -f "$MAGISK_PINS" ]; then
+  mpin() { sed -n "s/^$1=//p" "$MAGISK_PINS" | head -1; }
+  MV=$(mpin MAGISK_VERSION); MAGISK_DIR="$ROOT/magisk-$MV"; msrc=""
+  if [ -f "$HERE/magisk-$MV/$(mpin MAGISK_APK)" ]; then msrc="bundle"
+  elif [ -n "$MIRROR" ]; then msrc="mirror"; fi
+  if [ -z "$msrc" ]; then
+    info "Magisk $MV not in this bundle — Google Play emulators will use the Settings screens for the CA"
+  else
+    rm -rf "$TMP/mg"; mkdir "$TMP/mg"; mok=1
+    for spec in "$(mpin MAGISK_APK):MAGISK_APK_SHA256" "host_patch.sh:MAGISK_HOST_PATCH_SHA256" "LICENSE:MAGISK_LICENSE_SHA256"; do
+      f="${spec%%:*}"; k="${spec##*:}"
+      if [ "$msrc" = bundle ]; then cp "$HERE/magisk-$MV/$f" "$TMP/mg/$f" || { mok=0; break; }
+      else need_https_mirror
+        curl -fL --proto '=https' --tlsv1.2 --retry 2 -sS -o "$TMP/mg/$f" "$MIRROR/magisk/$MV/$f" 2>/dev/null || { mok=0; break; }
+      fi
+      verify "$TMP/mg/$f" "$(mpin "$k")" "Magisk $f"          # a mismatch stops the install: never a tampered file
+    done
+    if [ "$mok" = 1 ]; then
+      rm -rf "$MAGISK_DIR"; mv "$TMP/mg" "$MAGISK_DIR"; chmod 700 "$MAGISK_DIR"
+      info "installed Magisk $MV → $MAGISK_DIR (one-click CA on Google Play emulators)"
+    else
+      info "Magisk $MV not available from the $msrc — Google Play emulators will use the Settings screens for the CA"
+    fi
+  fi
+fi
 
 # ---- 3. launcher on PATH ---------------------------------------------------------------------------------------
 mkdir -p "$BIN_DIR"

@@ -1,0 +1,13 @@
+# Rivis one-shot boot service, added to a TEMPORARY Magisk-patched ramdisk (never to the SDK image).
+# Runs once as root after boot, copies the workstation CA into the user CA store, writes a status file and exits.
+# It grants root to nothing else: adb shell, apps and Magisk's policies are left alone.
+on property:sys.boot_completed=1
+    start rivis_ca
+
+service rivis_ca ${MAGISKTMP}/rivis_ca.sh
+    class late_start
+    user root
+    group root
+    seclabel u:r:magisk:s0
+    disabled
+    oneshot

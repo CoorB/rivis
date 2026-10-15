@@ -1,0 +1,12 @@
+# Magisk, used only to install the CA on Google Play emulators (they refuse `adb root`). Plain KEY=VALUE, never sourced.
+# Official upstream files, verified before every use. Same files and hashes Proxyman 6.14 bundles (cross-checked
+# 2026-10-15 against its MANIFEST.sha256). Source: https://github.com/topjohnwu/Magisk/tree/v30.7 (GPLv3, see LICENSE).
+MAGISK_VERSION=30.7
+MAGISK_COMMIT=e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac
+MAGISK_APK=Magisk-v30.7.apk
+MAGISK_APK_SHA256=e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5
+MAGISK_APK_URL=https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk
+MAGISK_HOST_PATCH_SHA256=1720669a684f75fe90a7318868dd4528f2e736a5ad5363f92a3c51c848d79703
+MAGISK_HOST_PATCH_URL=https://raw.githubusercontent.com/topjohnwu/Magisk/e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac/scripts/host_patch.sh
+MAGISK_LICENSE_SHA256=589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2
+MAGISK_LICENSE_URL=https://raw.githubusercontent.com/topjohnwu/Magisk/e8a58776f1d7bdf852072ad0baa6eceb9a1e4aac/LICENSE

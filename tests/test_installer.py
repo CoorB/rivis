@@ -412,6 +412,53 @@ class OfflineBundle(InstallerBase):
         self.assertIn("tool tarball (TOOL_SHA256): sha256 OK", cp.stdout)
         self.assertTrue(os.path.isfile(os.path.join(self.home, ".local", "rivis", "current", "rivis")))
 
+    def stage_magisk(self):
+        """Fake Magisk files with their hashes pinned in the staged tool's magisk.pins (the real APK is 11 MB)."""
+        src = os.path.join(self.suite.root, "magisk-src-%s" % self._testMethodName)
+        os.makedirs(src)
+        pins_path = os.path.join(self.stage, "addons", "android", "magisk.pins")
+        pins = open(pins_path).read()
+        apk = next(l.split("=", 1)[1] for l in pins.splitlines() if l.startswith("MAGISK_APK="))
+        for name, key in ((apk, "MAGISK_APK_SHA256"), ("host_patch.sh", "MAGISK_HOST_PATCH_SHA256"), ("LICENSE", "MAGISK_LICENSE_SHA256")):
+            data = ("fake %s\n" % name).encode()
+            open(os.path.join(src, name), "wb").write(data)
+            pins = "\n".join(("%s=%s" % (key, hashlib.sha256(data).hexdigest())) if l.startswith(key + "=") else l
+                              for l in pins.splitlines()) + "\n"
+        open(pins_path, "w").write(pins)
+        return src
+
+    def test_bundled_magisk_is_installed_verified_and_removed_on_uninstall(self):
+        src = self.stage_magisk()
+        cp = subprocess.run(["/bin/bash", os.path.join(self.stage, "install", "mirror", "make-bundle.sh"), self.mitm,
+                             "--magisk", src, "--out", self.out], capture_output=True, text=True, env=self.suite.env(self.home))
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        dest = os.path.join(self.out, "unzipped")
+        subprocess.run(["unzip", "-q", os.path.join(self.out, [f for f in os.listdir(self.out) if f.endswith(".zip")][0]),
+                        "-d", dest], check=True)
+        (top,) = os.listdir(dest)
+        b = os.path.join(dest, top)
+        out = self.ok("--yes", "--skip-local-capture", "--no-rc", bin=os.path.join(b, "install.sh")).stdout
+        self.assertIn("installed Magisk 30.7", out)
+        mdir = os.path.join(self.home, ".local", "rivis", "magisk-30.7")
+        self.assertEqual(sorted(os.listdir(mdir)), sorted(os.listdir(src)))
+        self.ok("--uninstall", bin=os.path.join(b, "install.sh"))
+        self.assertFalse(os.path.exists(mdir))
+        # a bundled Magisk file that does not match its pin stops the install
+        with open(os.path.join(b, "magisk-30.7", "host_patch.sh"), "ab") as fh:
+            fh.write(b"x")
+        cp = self.install("--yes", "--skip-local-capture", "--no-rc", bin=os.path.join(b, "install.sh"))
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertIn("MISMATCH", cp.stdout + cp.stderr)
+
+    def test_make_bundle_refuses_magisk_files_that_do_not_match_their_pins(self):
+        src = self.stage_magisk()
+        with open(os.path.join(src, "LICENSE"), "ab") as fh:
+            fh.write(b"x")
+        cp = subprocess.run(["/bin/bash", os.path.join(self.stage, "install", "mirror", "make-bundle.sh"), self.mitm,
+                             "--magisk", src, "--out", self.out], capture_output=True, text=True, env=self.suite.env(self.home))
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertIn("does not match its pin", cp.stderr)
+
     def test_a_tampered_bundle_archive_is_refused(self):
         b = self.unzip()
         with open(os.path.join(b, self.mfile), "ab") as fh:

@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # Build an offline installer bundle: one zip a user unzips and runs, no mirror needed.
-#   make-bundle.sh MITMPROXY_ARCHIVE... [--out DIR]     (default DIR: ../dist beside next/)
+#   make-bundle.sh MITMPROXY_ARCHIVE... [--magisk DIR] [--out DIR]     (default DIR: ../dist beside next/)
 # MITMPROXY_ARCHIVE = the official mitmproxy file(s) for the platforms to support, e.g.
 #   mitmproxy-12.2.3-macos-arm64.tar.gz  mitmproxy-12.2.3-macos-x86_64.tar.gz
 # Each one must match its pinned SHA-256 in install/mirror.conf, or the bundle is not built. The tool archive is made
 # by make-release.sh and its hash is pinned into the bundle's own copy of mirror.conf (MIRROR_BASE_URL left empty).
 # The installer prefers files sitting next to it over any mirror and verifies them exactly like a download.
+# --magisk DIR: also bundle the official Magisk files (APK, host_patch.sh, LICENSE) pinned in
+# addons/android/magisk.pins, for the one-click CA on Google Play emulators. Each must match its pin.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="$(cd "$HERE/../.." && pwd -P)"                 # next/
-OUT="$ROOT/../dist"; ARCHIVES=()
+OUT="$ROOT/../dist"; ARCHIVES=(); MAGISK_SRC=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift ;;
+    --magisk) MAGISK_SRC="$2"; shift ;;
     -h|--help) awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0"; exit 0 ;;
     *) ARCHIVES+=("$1") ;;
   esac
@@ -37,6 +40,17 @@ for a in "${ARCHIVES[@]}"; do              # only pinned official files, by thei
   [ -n "$want" ] && [ "$want" = "$got" ] || { echo "make-bundle: $base SHA-256 does not match its pin — refusing" >&2; exit 1; }
   cp "$a" "$B/$base"
 done
+
+if [ -n "$MAGISK_SRC" ]; then
+  MP="$ROOT/addons/android/magisk.pins"; mp() { sed -n "s/^$1=//p" "$MP" | head -1; }
+  MD="$B/magisk-$(mp MAGISK_VERSION)"; mkdir "$MD"
+  for spec in "$(mp MAGISK_APK):MAGISK_APK_SHA256" "host_patch.sh:MAGISK_HOST_PATCH_SHA256" "LICENSE:MAGISK_LICENSE_SHA256"; do
+    f="${spec%%:*}"; want="$(mp "${spec##*:}")"
+    [ -f "$MAGISK_SRC/$f" ] && [ "$(shasum -a 256 "$MAGISK_SRC/$f" | awk '{print $1}')" = "$want" ] \
+      || { echo "make-bundle: Magisk $f missing or does not match its pin — refusing" >&2; exit 1; }
+    cp "$MAGISK_SRC/$f" "$MD/$f"
+  done
+fi
 
 REL="$(bash "$HERE/make-release.sh" "$STAGE/release")"
 TOOL_SHA="$(echo "$REL" | awk '/^sha256/{print $2}')"

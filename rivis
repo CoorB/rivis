@@ -34,11 +34,15 @@
 #   <cli> breakpoint URL-REGEX [--request|--response] | off
 #                                 pause matching calls in the UI to edit them, then Resume
 #   <cli> mock NAME URL-REGEX              save the last matching response and Map-Local it
-#   <cli> android on|off [-s SERIAL] [--auto-ui]
-#                                 CA + proxy on an emulator. Google APIs image (no Play
-#                                 Store): fully automatic via adb root. Google Play image:
-#                                 prints the Settings steps; --auto-ui tries to tap them
-#                                 (best effort — Settings layout differs per Android build)
+#   <cli> setup                            ios on --all + android on --all: every booted simulator and
+#                                 running emulator, in one go (each one is skipped if already done)
+#   <cli> android on|off [-s SERIAL | --all] [--manual] [--yes]
+#                                 CA + proxy on an emulator. Google APIs image (no Play Store): direct
+#                                 copy via adb root. Google Play image: drives the Settings screens itself,
+#                                 skips them when the emulator already trusts this CA (fingerprint check),
+#                                 and verifies the result; prints the steps if a screen does not match.
+#                                 --manual: only print the steps. --yes: consent to the one-time
+#                                 Play-image setup without asking (scripts)
 #   <cli> ios on|off [--udid UDID | --all] CA on a simulator (default: the booted one; --all: every booted one)
 #   <cli> net-reset [--dry-run]            clear stale local web/https/socks proxies
 #                                         service — fixes "no internet after closing the proxy app"
@@ -505,13 +509,13 @@ have_root() { [ "$("$ADB" -s "$1" shell id -u 2>/dev/null | tr -d '\r')" = "0" ]
 # Tap the first on-screen node whose text/content-desc matches the regex (scrolls if needed).
 # Drives the Settings CA screens on Google Play images, where `adb root` is refused.
 # English UI labels; on mismatch the caller falls back to printed manual steps.
-ui_tap() {
-  local s="$1" re="$2" b i xml prev=""
+ui_tap() {   # ui_tap SERIAL REGEX [N] — tap the Nth match (default 1st)
+  local s="$1" re="$2" nth="${3:-1}" b i xml prev=""
   [ -n "${SCREEN_H:-}" ] || SCREEN_H=$("$ADB" -s "$s" shell wm size | tr -d '\r' | awk -F'[x ]' '/size/{print $NF}')
   for i in $(seq 1 12); do
     "$ADB" -s "$s" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1
     xml=$("$ADB" -s "$s" shell cat /sdcard/proxy-ui.xml 2>/dev/null)
-    b=$(printf '%s' "$xml" | tr '>' '\n' | grep -E "(text|content-desc)=\"($re)\"" | head -1 \
+    b=$(printf '%s' "$xml" | tr '>' '\n' | grep -E "(text|content-desc)=\"($re)\"" | sed -n "${nth}p" \
         | grep -oE 'bounds="\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]"' | grep -oE '[0-9]+' | tr '\n' ' ')
     if [ -n "$b" ]; then
       set -- $b
@@ -544,6 +548,21 @@ ui_install_ca() {
     && ui_tap "$s" "INSTALL ANYWAY|Install anyway" && sleep 2 \
     && { ui_tap "$s" "proxy-ca.crt" || { ui_tap "$s" "Show roots" && ui_tap "$s" "Downloads?" && ui_tap "$s" "proxy-ca.crt"; }; }
 }
+ca_fingerprint() { openssl x509 -in "$CA_PEM" -noout -fingerprint -sha256 | cut -d= -f2; }   # AA:BB:… as Settings shows it
+ui_has_current_ca() {   # does the user store hold THIS CA? (an older "mitmproxy" entry does not count)
+  local s="$1" fp n; fp=$(ca_fingerprint) || return 1
+  # straight to Trusted credentials → User (under a second); the menu walk is the fallback
+  if ! "$ADB" -s "$s" shell am start -W -f 0x10008000 -a com.android.settings.TRUSTED_CREDENTIALS_USER 2>/dev/null | grep -q "Status: ok"; then
+    open_credentials "$s" && ui_tap "$s" "Trusted credentials" && ui_tap "$s" "USER|User" || return 1
+  fi
+  sleep 1
+  for n in 1 2 3 4 5; do
+    ui_tap "$s" "mitmproxy" "$n" || return 1          # no Nth entry: not found
+    if ui_screen_has "$s" "$fp"; then ui_tap "$s" "OK"; return 0; fi
+    ui_tap "$s" "OK" || "$ADB" -s "$s" shell input keyevent KEYCODE_BACK
+  done
+  return 1
+}
 ui_remove_ca() {   # every user-store entry named mitmproxy
   local s="$1" n=0
   open_credentials "$s" && ui_tap "$s" "Trusted credentials" && ui_tap "$s" "USER|User" || return 1
@@ -557,9 +576,20 @@ ui_remove_ca() {   # every user-store entry named mitmproxy
 
 cmd_android() {
   local action="${1:-}"; shift || true
-  local auto_ui=0
-  while [ $# -gt 0 ]; do case "$1" in -s) SERIAL="$2"; shift ;; --auto-ui) auto_ui=1 ;; *) die "android: unknown option $1" ;; esac; shift; done
+  local auto_ui=1 all=0 consent=""
+  while [ $# -gt 0 ]; do case "$1" in
+    -s) SERIAL="$2"; shift ;; --all) all=1 ;; --manual) auto_ui=0 ;; --yes) consent=--yes ;;
+    --auto-ui) ;;                                   # the default now; still accepted
+    *) die "android: unknown option $1" ;; esac; shift; done
+  case "$action" in on|off) ;; *) die "usage: $CLI android on|off [-s SERIAL | --all] [--manual]" ;; esac
   [ -x "$ADB" ] || die "adb not found"
+  if [ "$all" = 1 ]; then
+    [ -z "${SERIAL:-}" ] || die "android: pass -s or --all, not both"
+    local e list; list=$("$ADB" devices | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
+    [ -n "$list" ] || die "no running emulator (adb devices)"
+    for e in $list; do ( SERIAL="$e"; cmd_android "$action" $([ "$auto_ui" = 0 ] && echo --manual) $consent ) || info "WARNING: $e: android $action failed"; done
+    return
+  fi
   local s; s=$(pick_serial) || exit 1
   [ "$action" = on ] && ensure_ca
   local h=""; [ -f "$CA_PEM" ] && h=$(ca_hash)
@@ -580,11 +610,19 @@ cmd_android() {
         ca_history_add
         "$ADB" -s "$s" push "$CONFDIR/mitmproxy-ca-cert.cer" /sdcard/Download/proxy-ca.crt >/dev/null 2>&1 \
           || die "could not push the CA to the emulator — proxy NOT enabled"
-        info "$s is a Google Play image (no adb root) — the CA goes in through Settings once."
-        if [ "$auto_ui" = 1 ] && ui_install_ca "$s"; then
-          info "$s: CA installed in user store via Settings"
+        local magisk_dir="${RIVIS_MAGISK_DIR:-$SCRIPT_DIR/../magisk-$(sed -n 's/^MAGISK_VERSION=//p' "$SCRIPT_DIR/addons/android/magisk.pins")}"
+        if [ "$auto_ui" = 1 ] && ui_has_current_ca "$s"; then
+          info "$s: already trusts this CA — nothing to install"
+          "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
+        elif [ "$auto_ui" = 1 ] && [ -d "$magisk_dir" ] \
+            && ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent; then
+          :   # one-click Play-image path (Proxyman's Magisk approach); it reports its own result
+        elif [ "$auto_ui" = 1 ] && info "$s: Google Play image — installing the CA through Settings (about a minute; hands off the emulator)" \
+            && ui_install_ca "$s" && ui_has_current_ca "$s"; then
+          info "$s: CA installed in user store via Settings (verified by fingerprint)"
         else
-          [ "$auto_ui" = 1 ] && info "  --auto-ui could not drive this Android build's Settings — do it by hand:"
+          [ "$auto_ui" = 0 ] && info "$s is a Google Play image (no adb root) — the CA goes in through Settings once."
+          [ "$auto_ui" = 1 ] && info "  could not drive this Android build's Settings — do it by hand:"
           [ "$auto_ui" = 1 ] || info "  CA pushed to Downloads. On the emulator:"
           info "  Settings → Security → More security → Encryption & credentials → Install a"
           info "  certificate → CA certificate → Install anyway → Downloads → proxy-ca.crt"
@@ -621,8 +659,17 @@ cmd_android() {
         else info "$s: remove the CA by hand: Encryption & credentials → Trusted credentials → User → mitmproxy → Uninstall"; fi
         "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
       fi ;;
-    *) die "usage: $CLI android on|off [-s SERIAL]" ;;
   esac
+}
+
+cmd_setup() {   # every booted simulator + every running emulator; each skips what is already done
+  local did=0
+  if xcrun simctl list devices booted 2>/dev/null | grep -q Booted; then cmd_ios on --all; did=1
+  else info "iOS: no booted simulator (boot one, then run '$CLI setup' again)"; fi
+  if [ -x "$ADB" ] && "$ADB" devices 2>/dev/null | grep -qE '^emulator-[0-9]+[[:space:]]device$'; then cmd_android on --all; did=1
+  elif [ -x "$ADB" ]; then info "Android: no running emulator"
+  else info "Android: adb not found (install the Android SDK platform-tools)"; fi
+  [ "$did" = 1 ] || die "nothing to set up: no booted simulator or running emulator"
 }
 
 # ───────────────────────── ios ─────────────────────────
@@ -775,6 +822,7 @@ case "${1:-}" in
   projects)  shift; cmd_projects "$@" ;;
   start)     shift; cmd_start "$@" ;;
   android)   shift; cmd_android "$@" ;;
+  setup)     shift; cmd_setup "$@" ;;
   ios)       shift; cmd_ios "$@" ;;
   net-reset) shift; cmd_net_reset "$@" ;;
   status)    cmd_status ;;
