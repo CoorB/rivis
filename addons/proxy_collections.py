@@ -32,7 +32,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
-from proxy_common import SAFE_NAME, STATE_ROOT, confined_path, project_profile, project_state
+from proxy_common import SAFE_NAME, STATE_ROOT, confined_path, project_profile, project_state, user_regex
 
 DEFAULT_RECORD = "."
 COLL_DIR = os.path.join(STATE_ROOT, "projects", "default", "collections")
@@ -213,11 +213,22 @@ class ProxyCollections:
             flow.metadata["proxy_local"] = True
             pos = f" {min(i, len(same) - 1) + 1}/{len(same)}" if len(same) > 1 else ""
             flow.comment = (flow.comment + " | " if flow.comment else "") + f"collection:{name}{pos}"
-        elif self.cfg.get("strict") and re.search(self.cfg.get("record_match") or self.default_record, r.pretty_url):
+        elif self.cfg.get("strict") and self._record_matches(r.pretty_url):
             flow.response = http.Response.make(404, json.dumps({"error": "not in the replayed collection (strict mode)"}),
                                                {"Content-Type": "application/json"})
             flow.metadata["proxy_local"] = True
             flow.comment = (flow.comment + " | " if flow.comment else "") + "collection: strict miss"
+
+    def _record_matches(self, url):
+        pattern = self.cfg.get("record_match") or self.default_record
+        if getattr(self, "_record_src", None) != pattern:
+            try:
+                self._record_re = user_regex(pattern)
+            except re.error as e:      # an unsafe or broken pattern records / strict-misses nothing (F-05)
+                ctx.log.warn(f"proxy_collections: record_match refused: {e}")
+                self._record_re = None
+            self._record_src = pattern
+        return bool(self._record_re and self._record_re.search(url))
 
     def response(self, flow: http.HTTPFlow):
         self._reload()
@@ -226,7 +237,7 @@ class ProxyCollections:
         if not name or name in self.deleted or flow.metadata.get("proxy_local") \
                 or flow.metadata.get("proxy_modified") or not flow.response:
             return
-        if not re.search(self.cfg.get("record_match") or self.default_record, flow.request.pretty_url):
+        if not self._record_matches(flow.request.pretty_url):
             return
         try:
             doc = self._recording_doc(name)

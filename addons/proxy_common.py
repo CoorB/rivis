@@ -132,6 +132,72 @@ def rule_file_path(state_dir, path, what, extra_forbidden=()):
                          "%s rules allow-file '%s'" % (what, path, PRODUCT["cli"], path)) from None
 
 
+try:                                    # stdlib parser: sre_parse on 3.9, re._parser on 3.11+ (mitmproxy's bundle)
+    from re import _parser as _sre
+except ImportError:                     # pragma: no cover - Python < 3.11
+    import sre_parse as _sre
+
+MAX_PATTERN = 1000
+_REPEATS = {_sre.MAX_REPEAT, _sre.MIN_REPEAT}
+_POSSESSIVE = getattr(_sre, "POSSESSIVE_REPEAT", None)
+
+
+def _unbounded_inside(items):
+    """True when a parsed sub-pattern contains a repeat with no upper bound (or a large one)."""
+    for op, av in items:
+        if op in _REPEATS:
+            lo, hi, sub = av
+            if hi == _sre.MAXREPEAT or hi > 100 or _unbounded_inside(sub):
+                return True
+        elif op == _sre.SUBPATTERN:
+            if _unbounded_inside(av[-1]):
+                return True
+        elif op == _sre.BRANCH:
+            if any(_unbounded_inside(b) for b in av[1]):
+                return True
+        elif op in (_sre.ASSERT, _sre.ASSERT_NOT):
+            if _unbounded_inside(av[1]):
+                return True
+    return False
+
+
+def _nested_repeat(items):
+    for op, av in items:
+        if op in _REPEATS:
+            lo, hi, sub = av
+            if (hi == _sre.MAXREPEAT or hi > 100) and _unbounded_inside(sub):
+                return True
+            if _nested_repeat(sub):
+                return True
+        elif op == _sre.SUBPATTERN:
+            if _nested_repeat(av[-1]):
+                return True
+        elif op == _sre.BRANCH:
+            if any(_nested_repeat(b) for b in av[1]):
+                return True
+        elif op in (_sre.ASSERT, _sre.ASSERT_NOT):
+            if _nested_repeat(av[1]):
+                return True
+    return False
+
+
+def user_regex(pattern, flags=0):
+    """Compile a user-, rule- or profile-supplied regex, refusing the shapes that hang the proxy (F-05).
+
+    Python's re has no timeout and every match runs on mitmproxy's single event loop, so a pattern like
+    (a+)+ or (.*)*x against a crafted URL would stall all traffic. Nested unbounded repeats are refused and the
+    pattern length is capped; the error is a re.error, so callers' existing handling applies."""
+    if not isinstance(pattern, str):
+        raise re.error("pattern must be text")
+    if len(pattern) > MAX_PATTERN:
+        raise re.error("pattern is longer than %d characters" % MAX_PATTERN)
+    compiled = re.compile(pattern, flags)
+    if _nested_repeat(_sre.parse(pattern, flags)):
+        raise re.error("nested repetition such as (a+)+ or (.*)* can freeze the proxy; "
+                       "simplify it (e.g. a+ instead of (a+)+)")
+    return compiled
+
+
 def tls_host_regex(pattern):
     """Convert a Proxyman-style host wildcard to mitmproxy's host:port regex."""
     pattern = str(pattern or "").strip().lower().rstrip(".")

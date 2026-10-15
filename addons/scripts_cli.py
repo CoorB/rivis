@@ -10,7 +10,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from proxy_common import SAFE_NAME
+from proxy_common import SAFE_NAME, user_regex
 
 TEMPLATES = {
     "py": {
@@ -81,7 +81,7 @@ def main(argv):
         p.add_argument("--template", choices=tuple(TEMPLATES["py"]), default="header")
         a = p.parse_args(rest)
         if not SAFE_NAME.fullmatch(a.name): raise SystemExit("bad script name")
-        re.compile(a.match)
+        user_regex(a.match)
         filename = f"{a.name}.{a.lang}"; path = os.path.join(script_dir, filename)
         if any(x.get("name") == a.name or x.get("file") == filename for x in cfg["scripts"]) or os.path.exists(path):
             raise SystemExit("script already exists")

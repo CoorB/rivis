@@ -225,6 +225,12 @@ class Ops(LiveCase):
         self.bad("mockfile_put", {"name": "plain", "content": "x"}, "not a map local")
 
     # -- view / filters -------------------------------------------------------------------------------
+    def test_focus_host_refuses_filter_injection(self):
+        """F-16: the host becomes part of a ~d '...' filter; quotes and spaces must never reach it."""
+        for host in ("a' | ~all | ~d 'b", "x y", "evil$", 7):
+            self.assertEqual(self.panel.post("focus_host", {"host": host})[0], 400, host)
+        self.assertIsNone(self.panel.state()["focus_host"])
+
     def test_view_focus_host_and_graphql_filter_drive_mitmweb_view_filter(self):
         self.panel.ok("view", {"project_only": False, "show_dns": True})
         self.assertEqual(self.panel.option("view_filter") or "", "")

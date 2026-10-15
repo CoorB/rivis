@@ -815,7 +815,7 @@
       ${c.items.length ? c.items.map((x, i) => `
         <div class="row">${sw(`data-ci="${i}"`, x.replay, c.recording === x.name ? "disabled" : "")}
           <div class="n"><div><b>${esc(x.name)}</b>${c.recording === x.name ? ' <span class="rec"><i class="reddot"></i>REC</span>' : ""}</div>
-            <div class="sub">${x.count} calls${x.created ? " · " + new Date(x.created * 1000).toLocaleString() : ""}${x.replay ? " · replaying" : ""}</div></div>
+            <div class="sub">${esc(Number(x.count) || 0)} calls${x.created ? " · " + new Date(x.created * 1000).toLocaleString() : ""}${x.replay ? " · replaying" : ""}</div></div>
           <button class="b" data-cview="${i}">${collOpen === x.name ? "Hide" : "Calls"}</button>
           <button class="b" data-cexp="${i}">HAR</button><button class="b d" data-cdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>
         ${collOpen === x.name ? `<div id="centries" class="sub">loading…</div>` : ""}`).join("")
@@ -907,7 +907,7 @@
       <h4>Saved sessions (${ss.length})</h4>
       ${ss.length ? ss.map((x, i) => `
         <div class="row" style="align-items:flex-start"><div class="n"><div><b>${esc(x.name)}</b></div>
-            <div class="sub">${x.count} calls · ${new Date(x.created * 1000).toLocaleString()}${x.hosts && x.hosts.length ? " · " + esc(x.hosts.slice(0, 3).join(", ")) : ""}</div>
+            <div class="sub">${esc(Number(x.count) || 0)} calls · ${new Date(x.created * 1000).toLocaleString()}${x.hosts && x.hosts.length ? " · " + esc(x.hosts.slice(0, 3).join(", ")) : ""}</div>
             <div class="sub" data-note="${i}" title="click to edit" style="cursor:text;white-space:normal">${x.note ? ico("note", "sm") + " " + esc(x.note) : "<i>add a note…</i>"}</div></div>
           <button class="b" data-sload="${i}">Open</button><button class="b" data-shar="${i}">HAR</button><button class="b d" data-sdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
       : emptyState("sess", "No saved sessions yet", "Name the capture above and <b>Save session</b>. Open brings it back into the list; HAR exports it.")}

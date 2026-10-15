@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
 from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PRODUCT, breakpoints, confined_path, forbidden_file,
-                           set_trusted_file, trusted_files)
+                           set_trusted_file, trusted_files, user_regex)
 
 ACTIONS = ACTION_REQUIREMENTS
 
@@ -90,7 +90,7 @@ def validate(r):
     for k in ("match", "replace"):
         if k in r:
             try:
-                re.compile(r[k])
+                user_regex(r[k])
             except re.error as e:
                 die("bad regex in %s: %s" % (k, e))
     if a == "map_local" and not os.path.isfile(os.path.expanduser(r["file"])):
@@ -210,7 +210,7 @@ def throttle_cmd(path, args):
     for kv in args[1:]:
         k, _, v = kv.partition("=")
         if k == "match":
-            re.compile(v)
+            user_regex(v)
             cfg["throttle_match"] = v
         elif k == "loss":
             cfg["loss"] = throttle_number(v, k)
@@ -257,7 +257,7 @@ def breakpoint_cmd(path, args):
             die("breakpoint options: --request | --response | --method M")
         i += 1
     try:
-        re.compile(rx)
+        user_regex(rx)
     except re.error as e:
         die("bad regex: %s" % e)
     names = {b.get("name") for b in bps}
@@ -274,7 +274,7 @@ def breakpoint_cmd(path, args):
 def mock_cmd(path, args, flows_json, body_file):
     """mock NAME REGEX: save the newest matching call's real response to a file + map_local rule on it."""
     cfg = load(path)
-    name, rx = args[0], re.compile(args[1])
+    name, rx = args[0], user_regex(args[1])
     flows = [f for f in json.load(open(flows_json)) if f.get("type") == "http" and f.get("response")
              and rx.search(f["request"]["scheme"] + "://" + f["request"]["pretty_host"] + f["request"]["path"])]
     if not flows:
