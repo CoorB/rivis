@@ -8,7 +8,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with open(os.path.join(ROOT, "product.json")) as _fh:
     PRODUCT = json.load(_fh)
 STATE_ROOT = os.path.expanduser(PRODUCT["state_dir"])
-SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+# A file-name-safe identifier on every OS (F-18): no path characters, no leading/trailing dot (".", "..", hidden
+# files, Windows strips trailing dots) and none of Windows' reserved device names (CON.json opens the console).
+SAFE_NAME = re.compile(r"^(?!(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$))(?!\.)[A-Za-z0-9._-]{1,64}(?<!\.)$", re.I)
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 TLS_MODES = ("all", "allow", "ignore")
 NEVER_MATCH = "(?!)"
