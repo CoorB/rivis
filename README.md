@@ -107,7 +107,7 @@ Environment variables are named from `product.json`: `<PREFIX>_PORT`, `_WEB_PORT
 ## Panel
 
 Open the mitmweb UI and click the **Tools** button at the right end of the toolbar. Tabs provide This call, Compose, Map Local,
-Breakpoints, Network, Collections, Compare, Sessions, Scripts, and Rules. The header shows `Rivis · <project label>` and has
+Breakpoints, Network, Devices, Collections, Compare, Sessions, Scripts, and Rules. The header shows `Rivis · <project label>` and has
 a project selector. That selector changes only the host view; restart with `--project ID` to load a different
 rules file.
 
@@ -147,8 +147,8 @@ by a tiny same-origin boot script in `<head>` (the page CSP forbids inline scrip
 - **Light / dark** follow the OS by default; the brand bar (top-right) has a theme toggle, remembered per
   browser.
 - **Compact rows** and the **skin on/off** switch live in the panel's **Settings** (the gear / `?` → Settings).
-- **List tags:** MOCK / RULE / SCRIPT / COMPOSED / NOT DECRYPTED show as a one-letter glyph in the first column (the word
-  appears when the list is wide); a GraphQL response with `errors` shows `200 !`. Plain `http://` calls get an amber edge.
+- **List tags:** MOCK / RULE / SCRIPT / COMPOSED show as a one-letter glyph (M, R, S, C) and NOT DECRYPTED as `⇄` in the
+  first column (the word appears when the list is wide); a GraphQL response with `errors` shows `200 !`. Plain `http://` calls get an amber edge.
 - **Project switch:** the **Show** menu in the drawer header picks *All traffic* or *<project> only* (list view; rules still load via `--project`).
 - **Kill switch:** add `?theme=off` to the URL (or turn the skin off in Settings) to fall back to stock mitmweb;
   `?theme=on` restores it. Both are remembered in `localStorage`, so stock mode persists until you turn it back on.
@@ -193,7 +193,8 @@ Go `net/http`, PowerShell `Invoke-RestMethod`, or a Postman v2.1 collection. JSO
 literals where the language has one (Python, fetch, axios); binary bodies become base64 with a comment;
 HTTP/2 pseudo-headers, hop-by-hop headers and `Content-Length` are dropped; repeated headers are merged.
 
-**Mask secrets** is on by default: `Authorization` and `Cookie` values become `<redacted>`. Untick it only when
+**Mask secrets** is on by default: `Authorization`, cookies, API keys, session and CSRF tokens, and fields such as
+password, PIN, OTP or token (plus anything shaped like a JWT) become `<redacted>`. Untick it only when
 the snippet will not leave your machine; the note under the menu says so. Snippets get pasted into tickets and
 chats, and tokens must not be.
 

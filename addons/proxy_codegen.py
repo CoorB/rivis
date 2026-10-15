@@ -84,7 +84,7 @@ def _body_info(request):
     if not binary and raw and ("json" in ctype or text.lstrip().startswith(("{", "["))):
         try:
             native = json.loads(text)
-        except ValueError:
+        except (ValueError, RecursionError):
             pass
     return raw, text, binary, native
 
@@ -309,7 +309,7 @@ def _mask_body(request, headers):
     try:      # JSON is re-serialised by the redactor; keep the original bytes when nothing secret was in it
         if json.loads(masked) == json.loads(text):
             return request
-    except ValueError:
+    except (ValueError, RecursionError):
         pass
     return {**request, "body": masked.encode("utf-8")}
 

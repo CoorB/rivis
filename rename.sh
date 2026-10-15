@@ -61,6 +61,8 @@ then
   echo "could not update product.json; restored the original CLI names" >&2
   exit 1
 fi
+# the installer bundle carries its own copy; a stale one would install under the old name (QA TXT-02)
+[ ! -d "$SCRIPT_DIR/install" ] || cp "$PRODUCT" "$SCRIPT_DIR/install/product.json"
 echo "Renamed product to $NEW_NAME ($NEW_CLI)."
 echo "Re-link the CLI: ln -sf \"$SCRIPT_DIR/$NEW_CLI\" ~/bin/$NEW_CLI"
 echo "PowerShell entry point: $SCRIPT_DIR/$NEW_CLI.ps1"

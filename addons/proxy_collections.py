@@ -47,7 +47,7 @@ def body_hash(raw):
     raw = raw or b""
     try:   # JSON bodies compare by content, not key order / whitespace
         raw = json.dumps(json.loads(raw), sort_keys=True, separators=(",", ":")).encode()
-    except ValueError:
+    except (ValueError, RecursionError):
         pass
     return hashlib.sha256(raw).hexdigest()[:16]
 

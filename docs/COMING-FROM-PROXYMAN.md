@@ -23,6 +23,7 @@ Proxyman?**. Each row there has an **Open →** link that takes you straight to 
 
 | In Proxyman you did | In Rivis |
 |---|---|
+| **Certificate → Install on iOS Simulator / Android Emulator** | **Tools → Devices**: each booted simulator and running emulator with a **Set up** button (Google Play emulators ask once to restart). Terminal: `rivis setup`. |
 | **Map Local** (answer a call from a saved response) | On the call: **This call → Map Local this call…**; or the **Map Local** tab to add one by host and path. Edits body, status and headers; one mock per endpoint. |
 | **Breakpoint** | **This call → Breakpoint** (Request / Response). A matching call pauses and a sheet opens by itself with Continue / Skip / Abort. Manage all breakpoints in the **Breakpoints** tab. |
 | **Network Conditions** (throttle) | **Network** tab → traffic profiles (3G, LTE, high-latency VPN, packet loss, or a manual profile with your own latency / bandwidth / loss). Can be limited to URLs containing some text (e.g. your API host). |
@@ -56,6 +57,7 @@ list is focused (and are ignored while you type in a field).
 | `⌥⇧E` | HTTPS decryption list (SSL proxying) |
 | `⌥⇧S` | Scripts |
 | `⌥⇧D` | Compare (diff) two calls |
+| `⌥⇧V` | Devices: set up simulators / emulators |
 | `⌘F` / `Ctrl+F` | Filter the list (`Esc` clears) |
 | `⌥⇧F` | Filter the list (same) |
 | `⌘↵` | Repeat the selected call |

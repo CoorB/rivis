@@ -16,6 +16,8 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 SERIAL="$1" CA_PEM="$2" CA_NAME="$3" MAGISK_DIR="$4" STATE_DIR="$5" YES="${6:-}"
 ADB="${ADB:-adb}"
 PINS="$HERE/android/magisk.pins"
+product() { /usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2]) or sys.argv[3])' "$HERE/../product.json" "$1" "$2" 2>/dev/null || echo "$2"; }
+CLI_NAME=$(product cli rivis); PRODUCT_NAME=$(product name Rivis)
 
 info() { echo "• $*"; }
 die()  { echo "android: $*" >&2; exit 1; }
@@ -48,7 +50,7 @@ ABI=$(sh_ getprop ro.product.cpu.abi)
 
 # ---- pinned Magisk files ------------------------------------------------------------------------------------------
 APK="$MAGISK_DIR/$(pin MAGISK_APK)"; HOST_PATCH="$MAGISK_DIR/host_patch.sh"
-[ -f "$APK" ] && [ -f "$HOST_PATCH" ] || die "Magisk $(pin MAGISK_VERSION) is not installed ($MAGISK_DIR). Re-run the installer, or use: rivis android on --manual"
+[ -f "$APK" ] && [ -f "$HOST_PATCH" ] || die "Magisk $(pin MAGISK_VERSION) is not installed ($MAGISK_DIR). Re-run the installer, or use: $CLI_NAME android on --manual"
 [ "$(sha "$APK")" = "$(pin MAGISK_APK_SHA256)" ] || die "Magisk APK SHA-256 mismatch — refusing ($APK)"
 [ "$(sha "$HOST_PATCH")" = "$(pin MAGISK_HOST_PATCH_SHA256)" ] || die "host_patch.sh SHA-256 mismatch — refusing"
 
@@ -56,7 +58,7 @@ APK="$MAGISK_DIR/$(pin MAGISK_APK)"; HOST_PATCH="$MAGISK_DIR/host_patch.sh"
 cat <<EOF
 
 ─── Google Play emulator: one-time certificate setup ───────────────────────────────────────────────
-'$AVD' (Android API $API, $ABI) refuses adb root, so Rivis installs its certificate like Proxyman does:
+'$AVD' (Android API $API, $ABI) refuses adb root, so $PRODUCT_NAME installs its certificate like Proxyman does:
   • Magisk $(pin MAGISK_VERSION) (official release, GPLv3, checksum verified) patches a temporary COPY of the ramdisk
   • '$AVD' restarts twice: once with that copy, where a one-shot service copies the certificate
     into the user store as root, then normally. About 2 minutes; the emulator window will close and reopen.
@@ -67,7 +69,7 @@ EOF
 if [ "$YES" != --yes ]; then
   # from the terminal itself: adb calls read stdin and would swallow a piped answer
   printf 'Continue? [y/N] '; { read -r ans < /dev/tty; } 2>/dev/null || ans=n
-  case "$ans" in y|Y|yes|YES) ;; *) die "cancelled — nothing changed. 'rivis android on --manual' prints the Settings steps instead" ;; esac
+  case "$ans" in y|Y|yes|YES) ;; *) die "cancelled — nothing changed. '$CLI_NAME android on --manual' prints the Settings steps instead" ;; esac
 fi
 
 # ---- 1+2. patched ramdisk (cached) --------------------------------------------------------------------------------
@@ -96,7 +98,7 @@ else
   "$ADB" -s "$SERIAL" shell "cd $W && sed 's|cd /data/local/tmp|cd $W|' host_patch.sh > hp.sh && sh hp.sh $W/ramdisk.img" > "$log" 2>&1 \
     || { tail -5 "$log" >&2; die "Magisk could not patch this ramdisk (API $API)"; }
   "$ADB" -s "$SERIAL" shell "cd $W && sed 's|cd /data/local/tmp|cd $W|' rivis_inject.sh > ri.sh && sh ri.sh $W/ramdisk.img.magisk" >> "$log" 2>&1 \
-    || { tail -5 "$log" >&2; die "could not add the Rivis service to the patched ramdisk"; }
+    || { tail -5 "$log" >&2; die "could not add the $PRODUCT_NAME service to the patched ramdisk"; }
   "$ADB" -s "$SERIAL" pull "$W/ramdisk.img.magisk" "$tmp/patched.img" >/dev/null 2>&1 || die "could not copy the patched ramdisk back"
   [ -s "$tmp/patched.img" ] && [ "$(sha "$tmp/patched.img")" != "$(sha "$STOCK")" ] || die "Magisk produced no change — refusing"
   mv "$tmp/patched.img" "$PATCHED" && chmod 600 "$PATCHED" && sha "$PATCHED" > "$PATCHED.sha256"
@@ -130,6 +132,6 @@ info "restarting '$AVD' normally…"
 restore_stock
 case "$st" in
   "ok $CA_NAME") info "$SERIAL: CA installed in the user store (one-shot root service: $st)" ;;
-  "") die "the one-shot service did not report back — CA not confirmed. Retry, or: rivis android on --manual" ;;
-  *) die "the one-shot service failed ($st) — CA not installed. Retry, or: rivis android on --manual" ;;
+  "") die "the one-shot service did not report back — CA not confirmed. Retry, or: $CLI_NAME android on --manual" ;;
+  *) die "the one-shot service failed ($st) — CA not installed. Retry, or: $CLI_NAME android on --manual" ;;
 esac

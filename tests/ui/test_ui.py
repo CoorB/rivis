@@ -32,7 +32,8 @@ def shot(page, name):
 
 
 @unittest.skipIf(PW_REASON, PW_REASON or "")
-class UiSmoke(LiveCase):
+class UiBase(LiveCase):
+    """One browser per class + a throw-away Rivis; shared by the UI smoke and the workflow (demo-path) tests."""
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -75,6 +76,10 @@ class UiSmoke(LiveCase):
         self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))
         self.page.wait_for_selector("#fab", timeout=20000)
         return self.page
+
+
+@unittest.skipIf(PW_REASON, PW_REASON or "")
+class UiSmoke(UiBase):
 
     def test_page_loads_with_flows_and_the_panel_button(self):
         page = self.open()

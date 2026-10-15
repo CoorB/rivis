@@ -273,6 +273,9 @@ input[type="checkbox"] { accent-color: var(--rv-accent); }
 
 /* mitmweb makes this column 0 wide and lets the hover button overflow LEFT over the previous cell (now Start time) */
 .flow-table td.col-quickactions, .flow-table th.col-quickactions { width: 32px; min-width: 32px !important; padding: 0 2px; overflow: hidden; }
+.flow-table td.col-quickactions > div { visibility: hidden; }          /* replay on hover / selection, like mitmweb; resume always */
+.flow-table tr:hover td.col-quickactions > div, .flow-table tr.selected td.col-quickactions > div,
+.flow-table tr.intercepted td.col-quickactions > div { visibility: visible; }
 .flow-table td.col-timestamp { font-variant-numeric: tabular-nums; font-family: var(--rv-mono); font-size: 12px; color: var(--rv-text-2); white-space: nowrap; }
 .flow-table td.col-timestamp, .flow-table th.col-timestamp { width: 186px; min-width: 186px !important; }   /* "2026-10-15 13:46:20.552" in full */
 .flow-table .quickaction { color: var(--rv-text-3); }
@@ -452,6 +455,8 @@ footer .label[title="HTTP Proxy Server Address"] { display: none !important; }
 
 /* narrow list (details pane open next to the tools drawer): the path is what matters, so size and the hover quick-action give way */
 :root[data-narrow="1"] .flow-table .col-size, :root[data-narrow="1"] .flow-table .col-quickactions { display: none; }
+/* mid-width list (a call open, or a small window): Start time yields to the path. It stays the sort key. */
+:root[data-midlist="1"] .flow-table .col-timestamp { display: none; }
 :root[data-narrow="1"] .flow-table td.col-time, :root[data-narrow="1"] .flow-table th.col-time { width: 60px; min-width: 60px !important; }
 
 /* status bar: plain-language labels (attributes set by panel.js footerLabels; React's text stays underneath) */

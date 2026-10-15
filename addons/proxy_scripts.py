@@ -58,6 +58,17 @@ def _b64json(segment):
     return value
 
 
+def _human_span(seconds):
+    """'45 min', '5 h 20 min', '12 days', '74 years': minutes stay exact while they matter (access tokens)."""
+    mins = int(seconds // 60)
+    if mins < 180:
+        return "%d min" % mins
+    if mins < 48 * 60:
+        return "%d h %d min" % (mins // 60, mins % 60)
+    days = mins // (24 * 60)
+    return "%d days" % days if days < 730 else "%d years" % (days // 365)
+
+
 def decode_jwt(token, now=None):
     """Decode (never verify) a compact JWT for the panel."""
     parts = token.split(".")
@@ -76,8 +87,8 @@ def decode_jwt(token, now=None):
             item = {"epoch": value, "local": local}
             if key == "exp":
                 delta = value - now
-                mins = max(0, int(abs(delta) // 60))
-                item["relative"] = (f"expires in {mins} min" if delta >= 0 else f"expired {mins} min ago")
+                span = _human_span(abs(delta))
+                item["relative"] = (f"expires in {span}" if delta >= 0 else f"expired {span} ago")
                 item["expired"] = delta < 0
             times[key] = item
     return {"token": token, "header": header, "payload": payload, "times": times,

@@ -591,6 +591,19 @@ class StatusUiStop(CliBase):
         self.fail("mock", "x", "/y", msg="not running")
         self.fail("mock", "only-one-arg", msg="usage")
 
+    def test_help_on_any_command_prints_help_and_changes_nothing(self):
+        """QA TXT-03/04: `stop --help` stopped the proxy, `breakpoint --help` added a breakpoint named 'help'."""
+        rules = os.path.join(self.state, "projects", "default", "rules.json")
+        before = open(rules).read() if os.path.exists(rules) else None
+        for args in (("stop", "--help"), ("setup", "--help"), ("cert", "-h"), ("status", "--help"), ("breakpoint", "--help"),
+                     ("rules", "add", "x", "match=/y", "action=block", "--help"), ("tls", "--help"), ("bug-report", "--help"),
+                     ("android", "on", "--help"), ("ios", "--help"), ("mock", "m", "/x", "--help")):
+            r = self.ok(*args)
+            self.assertIn(args[0], r.stdout, args)
+        after = open(rules).read() if os.path.exists(rules) else None
+        self.assertEqual(before, after, "--help must not write the rules file")
+        self.assertFalse(os.path.exists(os.path.join(self.env["RIVIS_CONFDIR"], "mitmproxy-ca-cert.pem.new")))
+
     def test_start_background_returns_and_keeps_running_until_stop(self):
         port, web = harness.free_port(), harness.free_port()
         env = dict(self.env, RIVIS_PORT=str(port), RIVIS_WEB_PORT=str(web))

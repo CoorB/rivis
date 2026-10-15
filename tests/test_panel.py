@@ -218,6 +218,18 @@ class Ops(LiveCase):
                      "mock served for an unreachable host")
         self.assertEqual(r.json(), {})
 
+    def test_a_call_with_absurdly_deep_json_breaks_no_feature(self):
+        """QA 2026-10-15: /deep (nesting past Python's recursion limit) made Compare and the redacted HAR 500."""
+        self.fetch("/deep")
+        self.fetch("/json/small")
+        deep, small = self.flow_id("/deep"), self.flow_id("/json/small")
+        self.panel.ok("diff", {"a": deep, "b": small})
+        self.panel.ok("diff", {"a": deep, "b": deep})
+        self.panel.ok("sess_save", {"name": "deep-qa"})
+        har = self.panel.ok("sess_har", {"name": "deep-qa", "include_secrets": False})
+        self.assertTrue(har["redacted"])
+        self.assertTrue(any(e["request"]["url"].endswith("/deep") for e in har["har"]["log"]["entries"]))
+
     def test_devices_tab_lists_and_runs_the_cli_as_one_background_job(self):
         st = self.panel.ok("devices", {})
         self.assertIn("ios", st)
@@ -350,6 +362,16 @@ class Ops(LiveCase):
         self.assertEqual(self.up.hits_for("/echo"), [])
         self.bad("compose_send", {"spec": {"url": "ftp://x"}})
         self.bad("compose_send", {"spec": {"url": "https://h/{{undefined}}"}})
+
+    def test_cli_compose_send_reaches_the_running_proxy(self):
+        """QA RIVIS-QA-01: `rivis compose send` died with 'mitmweb gave no XSRF cookie' against a running proxy."""
+        self.panel.ok("compose_save", {"name": "clisend", "spec": {"method": "GET", "url": self.up.url("/json/small?cli=1")}})
+        r = harness.subprocess.run(["/bin/bash", harness.RIVIS, "compose", "send", "clisend", "--no-wait"], env=self.inst.env,
+                                   capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("sent GET", r.stdout)
+        wait_for(lambda: self.up.hits_for("/json/small"), 10, 0.2, "upstream hit by the CLI send")
+        self.panel.ok("compose_delete", {"name": "clisend"})          # the instance is shared by this class
 
     def test_compose_send_a_saved_request_with_variable_override(self):
         self.panel.ok("compose_save", {"name": "saved", "spec": {"method": "GET", "url": "{{base}}/json/small"}})

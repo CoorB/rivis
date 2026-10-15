@@ -118,6 +118,7 @@
     @keyframes pulse { 50% { opacity: .35; } }
 
     /* brand bar over mitmweb's header (product + project label, theme, help) */
+    .brand.mini #bname, .brand.mini #bproj, .brand.mini .sep { display: none; }   /* narrow window: the mark only, so the search box keeps its room */
     .brand { position: fixed; top: 4px; right: 12px; z-index: 11; display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 4px 0 10px;
              background: var(--rv-surface); border: 1px solid var(--rv-border); border-radius: var(--rv-r-pill); box-shadow: var(--rv-shadow-1); color: var(--rv-text); font-size: 12.5px; transition: right var(--rv-dur) var(--rv-ease); }
     .brand .mark { width: 18px; height: 18px; border-radius: 6px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; margin-right: 4px; }
@@ -174,7 +175,7 @@
     .cmenu .hd { padding: 4px 10px 6px; color: var(--rv-text-3); font-size: 11px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     /* drawer */
-    .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: var(--drawer-w, 460px); max-width: 100vw; z-index: 2147483001; background: var(--rv-surface); color: var(--rv-text);
+    .drawer { container: rvdrawer / inline-size; position: fixed; top: 0; right: 0; height: 100vh; width: var(--drawer-w, 460px); max-width: 100vw; z-index: 2147483001; background: var(--rv-surface); color: var(--rv-text);
               border-left: 1px solid var(--rv-border); box-shadow: var(--rv-shadow-2); display: none; flex-direction: column; font-size: 13px; }
     .drawer.open { display: flex; animation: slide var(--rv-dur) var(--rv-ease); }
     @keyframes slide { from { transform: translateX(18px); opacity: .4; } }
@@ -187,6 +188,7 @@
     .x:hover { background: var(--rv-surface-2); color: var(--rv-text); }
     nav { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--rv-border); background: var(--rv-surface); }   /* 6 + 5: every tab visible, even widths */
     nav::-webkit-scrollbar { display: none; }
+    @container rvdrawer (max-width: 430px) { nav { grid-template-columns: repeat(4, 1fr); } }
     nav button { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; border: 0; background: none; padding: 7px 2px 7px; cursor: pointer; font-size: 11.5px; font-weight: 500; color: var(--rv-text-2);
                  border-bottom: 2px solid transparent; border-radius: var(--rv-r-md) var(--rv-r-md) 0 0; white-space: nowrap; min-width: 0; transition: color var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease); }
     nav button svg.i { width: 17px; height: 17px; }
@@ -201,6 +203,7 @@
     h4 { margin: 18px 0 7px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--rv-text-3); font-weight: 700; display: flex; align-items: center; gap: 8px; }
     h4::after { content: ""; flex: 1; height: 1px; background: var(--rv-border); }
     h4:first-child { margin-top: 2px; }
+    .call .u { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }   /* a 3,000-char URL must not push the actions off screen */
     .call { background: var(--rv-surface-2); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 9px 11px; word-break: break-all; font-family: var(--rv-mono); font-size: 12px; line-height: 1.5; }
     .call .sub { font-family: var(--rv-font); }
     .m { font-weight: 700; margin-right: 8px; color: var(--rv-accent-text); font-size: 11px; letter-spacing: .03em; }
@@ -250,8 +253,9 @@
     textarea[readonly] { opacity: .75; }
     .hrow input, .krow input[type=text], td input { font-family: var(--rv-mono); }
     .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 26px; z-index: 2147483003; background: var(--rv-text); color: var(--rv-surface); padding: 9px 16px; border-radius: var(--rv-r-md);
-             font-size: 12.5px; font-weight: 500; display: none; max-width: 80vw; box-shadow: var(--rv-shadow-2); animation: toast var(--rv-dur) var(--rv-ease); }
+             font-size: 12.5px; font-weight: 500; display: none; align-items: center; gap: 12px; max-width: 80vw; box-shadow: var(--rv-shadow-2); animation: toast var(--rv-dur) var(--rv-ease); }
     .toast.err { background: var(--rv-danger); color: var(--rv-danger-fg); }
+    .toast button { border: 1px solid currentColor; border-radius: var(--rv-r-pill); padding: 4px 9px; background: transparent; color: inherit; font-weight: 700; white-space: nowrap; cursor: pointer; }
     @keyframes toast { from { opacity: 0; transform: translate(-50%, 8px); } }
     .card { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--rv-border); border-radius: var(--rv-r-lg); padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: var(--rv-surface);
             transition: border-color var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease), box-shadow var(--rv-dur) var(--rv-ease); }
@@ -402,9 +406,11 @@
   const $ = (id) => root.getElementById(id);
   let tab = "call", state = null, editing = null, pausedOpen = null, dismissed = new Set();
   let viewers = { tokens:[], graphql_ops:[], graphql_error_ids:[], complete:false };
-  const toast = (msg, err) => {
-    const t = $("toast"); t.textContent = msg; t.className = "toast" + (err ? " err" : ""); t.style.display = "block";
-    clearTimeout(toast._t); toast._t = setTimeout(() => (t.style.display = "none"), err ? 5000 : 2500);
+  const toast = (msg, err, action) => {
+    const t = $("toast"); t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action.label)}</button>` : ""}`;
+    t.className = "toast" + (err ? " err" : ""); t.style.display = "flex";
+    if (action) t.querySelector("button").onclick = () => { t.style.display = "none"; action.run(); };
+    clearTimeout(toast._t); toast._t = setTimeout(() => (t.style.display = "none"), action ? 8000 : err ? 5000 : 2500);
   };
   const busy = new Set();
   const run = async (op, body, ok) => {
@@ -414,6 +420,14 @@
     try { const r = await api(op, body); if (r.state) state = r.state; if (ok) toast(typeof ok === "function" ? ok(r) : ok); render(); return r; }
     catch (e) { toast(e.message, true); }
     finally { busy.delete(key); }
+  };
+  const breakpointOn = (flowId) => {
+    const repeatId = flowId || selectedFlow();
+    toast("Breakpoint on — it pauses the NEXT matching call. Trigger it in the app, or Repeat it now.", false, {
+      label: "Repeat now",
+      run: () => repeatId ? run("retry", { flow_id: repeatId, edits: {} }, "Repeated — the new call is in the list (newest first)")
+        : toast("Select a call in the list first", true),
+    });
   };
   const sw = (id, on, extra = "") => `<label class="sw"><input type="checkbox" ${id} ${on ? "checked" : ""} ${extra}><span></span></label>`;
 
@@ -540,7 +554,7 @@
     if (seq !== renderSeq) return;
     const focused = state.focus_host === r.pretty_host;
     m.innerHTML = `
-      <div class="call"><span class="m">${esc(r.method)}</span><span class="dim">${esc(r.pretty_host)}</span>${esc(r.path)}
+      <div class="call"><span class="m">${esc(r.method)}</span><span class="u" title="${esc(r.pretty_host + r.path)}"><span class="dim">${esc(r.pretty_host)}</span>${esc(r.path)}</span>
         <div class="sub">${s ? "→ " + s.status_code : "no response yet"} · <button class="lnk" id="focus">${focused ? "Showing only this host — show all" : "Show only this host"}</button></div></div>
       <h4>Map Local ${info("Saves this response and serves it instead of the server's. You can edit its body, status and headers.")}</h4>
       <div class="btns" style="margin-top:0"><button class="b p" id="mock">Map Local this call…</button>${s ? "" : '<span class="sub">no response yet — starts from 200 {}</span>'}</div>
@@ -568,11 +582,12 @@
       const res = await run("mock", { flow_id: f.id }, (x) => (x.existing ? "Opened existing mock '" : "Map Local '") + x.name + "' is on");
       if (res) openEditor(res.name);
     };
-    root.querySelectorAll("[data-ph]").forEach((c) => (c.onclick = () => {
+    root.querySelectorAll("[data-ph]").forEach((c) => (c.onclick = async () => {
       const want = { request: !!(bpFor && bpFor.request), response: !!(bpFor && bpFor.response) };
       want[c.dataset.ph] = !want[c.dataset.ph];
       if (!want.request && !want.response) return bpFor && run("bp_delete", { name: bpFor.name }, "Breakpoint removed");
-      run("bp_add", { flow_id: f.id, ...want }, "Breakpoint on — matching calls will pause");
+      const added = await run("bp_add", { flow_id: f.id, ...want });
+      if (added && want[c.dataset.ph]) breakpointOn(f.id);
     }));
     $("retry").onclick = () => openRetry(f.id);
     $("compose").onclick = async () => {
@@ -731,13 +746,17 @@
       if (!f) return toast("Select a call in the list first", true);
       $("bh").value = f.request.pretty_host; $("bpth").value = f.request.path.split("?")[0]; $("bm").value = f.request.method;
     };
-    $("badd").onclick = () => { split(); run("bp_add", { host: $("bh").value, path: $("bpth").value, method: $("bm").value, request: ph("request"), response: ph("response") }, (x) => "Breakpoint '" + x.name + "' is on"); };
-    root.querySelectorAll("[data-bi]").forEach((c) => (c.onchange = () => run("bp_update", { name: bps[c.dataset.bi].name, enabled: c.checked }, c.checked ? "Breakpoint on" : "Breakpoint off")));
-    root.querySelectorAll("[data-bph]").forEach((c) => (c.onclick = () => {
+    $("badd").onclick = async () => { split(); const added = await run("bp_add", { host: $("bh").value, path: $("bpth").value, method: $("bm").value, request: ph("request"), response: ph("response") }); if (added) breakpointOn(); };
+    root.querySelectorAll("[data-bi]").forEach((c) => (c.onchange = async () => {
+      const updated = await run("bp_update", { name: bps[c.dataset.bi].name, enabled: c.checked }, c.checked ? null : "Breakpoint off");
+      if (updated && c.checked) breakpointOn();
+    }));
+    root.querySelectorAll("[data-bph]").forEach((c) => (c.onclick = async () => {
       const [i, p] = c.dataset.bph.split(":"); const b = bps[i];
       const next = { request: b.request, response: b.response }; next[p] = !next[p];
       if (!next.request && !next.response) return toast("Keep Request or Response on — or delete the breakpoint", true);
-      run("bp_update", { name: b.name, ...next });
+      const updated = await run("bp_update", { name: b.name, ...next });
+      if (updated && next[p]) breakpointOn();
     }));
     root.querySelectorAll("[data-bdel]").forEach((b) => (b.onclick = () => run("bp_delete", { name: bps[b.dataset.bdel].name }, "Breakpoint removed")));
     $("showp") && ($("showp").onclick = () => { dismissed.clear(); openPaused(state.paused[0].id); });
@@ -1244,7 +1263,7 @@
   const sizeBuckets = () => {
     const t = document.querySelector(".flow-table"); if (!t) return;
     const w = t.getBoundingClientRect().width;
-    if (w) { setAttr(DOC, "data-narrow", w < 520 ? "1" : null); setAttr(DOC, "data-wide", w > 640 ? "1" : null); }
+    if (w) { setAttr(DOC, "data-narrow", w < 520 ? "1" : null); setAttr(DOC, "data-wide", w > 640 ? "1" : null); setAttr(DOC, "data-midlist", w < 760 ? "1" : null); }
   };
   window.addEventListener("resize", () => { sizeBuckets(); placeBars(); });
   new MutationObserver(() => { clearTimeout(tagCells._t); tagCells._t = setTimeout(() => { tagCells(); sizeBuckets(); placeBars(); }, 60); })
@@ -1391,13 +1410,16 @@
     const hb = Math.round(hdr.getBoundingClientRect().bottom);
     // the brand pill slides when the drawer opens; use where it will end up, not where it is mid-transition
     const brand = $("brand"), openW = parseFloat(host.style.getPropertyValue("--open-w")) || 0;
+    const links0 = [...nav.querySelectorAll("a")], last0 = links0[links0.length - 1];   // the search box starts after the last menu
+    const left0 = Math.round((last0.dataset.rv === "Selected call" ? last0.getBoundingClientRect().right : last0.getBoundingClientRect().right + 112) + 16);
+    brand.classList.remove("mini");                                     // measure the full pill first
+    if (window.innerWidth - openW - 12 - brand.offsetWidth - left0 - 12 - 34 < 220) brand.classList.add("mini");
     const brandL = window.innerWidth - openW - 12 - brand.offsetWidth;
     setAttr(DOC, "data-ribbon", hdr.getBoundingClientRect().width < 900 ? "icons" : null);
     hdr.querySelectorAll(".btn:not([title])").forEach((b) => { const t = b.textContent.replace(/[▾\s]+$/, "").trim(); if (t) b.title = t; });   // icon-only toolbar needs its names
-    const links = [...nav.querySelectorAll("a")], last = links[links.length - 1];
-    const left = Math.round((last.dataset.rv === "Selected call" ? last.getBoundingClientRect().right : last.getBoundingClientRect().right + 112) + 16), room = brandL - left - 12;
+    const left = left0, room = brandL - left - 12;
     host.style.setProperty("--sb-left", left + "px");
-    const sbw = Math.max(140, Math.min(440, room - 34));   // 34 = the clear-list button
+    const sbw = Math.max(110, Math.min(440, room - 34));   // 34 = the clear-list button
     host.style.setProperty("--sb-w", sbw + "px");
     if (host.hasAttribute("data-tight") !== (sbw < 270)) { if (sbw < 270) host.setAttribute("data-tight", ""); else host.removeAttribute("data-tight"); }
     host.style.setProperty("--hb", hb + "px");
@@ -1435,8 +1457,8 @@
       closeCallMenu();
       const k = b.dataset.k, id = mf.id;
       if (k === "map") { const res = await run("mock", { flow_id: id }, (r) => (r.existing ? "Opened existing Map Local '" : "Map Local '") + r.name + "' is on"); if (res) { if (!$("drawer").classList.contains("open")) { setOpen(true); } openEditor(res.name); } }
-      else if (k === "bp") run("bp_add", { flow_id: id, request: true, response: true }, "Breakpoint on — matching calls will pause");
-      else if (k === "repeat") run("retry", { flow_id: id, edits: {} }, "Repeated — the new call is at the bottom of the list");
+      else if (k === "bp") { const added = await run("bp_add", { flow_id: id, request: true, response: true }); if (added) breakpointOn(id); }
+      else if (k === "repeat") run("retry", { flow_id: id, edits: {} }, "Repeated — the new call is in the list (newest first)");
       else if (k === "retry") openRetry(id);
       else if (k === "cmpA") { cmpA = { id, label: f.request.method + " " + hostName + f.request.path }; openDrawer("cmp"); toast("Now select another call and press Compare"); }
       else if (k === "curl" || k === "url") copyExport(id, k);
@@ -1489,7 +1511,7 @@
     $("rsend").onclick = async () => {
       const edits = { method: $("rm").value, url: $("ru").value, headers: readHeaders("rhd") };
       if ($("rb").value !== p.req_body && !$("rb").readOnly) edits.body = $("rb").value;
-      const r = await run("retry", { flow_id: id, edits }, "Sent — the new call is at the bottom of the list");
+      const r = await run("retry", { flow_id: id, edits }, "Sent — the new call is in the list (newest first)");
       if (r) $("pause").classList.remove("open");
     };
   }
@@ -1681,7 +1703,7 @@
         <input type="text" id="cu" class="grow" value="${esc(draft.url)}" placeholder="https://host/path?x=1  or  {{edge}}/path" aria-label="URL"><button class="b p" id="csend">Send</button></div>
       <div class="seg">${subs.map(([id, l]) => `<button data-cs="${id}" class="${composeSub === id ? "on" : ""}">${l}${count[id] ? " (" + count[id] + ")" : ""}</button>`).join("")}</div>
       <div id="carea"></div>
-      <div class="sub" style="margin-top:6px">Runs through your rules and scripts · appears at the bottom of the list as COMPOSED.</div>
+      <div class="sub" style="margin-top:6px">Runs through your rules and scripts · shows up in the list tagged COMPOSED.</div>
       <h4>Copy</h4>${copyAsHTML("cc")}`;
     drawSection();
     $("cm").oninput = () => (draft.method = $("cm").value.trim().toUpperCase());
@@ -1710,7 +1732,7 @@
       const r = await run("compose_delete", { name: draft.name }, "Deleted " + draft.name);
       if (r) { draft.name = ""; render(); }
     };
-    $("csend").onclick = () => run("compose_send", { spec: specOf() }, (x) => "Sent " + x.method + " " + x.url + " — see the bottom of the list");
+    $("csend").onclick = () => run("compose_send", { spec: specOf() }, (x) => "Sent " + x.method + " " + x.url + " — it is in the list, tagged COMPOSED");
     wireCopyAs("cc", () => ({ spec: specOf() }));
     if (focusNew) {
       const rows = m.querySelectorAll(`[data-kv="${focusNew}"] .krow`);
@@ -1917,7 +1939,7 @@
   const repeatSelected = () => {
     const id = selectedFlow();
     if (!id) return toast("Select a call in the list first", true);
-    run("retry", { flow_id: id, edits: {} }, "Repeated — the new call is at the bottom of the list");
+    run("retry", { flow_id: id, edits: {} }, "Repeated — the new call is in the list (newest first)");
   };
   const focusFilter = () => {
     if (skinOn() && host.hasAttribute("data-sbar")) return focusSearch();
@@ -1935,6 +1957,7 @@
     KeyE: ["TLS decryption list (SSL proxying)", () => openDrawer("net")],
     KeyS: ["Scripts", () => openDrawer("scripts")],
     KeyD: ["Compare (diff) two calls", () => openDrawer("cmp")],
+    KeyV: ["Devices: set up simulators / emulators", () => openDrawer("dev")],
     KeyF: ["Search / filter the list", focusFilter],
     Enter: ["Edit & Repeat the selected call", () => { const id = selectedFlow(); if (id) openRetry(id); else toast("Select a call in the list first", true); }],
   };
@@ -1948,6 +1971,7 @@
       [kb(KALT, KSHIFT, "E"), "TLS decryption list (SSL proxying)"],
       [kb(KALT, KSHIFT, "S"), "Scripts"],
       [kb(KALT, KSHIFT, "D"), "Compare (diff) two calls"],
+      [kb(KALT, KSHIFT, "V"), "Devices: set up simulators / emulators"],
       [kb(KMOD, "F"), "Filter the list — Esc clears"],
       [kb(KALT, KSHIFT, "F"), "Filter the list (same)"],
       [kb(KMOD, "↵"), "Repeat the selected call"],
@@ -1964,6 +1988,7 @@
     ]],
   ];
   const MAPPING = [
+    ["Certificate → Install on iOS Simulator / Android Emulator", "<b>Devices</b> tab: every booted simulator and running emulator, <b>Set up</b> per device (or <code>rivis setup</code>)", "dev"],
     ["Map Local (answer a call from a saved response)", "On the call: <b>This call → Map Local this call…</b>; or the <b>Map Local</b> tab to add by host and path", "call"],
     ["Breakpoint", "<b>This call → Breakpoint</b> (Request / Response); manage in the <b>Breakpoints</b> tab", "bp"],
     ["Network Conditions (throttle)", "<b>Network</b> tab → traffic profiles", "net"],

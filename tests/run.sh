@@ -38,7 +38,7 @@ $PY "$HERE/hermetic.py" snapshot "$RES/before.snap" || exit 2
 
 cd "$HERE" || exit 2
 if [ "$UI_ONLY" = 1 ]; then
-  MODULES="ui/test_ui.py"
+  MODULES="$(ls ui/test_*.py | sort)"
 else
   MODULES="$(ls test_*.py | sort)"
   [ "$FAST" = 1 ] || MODULES="$MODULES

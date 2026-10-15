@@ -11,14 +11,14 @@ changes your system proxy, or listens outside your own computer.
    confirm with Touch ID or your password, and the installer carries on by itself. Skip it and everything else
    still works; only iOS capture needs it. To approve later, run `./install.sh` again.
 4. The installer offers to start Rivis and open its UI. Then **Tools → Devices**: one click per simulator or
-   emulator (Google Play emulators ask once to restart). Later: `<cli> start --background` (or `<cli> setup` from a terminal).
+   emulator (Google Play emulators ask once to restart). Later: `rivis start --background` (or `rivis setup` from a terminal).
 
 Remove with `./install.sh --uninstall`. Your saved data and certificate are kept; the command tells you how to delete them.
 
 ### Windows
 1. Download the installer folder from the internal mirror and open PowerShell in it.
 2. Run `.\install.ps1` (add `-DryRun` first to preview).
-3. Open a new PowerShell window, then: `<cli> start`, `<cli> android on`.
+3. Open a new PowerShell window, then: `rivis start`, `rivis android on`.
 
 Windows has no iOS Simulator, so iOS capture is Mac-only. Android emulator capture needs the Android SDK
 (`adb`). Remove with `.\install.ps1 -Uninstall`.

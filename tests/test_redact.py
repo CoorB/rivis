@@ -90,5 +90,14 @@ class Contract(unittest.TestCase):
         self.assertIn("redacted", out["log"]["comment"])
 
 
+class DeepJson(unittest.TestCase):
+    def test_json_nested_past_the_recursion_limit_is_redacted_as_text(self):
+        body = "[" * 5000 + '"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln"' + "]" * 5000
+        out = R.text(body, "application/json")
+        self.assertNotIn("eyJzdWIiOiJ4In0", out)
+        self.assertIn("<redacted>", out)
+
+
 if __name__ == "__main__":
     unittest.main()
+

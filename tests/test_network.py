@@ -104,6 +104,18 @@ class Breakpoints(LiveCase):
     def bg(self, path, **kw):
         return Background(self.fetch, path, **kw)
 
+    def retry(self, path, breakpoint):
+        self.fetch(path)
+        flow_id = self.inst.flow_for(path)["id"]
+        self.reset_state(breakpoints=[breakpoint])
+        replay_id = self.panel.ok("retry", {"flow_id": flow_id, "edits": {}})["id"]
+        return flow_id, replay_id
+
+    def paused_id(self, flow_id, phase=None):
+        return wait_for(lambda: next((p for p in self.panel.state()["paused"]
+                                     if p["id"] == flow_id and (phase is None or p["phase"] == phase)), None),
+                        10, 0.1, "replayed call paused")
+
     def test_request_pause_continue_with_edits(self):
         self.reset_state(breakpoints=[bp()])
         call = self.bg("/echo?q=1", method="POST", data="orig")
@@ -158,6 +170,69 @@ class Breakpoints(LiveCase):
         p2 = wait_for(lambda: [x for x in self.panel.state()["paused"] if x["phase"] == "response"], 10, 0.1, "response pause")[0]
         self.panel.ok("paused_skip", {"id": p2["id"]})
         self.assertEqual(call.result().status, 200)
+
+    def test_replayed_matching_request_pauses_and_can_continue_and_abort(self):
+        source_id, replay_id = self.retry("/echo?replay=request", bp())
+        p = self.paused_id(replay_id, "request")
+        self.assertEqual(self.panel.ok("paused_get", {"id": replay_id})["phase"], "request")
+        self.assertEqual(self.up.hits_for("/echo"), [])
+        self.panel.ok("paused_continue", {"id": p["id"]})
+        wait_for(lambda: len(self.up.hits_for("/echo")) == 1, 10, 0.1, "continued replay hit")
+
+        replay_id = self.panel.ok("retry", {"flow_id": source_id, "edits": {}})["id"]
+        p = self.paused_id(replay_id, "request")
+        self.panel.ok("paused_abort", {"id": p["id"]})
+        wait_for(lambda: next((f.get("error") for f in self.inst.flows() if f["id"] == replay_id), None),
+                 10, 0.1, "aborted replay completed")
+        self.assertEqual(len(self.up.hits_for("/echo")), 1)
+
+    def test_replayed_matching_response_pauses_at_response(self):
+        _, replay_id = self.retry("/json/small?replay=response",
+                                  bp(match="/json/small", request=False, response=True))
+        p = self.paused_id(replay_id, "response")
+        info = self.panel.ok("paused_get", {"id": p["id"]})
+        self.assertEqual((info["phase"], info["status"]), ("response", 200))
+        self.assertEqual(len(self.up.hits_for("/json/small")), 1)
+        self.panel.ok("paused_continue", {"id": p["id"]})
+
+    def test_replayed_nonmatching_call_is_not_paused(self):
+        _, replay_id = self.retry("/json/small?replay=nonmatch", bp(match="/echo"))
+        wait_for(lambda: next((f.get("response") for f in self.inst.flows() if f["id"] == replay_id), None),
+                 10, 0.1, "nonmatching replay response")
+        self.assertNotIn(replay_id, {p["id"] for p in self.panel.state()["paused"]})
+        self.assertEqual(len(self.up.hits_for("/json/small")), 1)
+
+    def test_breakpoint_on_a_mocked_endpoint_pauses_once_then_the_mock_answers(self):
+        """Demo path: Map Local + breakpoint on one endpoint. The breakpoint used to never fire (the mock answered first)."""
+        self.reset_state(rules=[self.rule("m", "respond", "/echo", status=201, body={"mocked": True})],
+                         breakpoints=[bp(match="/echo", request=True, response=True)])
+        call = self.bg("/echo?mocked=1")
+        p = self.paused()[0]
+        self.assertEqual(p["phase"], "request")
+        self.panel.ok("paused_continue", {"id": p["id"]})
+        r = wait_for(lambda: [x for x in self.panel.state()["paused"] if x["phase"] == "response"], 10, 0.1, "response pause")[0]
+        self.panel.ok("paused_continue", {"id": r["id"]})
+        res = call.result()
+        self.assertEqual((res.status, res.json()), (201, {"mocked": True}))
+        self.assertEqual(self.panel.state()["paused"], [], "exactly one request pause and one response pause")
+        self.assertEqual(self.up.hits_for("/echo"), [])
+
+    def test_response_breakpoint_on_a_mocked_endpoint_can_edit_the_mock(self):
+        self.reset_state(rules=[self.rule("m", "respond", "/echo", status=201, body={"mocked": True})],
+                         breakpoints=[bp(match="/echo", request=False, response=True)])
+        call = self.bg("/echo?mocked=3")
+        r = self.paused()[0]
+        self.assertEqual((r["phase"], r["status"]), ("response", 201))
+        self.panel.ok("paused_continue", {"id": r["id"], "edits": {"status": 409, "body": '{"edited": true}'}})
+        res = call.result()
+        self.assertEqual((res.status, res.json()), (409, {"edited": True}))
+
+    def test_abort_at_a_breakpoint_on_a_mocked_endpoint_gives_an_error_not_the_mock(self):
+        self.reset_state(rules=[self.rule("m", "respond", "/echo", status=201, body={"mocked": True})],
+                         breakpoints=[bp(match="/echo")])
+        call = self.bg("/echo?mocked=2")
+        self.panel.ok("paused_abort", {"id": self.paused()[0]["id"]})
+        self.assertNotEqual(call.result().status, 201)
 
     def test_method_filter_and_disabled(self):
         self.reset_state(breakpoints=[bp(method="DELETE"), bp("off", "/json", enabled=False)])

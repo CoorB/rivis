@@ -48,7 +48,7 @@ import sys
 import time
 import ipaddress
 
-from mitmproxy import ctx, http
+from mitmproxy import ctx, flowfilter, http
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -100,9 +100,25 @@ def _bp_filter(bps):
             f += " & ~q"
         elif b.get("response") and not b.get("request"):
             f += " & ~s"
+        # Calls Rivis answers itself (Map Local / respond, tagged "mock:") are paused by proxy_rules, never by
+        # mitmweb's Intercept: mitmweb 12.2.3 never sends a locally answered response it has intercepted.
+        f += " & !~comment '(^| )mock:'"
         # spaces inside the brackets matter: mitmproxy's parser rejects "~s)" but accepts "~s )"
         parts.append("( " + f + " )")
     return " | ".join(parts)
+
+
+def _local_bps(bps):
+    """Active breakpoints as (url regex, METHOD or None, request?, response?) for calls Rivis answers itself."""
+    out = []
+    for b in bps:
+        if b.get("enabled", True) and b.get("match") and (b.get("request") or b.get("response")):
+            try:
+                out.append((re.compile(b["match"]), (b.get("method") or "").upper() or None,
+                            bool(b.get("request")), bool(b.get("response"))))
+            except re.error:
+                continue
+    return out
 
 
 def _set_path(doc, path, value):
@@ -273,6 +289,7 @@ class ProxyRules:
                     ctx.log.warn(f"proxy_rules: skipping rule '{name}': {e}")
             # breakpoints drive mitmweb's own Intercept (paused calls → edit → Continue)
             bp_filter = _bp_filter(breakpoints(cfg))
+            self._local_breakpoints = _local_bps(breakpoints(cfg))
             throttle = _parse_throttle(cfg.get("throttle"), cfg.get("manual"))
             tre = cfg.get("throttle_match", "")
             throttle_re = user_regex(tre) if tre else None
@@ -334,6 +351,30 @@ class ProxyRules:
         self._intercept_set = desired
         ctx.log.info(f"proxy_rules: breakpoints {'set: ' + desired if desired else 'off'}")
 
+    async def _pause_local(self, flow, phase):
+        """Pause a call Rivis answers itself at a matching breakpoint (phase 'request': before the local answer,
+        'response': after it, so the mock can be edited). Returns False when it was aborted while paused."""
+        current = ctx.options.intercept or None
+        if flow.intercepted or self._intercept_set is _UNSET or current is None or current != self._intercept_set:
+            return True                                        # we do not own breakpoints right now
+        url, method = flow.request.pretty_url, flow.request.method.upper()
+        if any(rx.search(url) and (m is None or m == method) and (req if phase == "request" else resp)
+               for rx, m, req, resp in getattr(self, "_local_breakpoints", [])):
+            flow.intercept()
+            await flow.wait_for_resume()
+        return flow.error is None
+
+    def _intercept_replay(self, flow):
+        """mitmproxy's Intercept addon skips client replays; apply our owned filter to them."""
+        if flow.is_replay != "request" or flow.intercepted:
+            return
+        current = ctx.options.intercept or None
+        if not ctx.options.intercept_active or self._intercept_set is _UNSET \
+                or current is None or current != self._intercept_set:
+            return
+        if flowfilter.match(current, flow):
+            flow.intercept()
+
     def _matching(self, flow, actions):
         url, method = flow.request.pretty_url, flow.request.method
         for r in self.rules:
@@ -387,6 +428,11 @@ class ProxyRules:
     # ── request side ─────────────────────────────────────────────
     async def request(self, flow: http.HTTPFlow):
         self._reload()
+        answers_locally = any(True for _ in self._matching(flow, {"respond", "map_local"}))
+        if not answers_locally:
+            self._intercept_replay(flow)                       # Repeat: mitmweb's Intercept skips client replays
+        elif not await self._pause_local(flow, "request"):
+            return                                             # aborted at the breakpoint
         if self.loss and (self.throttle_re is None or self.throttle_re.search(flow.request.pretty_url)) \
                 and random.random() * 100 < self.loss:
             _tag(flow, f"loss {self.loss:g}%")
@@ -436,10 +482,13 @@ class ProxyRules:
                 _tag(flow, f"rule:{r['name']} FAILED: {e}")
                 ctx.log.warn(f"proxy_rules: {r['name']}: {e}")
             break
+        if answers_locally and flow.response is not None:
+            await self._pause_local(flow, "response")          # the mock can still be edited before the app gets it
 
     # ── response side ────────────────────────────────────────────
     async def response(self, flow: http.HTTPFlow):
         self._reload()
+        self._intercept_replay(flow)
         for r in self._matching(flow, {"status"}):
             flow.response.status_code = int(r["status"])
             if r.get("body") is not None or r.get("body_file"):

@@ -60,7 +60,7 @@ def text(body, mime=""):
     if stripped[:1] in ("{", "["):
         try:
             return json.dumps(_value(json.loads(body)), ensure_ascii=False)
-        except ValueError:
+        except (ValueError, RecursionError):   # not JSON, or nested too deep to walk: redact it as text
             pass
     if "x-www-form-urlencoded" in (mime or "").lower():
         return query(body)

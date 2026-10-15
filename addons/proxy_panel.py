@@ -102,8 +102,9 @@ def wildcard_regex(host, path):
     return r"^https?://" + wc(host, r"[^/:]*") + r"(:\d+)?" + wc(path, ".*") + r"(\?|$)"
 
 
-class PanelError(Exception):
-    pass
+class PanelError(ValueError):
+    """A user-facing 400. A ValueError on purpose: after a hot reload the API route (registered once) still holds the
+    OLD module's PanelError while the swapped-in implementation raises the NEW one; both are ValueErrors."""
 
 
 
@@ -532,7 +533,7 @@ class ProxyPanel:
                 flow.metadata["proxy_graphql_error"] = True
                 if "graphql:error" not in (flow.comment or "").split(" | "):
                     flow.comment = (flow.comment + " | " if flow.comment else "") + "graphql:error"
-        except (UnicodeDecodeError, ValueError, TypeError):
+        except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
             return
 
     @staticmethod
@@ -854,7 +855,7 @@ class ProxyPanel:
             if "json" in ctype or text.lstrip().startswith(("{", "[")):
                 try:
                     body, mode = json.dumps(json.loads(text), indent=2, ensure_ascii=False), "json"
-                except ValueError:
+                except (ValueError, RecursionError):
                     body, mode = text, "raw"
             elif "x-www-form-urlencoded" in ctype:
                 form, mode = [[k, v, True] for k, v in parse_qsl(text, keep_blank_values=True)], "form"
@@ -1052,7 +1053,7 @@ class ProxyPanel:
             body = (f.response.get_content(strict=False) or b"") if f.response else b"{}\n"
             try:   # pretty-print JSON so it is easy to edit
                 body = (json.dumps(json.loads(body), indent=2, ensure_ascii=False) + "\n").encode()
-            except ValueError:
+            except (ValueError, RecursionError):
                 pass
             atomic_write_bytes(path, body)
             r = {"name": name, "enabled": True, "match": self.flow_regex(f), "method": f.request.method,
@@ -1153,6 +1154,9 @@ class ProxyPanel:
             if not f.intercepted:
                 raise PanelError("that call is not paused any more")
             if op == "paused_abort":
+                # kill() clears intercepted without waking wait_for_resume(); signal first so an
+                # intercepted client replay does not wedge mitmproxy's replay worker.
+                f.resume()
                 f.kill()
             else:
                 if op == "paused_continue":
@@ -1574,7 +1578,7 @@ class ProxyPanel:
                     if da.get(k) != db.get(k):
                         rows.append([k, da.get(k, "—"), db.get(k, "—")])
                 return "json", rows[:500]
-            except ValueError:
+            except (ValueError, RecursionError):
                 import difflib
                 ta, tb = ra.decode("utf-8", "replace").splitlines(), rb.decode("utf-8", "replace").splitlines()
                 rows = [[l[:1], l[1:][:300], ""] for l in difflib.unified_diff(ta, tb, lineterm="", n=0)
@@ -1784,6 +1788,12 @@ class ProxyPanel:
                 except (PanelError, AttributeError, KeyError, TypeError, ValueError, OSError, re.error) as e:
                     self.set_status(400)
                     self.write(json.dumps({"error": str(e)}))
+                except Exception as e:   # a bug: say so in the UI, and leave the traceback in the log for the bug report
+                    import traceback
+                    ctx.log.error("panel %s failed: %s\n%s" % (op, e, traceback.format_exc()[-4000:]))
+                    self.set_status(500)
+                    self.write(json.dumps({"error": "%s failed (%s) — details are in the log; `%s bug-report` collects them"
+                                                    % (op, type(e).__name__, PRODUCT["cli"])}))
 
         # B2 (DNS rebinding): a page on evil.example that re-resolves to 127.0.0.1 is same-origin to itself, so the
         # browser sends Host: evil.example. Every UI request (mitmweb's own routes, the websocket and ours) must name

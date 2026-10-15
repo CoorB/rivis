@@ -9,6 +9,7 @@ shows up in the proxy's list and passes through rules and scripts like any other
 import http.cookiejar
 import json
 import os
+import secrets
 import sys
 import time
 import urllib.error
@@ -80,8 +81,10 @@ def do_send(name, directory, port, token_file, overrides, wait, project=None):
     except (urllib.error.URLError, OSError) as e:
         die("cannot reach the proxy UI on 127.0.0.1:%s (%s) — is it running?" % (port, e))
     xsrf = next((c.value for c in jar if c.name == "_mitmproxy_xsrf"), "")
-    if not xsrf:
-        die("mitmweb gave no XSRF cookie — token rejected? restart the proxy or run `%s ui`" % PRODUCT["cli"])
+    if not xsrf:   # mitmweb 12 does not always issue it; tornado only needs the cookie and the header to agree
+        xsrf = secrets.token_hex(16)
+        jar.set_cookie(http.cookiejar.Cookie(0, "_mitmproxy_xsrf", xsrf, None, False, "127.0.0.1", True, False, "/",
+                                             True, False, None, False, None, None, {}))
 
     if project:     # the running proxy loads saved requests from ITS project's composer/ directory
         try:

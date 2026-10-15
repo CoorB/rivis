@@ -46,14 +46,13 @@
 #                                 --manual: only print the steps. --yes: consent to the one-time
 #                                 Play-image setup without asking (scripts)
 #   <cli> ios on|off [--udid UDID | --all] CA on a simulator (default: the booted one; --all: every booted one)
-#   <cli> net-reset [--dry-run]            clear stale local web/https/socks proxies
+#   <cli> net-reset [--dry-run]            clear stale local web/https/socks proxies on every network
 #                                         service — fixes "no internet after closing the proxy app"
 #   <cli> doctor [--json] [--no-net] [--fix-safe [--yes]]
 #                                 read-only health check: versions, CA, ports, system proxy,
 #                                 sim/emulator trust, running state, host reachability, disk.
 #                                 --fix-safe does only safe, reversible fixes (asks y/N)
 #   <cli> bug-report [--output PATH]     create a redacted support bundle (no flows or tokens)
-#   <cli> status | cert
 set -uo pipefail
 umask 077
 
@@ -148,6 +147,15 @@ ADDON="$SCRIPT_DIR/addons/proxy_rules.py"
 AUTH_ADDON="$SCRIPT_DIR/addons/proxy_auth.py"
 
 usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1{exit}' "$0" | sed "s/<cli>/$CLI/g; s/<ProductName>/$PRODUCT_NAME/g"; }
+usage_for() {   # usage_for CMD — only that command's lines of the usage above (all of it if CMD has none)
+  local out; out=$(usage | awk -v c="$CLI" -v cmd="$1" '
+    { line = $0; sub(/^ +/, "", line); sub(/^\[--project ID\] /, "", line)
+      if (index(line, c " ") == 1) {            # a command line: is CMD one of its words (e.g. "ui | stop | status")?
+        part = substr(line, length(c) + 2); sub(/  .*/, "", part)
+        p = (part ~ ("(^|[ |])" cmd "( |$)")) } }
+    p { print }')
+  if [ -n "$out" ]; then echo "$out"; else usage; fi
+}
 die()   { echo "$CLI: $*" >&2; exit 1; }
 info()  { echo "• $*"; }
 
@@ -838,6 +846,8 @@ cmd_cert() {
   openssl x509 -in "$CA_PEM" -noout -enddate
 }
 
+# `<cmd> … --help` prints help and does NOTHING else: stop/setup/cert/status used to ignore it and run (QA TXT-03/04)
+if [ $# -ge 2 ]; then for _a in "${@:2}"; do case "$_a" in -h|--help) usage_for "$1"; exit 0 ;; esac; done; fi
 case "${1:-}" in -h|--help|help|""|cert|doctor|bug-report) ;; *) migrate_legacy || exit 1 ;; esac
 
 case "${1:-}" in
