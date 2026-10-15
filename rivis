@@ -129,6 +129,9 @@ PROJECT_STATE="$STATE_ROOT/projects/$PROJECT"
 
 PORT="$(env_value PORT 8080)"
 WEB_PORT="$(env_value WEB_PORT 8083)"
+MAX_FLOWS="$(env_value MAX_FLOWS 5000)"
+[[ "$MAX_FLOWS" =~ ^[0-9]+$ ]] && [ "$MAX_FLOWS" -ge 1 ] && [ "$MAX_FLOWS" -le 1000000 ] || \
+  { echo "$CLI: ${ENV_PREFIX}_MAX_FLOWS must be an integer from 1 to 1000000" >&2; exit 1; }
 CONFDIR="$(env_value CONFDIR "$HOME/.mitmproxy")"
 CA_PEM="$CONFDIR/mitmproxy-ca-cert.pem"
 ADB="${ADB:-$(command -v adb || echo "$HOME/Library/Android/sdk/platform-tools/adb")}"
@@ -358,9 +361,9 @@ cmd_start() {
   local args=(--listen-host 127.0.0.1 --mode "regular@$PORT"
               --set web_host=127.0.0.1 --set "web_port=$WEB_PORT" --set web_open_browser=false
               --set confdir="$CONFDIR" --set connection_strategy=lazy
-              -s "$AUTH_ADDON" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_panel.py"
+              -s "$AUTH_ADDON" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_panel.py" -s "$SCRIPT_DIR/addons/proxy_retention.py"
               --set "proxy_auth_token_file=$STATE_ROOT/web-token" --set "proxy_bootstrap_file=$STATE_ROOT/web-bootstrap"
-              --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT")
+              --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT" --set "proxy_max_flows=$MAX_FLOWS")
   [ -n "$private_hosts" ] && args+=(--set "proxy_private_hosts=$private_hosts")
   # local capture: the iOS Simulator shares the Mac network stack and has no proxy
   # setting of its own. Scoping capture to simulator processes keeps us off the

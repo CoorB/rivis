@@ -95,6 +95,11 @@ if (-not $ProfileDir) { throw "unknown project '$Project'" }
 $ProjectConfig = Get-Content -Raw (Join-Path $ProfileDir "project.json") | ConvertFrom-Json
 $Port    = Config-Env "PORT" 8080
 $WebPort = Config-Env "WEB_PORT" 8083
+$MaxFlowsText = Config-Env "MAX_FLOWS" 5000
+$MaxFlows = 0
+if (-not [int]::TryParse($MaxFlowsText, [ref]$MaxFlows) -or $MaxFlows -lt 1 -or $MaxFlows -gt 1000000) {
+  throw "${EnvPrefix}_MAX_FLOWS must be an integer from 1 to 1000000"
+}
 $ConfDir = Config-Env "CONFDIR" (Join-Path $HOME ".mitmproxy")
 $CaPem   = Join-Path $ConfDir "mitmproxy-ca-cert.pem"
 $CaCer   = Join-Path $ConfDir "mitmproxy-ca-cert.cer"
@@ -456,8 +461,8 @@ switch ($Command) {
               "--set","web_host=127.0.0.1","--set","web_port=$WebPort","--set","web_open_browser=false",
               "-s",(Join-Path $PSScriptRoot "addons\proxy_auth.py"),
               "--set","proxy_auth_token_file=$TokenPath","--set","proxy_bootstrap_file=$BootstrapPath",
-              "--set","confdir=$ConfDir","--set","connection_strategy=lazy","-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),
-              "--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project")
+              "--set","confdir=$ConfDir","--set","connection_strategy=lazy","-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_retention.py"),
+              "--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project","--set","proxy_max_flows=$MaxFlows")
     if ($Insecure) { $margs += @("--set","ssl_insecure=true"); Info "TLS: upstream verification OFF" }
     if ($ProjectOnly -and $ProjectConfig.hosts) {
       $escapedHosts = $ProjectConfig.hosts.Replace('\','\\').Replace("'","\'")

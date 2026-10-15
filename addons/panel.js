@@ -1082,7 +1082,10 @@
     document.querySelectorAll("footer .label").forEach((el) => {
       const t = el.textContent.trim(); let m;
       if (/^Intercept:/.test(t)) { setAttr(el, "data-rv", "Breakpoints on — matching calls pause"); setAttr(el, "title", t); setAttr(el, "data-rv-tone", "warn"); return; }
-      if ((m = t.match(/^(\d+) of (\d+) flows? selected$/))) { setAttr(el, "data-rv", m[1] === "0" ? `${m[2]} call${m[2] === "1" ? "" : "s"}` : `${m[1]} selected · ${m[2]} calls`); return; }
+      if ((m = t.match(/^(\d+) of (\d+) flows? selected$/))) {
+        const kept = state && state.retention && state.retention.limit ? ` · showing last ${state.retention.limit} calls` : "";
+        setAttr(el, "data-rv", (m[1] === "0" ? `${m[2]} call${m[2] === "1" ? "" : "s"}` : `${m[1]} selected · ${m[2]} calls`) + kept); return;
+      }
       if ((m = t.match(/^(?:regular|local|transparent|socks5|upstream|reverse)[^@]*@(?:.*:)?(\d+)$/))) {
         setAttr(el, "data-rv", `Proxy 127.0.0.1:${m[1]}` + (state && state.project.label ? ` · ${state.project.label}` : ""));
         setAttr(el, "title", "Point the device or simulator at this address (the tool prints the exact setup commands)");
@@ -1826,10 +1829,12 @@
   // mitmweb changes the selection with history.replaceState, which fires no "hashchange" —
   // so watch the selected call id ourselves
   let lastSel = selectedFlow();
+  api("flow_selected", { id:lastSel }).catch(() => {});
   setInterval(() => {
     const cur = selectedFlow();
     if (cur === lastSel) return;
     lastSel = cur;
+    api("flow_selected", { id:cur }).catch(() => {});
     if ($("drawer").classList.contains("open") && (tab === "call" || tab === "cmp") && !editing) render();
   }, 300);
   // ───────────── Help · shortcuts · "Coming from Proxyman?" · settings · empty state ─────────────

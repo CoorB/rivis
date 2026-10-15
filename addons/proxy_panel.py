@@ -120,6 +120,7 @@ class ProxyPanel:
         self.show_dns = False
         self.focused_host = None
         self.graphql_operation = None
+        self.selected_flow_id = None
         self._coll_count_cache = {}
         self._viewer_cache = {}
         self._panel_view_filter = None
@@ -292,6 +293,7 @@ class ProxyPanel:
             "skipped_rules": self.skipped_rules(),
             "scripts": self.scripts(cfg),
             "script_status": self.script_status(),
+            "retention": self.retention_state(),
             "focus_host": self.focused_host,
             "project_only": self.project_only,
             "show_dns": self.show_dns,
@@ -307,7 +309,7 @@ class ProxyPanel:
         if manager is None:
             return []
         found = []
-        for name in ("proxyrules", "proxycollections", "proxyscripts"):
+        for name in ("proxyrules", "proxycollections", "proxyscripts", "proxyretention"):
             try:
                 addon = manager.get(name)
             except (KeyError, TypeError):
@@ -336,6 +338,12 @@ class ProxyPanel:
                         "node_message": None if getattr(addon, "node", None) else "Node.js not installed — JS scripts disabled",
                         "errors": dict(getattr(addon, "last_errors", {}))}
         return {"node": False, "node_message": "Scripting add-on is not loaded", "errors": {}}
+
+    def retention_state(self):
+        for addon in self._addons():
+            if addon.__class__.__name__ == "ProxyRetention":
+                return {"limit": int(ctx.options.proxy_max_flows), "trimmed": int(getattr(addon, "trimmed", 0))}
+        return {"limit": 5000, "trimmed": 0}
 
     def clear_script_error(self, filename):
         for addon in self._addons():
@@ -865,6 +873,16 @@ class ProxyPanel:
     def act(self, op, a):
         if not isinstance(a, dict):
             raise PanelError("request body must be a JSON object")
+        if op == "flow_selected":
+            flow_id = a.get("id")
+            if flow_id is not None:
+                self.flow_any(flow_id)
+            self.selected_flow_id = flow_id
+            for addon in self._addons():
+                if addon.__class__.__name__ == "ProxyRetention":
+                    addon.trim()
+                    break
+            return {"id": flow_id}
         cfg = self.load_cfg()
         if op == "viewer":
             return self._flow_viewer(self.flow(a["flow_id"]))
