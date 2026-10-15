@@ -10,7 +10,8 @@ changes your system proxy, or listens outside your own computer.
    right System Settings page and waits. Under Extensions, click By Category, then the ⓘ next to Network Extensions: switch it on,
    confirm with Touch ID or your password, and the installer carries on by itself. Skip it and everything else
    still works; only iOS capture needs it. To approve later, run `./install.sh` again.
-4. Open a new Terminal window, then: `<cli> start`, `<cli> ios on`, `<cli> android on`.
+4. The installer offers to start Rivis and open its UI. Then **Tools → Devices**: one click per simulator or
+   emulator (Google Play emulators ask once to restart). Later: `<cli> start --background` (or `<cli> setup` from a terminal).
 
 Remove with `./install.sh --uninstall`. Your saved data and certificate are kept; the command tells you how to delete them.
 
