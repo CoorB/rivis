@@ -94,9 +94,11 @@ rivis mock NAME URL-REGEX
 rivis net-reset [--dry-run]
 ```
 
-`rivis.ps1` takes the same commands. Options that are `key=value` in bash work the same way in PowerShell
-(`.\rivis.ps1 throttle lte-congested match=neo\.sa loss=5`); `-Match` / `-Loss` still work, and `--var` / `--no-wait`
-become `-Var name=value` / `-NoWait`.
+`rivis.ps1` supports the same cross-platform commands, including `stop`, `breakpoint`, `mock`, and `setup`.
+Windows has no iOS Simulator, so `setup` says so and configures every running Android emulator (`android on -All`).
+Options that are `key=value` in bash work the same way in PowerShell (`.\rivis.ps1 throttle lte-congested
+match=neo\.sa loss=5`); GNU-style options use their PowerShell spellings, such as `-Request`, `-Response`,
+`-Method`, `-Var name=value`, and `-NoWait`.
 
 `--dev` remains an alias of `--insecure`; `--neo-only` remains an alias of `--project-only`. The legacy
 `neo-mitm` and `neo-mitm.ps1` wrappers select project `neo` unless an explicit project is supplied.
@@ -172,7 +174,7 @@ The **Compose** tab builds a request from scratch (or from the selected call: **
 It has a method box (common verbs or any custom one), the URL, a Params table that stays in sync with the URL
 (untick a row to keep it without sending it), a Headers table, and a body editor: none, JSON (validate and
 pretty-print), form-urlencoded (table) or raw text. **Send** creates the call server-side exactly like
-Edit & Retry, so it appears in the list, passes through rules, scripts and breakpoints, and is marked
+Edit & Repeat, so it appears in the list, passes through rules, scripts and breakpoints, and is marked
 `proxy_composed` with the comment `composed`.
 
 - **Saved requests** live in `~/.rivis/projects/<id>/composer/<name>.json` (owner-only): save, load, rename,

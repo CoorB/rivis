@@ -28,7 +28,7 @@ Proxyman?**. Each row there has an **Open →** link that takes you straight to 
 | **Breakpoint** | **This call → Breakpoint** (Request / Response). A matching call pauses and a sheet opens by itself with Continue / Skip / Abort. Manage all breakpoints in the **Breakpoints** tab. |
 | **Network Conditions** (throttle) | **Network** tab → traffic profiles (3G, LTE, high-latency VPN, packet loss, or a manual profile with your own latency / bandwidth / loss). Can be limited to URLs containing some text (e.g. your API host). |
 | **Compose a new request** | **Compose** tab, or **Compose from this call**. Method, URL, params, headers and a JSON / form / raw body; **Send** runs it through rules, scripts and breakpoints just like a real call. |
-| **Repeat / Edit & Repeat** | Repeat as-is: `⌘↵` (Ctrl+Enter) or mitmweb's `r`. Edit first: **This call → Edit & Retry…** — change method, URL, headers and body, then send a copy; the original stays in the list. |
+| **Repeat / Edit & Repeat** | Repeat as-is: `⌘↵` (Ctrl+Enter) or mitmweb's `r`. Edit first: **This call → Edit & Repeat…** — change method, URL, headers and body, then send a copy; the original stays in the list. |
 | **Diff two requests** | **Compare** tab: pick **Compare: set as A** on one call, then select another. Shows a field-level diff. |
 | **Export HAR** | **Sessions** or **Collections** → **HAR**. Sessions also save and reopen the whole capture with a note. |
 | **Filter by host / app** | The filter box at the top is always visible (`⌘F` / `Ctrl+F`, `Esc` clears): type a host or part of a URL. `~` filters (`~m POST`, `~c 500`, `~q`) work too. Or right-click a call → **Show only this host**. A strip under the toolbar shows what is hiding calls, with an ✕ to undo each. |

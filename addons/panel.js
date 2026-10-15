@@ -539,11 +539,15 @@
       return;
     }
     if (!f || f.type !== "http") {
-      m.innerHTML = emptyState("call", "No call selected", "Click a row in the list. Everything for that call — Map Local, Breakpoint, Copy as cURL, Edit &amp; Retry — is on this tab.");
+      m.innerHTML = emptyState("call", "No call selected", "Click a row in the list. Everything for that call — Map Local, Breakpoint, Copy as cURL, Edit &amp; Repeat — is on this tab.");
       return;
     }
     const r = f.request, s = f.response;
-    const bpFor = state.breakpoints.find((b) => b.label === r.pretty_host + r.path.split("?")[0] && b.method === r.method);
+    // like the proxy: the breakpoint's pattern on the URL (CLI-made breakpoints carry no label)
+    const urlOf = (r.scheme || "https") + "://" + r.pretty_host + ((r.port && ![80, 443].includes(r.port)) ? ":" + r.port : "") + r.path;
+    const bpHits = (b) => { if (b.label) return b.label === r.pretty_host + r.path.split("?")[0];
+      try { return new RegExp(b.match).test(urlOf); } catch (e) { return false; } };
+    const bpFor = state.breakpoints.find((b) => bpHits(b) && (!b.method || b.method === r.method));
     let viewer = null;
     try { viewer = await api("viewer", { flow_id: f.id }); } catch (e) { /* call tools still work */ }
     if (viewer && viewer.grpc) {
@@ -563,7 +567,7 @@
         <div class="seg" style="margin:0"><button data-ph="request" class="${bpFor && bpFor.request ? "on" : ""}" aria-pressed="${!!(bpFor && bpFor.request)}">Request</button><button data-ph="response" class="${bpFor && bpFor.response ? "on" : ""}" aria-pressed="${!!(bpFor && bpFor.response)}">Response</button></div>
         <span class="sub">${bpFor ? "on for this endpoint" : "off"}</span></div>
       <h4>Edit &amp; repeat</h4>
-      <div class="btns" style="margin-top:0"><button class="b" id="retry">Edit &amp; Retry…</button>
+      <div class="btns" style="margin-top:0"><button class="b" id="retry">Edit &amp; Repeat…</button>
         <button class="b" id="compose">Compose from this call</button>
         <button class="b" id="cmpA">Compare: set as A</button></div>
       <h4>Copy</h4>
@@ -575,11 +579,11 @@
         <button class="b" id="force">Force status</button>
         <button class="b" id="block">Block (network error)</button></div>
       <div class="btns"><span class="sub">Delay by</span><input type="number" id="ms" value="8000" step="1000" style="width:84px" aria-label="Delay in milliseconds"><span class="sub">ms</span>
-        <button class="b" id="delay">Delay this call</button></div>
+        <button class="b" id="delay">Delay this endpoint</button></div>
       ${tlsQuickHTML(r.pretty_host)}
       ${viewerHTML(viewer)}${viewerListsHTML()}`;
     $("mock").onclick = async () => {
-      const res = await run("mock", { flow_id: f.id }, (x) => (x.existing ? "Opened existing mock '" : "Map Local '") + x.name + "' is on");
+      const res = await run("mock", { flow_id: f.id }, (x) => (x.existing ? "Opened existing Map Local '" : "Map Local '") + x.name + "' is on");
       if (res) openEditor(res.name);
     };
     root.querySelectorAll("[data-ph]").forEach((c) => (c.onclick = async () => {
@@ -1311,7 +1315,7 @@
   }
   async function commitSearch(raw) {
     const seq = ++sbSeq, text = raw.trim(), f = toFilter(text), st = mwStore();
-    if (!st) { toast("Can't reach mitmweb's filter (version changed?). Use the Search box on the Flow List tab.", true); return; }
+    if (!st) { toast("Can't reach mitmweb's filter (version changed?). Use the Search box on the Calls tab.", true); return; }
     let res = f ? checked.get(f) : { ok: true };
     if (!res) {
       try { const r = await api("filter_check", { filter: f }); res = { ok: r.ok !== false, error: r.error }; }
@@ -1487,12 +1491,12 @@
     else if (e.key === "ArrowUp") { bs[(i - 1 + bs.length) % bs.length].focus(); e.preventDefault(); }
   });
 
-  // ───────────── Edit & Retry (request editor in the sheet) ─────────────
+  // ───────────── Edit & Repeat (request editor in the sheet) ─────────────
   async function openRetry(id) {
     let p;
     try { p = await api("retry_get", { flow_id: id }); } catch (e) { return toast(e.message, true); }
     $("sheet").innerHTML = `
-      <header class="retry"><b>${ico("retry", "sm")} Edit &amp; Retry</b><span class="sub">sends a copy; the original stays in the list</span></header>
+      <header class="retry"><b>${ico("retry", "sm")} Edit &amp; Repeat</b><span class="sub">sends a copy; the original stays in the list</span></header>
       <main>
         <div class="btns" style="margin-top:0"><select id="rm">${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((x) => `<option ${x === p.method ? "selected" : ""}>${x}</option>`).join("")}</select>
           <input type="text" id="ru" class="grow" value="${esc(p.url)}"></div>
@@ -1993,7 +1997,7 @@
     ["Breakpoint", "<b>This call → Breakpoint</b> (Request / Response); manage in the <b>Breakpoints</b> tab", "bp"],
     ["Network Conditions (throttle)", "<b>Network</b> tab → traffic profiles", "net"],
     ["Compose a new request", "<b>Compose</b> tab, or <b>Compose from this call</b>", "compose"],
-    ["Repeat / Edit & Repeat", "Repeat: " + kb(KMOD, "↵") + " or " + kb("r") + ". Edit: <b>This call → Edit &amp; Retry…</b>", "call"],
+    ["Repeat / Edit & Repeat", "Repeat: " + kb(KMOD, "↵") + " or " + kb("r") + ". Edit: <b>This call → Edit &amp; Repeat…</b>", "call"],
     ["Diff two requests", "<b>Compare</b> tab: <i>Compare: set as A</i> on a call, then select another", "cmp"],
     ["Export HAR", "<b>Sessions</b> or <b>Collections</b> → <i>HAR</i>", "sess"],
     ["Filter by host / app", "The filter box at the top (" + kb(KMOD, "F") + "): type a host or part of a URL. Or <b>right-click → Show only this host</b>", "filter"],
@@ -2099,7 +2103,7 @@
           <div class="opt"><h5>${ico("phone", "sm")} Android emulator</h5><code class="cmd" data-copy="${esc(cli + proj + " android on")}" title="Click to copy">${esc(cli + proj + " android on")}</code>
             <div class="sub">Points the emulator at ${esc(state.product.name || "Rivis")} and installs the certificate. Then open the app.</div></div>
         </div>
-        <div class="foot">Or from a terminal, as above (<code>${esc(cli + proj + " setup")}</code> does every running device). Nothing from a simulator? Quit any other proxy app first — only one tool can own the system proxy.</div></div>`;
+        <div class="foot">Or from a terminal, as above (<code>${esc(cli + proj + " setup")}</code> does every running device). Nothing from a simulator? Another proxy app (Proxyman, Charles) may have set the Mac's system proxy — quit it, or run <code>${esc(cli)} net-reset</code>.</div></div>`;
     } else {
       const why = q ? `No calls match <b>${esc(q)}</b>` : "Every call is hidden by your view settings";
       const sub = q ? "Try a shorter word, or the host name only. Filters with <code>~</code> must be written exactly (see the examples in the search box)."

@@ -6,6 +6,7 @@ system proxy, one CA per workstation, removed again with `off`.
 
   .\<cli>.ps1 start [-Insecure] [-ProjectOnly] [-NoOpen] [-Project ID]
                                             mitmweb: proxy 127.0.0.1:8080, UI http://127.0.0.1:8083
+  .\<cli>.ps1 stop | ui | status | cert
   .\<cli>.ps1 projects list|use|show|new
   .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|edit|allow-file PATH|disallow-file PATH|trusted-files
                                             manage hot-reloaded interception rules
@@ -18,7 +19,10 @@ system proxy, one CA per workstation, removed again with `off`.
                                             hot-reloaded for NEW connections, no restart
   .\<cli>.ps1 compose list | send NAME [-Var name=value] [-NoWait]
                                             replay a request saved in the panel's Compose tab
-  .\<cli>.ps1 android on|off [-Serial emulator-5554]
+  .\<cli>.ps1 breakpoint URL-REGEX [-Request|-Response] [-Method M] | off [NAME] | list
+  .\<cli>.ps1 mock NAME URL-REGEX
+  .\<cli>.ps1 android on|off [-Serial emulator-5554 | -All]
+  .\<cli>.ps1 setup                         configure every running Android emulator (iOS is unavailable on Windows)
   .\<cli>.ps1 net-reset [-DryRun] | status | cert
   .\<cli>.ps1 doctor [-Json] [-NoNet] [-FixSafe [-Yes]]
                                             read-only health check. Runs the shared Python checker when
@@ -39,6 +43,7 @@ param(
   [string]$Label = "",
   [string]$Hosts = "",
   [string]$Output = "",
+  [Alias("-method")][string]$Method = "",
   [ValidateSet("py","js")][string]$Lang = "",
   [double]$Loss,
   [Alias("Dev")][switch]$Insecure,
@@ -51,6 +56,10 @@ param(
   [switch]$AllowProfileNetwork,
   [switch]$FixSafe,
   [switch]$Yes,
+  [Alias("-request")][switch]$Request,
+  [Alias("-response")][switch]$Response,
+  [Alias("-all")][switch]$All,
+  [Alias("h","-help")][switch]$Help,
   [string[]]$Var = @(),
   [Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest = @()
 )
@@ -170,6 +179,37 @@ $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 function Info($m) { Write-Host "* $m" }
 function Die($m)  { Write-Host "${Cli}: $m" -ForegroundColor Red; exit 1 }
 
+function Write-Usage([string]$only = "") {
+  $lines = @()
+  foreach ($line in (Get-Content $PSCommandPath | Select-Object -Skip 1)) {
+    if ($line -eq '#>') { break }
+    $lines += (($line -replace '<cli>',$Cli) -replace '<ProductName>',$ProductName)
+  }
+  if (-not $only -or $only -in @("help","-h","--help")) { $lines | ForEach-Object { Write-Host $_ }; return }
+  $selected = @(); $take = $false
+  $prefix = ".\${Cli}.ps1 "
+  foreach ($line in $lines) {
+    $trimmed = $line.TrimStart()
+    if ($trimmed.StartsWith($prefix)) {
+      $commands = $trimmed.Substring($prefix.Length) -replace '\s{2,}.*$',''
+      $take = $commands -match ("(^|[ |])" + [Regex]::Escape($only) + "([ |]|$)")
+    }
+    if ($take) { $selected += $line }
+  }
+  if ($selected.Count) { $selected | ForEach-Object { Write-Host $_ } }
+  else { $lines | ForEach-Object { Write-Host $_ } }
+}
+
+function Get-PythonCommand {
+  foreach ($candidate in @("py","python3","python")) {
+    $command = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($command) {
+      return [PSCustomObject]@{ Exe = $command.Source; Prefix = $(if ($candidate -eq "py") { @("-3") } else { @() }) }
+    }
+  }
+  Die "Python is required for this command"
+}
+
 function Find-Adb {
   $c = Get-Command adb -ErrorAction SilentlyContinue
   if ($c) { return $c.Source }
@@ -205,6 +245,21 @@ function Port-Owner($p) {
   $line = netstat -ano -p tcp | Select-String "LISTENING" | Where-Object { $_ -match "[:.]$p\s" } | Select-Object -First 1
   if ($line) { $f = ($line.ToString().Trim() -split '\s+'); $pr = Get-Process -Id $f[-1] -ErrorAction SilentlyContinue; return "$($pr.ProcessName) pid $($f[-1]) $($f[1])" }
   return $null
+}
+
+function Listening-Pids([int[]]$ports) {
+  $pids = @()
+  if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
+    foreach ($p in $ports) {
+      $pids += @(Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess })
+    }
+  } else {
+    foreach ($line in @(netstat -ano -p tcp | Select-String "LISTENING")) {
+      $fields = $line.ToString().Trim() -split '\s+'
+      if ($fields.Count -ge 5 -and ($ports | Where-Object { $fields[1] -match "[:.]$_$" })) { $pids += $fields[-1] }
+    }
+  }
+  return @($pids | Where-Object { $_ } | Sort-Object -Unique)
 }
 
 function Ensure-Rules {
@@ -383,10 +438,14 @@ function Test-StaleLocalProxy($spec) {
   return $true
 }
 
+$helpTokens = @("-h","--help","-Help")
+$helpRequested = $Help -or $Action -in $helpTokens -or $Name -in $helpTokens -or @($Rest | Where-Object { $_ -in $helpTokens }).Count
+if ($helpRequested -or $Command -in @("-h","--help")) { Write-Usage $Command; exit 0 }
+
 if ($Command -notin @("help","cert","doctor","bug-report","-h","--help","")) { Migrate-Legacy }
 
 $unexpected = @()
-if ($Command -in @("start","ui","net-reset","doctor","bug-report","status","cert","help")) {
+if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report","status","cert","help")) {
   if ($Action) { $unexpected += $Action }; if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif ($Action -eq "list" -and $Command -in @("projects","rules","scripts","compose")) {
   if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
@@ -491,6 +550,18 @@ switch ($Command) {
       } | Out-Null
     }
     & mitmweb @margs
+  }
+  "stop" {
+    $stopped = 0
+    foreach ($ownerPid in @(Listening-Pids @([int]$Port,[int]$WebPort))) {
+      $process = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+      if ($process -and $process.ProcessName -eq "mitmweb") {
+        try { Stop-Process -Id $ownerPid -ErrorAction Stop; $stopped++ }
+        catch { Die "could not stop mitmweb pid ${ownerPid}: $($_.Exception.Message)" }
+      }
+    }
+    if ($stopped) { Info "stopped mitmweb on :$Port/:$WebPort" }
+    else { Info "nothing to stop on :$Port/:$WebPort" }
   }
   "ui" {
     if (-not (Port-Owner $WebPort)) { Die "mitmweb is not running - ${Cli}.ps1 start" }
@@ -738,7 +809,63 @@ switch ($Command) {
       }
     } else { Die "compose list | send NAME" }
   }
+  "breakpoint" {
+    Ensure-Rules
+    $arguments = @()
+    if ($Action -and $Action.ToLowerInvariant() -ne "list") { $arguments += $Action }
+    if ($Name) { $arguments += $Name }
+    $arguments += @($Rest)
+    if ($Request) { $arguments += "--request" }
+    if ($Response) { $arguments += "--response" }
+    if ($Method) { $arguments += @("--method",$Method) }
+    $python = Get-PythonCommand
+    & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath breakpoint @arguments
+    exit $LASTEXITCODE
+  }
+  "mock" {
+    if (-not $Action -or -not $Name -or @($Rest).Count) { Die "usage: ${Cli}.ps1 mock NAME URL-REGEX   (run the journey once first so the call is captured)" }
+    if ($Action -notmatch '^[A-Za-z0-9._-]{1,64}$' -or $Action.StartsWith('.')) { Die "name '$Action': letters, digits, . _ - only (max 64, not starting with .)" }
+    Ensure-Rules
+    if (-not (Port-Owner $WebPort)) { Die "mitmweb is not running - ${Cli}.ps1 start" }
+    if (-not (Test-Path $TokenPath)) { Die "no token file - restart with ${Cli}.ps1 start" }
+    $token = (Get-Content -Raw $TokenPath).Trim()
+    $temp = [IO.Path]::GetTempFileName()
+    $python = Get-PythonCommand
+    try {
+      try { Invoke-WebRequest -Uri "http://127.0.0.1:$WebPort/flows?token=$token" -OutFile $temp -UseBasicParsing }
+      catch { Die "could not read the captured calls" }
+      $pick = @(& $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath mock-pick $Action $Name $temp)
+      if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } finally { if (Test-Path $temp) { Remove-Item -Force $temp } }
+    if ($pick.Count -ne 3) { Die "could not identify the captured response" }
+    $id,$status,$method = $pick
+    $mockDir = Join-Path $ProjectState "mocks"
+    New-Item -ItemType Directory -Force -Path $mockDir | Out-Null
+    $file = Join-Path $mockDir "$Action.json"
+    try { Invoke-WebRequest -Uri "http://127.0.0.1:$WebPort/flows/$id/response/content.data?token=$token" -OutFile $file -UseBasicParsing }
+    catch { Die "could not read the response body" }
+    try { Get-Content -Raw $file | ConvertFrom-Json | Out-Null }
+    catch { $textFile = [IO.Path]::ChangeExtension($file, ".txt"); Move-Item -Force $file $textFile; $file = $textFile }
+    & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath rules add $Action "match=$Name" action=map_local "file=$file" "status=$status" "method=$method" | Out-Null
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Info "saved the real $method response ($status) to $file"
+    Info "map_local rule '$Action' is ON - edit that file; every save applies to the next call"
+    Info "turn off: ${Cli}.ps1 rules off $Action"
+  }
   "android" {
+    if ($All) {
+      if ($Serial) { Die "android ${Action}: use -Serial or -All, not both" }
+      if ($Action -notin @("on","off")) { Die "usage: ${Cli}.ps1 android on|off [-Serial SERIAL | -All]" }
+      $adb = Find-Adb
+      $devices = & $adb devices; Run "adb devices"
+      $emulators = @($devices | Select-String '^(emulator-\d+)\s+device$' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+      if (-not $emulators.Count) { Die "no running emulator. Physical devices need a separate approval." }
+      foreach ($emulator in $emulators) {
+        & $PSCommandPath android $Action -Serial $emulator -Project $Project
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      }
+      break
+    }
     $adb = Find-Adb; $s = Pick-Serial $adb
     if ($Action -eq "on") { Ensure-Ca }
     # `off` must work even when mitmproxy or the CA file is gone
@@ -785,6 +912,11 @@ switch ($Command) {
         Info "${s}: remove the CA by hand: Encryption & credentials > Trusted credentials > User > mitmproxy > Uninstall"
       }
     } else { Die "usage: ${Cli}.ps1 android on|off [-Serial SERIAL]" }
+  }
+  "setup" {
+    Info "iOS: unavailable on Windows (there is no iOS Simulator)"
+    & $PSCommandPath android on -All -Project $Project
+    exit $LASTEXITCODE
   }
   "net-reset" {
     $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
@@ -934,9 +1066,6 @@ switch ($Command) {
     Write-Host "expires:   $($cert.NotAfter)"
   }
   default {
-    foreach ($line in (Get-Content $PSCommandPath | Select-Object -Skip 1)) {
-      if ($line -eq '#>') { break }
-      ($line -replace '<cli>',$Cli) -replace '<ProductName>',$ProductName
-    }
+    Write-Usage
   }
 }

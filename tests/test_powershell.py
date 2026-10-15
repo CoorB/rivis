@@ -22,6 +22,34 @@ def mode(path):
     return stat.S_IMODE(os.stat(path).st_mode)
 
 
+class PowerShellSource(unittest.TestCase):
+    """Parity checks that still run on development Macs where pwsh is intentionally absent."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(harness.REPO, "rivis.ps1")) as fh:
+            cls.src = fh.read()
+
+    def test_windows_has_the_cross_platform_command_cases(self):
+        for command in ("stop", "breakpoint", "mock", "setup"):
+            self.assertRegex(self.src, r'(?m)^  "' + command + r'" \{', command)
+
+    def test_help_guard_precedes_dispatch_and_recognises_all_spellings(self):
+        guard = self.src.index("$helpRequested =")
+        dispatch = self.src.index("switch ($Command)")
+        self.assertLess(guard, dispatch)
+        self.assertIn('@("-h","--help","-Help")', self.src)
+        self.assertRegex(self.src[guard:dispatch], r'if \(\$helpRequested.*Write-Usage.*exit 0')
+
+    def test_new_commands_keep_the_bash_safety_and_delegation_contracts(self):
+        self.assertIn('$process.ProcessName -eq "mitmweb"', self.src)
+        self.assertIn('Stop-Process -Id $ownerPid', self.src)
+        self.assertRegex(self.src, r'rules_cli\.py"\) \$RulesPath breakpoint @arguments')
+        self.assertRegex(self.src, r'rules_cli\.py"\) \$RulesPath mock-pick')
+        self.assertIn('& $PSCommandPath android on -All', self.src)
+        self.assertIn('iOS: unavailable on Windows', self.src)
+
+
 @unittest.skipUnless(HAVE_PWSH, NO_PWSH)
 class Parse(unittest.TestCase):
     def errors(self, path):
