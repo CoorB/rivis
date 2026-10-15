@@ -42,6 +42,16 @@ Put the printed hash into `TOOL_SHA256` in `mirror.conf`. The tarball excludes `
 Publish alongside: `install.sh`, `install.ps1`, `VERSION`, `mirror.conf`, `product.json` (with `MIRROR_BASE_URL` and all hashes filled in).
 They must stay in one directory; the tool tarball does not contain them. Distribute as a folder or zip.
 
+## 3b. Or: one offline bundle (no mirror needed)
+
+```bash
+install/mirror/make-bundle.sh mitmproxy-12.2.3-macos-arm64.tar.gz mitmproxy-12.2.3-macos-x86_64.tar.gz --out ./dist
+```
+Builds `dist/<cli>-installer-<version>.zip`: the installer files plus the tool archive and the given official mitmproxy
+archives (each must match its pin, or nothing is built). The installer uses archives sitting next to it before any
+mirror and verifies them exactly like a download. Share the zip through any internal channel (Teams, SharePoint, a
+file share). Users unzip it and run `./install.sh`. A mirror, when configured, must be `https://`.
+
 ## 4. Optional: internal Homebrew tap
 
 `<cli>.rb.template` is a formula template for an internal tap. Placeholders only. Fill them in and host the tap

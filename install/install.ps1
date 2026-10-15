@@ -5,10 +5,11 @@
   install.ps1 [-DryRun] [-FromMirror URL] [-MitmproxyZip PATH] [-ToolTarball PATH] [-AllowOfficial] [-NoPath]
   install.ps1 -Uninstall [-DryRun]
 
-  mitmproxy source, in priority order (the pinned SHA-256 in mirror.conf is verified in EVERY case; mismatch = refuse):
-    1. -FromMirror URL (or MIRROR_BASE_URL in mirror.conf once IT publishes it)
-    2. -MitmproxyZip PATH
-    3. the official URL, only with -AllowOfficial
+  Source of each archive, in priority order (the pinned SHA-256 in mirror.conf is verified in EVERY case; mismatch = refuse):
+    1. -MitmproxyZip / -ToolTarball PATH
+    2. an offline bundle: the pinned archive file sitting next to this script (mirror/make-bundle.sh builds one)
+    3. -FromMirror URL (or MIRROR_BASE_URL in mirror.conf once IT publishes it); https:// only
+    4. mitmproxy only: the official URL, only with -AllowOfficial
   A mitmdump of the pinned version already on PATH is reused.
   Windows has no iOS Simulator: only the Android emulator path (adb from the Android SDK) and plain proxying apply.
   Uninstall removes our files and the PATH entry; it keeps the state dir and the CA.
@@ -125,6 +126,13 @@ $MSha  = Get-Conf "MITMPROXY_SHA256_WINDOWS_X86_64"
 $TSha  = Get-Conf "TOOL_SHA256"
 $Mirror = if ($FromMirror) { $FromMirror } else { Get-Conf "MIRROR_BASE_URL" }
 $Mirror = $Mirror.TrimEnd("/")
+# offline bundle: pinned archives next to this script stand in for the mirror (verified like any other source)
+if (-not $MitmproxyZip -and $MFile -and (Test-Path (Join-Path $Here $MFile))) { $MitmproxyZip = Join-Path $Here $MFile }
+$bundledTool = Join-Path $Here "$Cli-$ToolVersion.tar.gz"
+if (-not $ToolTarball -and (Test-Path $bundledTool)) { $ToolTarball = $bundledTool }
+function Assert-HttpsMirror {   # downloads are HTTPS-only; say so before doing anything
+  if ($Mirror -notlike "https://*") { Die "the mirror must be an https:// URL, got: $Mirror`n   (downloads are HTTPS-only. Ask IT for the https address, or use an offline bundle: the archives next to this script)" }
+}
 
 function Get-MitmVersion([string]$exe) {
   try { $o = & $exe --version 2>$null; foreach ($l in $o) { if ($l -match "^Mitmproxy:\s*(\S+)") { return $Matches[1] } } } catch {}
@@ -154,8 +162,8 @@ if ($DryRun) { Info "DRY RUN - nothing below will be changed" }
 $MUrl = $null
 if ($Reuse) { Info "plan: mitmproxy $MitmVersion already present at $Reuse - reuse (no download)" }
 else {
-  if ($Mirror)            { $MUrl = "$Mirror/mitmproxy/$MitmVersion/$MFile"; $From = "internal mirror" }
-  elseif ($MitmproxyZip)  { $From = "local zip $MitmproxyZip" }
+  if ($MitmproxyZip)      { $From = "local zip $MitmproxyZip" }
+  elseif ($Mirror)        { Assert-HttpsMirror; $MUrl = "$Mirror/mitmproxy/$MitmVersion/$MFile"; $From = "internal mirror" }
   elseif ($AllowOfficial) { $MUrl = "https://downloads.mitmproxy.org/$MitmVersion/$MFile"; $From = "official site (explicitly allowed)" }
   else { Die "no internal mirror or local mitmproxy zip; pass -AllowOfficial to explicitly permit downloads.mitmproxy.org" }
   Info "plan: install mitmproxy $MitmVersion from $From -> $MitmDir"
@@ -166,7 +174,7 @@ else {
 }
 if ($ToolTarball) { $TFrom = "tarball $ToolTarball" }
 elseif (Test-Path (Join-Path $SrcRoot "$Cli.ps1")) { $TFrom = "this checkout ($SrcRoot)" }
-elseif ($Mirror) { $TFrom = "mirror $Mirror/$Cli/$Cli-$ToolVersion.tar.gz" }
+elseif ($Mirror) { Assert-HttpsMirror; $TFrom = "mirror $Mirror/$Cli/$Cli-$ToolVersion.tar.gz" }
 else { Die "no tool source: run from a checkout, or pass -ToolTarball / -FromMirror" }
 Info "plan: install tool from $TFrom -> $ToolDir"
 Info "plan: launcher $(Join-Path $BinDir "$Cli.cmd") (puts the pinned mitmproxy first on PATH for the tool only)"
@@ -190,7 +198,7 @@ function Fetch([string]$url, [string]$dest) {
   try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
-  } catch { Die "download failed: $url ($($_.Exception.Message)) - blocked by the web filter? use -FromMirror or a local file" }
+  } catch { Die "download failed: $url ($($_.Exception.Message))`n   (is the mirror reachable from this network? Or use an offline bundle: the archives next to this script)" }
 }
 function Free-Port {
   $l = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 0); $l.Start()

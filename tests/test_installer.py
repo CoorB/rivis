@@ -350,7 +350,108 @@ class Cosmetics(InstallerBase):
         self.assertNotRegex(out, r"redirector\s+\S*\]")
 
 
+class OfflineBundle(InstallerBase):
+    """make-bundle.sh: one zip with the installer and every archive; install.sh prefers files next to it over any mirror
+    and verifies them like a download. Uses a stand-in mitmproxy archive whose hash is pinned in a staged checkout."""
+    NO_MITM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+
+    def setUp(self):
+        super().setUp()
+        root = os.path.join(self.suite.root, "bundle-%s" % self._testMethodName)
+        stage = os.path.join(root, "next")
+        shutil.copytree(harness.REPO, stage, ignore=shutil.ignore_patterns("tests", ".git", "__pycache__"))
+        self.stage, self.out = stage, os.path.join(root, "dist")
+        key = "MACOS_ARM64" if os.uname().machine == "arm64" else "MACOS_X86_64"
+        conf_path = os.path.join(stage, "install", "mirror.conf")
+        conf = open(conf_path).read()
+        self.mfile = next(l.split("=", 1)[1] for l in conf.splitlines() if l.startswith("MITMPROXY_FILE_%s=" % key))
+        self.mitm = os.path.join(root, self.mfile)
+        with tarfile.open(self.mitm, "w:gz") as tf:
+            data = b"#!/bin/sh\necho 'Mitmproxy: 12.2.3'\n"
+            info = tarfile.TarInfo("mitmproxy.app/Contents/MacOS/mitmdump")
+            info.size, info.mode = len(data), 0o755
+            import io
+            tf.addfile(info, io.BytesIO(data))
+        sha = hashlib.sha256(open(self.mitm, "rb").read()).hexdigest()
+        lines = [("MITMPROXY_SHA256_%s=%s" % (key, sha)) if l.startswith("MITMPROXY_SHA256_%s=" % key) else l
+                 for l in conf.splitlines()]
+        open(conf_path, "w").write("\n".join(lines) + "\n")
+
+    def bundle(self, *archives):
+        return subprocess.run(["/bin/bash", os.path.join(self.stage, "install", "mirror", "make-bundle.sh"), *archives,
+                               "--out", self.out], capture_output=True, text=True, env=self.suite.env(self.home))
+
+    def unzip(self):
+        cp = self.bundle(self.mitm)
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        zips = [f for f in os.listdir(self.out) if f.endswith(".zip")]
+        self.assertEqual(len(zips), 1, zips)
+        dest = os.path.join(self.out, "unzipped")
+        subprocess.run(["unzip", "-q", os.path.join(self.out, zips[0]), "-d", dest], check=True)
+        (top,) = os.listdir(dest)
+        return os.path.join(dest, top)
+
+    def test_bundle_holds_everything_and_pins_the_tool_with_no_mirror(self):
+        b = self.unzip()
+        version = open(os.path.join(harness.REPO, "install", "VERSION")).read().strip()
+        for name in ("install.sh", "install.ps1", "VERSION", "product.json", "mirror.conf", self.mfile, "rivis-%s.tar.gz" % version):
+            self.assertTrue(os.path.isfile(os.path.join(b, name)), name)
+        conf = open(os.path.join(b, "mirror.conf")).read()
+        self.assertRegex(conf, r"(?m)^MIRROR_BASE_URL=$")
+        tool_sha = hashlib.sha256(open(os.path.join(b, "rivis-%s.tar.gz" % version), "rb").read()).hexdigest()
+        self.assertIn("TOOL_SHA256=" + tool_sha, conf)
+
+    def test_install_from_the_bundle_uses_the_files_next_to_it(self):
+        b = self.unzip()
+        env = self.suite.env(self.home, extra={"PATH": self.NO_MITM_PATH})
+        out = self.ok("--dry-run", env=env, bin=os.path.join(b, "install.sh")).stdout
+        self.assertIn("from local tarball %s" % os.path.join(b, self.mfile), out)
+        self.assertIn("install tool from tarball %s" % os.path.join(b, "rivis-"), out)
+        self.assertNotIn("mirror", out.split("plan:", 1)[1].split("no sudo")[0])
+        cp = self.ok("--yes", "--skip-local-capture", "--no-rc", bin=os.path.join(b, "install.sh"))   # mitmproxy: hermetic shim
+        self.assertIn("tool tarball (TOOL_SHA256): sha256 OK", cp.stdout)
+        self.assertTrue(os.path.isfile(os.path.join(self.home, ".local", "rivis", "current", "rivis")))
+
+    def test_a_tampered_bundle_archive_is_refused(self):
+        b = self.unzip()
+        with open(os.path.join(b, self.mfile), "ab") as fh:
+            fh.write(b"x")
+        env = self.suite.env(self.home, extra={"PATH": self.NO_MITM_PATH})
+        cp = self.install("--yes", "--skip-local-capture", "--no-rc", env=env, bin=os.path.join(b, "install.sh"))
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertIn("MISMATCH", cp.stdout + cp.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".local", "rivis", "mitmproxy-12.2.3")))
+
+    def test_make_bundle_refuses_an_archive_that_does_not_match_its_pin(self):
+        with open(self.mitm, "ab") as fh:
+            fh.write(b"x")
+        cp = self.bundle(self.mitm)
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertIn("does not match its pin", cp.stderr)
+        stray = os.path.join(self.suite.root, "mitmproxy-9.9.9-whatever.tar.gz")
+        open(stray, "wb").close()
+        self.assertIn("not a pinned", self.bundle(stray).stderr)
+
+    def test_an_http_mirror_is_refused_up_front_with_a_clear_reason(self):
+        conf_path = os.path.join(self.stage, "install", "mirror.conf")
+        conf = open(conf_path).read().replace("MIRROR_BASE_URL=\n", "MIRROR_BASE_URL=http://192.0.2.1:8780\n", 1)
+        open(conf_path, "w").write(conf)
+        env = self.suite.env(self.home, extra={"PATH": self.NO_MITM_PATH})
+        cp = self.install("--dry-run", env=env, bin=os.path.join(self.stage, "install", "install.sh"))
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertIn("must be an https:// URL", cp.stderr)
+        self.assertNotIn("web filter", cp.stdout + cp.stderr)
+
+
 class WindowsInstallerSource(unittest.TestCase):
+    def test_bundle_first_and_https_only_mirror_like_the_mac_installer(self):
+        src = open(os.path.join(harness.REPO, "install", "install.ps1")).read()
+        self.assertIn("function Assert-HttpsMirror", src)
+        self.assertRegex(src, r'if \(\$MitmproxyZip\)\s+\{ \$From = "local zip')          # local/bundle before mirror
+        self.assertRegex(src, r"elseif \(\$Mirror\)\s+\{ Assert-HttpsMirror")
+        self.assertIn('Join-Path $Here "$Cli-$ToolVersion.tar.gz"', src)
+        self.assertNotIn("web filter", src)
+
     def test_junctions_are_removed_without_recursive_delete_and_official_is_opt_in(self):
         src = open(os.path.join(harness.REPO, "install", "install.ps1")).read()
         self.assertIn("function Remove-Junction", src)

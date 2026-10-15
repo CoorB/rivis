@@ -5,10 +5,11 @@
 #              [--allow-official] [--trust-mitmdump PATH] [--skip-local-capture] [--no-rc] [--yes]
 #   install.sh --uninstall [--dry-run]
 #
-# mitmproxy source, in priority order (the pinned SHA-256 in mirror.conf is verified in EVERY case; mismatch = refuse):
-#   1. --from-mirror URL   (or MIRROR_BASE_URL in mirror.conf, once IT publishes it)
-#   2. --mitmproxy-tarball PATH
-#   3. the official URL, only with --allow-official
+# Source of each archive, in priority order (the pinned SHA-256 in mirror.conf is verified in EVERY case; mismatch = refuse):
+#   1. --mitmproxy-tarball / --tool-tarball PATH
+#   2. an offline bundle: the pinned archive file sitting next to this script (mirror/make-bundle.sh builds one)
+#   3. --from-mirror URL   (or MIRROR_BASE_URL in mirror.conf, once IT publishes it); https:// only
+#   4. mitmproxy only: the official URL, only with --allow-official
 # A compatible mitmproxy (same pinned version) already on PATH, e.g. the Homebrew cask, is reused only when its
 # app signature verifies against MITMPROXY_TEAM_ID (codesign); otherwise the pinned archive is installed.
 #
@@ -68,12 +69,13 @@ verify() {  # verify FILE EXPECTED_SHA LABEL
 # A tool archive is untrusted until its release pin matches.  Copy it first to
 # close the local-file TOCTOU window, then verify before reading even product.json.
 VERIFIED_TOOL_TARBALL=""
-if [ -n "$TOOL_TARBALL" ]; then
+take_tool_tarball() {
   [ -f "$TOOL_TARBALL" ] || die "no such file: $TOOL_TARBALL"
   cp "$TOOL_TARBALL" "$TMP/tool-local.tar.gz" || die "cannot copy tool tarball"
   verify "$TMP/tool-local.tar.gz" "$(conf TOOL_SHA256)" "tool tarball (TOOL_SHA256)"
   VERIFIED_TOOL_TARBALL="$TMP/tool-local.tar.gz"
-fi
+}
+[ -z "$TOOL_TARBALL" ] || take_tool_tarball
 
 [ "$(uname -s)" = Darwin ] || die "this installer is for macOS; on Windows use install.ps1"
 [ "$(id -u)" -ne 0 ] || die "do not run as root — everything installs in your home directory"
@@ -106,6 +108,10 @@ echo "$PREFIX_VAR" | grep -Eq '^[A-Z][A-Z0-9_]{0,30}$' || die "product.json has 
 conf_var="${PREFIX_VAR}_CONFDIR"; _c="${!conf_var:-}"; [ -n "$_c" ] && CONFDIR="$_c"
 STATE_DIR=$(plutil -extract state_dir raw -o - "$product_json" 2>/dev/null); STATE_DIR="${STATE_DIR/#\~/$HOME}"
 [ -z "${tmp_pj:-}" ] || rm -rf "$tmp_pj"
+# offline bundle: the release archive next to this script stands in for the mirror (verified like any other source)
+if [ -z "$TOOL_TARBALL" ] && [ "$UNINSTALL" = 0 ] && [ -f "$HERE/$CLI-$TOOL_VERSION.tar.gz" ]; then
+  TOOL_TARBALL="$HERE/$CLI-$TOOL_VERSION.tar.gz"; take_tool_tarball
+fi
 
 # ---- uninstall -------------------------------------------------------------------------------------------------
 strip_rc_block() {  # strip_rc_block FILE — removes only our marked block
@@ -149,6 +155,11 @@ M_FILE=$(conf "MITMPROXY_FILE_$KEY"); M_SHA=$(conf "MITMPROXY_SHA256_$KEY")
 T_SHA=$(conf TOOL_SHA256)
 [ -n "$MIRROR" ] || MIRROR=$(conf MIRROR_BASE_URL)
 MIRROR="${MIRROR%/}"
+[ -n "$MITM_TARBALL" ] || [ ! -f "$HERE/$M_FILE" ] || MITM_TARBALL="$HERE/$M_FILE"     # offline bundle
+need_https_mirror() {  # every download is HTTPS-only (curl --proto =https); say so before doing anything
+  case "$MIRROR" in https://*) ;; *) die "the mirror must be an https:// URL, got: $MIRROR
+   (downloads are HTTPS-only. Ask IT for the https address, or use an offline bundle: the archives next to this script)" ;; esac
+}
 
 installed_mitm_version() {  # prints version of a mitmdump binary, or nothing
   "$1" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}'
@@ -182,8 +193,8 @@ info "$NAME ($CLI) installer — tool $TOOL_VERSION, mitmproxy pinned $MITM_VERS
 if [ -n "$REUSE" ]; then
   info "plan: mitmproxy $MITM_VERSION already present at $REUSE — reuse (no download)"
 else
-  if [ -n "$MIRROR" ];      then M_URL="$MIRROR/mitmproxy/$MITM_VERSION/$M_FILE"; M_FROM="internal mirror"
-  elif [ -n "$MITM_TARBALL" ]; then M_URL=""; M_FROM="local tarball $MITM_TARBALL"
+  if [ -n "$MITM_TARBALL" ]; then M_URL=""; M_FROM="local tarball $MITM_TARBALL"
+  elif [ -n "$MIRROR" ]; then need_https_mirror; M_URL="$MIRROR/mitmproxy/$MITM_VERSION/$M_FILE"; M_FROM="internal mirror"
   elif [ "$ALLOW_OFFICIAL" = 1 ]; then M_URL="https://downloads.mitmproxy.org/$MITM_VERSION/$M_FILE"; M_FROM="official site (explicitly allowed)"
   else die "no internal mirror or local mitmproxy tarball; pass --allow-official to explicitly permit downloads.mitmproxy.org"; fi
   info "plan: install mitmproxy $MITM_VERSION from $M_FROM → $MITM_DIR"
@@ -192,7 +203,7 @@ else
   echo "$M_FROM" | grep -q '^official site' && warn "using the public official site by explicit request"
 fi
 if [ -n "$TOOL_TARBALL" ]; then T_FROM="tarball $TOOL_TARBALL"
-elif [ -n "$MIRROR" ] && [ ! -f "$SRC_ROOT/$CLI" ]; then T_FROM="mirror $MIRROR/$CLI/$CLI-$TOOL_VERSION.tar.gz"
+elif [ -n "$MIRROR" ] && [ ! -f "$SRC_ROOT/$CLI" ]; then need_https_mirror; T_FROM="mirror $MIRROR/$CLI/$CLI-$TOOL_VERSION.tar.gz"
 elif [ -f "$SRC_ROOT/$CLI" ]; then T_FROM="this checkout ($SRC_ROOT)"
 else die "no tool source: run from a checkout, or pass --tool-tarball / --from-mirror"; fi
 info "plan: install tool from $T_FROM → $TOOL_DIR"
@@ -213,7 +224,8 @@ info "no sudo, no system proxy changes, nothing listens beyond 127.0.0.1"
 # ---- helpers (real run) ----------------------------------------------------------------------------------------
 fetch() {  # fetch URL DEST
   curl -fL --proto '=https' --tlsv1.2 --retry 2 -sS -o "$2" "$1" \
-    || die "download failed: $1  (blocked by the web filter? use --from-mirror or a local tarball)"
+    || die "download failed: $1
+   (is the mirror reachable from this network? Or use an offline bundle: the archives next to this script)"
 }
 
 # ---- 1. mitmproxy ----------------------------------------------------------------------------------------------
