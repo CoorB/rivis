@@ -344,7 +344,7 @@
     .welcome h3 .mark { width: 26px; height: 26px; border-radius: 8px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; }
     .welcome h3 .mark svg { width: 16px; height: 16px; stroke-width: 2.2; }
     .welcome p { margin: 6px 0 12px; color: var(--rv-text-2); line-height: 1.5; }
-    .emptylist { position: fixed; z-index: 1; left: 0; top: calc(var(--hb, 80px) + 30px + var(--strip-h, 0px)); width: calc(100vw - var(--open-w, 0px)); bottom: 30px; pointer-events: none; display: none; align-items: center; justify-content: center; padding: 16px; }
+    .emptylist { position: fixed; z-index: 1; left: 0; top: calc(var(--hb, 80px) + 30px + var(--strip-h, 0px)); width: calc(100vw - var(--open-w, 0px)); bottom: 30px; pointer-events: none; display: none; align-items: center; justify-content: center; padding: 16px; overflow: hidden; }   /* placed over the call list by placeEmptyList() */
     .emptylist.open { display: flex; }
     .emptylist .box { pointer-events: auto; width: min(660px, 100%); text-align: center; padding: 8px 12px; }
     .emptylist .glyph { width: 52px; height: 52px; margin: 0 auto 12px; border-radius: 16px; background: var(--rv-accent-soft); color: var(--rv-accent-text); display: grid; place-items: center; }
@@ -2041,8 +2041,17 @@
     if (f.list.length === 0) return "first";
     return f.view.length === 0 ? "hidden" : null;
   }
+  // Over the call list only: with a call open, mitmweb's detail pane sits to the right of the list
+  function placeEmptyList(box) {
+    const ft = document.querySelector(".flow-table");
+    if (!ft) return;
+    const r = ft.getBoundingClientRect();
+    if (r.width < 50) return;
+    Object.assign(box.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px", bottom: "auto" });
+  }
   function drawEmptyList() {
     const box = $("emptylist");
+    if (box.classList.contains("open")) placeEmptyList(box);
     const kind = skinOn() ? emptyKind() : null;
     if (!kind || $("welcome").classList.contains("open")) { if (box.classList.contains("open")) { box.classList.remove("open"); box.dataset.sig = ""; } setAttr(DOC, "data-rv-empty", null); return; }
     const cli = state.product.cli || "rivis", proj = state.active_project && state.active_project !== "default" ? ` --project ${state.active_project}` : "";
@@ -2073,7 +2082,7 @@
       box.innerHTML = `<div class="box"><div class="glyph">${ico("search")}</div><h3>${why}</h3><div class="lede">${sub}</div>
         <div class="btns">${q ? '<button class="b p" data-act="clear">Clear filter</button>' : ""}${limits.length ? `<button class="b ${q ? "" : "p"}" data-act="all">Show all traffic</button>` : ""}</div></div>`;
     }
-    box.classList.add("open"); setAttr(DOC, "data-rv-empty", kind === "first" ? "1" : null);
+    box.classList.add("open"); placeEmptyList(box); setAttr(DOC, "data-rv-empty", kind === "first" ? "1" : null);
     box.querySelectorAll("[data-copy]").forEach((c) => (c.onclick = () => navigator.clipboard.writeText(c.dataset.copy).then(() => toast("Copied — paste it in a terminal"), () => toast("Select the command and copy it"))));
     box.querySelectorAll("[data-act]").forEach((b) => (b.onclick = async () => {
       if (b.dataset.act === "devices") { tab = "dev"; editing = null; if (!$("drawer").classList.contains("open")) setOpen(true); render(); }
@@ -2093,6 +2102,50 @@
     else if (e.key === "Escape" && $("welcome").classList.contains("open")) { e.stopPropagation(); closeWelcome(); }
   }, true);
   setInterval(() => { try { drawEmptyList(); } catch (err) { /* cosmetic */ } }, 1500);
+  window.addEventListener("resize", () => { const b = $("emptylist"); if (b.classList.contains("open")) placeEmptyList(b); });
+
+  // Scroll anchoring, like Proxyman: at the very top the newest calls come into view; once you scroll away, the rows
+  // you are looking at stay put while calls keep arriving (or old ones are trimmed). The anchor is the first visible
+  // row's call id and its offset; after each list update the scroll position is corrected before the next paint.
+  (function anchorList() {
+    let ft = null, anchor = null, mo = null;
+    const rows = () => ft.querySelectorAll("tbody tr");
+    const headH = () => { const h = ft.querySelector("thead"); return h ? h.getBoundingClientRect().height : 0; };
+    const record = () => {
+      anchor = null;
+      if (!ft || ft.scrollTop <= 0) return;                 // at the top: follow the newest calls
+      const top = ft.getBoundingClientRect().top + headH();
+      for (const tr of rows()) {
+        const r = tr.getBoundingClientRect();
+        if (r.height && r.bottom > top + 1) { const f = flowOf(tr); if (f) anchor = { id: f.id, off: r.top - top }; return; }
+      }
+    };
+    const correct = () => {
+      if (!anchor || !ft) return record();
+      const top = ft.getBoundingClientRect().top + headH();
+      for (const tr of rows()) {
+        const f = flowOf(tr);
+        if (f && f.id === anchor.id) {
+          const d = tr.getBoundingClientRect().top - top - anchor.off;
+          if (Math.abs(d) >= 1) ft.scrollTop += d;
+          break;
+        }
+      }
+      record();
+    };
+    const attach = () => {
+      const now = document.querySelector(".flow-table");
+      if (now === ft) return;
+      if (mo) mo.disconnect();
+      ft = now; anchor = null;
+      if (!ft) return;
+      ft.style.overflowAnchor = "none";                    // ours, not the browser's: rows are virtualized
+      ft.addEventListener("scroll", record, { passive: true });
+      mo = new MutationObserver(correct);
+      mo.observe(ft, { childList: true, subtree: true });
+    };
+    setInterval(attach, 1000); attach();
+  })();
   setTimeout(showWelcome, 900);
 
   // Newest call first, like Proxyman. mitmweb has no default sort, so once per page load sort "Start time"

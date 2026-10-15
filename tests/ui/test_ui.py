@@ -135,6 +135,61 @@ class UiSmoke(LiveCase):
         self.assertEqual(page.locator("text=mitmproxy has crashed").count(), 0)
         self.assertEqual(self.errors, [])
 
+    def first_visible(self, page):
+        return page.evaluate("""() => { const ft = document.querySelector('.flow-table');
+            const top = ft.getBoundingClientRect().top + ft.querySelector('thead').getBoundingClientRect().height;
+            for (const tr of ft.querySelectorAll('tbody tr')) { const r = tr.getBoundingClientRect();
+              if (r.height && r.bottom > top + 1) return tr.querySelector('.col-path').textContent + '|' + Math.round(r.top - top); }
+            return null; }""")
+
+    def test_header_stays_pinned_and_rows_stay_put_while_calls_stream_in(self):
+        self.many_flows(150)
+        page = self.open()
+        wait_for(lambda: "sort-desc" in (page.locator(".flow-table th.col-timestamp").get_attribute("class") or ""), 10, 0.1, "newest first")
+        page.evaluate("document.querySelector('.flow-table').scrollTop = 1600")
+        page.wait_for_timeout(400)
+        gap = page.evaluate("Math.abs(document.querySelector('.flow-table thead').getBoundingClientRect().top - "
+                            "document.querySelector('.flow-table').getBoundingClientRect().top)")
+        self.assertLess(gap, 1.5, "the column header must sit at the top of the list while scrolled")
+        before = self.first_visible(page)
+        self.many_flows(12)                                     # 12 newer calls arrive above the visible rows
+        page.wait_for_timeout(1200)
+        self.assertEqual(self.first_visible(page), before, "rows under the pointer must not move")
+        page.evaluate("document.querySelector('.flow-table').scrollTop = 0")   # at the top: newest calls come into view
+        page.wait_for_timeout(300)
+        self.fetch("/text?newest=1")
+        wait_for(lambda: "newest=1" in (self.first_visible(page) or ""), 10, 0.2, "newest call shown at the top")
+        self.assertEqual(self.errors, [])
+
+    def test_the_hover_button_does_not_cover_start_time(self):
+        self.page.set_viewport_size({"width": 1920, "height": 1000})            # wide: the button column is shown
+        page = self.open()
+        row = page.locator(".flow-table tbody tr:has(td.col-path)").first
+        row.hover()
+        page.wait_for_timeout(200)
+        ts = row.locator("td.col-timestamp").bounding_box()
+        qa = row.locator("td.col-quickactions").bounding_box()
+        self.assertIsNotNone(qa, "at 1920 px the quick-action column is visible")
+        self.assertGreaterEqual(qa["x"] + 0.5, ts["x"] + ts["width"])
+        clip = row.locator("td.col-timestamp").evaluate("td => td.scrollWidth <= td.clientWidth + 1")
+        self.assertTrue(clip, "the start time must fit its column")
+
+    def test_the_no_match_message_stays_over_the_call_list(self):
+        page = self.open()
+        page.locator(".flow-table tbody tr:has(td.col-path)").first.click()      # opens mitmweb's detail pane
+        page.wait_for_timeout(400)
+        search = page.locator("#proxy-panel-host").locator("input[type=search], #sq").first
+        page.keyboard.press("Meta+f" if sys.platform == "darwin" else "Control+f")
+        page.keyboard.type("zz-no-such-call-zz")
+        page.keyboard.press("Enter")
+        box = page.locator("#proxy-panel-host #emptylist.open")
+        box.wait_for(timeout=10000)
+        page.wait_for_timeout(1700)                             # one placement tick
+        b = box.bounding_box()
+        ft = page.locator(".flow-table").bounding_box()
+        self.assertLessEqual(b["x"] + b["width"], ft["x"] + ft["width"] + 1, "message must not spill into the detail pane")
+        self.assertEqual(self.errors, [])
+
     def test_the_list_opens_newest_first_and_the_user_can_still_re_sort(self):
         page = self.open()
         th = page.locator(".flow-table th.col-timestamp")
