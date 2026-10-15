@@ -215,5 +215,35 @@ class QuotesAndUnicode(unittest.TestCase):
             self.assertEqual(json.loads(literal), self.value, target)
 
 
+
+class MaskingCoversTheAuditRepro(unittest.TestCase):
+    """F-11: with "Mask secrets" on, nothing that authenticates survives in any target; off keeps everything."""
+    SECRETS = ("k-123", "t-456", "qs-789", "p@ss", "r-tok", "hunter2", "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1In0.sig")
+
+    def request(self):
+        return req("POST", "https://bob:hunter2@api.example.test/v1/login?access_token=qs-789&page=2",
+                   [("X-Api-Key", "k-123"), ("X-Auth-Token", "t-456"), ("Content-Type", "application/json"),
+                    ("Authorization", BEARER)],
+                   json.dumps({"username": "alice", "password": "p@ss", "refresh_token": "r-tok"}).encode())
+
+    def test_masked_in_every_target(self):
+        for target in IDS:
+            out = generate(self.request(), target)
+            for secret in self.SECRETS:
+                self.assertNotIn(secret, out, (target, secret))
+            self.assertIn("alice", out, target)
+            self.assertIn("page=2", out, target)
+
+    def test_unmasked_keeps_everything(self):
+        out = generate(self.request(), "curl", mask_secrets=False)
+        for secret in self.SECRETS[:5]:
+            self.assertIn(secret, out)
+
+    def test_nothing_secret_means_the_body_bytes_are_untouched(self):
+        body = b'{"a":1,  "b":[1,2]}'
+        out = generate(req("POST", "https://x.test/", [("Content-Type", "application/json")], body), "curl")
+        self.assertIn('{"a":1,  "b":[1,2]}', out)
+
+
 if __name__ == "__main__":
     unittest.main()

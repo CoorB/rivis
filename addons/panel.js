@@ -1435,11 +1435,11 @@
         `<option value="${esc(t.id)}" ${t.id === lastTarget() ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select>
       <button class="b p" id="${idp}-go">Copy</button>
       <label class="sub" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="${idp}-mask" ${maskOn() ? "checked" : ""}> Mask secrets</label></div>
-    <div class="sub" id="${idp}-note">${maskOn() ? "Authorization and cookie values become &lt;redacted&gt;." : "⚠ Tokens and cookies will be included — keep this out of tickets and chats."}</div>`;
+    <div class="sub" id="${idp}-note">${maskOn() ? "Tokens, cookies, API keys and passwords become &lt;redacted&gt;." : "⚠ Tokens and cookies will be included — keep this out of tickets and chats."}</div>`;
   function wireCopyAs(idp, payload) {
     $(idp + "-mask").onchange = () => {
       remember("proxy-mask", $(idp + "-mask").checked ? "on" : "off");
-      $(idp + "-note").innerHTML = $(idp + "-mask").checked ? "Authorization and cookie values become &lt;redacted&gt;."
+      $(idp + "-note").innerHTML = $(idp + "-mask").checked ? "Tokens, cookies, API keys and passwords become &lt;redacted&gt;."
         : "⚠ Tokens and cookies will be included — keep this out of tickets and chats.";
     };
     $(idp + "-go").onclick = async () => {

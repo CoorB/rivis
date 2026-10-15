@@ -168,6 +168,8 @@ ca_history_field() {  # 1 = sha256, 2 = android hash; current CA first, then eve
     [ -f "$CA_HISTORY" ] && awk -v f="$1" '$f ~ /^[0-9A-Fa-f]+$/ {print $f}' "$CA_HISTORY"; } | awk '!seen[$0]++'
 }
 
+safe_name() { [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]] && [[ "$1" != .* ]] || die "name '$1': letters, digits, . _ - only (max 64, not starting with .)"; }
+
 port_owner() { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==2{print $1" pid "$2" "$9}'; }
 
 secure_dirs() {
@@ -426,6 +428,7 @@ cmd_breakpoint() { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_c
 # matching the regex, save its real response body to a file, and serve that file from now on.
 cmd_mock() {
   [ $# -eq 2 ] || die "usage: $CLI mock NAME URL-REGEX   (run the journey once first so the call is captured)"
+  safe_name "$1"     # F-17: before anything is written under mocks/
   ensure_rules
   [ -n "$(port_owner "$WEB_PORT")" ] || die "mitmweb is not running — $CLI start"
   local tok; tok=$(cat "$STATE_ROOT/web-token")
@@ -616,6 +619,9 @@ sim_truststore() { find "$HOME/Library/Developer/CoreSimulator/Devices/$1/data/p
 cmd_ios() {
   local action="${1:-}"; shift || true; local udid=""
   while [ $# -gt 0 ]; do case "$1" in --udid) udid="$2"; shift ;; *) die "ios: unknown option $1" ;; esac; shift; done
+  # F-17: the UDID becomes part of a path whose trust store we edit
+  [ -z "$udid" ] || [[ "$udid" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] \
+    || die "--udid must be a simulator UDID (xcrun simctl list devices)"
   if [ -z "$udid" ]; then
     udid=$(xcrun simctl list devices booted | grep -oE '[0-9A-F-]{36}' )
     [ -z "$udid" ] && die "no booted simulator"

@@ -4,6 +4,9 @@ import json
 import pprint
 import re
 import shlex
+from urllib.parse import unquote
+
+import proxy_redact
 
 TARGETS = (
     ("curl", "cURL"), ("httpie", "HTTPie"), ("wget", "wget"),
@@ -46,7 +49,7 @@ def _headers(rows, mask):
         lower = key.lower()
         if key.startswith(":") or lower in DROP_HEADERS:
             continue
-        if mask and lower in SECRET_HEADERS:
+        if mask and (lower in SECRET_HEADERS or proxy_redact.secret_header(lower)):
             value = "<redacted>"
         out.append((key, value))
     return out
@@ -273,12 +276,56 @@ def _postman(method, url, headers, raw, text, binary):
     return json.dumps(collection, indent=2, ensure_ascii=False)
 
 
+_QUERY_PAIR = re.compile(r"(^|&)([^=&]*)=([^&]*)")
+
+
+def _mask_url(url):
+    """Hide credentials in a URL without re-encoding the rest (user:pass@, secret query values, JWTs)."""
+    scheme, sep, rest = url.partition("://")
+    if sep:
+        authority, slash, tail = rest.partition("/")
+        url = scheme + sep + authority.rsplit("@", 1)[-1] + slash + tail
+    base, q, query = url.partition("?")
+    if q:
+        query, hsh, frag = query.partition("#")
+        query = _QUERY_PAIR.sub(lambda m: m.group(1) + m.group(2) + "=" + (
+            proxy_redact.REDACTED if proxy_redact.secret_key(unquote(m.group(2))) and m.group(3) else m.group(3)), query)
+        url = base + q + query + hsh + frag
+    return proxy_redact._JWT.sub(proxy_redact.REDACTED, url)
+
+
+def _mask_body(request, headers):
+    body = request.get("body")
+    if not body:
+        return request
+    try:
+        text = body.decode("utf-8") if isinstance(body, (bytes, bytearray)) else str(body)
+    except UnicodeDecodeError:
+        return request
+    ctype = next((v for k, v in headers if k.lower() == "content-type"), "")
+    masked = proxy_redact.text(text, ctype)
+    if masked == text:
+        return request
+    try:      # JSON is re-serialised by the redactor; keep the original bytes when nothing secret was in it
+        if json.loads(masked) == json.loads(text):
+            return request
+    except ValueError:
+        pass
+    return {**request, "body": masked.encode("utf-8")}
+
+
 def generate(request, target="curl", mask_secrets=True):
-    """Generate one ready-to-run representation from a normalized request mapping."""
+    """Generate one ready-to-run representation from a normalized request mapping.
+
+    mask_secrets (default on): credential headers, cookies, secret query/body fields and JWTs become <redacted>
+    (F-11), using the same rules as HAR export redaction."""
     if target not in TARGET_IDS:
         raise ValueError("unknown code-generation target '%s'" % target)
     method, url = str(request.get("method") or "GET").upper(), str(request.get("url") or "")
     headers = _headers(request.get("headers") or [], bool(mask_secrets))
+    if mask_secrets:
+        url = _mask_url(url)
+        request = _mask_body(request, headers)
     raw, text, binary, native = _body_info({**request, "headers": headers})
     if target == "curl": return _curl(method, url, headers, raw, text, binary)
     if target == "httpie": return _httpie(method, url, headers, raw, text, binary)
