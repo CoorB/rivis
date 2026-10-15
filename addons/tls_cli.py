@@ -11,12 +11,11 @@ change up within a second; it applies to NEW connections, no restart needed.
 import json
 import os
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
-from proxy_common import PRODUCT, tls_config, tls_host_regex, tls_update
+from proxy_common import PRODUCT, atomic_json, migrate_rules, tls_config, tls_host_regex, tls_update
 
 NOTE = "applies to new connections within a second — no restart; open connections keep their earlier decision"
 
@@ -46,7 +45,7 @@ def main(argv):
     path, args = argv[0], argv[1:]
     try:
         with open(path) as fh:
-            cfg = json.load(fh)
+            cfg = migrate_rules(json.load(fh))
         cmd = args[0]
         if cmd == "list":
             show(cfg)
@@ -65,12 +64,7 @@ def main(argv):
             die(__doc__)
     except (OSError, ValueError) as e:
         die(str(e))
-    directory = os.path.dirname(os.path.abspath(path))
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".rules-", suffix=".json")
-    with os.fdopen(fd, "w") as fh:
-        json.dump(cfg, fh, indent=2, ensure_ascii=False)
-        fh.write("\n")
-    os.replace(tmp, path)
+    atomic_json(path, cfg)
     print(message)
     tls = tls_config(cfg)
     if tls["mode"] != "all" and not tls[tls["mode"]]:

@@ -20,7 +20,6 @@ import importlib
 import json
 import os
 import re
-import tempfile
 import time
 import sys
 from urllib.parse import parse_qsl, urlencode
@@ -32,7 +31,8 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
-from proxy_common import SAFE_NAME, STATE_ROOT, confined_path, project_profile, project_state, user_regex
+from proxy_common import (SAFE_NAME, STATE_ROOT, atomic_json, confined_path, migrate_collection,
+                          migrate_rules, project_profile, project_state, user_regex)
 
 DEFAULT_RECORD = "."
 COLL_DIR = os.path.join(STATE_ROOT, "projects", "default", "collections")
@@ -62,17 +62,13 @@ def coll_path(name):
 
 def load_coll(name):
     with open(coll_path(name)) as f:
-        return json.load(f)
+        return migrate_collection(json.load(f))
 
 
 def save_coll(doc):
     os.makedirs(COLL_DIR, mode=0o700, exist_ok=True)
     os.chmod(COLL_DIR, 0o700)
-    fd, tmp = tempfile.mkstemp(dir=COLL_DIR, prefix=".coll-", suffix=".json")
-    with os.fdopen(fd, "w") as f:
-        json.dump(doc, f, ensure_ascii=False)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, coll_path(doc["name"]))
+    atomic_json(coll_path(doc["name"]), migrate_collection(doc))
 
 
 def entry_from_flow(f):
@@ -168,7 +164,7 @@ class ProxyCollections:
         self.checked = now
         try:
             with open(self._rules_path()) as f:
-                cfg = json.load(f).get("collections") or {}
+                cfg = migrate_rules(json.load(f)).get("collections") or {}
         except (OSError, ValueError):
             return
         old_recording = self.cfg.get("recording")

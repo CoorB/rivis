@@ -3,6 +3,8 @@ import json
 import os
 import re
 import tempfile
+import threading
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with open(os.path.join(ROOT, "product.json")) as _fh:
@@ -14,6 +16,140 @@ SAFE_NAME = re.compile(r"^(?!(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$))(?!\.
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 TLS_MODES = ("all", "allow", "ignore")
 NEVER_MATCH = "(?!)"
+RULES_SCHEMA_VERSION = 1
+COLLECTION_SCHEMA_VERSION = 1
+
+
+def _fsync_directory(path):
+    """Persist a rename on platforms that permit fsync on directories."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def atomic_write_bytes(path, data, mode=0o600):
+    """Crash-safe private write: temp file, flush+fsync, replace, then directory fsync."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".%s-" % os.path.basename(path), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        commit_temp_file(tmp, path, mode)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def atomic_write_text(path, text, mode=0o600):
+    atomic_write_bytes(path, str(text).encode("utf-8"), mode)
+
+
+def atomic_json(path, value, mode=0o600):
+    atomic_write_text(path, json.dumps(value, indent=2, ensure_ascii=False) + "\n", mode)
+
+
+def commit_temp_file(tmp, path, mode=0o600):
+    """Commit an already flushed temporary file and persist its directory entry."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+    os.chmod(path, mode)
+    _fsync_directory(directory)
+
+
+def _migrate(doc, current, kind):
+    if not isinstance(doc, dict):
+        raise ValueError("%s top level must be an object" % kind)
+    version = doc.get("schema_version", 0)
+    if isinstance(version, bool) or not isinstance(version, int) or version < 0:
+        raise ValueError("%s schema_version must be a non-negative integer" % kind)
+    if version > current:
+        raise ValueError("%s schema version %d is newer than this Rivis supports (%d); upgrade Rivis" %
+                         (kind, version, current))
+    migrated = dict(doc)
+    while version < current:
+        # v0 -> v1 is intentionally shape-preserving: it establishes the migration hook without breaking legacy data.
+        if version == 0:
+            version = 1
+        else:  # every future schema bump must add an explicit step here
+            raise ValueError("no %s migration from schema version %d" % (kind, version))
+        migrated["schema_version"] = version
+    return migrated
+
+
+def migrate_rules(doc):
+    return _migrate(doc, RULES_SCHEMA_VERSION, "rules.json")
+
+
+def migrate_collection(doc):
+    return _migrate(doc, COLLECTION_SCHEMA_VERSION, "collection")
+
+
+_JWT = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])")
+_SECRET = re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?|(?:access_|refresh_)?token|password|secret|api[_-]?key)(\s*[=:]\s*|\s+)([^\s,;&]+)")
+
+
+def redact_diagnostic(value):
+    """Conservative text redaction for product logs and support bundles."""
+    text = str(value)
+    text = _JWT.sub("[REDACTED-JWT]", text)
+    return _SECRET.sub(lambda m: m.group(1) + m.group(2) + "[REDACTED]", text)
+
+
+class RotatingTextLog:
+    """Small dependency-free rotating log, suitable inside mitmproxy's packaged runtime."""
+    def __init__(self, path, max_bytes=2 * 1024 * 1024, backups=3):
+        self.path = os.path.abspath(os.path.expanduser(path))
+        self.max_bytes = int(max_bytes)
+        self.backups = int(backups)
+        self._lock = threading.Lock()
+
+    def _rotate(self, incoming):
+        try:
+            size = os.path.getsize(self.path)
+        except OSError:
+            size = 0
+        if size + incoming <= self.max_bytes:
+            return
+        if self.backups < 1:
+            try:
+                os.unlink(self.path)
+            except FileNotFoundError:
+                pass
+            return
+        oldest = "%s.%d" % (self.path, self.backups)
+        try:
+            os.unlink(oldest)
+        except FileNotFoundError:
+            pass
+        for index in range(self.backups - 1, 0, -1):
+            source = "%s.%d" % (self.path, index)
+            if os.path.exists(source):
+                os.replace(source, "%s.%d" % (self.path, index + 1))
+        if os.path.exists(self.path):
+            os.replace(self.path, self.path + ".1")
+
+    def append(self, level, message):
+        directory = os.path.dirname(self.path)
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        data = (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " " +
+                str(level).upper() + " " + redact_diagnostic(message).replace("\n", "\\n")[:16384] + "\n").encode("utf-8")
+        with self._lock:
+            self._rotate(len(data))
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+            os.chmod(self.path, 0o600)
 
 
 def project_profile(project_id):
@@ -114,11 +250,7 @@ def set_trusted_file(state_dir, path, trusted=True):
         raise ValueError("refusing to trust %s: %s" % (path, why))
     files = trusted_files(state_dir)
     files = (files | {real}) if trusted else (files - {real})
-    fd, tmp = tempfile.mkstemp(dir=state_dir, prefix=".trusted-", suffix=".json")
-    with os.fdopen(fd, "w") as fh:
-        json.dump({"files": sorted(files)}, fh, indent=2)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, os.path.join(state_dir, TRUSTED_FILES))
+    atomic_json(os.path.join(state_dir, TRUSTED_FILES), {"files": sorted(files)})
     return real
 
 

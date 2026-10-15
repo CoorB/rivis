@@ -56,7 +56,7 @@ if HERE not in sys.path:
 import proxy_common
 importlib.reload(proxy_common)
 from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PROFILE_VALUES, STATE_ROOT, breakpoints,
-                          rule_file_path, tls_config, tls_options, user_regex)
+                          migrate_rules, rule_file_path, tls_config, tls_options, user_regex)
 
 # Traffic profiles: latency ms, jitter ms, down kbps, up kbps, loss %, extra response delay ms.
 # The first four named ones are FRTMProxy's built-ins, same numbers, so teams see the same thing.
@@ -251,7 +251,7 @@ class ProxyRules:
             return
         try:
             with open(self.path) as f:
-                cfg = json.load(f)
+                cfg = migrate_rules(json.load(f))
             if not isinstance(cfg, dict):
                 raise ValueError("top level must be an object")
             if not isinstance(cfg.get("rules", []), list):

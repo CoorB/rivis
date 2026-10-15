@@ -2,10 +2,9 @@
 import json
 import os
 import re
-import tempfile
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from proxy_common import SAFE_NAME, confined_path
+from proxy_common import SAFE_NAME, atomic_json, confined_path
 
 VAR_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*}}")
 METHOD_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,32}$")
@@ -124,17 +123,7 @@ class ComposerStore:
 
     def _write(self, path, value):
         self._ensure()
-        fd, tmp = tempfile.mkstemp(dir=self.directory, prefix=".composer-", suffix=".json")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-                json.dump(value, fh, indent=2, ensure_ascii=False)
-                fh.write("\n")
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, path)
-            os.chmod(path, 0o600)
-        finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+        atomic_json(path, value)
 
     def list(self):
         if not os.path.isdir(self.directory):

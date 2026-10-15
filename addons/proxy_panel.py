@@ -47,9 +47,11 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
-from proxy_common import (ACTIONS, PANEL_PROFILES, PRODUCT, SAFE_NAME, STATE_ROOT, breakpoints, user_regex,
-                          confined_path, project_profile, project_profiles, project_state,
-                          tls_config, tls_covering, tls_update)
+from proxy_common import (ACTIONS, PANEL_PROFILES, PRODUCT, SAFE_NAME, STATE_ROOT, atomic_json,
+                          atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
+                          confined_path, migrate_collection, migrate_rules, project_profile,
+                          project_profiles, project_state, tls_config, tls_covering, tls_update,
+                          user_regex)
 from proxy_codegen import TARGETS, generate
 import proxy_redact
 from proxy_compose import ComposerStore, normalize_request
@@ -72,6 +74,10 @@ SCRIPT_TEMPLATES = {
     "latency": "add latency to one endpoint",
     "token": "log every token refresh",
 }
+MAX_PANEL_REQUEST_BYTES = 8 * 1024 * 1024
+MAX_PANEL_TEXT_BYTES = 2 * 1024 * 1024
+MAX_PANEL_VALUES = 10000
+MAX_PANEL_DEPTH = 16
 
 
 def wildcard_regex(host, path):
@@ -178,7 +184,7 @@ class ProxyPanel:
         try:
             try:
                 with open(self.rules_path) as f:
-                    cfg = json.load(f)
+                    cfg = migrate_rules(json.load(f))
             except FileNotFoundError:
                 cfg = {}
             if not isinstance(cfg, dict):
@@ -209,13 +215,27 @@ class ProxyPanel:
         return cfg
 
     def save_cfg(self, cfg):
-        d = os.path.dirname(self.rules_path) or "."
-        os.makedirs(d, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=d, prefix=".rules-", suffix=".json")
-        with os.fdopen(fd, "w") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, self.rules_path)
+        atomic_json(self.rules_path, migrate_rules(cfg))
+
+    @staticmethod
+    def _check_input(value):
+        """Bound decoded panel values as well as the HTTP body to protect every operation."""
+        stack = [(value, 0)]
+        seen = 0
+        while stack:
+            item, depth = stack.pop()
+            seen += 1
+            if seen > MAX_PANEL_VALUES:
+                raise PanelError("request contains too many values")
+            if depth > MAX_PANEL_DEPTH:
+                raise PanelError("request is nested too deeply")
+            if isinstance(item, str) and len(item.encode("utf-8")) > MAX_PANEL_TEXT_BYTES:
+                raise PanelError("text value exceeds the 2 MiB panel limit")
+            if isinstance(item, dict):
+                stack.extend((key, depth + 1) for key in item)
+                stack.extend((child, depth + 1) for child in item.values())
+            elif isinstance(item, list):
+                stack.extend((child, depth + 1) for child in item)
 
     @staticmethod
     def find(cfg, name):
@@ -575,7 +595,7 @@ class ProxyPanel:
                         cached = self._coll_count_cache.get(key)
                         if cached is None:
                             with open(path) as fh:
-                                doc = json.load(fh)
+                                doc = migrate_collection(json.load(fh))
                             cached = (len(doc.get("entries", [])), doc.get("created"))
                             self._coll_count_cache = {k: v for k, v in self._coll_count_cache.items() if k[0] != path}
                             self._coll_count_cache[key] = cached
@@ -873,6 +893,7 @@ class ProxyPanel:
     def act(self, op, a):
         if not isinstance(a, dict):
             raise PanelError("request body must be a JSON object")
+        self._check_input(a)
         if op == "flow_selected":
             flow_id = a.get("id")
             if flow_id is not None:
@@ -902,9 +923,7 @@ class ProxyPanel:
             source = self.script_template(lang, a.get("template") or "header")
             path = self._script_path(filename)
             os.makedirs(SCRIPT_DIR, mode=0o700, exist_ok=True)
-            with open(path, "x", encoding="utf-8", newline="\n") as fh:
-                fh.write(source)
-            os.chmod(path, 0o600)
+            atomic_write_text(path, source)
             scripts.append({"name": name, "file": filename, "lang": lang, "enabled": True,
                             "match": match, "method": method})
             self.save_cfg(cfg)
@@ -921,9 +940,7 @@ class ProxyPanel:
             if item is None: raise PanelError("no such script")
             match = a.get("match") or "."; user_regex(match)
             method = (a.get("method") or "").upper() or None
-            fd, tmp = tempfile.mkstemp(dir=SCRIPT_DIR, prefix=".script-", suffix=os.path.splitext(filename)[1], text=True)
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh: fh.write(a.get("content") or "")
-            os.chmod(tmp, 0o600); os.replace(tmp, path)
+            atomic_write_text(path, a.get("content") or "")
             item.update(match=match, method=method)
             self.save_cfg(cfg)
             self.clear_script_error(filename)
@@ -977,9 +994,7 @@ class ProxyPanel:
                 body = (json.dumps(json.loads(body), indent=2, ensure_ascii=False) + "\n").encode()
             except ValueError:
                 pass
-            with open(path, "wb") as fh:
-                fh.write(body)
-            os.chmod(path, 0o600)
+            atomic_write_bytes(path, body)
             r = {"name": name, "enabled": True, "match": self.flow_regex(f), "method": f.request.method,
                  "action": "map_local", "file": path, "status": f.response.status_code,
                  "note": f"from {f.request.method} {f.request.pretty_url[:120]}"}
@@ -1132,9 +1147,7 @@ class ProxyPanel:
             name = self.unique(cfg, name)
             os.makedirs(MOCK_DIR, exist_ok=True)
             path = self.mock_path(name)
-            with open(path, "w") as fh:
-                fh.write(a.get("body") or "{}\n")
-            os.chmod(path, 0o600)
+            atomic_write_text(path, a.get("body") or "{}\n")
             r = {"name": name, "enabled": True, "match": wildcard_regex(a.get("host"), a.get("path")),
                  "action": "map_local", "file": path, "status": int(a.get("status") or 200),
                  "headers": {"Content-Type": "application/json"},
@@ -1262,13 +1275,12 @@ class ProxyPanel:
                 w = mio.FlowWriter(fh)
                 for f in flows:
                     w.add(f)
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, fpath)
+                fh.flush()
+                os.fsync(fh.fileno())
+            commit_temp_file(tmp, fpath)
             meta = {"name": name, "note": a.get("note") or "", "created": _t.time(), "count": len(flows),
                     "hosts": sorted({f.request.pretty_host for f in flows if isinstance(f, http.HTTPFlow)})[:8]}
-            with open(mpath, "w") as fh:
-                json.dump(meta, fh)
-            os.chmod(mpath, 0o600)
+            atomic_json(mpath, meta)
             return {"count": len(flows)}
         elif op == "sess_load":
             from mitmproxy import io as mio
@@ -1286,8 +1298,7 @@ class ProxyPanel:
             with open(mpath) as fh:
                 meta = json.load(fh)
             meta["note"] = a.get("note") or ""
-            with open(mpath, "w") as fh:
-                json.dump(meta, fh)
+            atomic_json(mpath, meta)
         elif op == "sess_delete":
             for pth in self.sess_paths(a["name"]):
                 if os.path.exists(pth):
@@ -1358,7 +1369,7 @@ class ProxyPanel:
         elif op == "coll_entries":
             self.flush_collection(a["name"])
             with open(self.coll_file(a["name"])) as fh:
-                doc = json.load(fh)
+                doc = migrate_collection(json.load(fh))
             return {"entries": [{"i": i, "method": e["method"], "host": e["host"], "path": e["path"],
                                  "query": e.get("query", ""), "status": e["status"]}
                                 for i, e in enumerate(doc.get("entries", []))]}
@@ -1366,13 +1377,13 @@ class ProxyPanel:
             path = self.coll_file(a["name"])
             self.flush_collection(a["name"], forget=True)
             with open(path) as fh:
-                doc = json.load(fh)
+                doc = migrate_collection(json.load(fh))
             doc["entries"] = [e for i, e in enumerate(doc.get("entries", [])) if i != int(a["i"])]
             self._write_coll(doc)
         elif op == "coll_export":      # HAR, downloaded by the browser to this workstation only
             self.flush_collection(a["name"])
             with open(self.coll_file(a["name"])) as fh:
-                doc = json.load(fh)
+                doc = migrate_collection(json.load(fh))
             return self._har_reply(self.to_har(doc), a)
         elif op == "coll_import":
             name = (a.get("name") or "").strip()
@@ -1404,9 +1415,7 @@ class ProxyPanel:
             if os.path.dirname(path) != os.path.realpath(MOCK_DIR):
                 raise PanelError("only files in the active project's state directory can be edited here")
             self.mock_path(os.path.basename(path)[:-5])   # name check
-            with open(path, "w") as fh:
-                fh.write(a["content"])
-            os.chmod(path, 0o600)
+            atomic_write_text(path, a["content"])
             if str(a.get("status", "")).isdigit():
                 r["status"] = int(a["status"])
             if isinstance(a.get("headers"), list):
@@ -1418,11 +1427,7 @@ class ProxyPanel:
 
     def _write_coll(self, doc):
         os.makedirs(COLL_DIR, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=COLL_DIR, prefix=".coll-", suffix=".json")
-        with os.fdopen(fd, "w") as fh:
-            json.dump(doc, fh, ensure_ascii=False)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self.coll_file(doc["name"]))
+        atomic_json(self.coll_file(doc["name"]), migrate_collection(doc))
 
     @staticmethod
     def _har_reply(har, a):
@@ -1672,6 +1677,13 @@ class ProxyPanel:
             def prepare(self):
                 # before mitmweb's own prepare, whose fetch-metadata refusal surfaces as a 500
                 if self.request.method not in ("GET", "HEAD", "OPTIONS"):
+                    raw_length = self.request.headers.get("Content-Length")
+                    try:
+                        declared = int(raw_length) if raw_length is not None else len(self.request.body or b"")
+                    except ValueError:
+                        raise tornado.web.HTTPError(400, "invalid Content-Length")
+                    if declared > MAX_PANEL_REQUEST_BYTES or len(self.request.body or b"") > MAX_PANEL_REQUEST_BYTES:
+                        raise tornado.web.HTTPError(413, "panel request exceeds the 8 MiB limit")
                     refused = self._refuse_cross_site()
                     if refused:
                         raise tornado.web.HTTPError(403, refused)

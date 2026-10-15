@@ -6,11 +6,10 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from proxy_common import SAFE_NAME, user_regex
+from proxy_common import SAFE_NAME, atomic_json, atomic_write_text, migrate_rules, user_regex
 
 TEMPLATES = {
     "py": {
@@ -34,17 +33,14 @@ def load(path):
     try:
         with open(path, encoding="utf-8") as fh: cfg = json.load(fh)
     except FileNotFoundError: cfg = {}
+    cfg = migrate_rules(cfg)
     if not isinstance(cfg.get("rules"), list): cfg["rules"] = []
     if not isinstance(cfg.get("scripts"), list): cfg["scripts"] = []
     return cfg
 
 
 def save(path, cfg):
-    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".rules-", suffix=".json")
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(cfg, fh, indent=2, ensure_ascii=False); fh.write("\n")
-    os.replace(tmp, path)
+    atomic_json(path, migrate_rules(cfg))
 
 
 def find(cfg, name):
@@ -85,8 +81,8 @@ def main(argv):
         filename = f"{a.name}.{a.lang}"; path = os.path.join(script_dir, filename)
         if any(x.get("name") == a.name or x.get("file") == filename for x in cfg["scripts"]) or os.path.exists(path):
             raise SystemExit("script already exists")
-        with open(path, "x", encoding="utf-8", newline="\n") as fh: fh.write(TEMPLATES[a.lang][a.template])
-        os.chmod(path, 0o600)
+        if os.path.exists(path): raise SystemExit("script already exists")
+        atomic_write_text(path, TEMPLATES[a.lang][a.template])
         cfg["scripts"].append({"name": a.name, "file": filename, "lang": a.lang, "enabled": True,
                                "match": a.match, "method": a.method.upper() or None})
         save(rules, cfg); print(f"created {path}")
