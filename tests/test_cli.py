@@ -518,6 +518,14 @@ class StartArgv(CliBase):
         line, _ = self.start_argv("--ios-filter", "MyApp")
         self.assertIn("local:MyApp", line)
 
+    def test_capture_filter_can_never_mean_the_whole_mac(self):
+        """F-13: an empty spec captures every process; '!x' captures everything except x."""
+        for bad in ("", "!CoreSimulator", "Core*", "a,CoreSimulator", "x;y", "CoreSimulator,", ",,"):
+            r = self.fail("start", "--no-open", "--ios-filter", bad)
+            self.assertRegex(r.stderr, r"--ios-filter (is empty|'.*')", bad)   # refused by the filter check itself
+        line, _ = self.start_argv("--ios-filter", "CoreSimulator,MyApp")
+        self.assertIn("local:CoreSimulator,MyApp", line)
+
     def test_insecure_and_dev_alias(self):
         for flag in ("--insecure", "--dev"):
             line, _ = self.start_argv("--no-ios", flag)

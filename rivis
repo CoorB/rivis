@@ -305,6 +305,20 @@ PY
 }
 
 # ───────────────────────── start ─────────────────────────
+# F-13: local capture must only ever name the Simulator or explicit apps. mitmproxy reads an empty spec as "every
+# process" and "!name" as "everything except name" — either would capture this Mac's own traffic (mail, Teams, VPN).
+check_capture_filter() {
+  local spec="$1" item
+  [ -n "$spec" ] || die "--ios-filter is empty: that would capture every app on this Mac. Name the Simulator or an app."
+  case "$spec" in ,*|*,|*,,*) die "--ios-filter '$spec': an empty name between commas would match every app" ;; esac
+  case "$spec" in *[!A-Za-z0-9\ ._,-]*) die "--ios-filter '$spec': only app/process names separated by commas (no '!' or patterns)" ;; esac
+  local IFS=,
+  for item in $spec; do
+    item="${item# }"; item="${item% }"
+    [ ${#item} -ge 3 ] || die "--ios-filter '$spec': each name needs at least 3 characters (a short name matches too many apps)"
+  done
+}
+
 cmd_start() {
   local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0 private_hosts=""
   while [ $# -gt 0 ]; do case "$1" in
@@ -312,6 +326,7 @@ cmd_start() {
     --allow-private-hosts) [ $# -ge 2 ] || die "--allow-private-hosts needs a regex"; private_hosts="$2"; shift ;;
     --project-only|--neo-only) project_only=1 ;; --no-open) open_ui=0 ;; --all) show_all=1 ;;
     *) die "start: unknown option $1" ;; esac; shift; done
+  [ "$ios" = 1 ] && check_capture_filter "$filter"
   command -v mitmweb >/dev/null || die "mitmweb not found (brew install --cask mitmproxy)"
   ensure_ca; ensure_rules
   local o; o=$(port_owner "$PORT"); [ -n "$o" ] && die "port $PORT already taken: $o  (a previous $CLI? run: $CLI stop)"
