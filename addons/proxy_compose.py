@@ -138,10 +138,13 @@ class ComposerStore:
             raise ValueError("saved request is not an object")
         return value
 
-    def save(self, name, value):
+    def save(self, name, value, overwrite=False):
         if not isinstance(value, dict):
             raise ValueError("request must be an object")
-        self._write(self._path(name), value)
+        path = self._path(name)
+        if os.path.exists(path) and overwrite is not True:
+            raise ValueError("a saved request named '%s' already exists" % name)
+        self._write(path, value)
 
     def rename(self, old, new):
         source, target = self._path(old), self._path(new)

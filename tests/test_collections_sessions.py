@@ -251,6 +251,19 @@ class Sessions(LiveCase):
         self.assertEqual(self.panel.state()["sessions"], [])
         self.assertFalse(os.path.exists(self.inst.path("sessions", "s1.flows")))
 
+    def test_save_requires_explicit_overwrite_and_preserves_the_first_capture(self):
+        self.fetch("/json/small")
+        first = self.panel.ok("sess_save", {"name": "dup", "note": "first"})["count"]
+        self.fetch("/text")
+        code, doc, _ = self.panel.post("sess_save", {"name": "dup", "note": "second"})
+        self.assertEqual(code, 400)
+        self.assertIn("already exists", doc["error"])
+        saved = self.panel.state()["sessions"][0]
+        self.assertEqual((saved["note"], saved["count"]), ("first", first))
+        replaced = self.panel.ok("sess_save", {"name": "dup", "note": "second", "overwrite": True})
+        self.assertGreater(replaced["count"], first)
+        self.assertEqual(self.panel.state()["sessions"][0]["note"], "second")
+
     def test_har_export(self):
         self.fetch("/json/small")
         self.panel.ok("sess_save", {"name": "h1"})

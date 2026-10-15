@@ -90,6 +90,11 @@ class Store(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(self.store.directory).st_mode), 0o700)
         self.assertEqual(self.store.load("login")["method"], "POST")
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self.store.save("login", {"method": "DELETE"})
+        self.assertEqual(self.store.load("login")["method"], "POST")
+        self.store.save("login", {"method": "PUT"}, overwrite=True)
+        self.assertEqual(self.store.load("login")["method"], "PUT")
         self.store.rename("login", "login2")
         self.assertEqual(self.store.list(), ["login2"])
         self.store.save("other", {})

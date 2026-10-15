@@ -131,6 +131,7 @@ class Commands(unittest.TestCase):
         token = os.path.join(self.state, "web-token")
         self.assertIn("proxy_auth_token_file=" + token, line)
         self.assertIn("proxy_bootstrap_file=" + os.path.join(self.state, "web-bootstrap"), line)
+        self.assertIn("http2=false", line)
         for path in (token, os.path.join(self.state, "web-bootstrap")):
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600, path)
         with open(token) as fh:

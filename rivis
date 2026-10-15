@@ -400,6 +400,10 @@ cmd_start() {
   local args=(--listen-host 127.0.0.1 --mode "regular@$PORT"
               --set web_host=127.0.0.1 --set "web_port=$WEB_PORT" --set web_open_browser=false
               --set confdir="$CONFDIR" --set connection_strategy=lazy
+              # HTTP/1.1 to the app lets one app connection retain one reusable upstream connection. With HTTP/2,
+              # app streams to an HTTP/1.1-only origin each open a new upstream TLS connection. That is especially
+              # expensive for TLS 1.2 static-RSA gateways over a VPN. RIVIS_HTTP2=1 opts back in.
+              --set "http2=$([ "$(env_value HTTP2 0)" = 1 ] && echo true || echo false)"
               -s "$AUTH_ADDON" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_panel.py" -s "$SCRIPT_DIR/addons/proxy_retention.py" -s "$SCRIPT_DIR/addons/proxy_operability.py"
               --set "proxy_auth_token_file=$STATE_ROOT/web-token" --set "proxy_bootstrap_file=$STATE_ROOT/web-bootstrap"
               --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT" --set "proxy_max_flows=$MAX_FLOWS" --set "proxy_log_dir=$STATE_ROOT/logs")

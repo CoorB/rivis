@@ -244,6 +244,10 @@ class Rules(CliBase):
         self.fail("rules", "add", "a", "action=explode", msg="action must be one of")
         self.fail("rules", "add", "a", msg="action must be one of")
         self.fail("rules", "add", "a", "action=block", "match=(unclosed", msg="bad regex")
+        for status in ("0", "99", "600", "99999", "true", "200.5"):
+            r = self.fail("rules", "add", "s" + status.replace(".", "-"), "action=status", "status=" + status,
+                          msg="status must be an integer from 100 to 599")
+            self.assertNotIn("Traceback", r.stderr)
         self.fail("rules", "add", "a", "action=map_local", "file=/no/such/file", msg="file not found")
         self.fail("rules", "add", "a", "action=block", "noequals", msg="expected key=value")
         self.assertEqual(self.cfg()["rules"], [])
@@ -261,6 +265,8 @@ class Rules(CliBase):
         with open(self.rules_file(), "w") as fh:
             fh.write("{ not json")
         r = self.fail("rules", "list")              # reading a corrupt file must fail loudly, not silently reset it
+        self.assertIn("not valid JSON", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
         self.assertEqual(open(self.rules_file()).read(), "{ not json")
 
     def test_rules_file_written_atomically_and_private(self):
@@ -309,8 +315,14 @@ class Throttle(CliBase):
         self.fail("throttle", "lte", "bogus=1", msg="throttle options")
         r = self.cli("throttle", "lte", "match=(unclosed")
         self.assertNotEqual(r.returncode, 0)
+        self.assertIn("bad regex", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
         r = self.cli("throttle", "lte", "loss=abc")
         self.assertNotEqual(r.returncode, 0)
+
+    def test_match_whitespace_is_trimmed(self):
+        self.ok("throttle", "lte", "match=  /json/small  ")
+        self.assertEqual(self.cfg()["throttle_match"], "/json/small")
 
 
     def test_out_of_range_and_non_finite_numbers_are_refused(self):
@@ -397,7 +409,8 @@ class Scripts(CliBase):
     def test_invalid(self):
         self.fail("scripts", "new", "../evil", "--lang", "py", msg="bad script name")
         self.fail("scripts", "new", "ok", "--lang", "rb")
-        self.fail("scripts", "new", "ok", "--lang", "py", "--match", "(x")
+        bad_rx = self.fail("scripts", "new", "ok", "--lang", "py", "--match", "(x", msg="bad regex")
+        self.assertNotIn("Traceback", bad_rx.stderr)
         self.ok("scripts", "new", "dup", "--lang", "py")
         self.fail("scripts", "new", "dup", "--lang", "py", msg="already exists")
         self.fail("scripts", "on", "ghost", msg="no script named")
@@ -514,6 +527,7 @@ class StartArgv(CliBase):
         self.assertIn("regular@%s" % self.env["RIVIS_PORT"], line)
         self.assertIn("web_port=%s" % self.env["RIVIS_WEB_PORT"], line)
         self.assertIn("confdir=" + self.env["RIVIS_CONFDIR"], line)
+        self.assertIn("http2=false", line)
         self.assertNotIn("0.0.0.0", line)
         self.assertNotIn("local:", line)                       # --no-ios: no local capture
         self.assertNotIn("ssl_insecure", line)
@@ -522,6 +536,9 @@ class StartArgv(CliBase):
         self.assertIn("proxy_auth_token_file=" + os.path.join(self.state, "web-token"), line)
         self.assertNotIn(" x", line)
         self.assertEqual(self.suite.shim_log("open.log"), "")  # --no-open really does not open anything
+
+        line, _ = self.start_argv("--no-ios", RIVIS_HTTP2="1")
+        self.assertIn("http2=true", line)
 
     def test_ios_local_capture_is_scoped_to_simulator_processes(self):
         line, _ = self.start_argv()

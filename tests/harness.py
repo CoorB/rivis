@@ -187,9 +187,9 @@ class Suite:
                 proc.kill()
         self.ca_pem = os.path.join(self.ca_dir, "mitmproxy-ca-cert.pem")
 
-    def upstream(self):
+    def upstream(self, **kwargs):
         from upstream import Upstream
-        up = Upstream(self.root)
+        up = Upstream(self.root, **kwargs)
         self.upstreams.append(up)
         return up
 

@@ -47,6 +47,16 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def setup(self):
+        # Delay in the per-connection handler thread, not the accept loop. This models an expensive TLS handshake
+        # while still allowing concurrent connections to be accepted independently.
+        if self.server.is_tls:
+            delay = self.server.owner.handshake_delay
+            if delay:
+                time.sleep(delay)
+            self.request.do_handshake()
+        BaseHTTPRequestHandler.setup(self)
+
     # -- plumbing -------------------------------------------------------------------------------------
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -159,11 +169,22 @@ class _Server(ThreadingHTTPServer):
     allow_reuse_address = True
     request_queue_size = 128
 
+    def get_request(self):
+        request, address = ThreadingHTTPServer.get_request(self)
+        owner = self.owner
+        key = "https" if self.is_tls else "http"
+        owner.connection_count[key] += 1
+        owner.connections.append({"kind": key, "peer": address, "t": time.time()})
+        return request, address
+
 
 class Upstream:
-    def __init__(self, workdir):
+    def __init__(self, workdir, static_rsa=False, handshake_delay=0):
         self.hits = []
         self.counter = 0
+        self.connection_count = {"http": 0, "https": 0}
+        self.connections = []
+        self.handshake_delay = handshake_delay
         tag = os.urandom(4).hex()           # several upstreams share one workdir: never share a cert file
         self.cert = os.path.join(workdir, "upstream-cert-%s.pem" % tag)
         key = os.path.join(workdir, "upstream-key-%s.pem" % tag)
@@ -173,6 +194,13 @@ class Upstream:
                        check=True, capture_output=True)
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(self.cert, key)
+        if static_rsa:
+            # The NEO gateway is TLS 1.2-only and offers a static-RSA cipher. Keep this deliberately narrow so a
+            # regression to TLS 1.3/ECDHE-only upstream behavior fails in the hermetic suite.
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+            ctx.set_ciphers("AES128-GCM-SHA256")
+            ctx.set_alpn_protocols(["http/1.1"])
         self.http = self._make(False, None)
         self.https = self._make(True, ctx)
         self.http_port = self.http.server_address[1]
@@ -192,6 +220,10 @@ class Upstream:
 
     def reset_hits(self):
         del self.hits[:]
+
+    def reset_connections(self):
+        self.connection_count = {"http": 0, "https": 0}
+        del self.connections[:]
 
     def hits_for(self, prefix):
         return [h for h in self.hits if h["path"].startswith(prefix)]

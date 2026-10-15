@@ -80,6 +80,10 @@ def validate(r):
     missing = [k for k in ACTIONS[a] if k not in r]
     if missing:
         die("action '%s' needs: %s" % (a, ", ".join(missing)))
+    if a in ("respond", "status") and "status" in r:
+        status = r["status"]
+        if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
+            die("status must be an integer from 100 to 599")
     for k in ("match", "replace"):
         if k in r:
             try:
