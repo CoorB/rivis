@@ -33,16 +33,18 @@ _SECRET_KEY = re.compile(
     r"|^(access|refresh|id|auth|bearer)[_\-]?token", re.I)
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
 _EXTRA_SECRET_KEY = re.compile(
-    r"^(password|passcode|otp|pin|cvv|cvc|secret)(_|\d|$)|^(auth_?code|code(_verifier)?|mfa_?code)$", re.I)
+    r"^(password|passcode|otp|pin|cvv|cvc|secret)(_|\d|$)|^(auth_?code|code_verifier|mfa_?code)$", re.I)
 _BEARER = re.compile(r"\b(Bearer)[ \t]+(?!<redacted>)[A-Za-z0-9._~+/=-]{6,}", re.I)
-_XML_VALUE = re.compile(r"(<(?P<key>[A-Za-z_][\w:.-]*)\b[^>]*>)(?P<value>.*?)(</(?P=key)\s*>)", re.I | re.S)
+# Opening tags and multipart field headers are found with linear patterns; the value is then located with str.find,
+# only for secret-named fields and within a bounded window. A backreferenced (.*?)</key> pattern scanned to the end of
+# the body for every tag: 278 s on a 1 MB HTML page.
+_XML_OPEN = re.compile(r"<(?P<key>[A-Za-z_][\w:.-]{0,63})\b[^<>]{0,512}>")
+_MULTIPART_NAME = re.compile(r"\bname=[\"'](?P<key>[A-Za-z_][\w.-]{0,63})[\"']", re.I)
+_SCAN_WINDOW = 65536
 _ASSIGN_VALUE = re.compile(
     r"(?P<key>[A-Za-z_][\w.-]{0,63})(?P<sep>\s*=\s*)(?P<quote>[\"']?)(?P<value>[^&\s<>\"']+)(?P=quote)")
 _JSON_VALUE = re.compile(
     r"(?P<prefix>[\"'](?P<key>[A-Za-z_][\w.-]{0,63})[\"']\s*:\s*[\"'])(?P<value>.*?)(?P<suffix>[\"'])")
-_MULTIPART_VALUE = re.compile(
-    r"(?P<prefix>\bname=[\"'](?P<key>[A-Za-z_][\w.-]{0,63})[\"'][^\r\n]*\r?\n(?:[^\r\n]*\r?\n)*\r?\n)"
-    r"(?P<value>.*?)(?=\r?\n--)", re.I | re.S)
 _HTML_INPUT = re.compile(r"<input\b[^>]*>", re.I)
 _HTML_NAME = re.compile(r"\bname\s*=\s*([\"'])(.*?)\1", re.I)
 _HTML_VALUE = re.compile(r"(\bvalue\s*=\s*)([\"'])(.*?)\2", re.I)
@@ -89,22 +91,73 @@ def _value(obj, depth=0):
     return obj
 
 
+def _spans(body, starts, end_of):
+    """Rebuild body with each (value_start, value_end) span replaced by REDACTED; spans are in order, non-overlapping."""
+    out, last = [], 0
+    for start in starts:
+        if start < last:
+            continue
+        end = end_of(start)
+        if end is None or end <= start:
+            continue
+        out.append(body[last:start]); out.append(REDACTED); last = end
+    out.append(body[last:])
+    return "".join(out)
+
+
+def _xml(body):
+    """<password>…</password> → <password><redacted></password>, for secret-named elements only."""
+    if "<" not in body:
+        return body
+    found = []
+    for m in _XML_OPEN.finditer(body):
+        if not secret_key(m.group("key")) or m.group(0).endswith("/>"):
+            continue
+        close = body.find("</" + m.group("key"), m.end(), m.end() + _SCAN_WINDOW)
+        if close > m.end() and "<" not in body[m.end():close]:
+            found.append((m.end(), close))
+    ends = dict(found)
+    return _spans(body, [a for a, _ in found], ends.get)
+
+
+def _multipart(body):
+    """Content-Disposition: form-data; name="otp" → its part body becomes REDACTED."""
+    if "--" not in body or "name=" not in body:
+        return body
+    found = []
+    for m in _MULTIPART_NAME.finditer(body):
+        if not secret_key(m.group("key")):
+            continue
+        blank = body.find("\n\n", m.end(), m.end() + 4096)
+        crlf = body.find("\r\n\r\n", m.end(), m.end() + 4096)
+        cands = [(x, 2) for x in (blank,) if x >= 0] + [(x, 4) for x in (crlf,) if x >= 0]
+        if not cands:
+            continue
+        start = min(x + n for x, n in cands)
+        end = body.find("\n--", start, start + _SCAN_WINDOW)
+        if end < 0:
+            continue
+        if end > start and body[end - 1] == "\r":
+            end -= 1
+        if end > start:
+            found.append((start, end))
+    ends = dict(found)
+    return _spans(body, [a for a, _ in found], ends.get)
+
+
 def _loose(body):
     """Best-effort masking for non-JSON text (XML, multipart, JSONP, plain assignments, opaque Bearer tokens)."""
-    def xml_value(m):
-        return m.group(1) + (REDACTED if secret_key(m.group("key")) and m.group("value") else m.group("value")) + m.group(4)
 
     def assigned(m):
-        value = REDACTED if secret_key(m.group("key")) and m.group("value") else m.group("value")
+        in_query = m.start() > 0 and m.string[m.start() - 1] in "?&"         # ?code= / &code= : an OAuth code in a URL
+        secret = secret_key(m.group("key")) or (in_query and m.group("key").lower() == "code")
+        value = REDACTED if secret and m.group("value") else m.group("value")
         return m.group("key") + m.group("sep") + m.group("quote") + value + m.group("quote")
 
     def json_value(m):
         value = REDACTED if secret_key(m.group("key")) and m.group("value") else m.group("value")
         return m.group("prefix") + value + m.group("suffix")
 
-    def multipart_value(m):
-        value = REDACTED if secret_key(m.group("key")) and m.group("value") else m.group("value")
-        return m.group("prefix") + value
 
     def html_input(m):
         tag = m.group(0)
@@ -113,9 +166,9 @@ def _loose(body):
             return tag
         return _HTML_VALUE.sub(lambda v: v.group(1) + v.group(2) + REDACTED + v.group(2), tag)
 
-    body = _MULTIPART_VALUE.sub(multipart_value, body)
+    body = _multipart(body)
     body = _HTML_INPUT.sub(html_input, body)
-    body = _XML_VALUE.sub(xml_value, body)
+    body = _xml(body)
     body = _JSON_VALUE.sub(json_value, body)
     body = _ASSIGN_VALUE.sub(assigned, body)
     body = _BEARER.sub(lambda m: m.group(1) + " " + REDACTED, body)
@@ -143,7 +196,8 @@ def query(qs):
     pairs = parse_qsl(qs, keep_blank_values=True)
     if not pairs:
         return _JWT.sub(REDACTED, qs)
-    return urlencode([(k, REDACTED if secret_key(k) and v else _JWT.sub(REDACTED, v)) for k, v in pairs])
+    # an OAuth authorization "code" is a credential in a URL or form; in a JSON body "code" is usually an error code
+    return urlencode([(k, REDACTED if (secret_key(k) or k.lower() == "code") and v else _JWT.sub(REDACTED, v)) for k, v in pairs])
 
 
 def url(u):

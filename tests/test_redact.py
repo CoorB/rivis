@@ -113,6 +113,25 @@ class DeepJson(unittest.TestCase):
         self.assertIn("<redacted>", out)
 
 
+class PilotReview(unittest.TestCase):
+    """Review of the overnight redaction change (2026-10-15): no quadratic patterns, and JSON error codes stay readable."""
+
+    def test_large_bodies_redact_in_linear_time(self):
+        import time
+        html = ("<div><p>hello</p><input name='q' value='x'>" * 20000) + "<span>unterminated " * 5000
+        for body, mime in ((html, "text/html"), ("<a>" * 30000 + "text", "text/xml"),
+                           ('--B\r\nContent-Disposition: form-data; name="f"\r\n\r\n' + "x\n" * 300000, "multipart/form-data")):
+            t = time.monotonic()
+            R.text(body, mime)
+            self.assertLess(time.monotonic() - t, 3.0, mime)          # was 278 s for the 1 MB page
+
+    def test_json_code_field_kept_but_oauth_code_masked(self):
+        self.assertIn('"code": "ACC-710"', R.text(json.dumps({"code": "ACC-710", "authCode": "9"}), "application/json"))
+        self.assertNotIn("SECRET", R.url("https://a.test/cb?code=SECRET&state=ok"))
+        self.assertNotIn("SECRET", R.text("GET /cb?code=SECRET HTTP/1.1", "text/plain"))
+        self.assertIn("<password><redacted></password>", R.text("<r><password>x</password></r>", "text/xml"))
+
+
 class RoundThreeAuditShapes(unittest.TestCase):
     def test_secret_containers_variants_redirects_and_encoded_bodies(self):
         markers = {
