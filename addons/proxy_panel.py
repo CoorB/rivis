@@ -54,6 +54,8 @@ from proxy_common import (ACTIONS, PANEL_PROFILES, PRODUCT, SAFE_NAME, STATE_ROO
                           user_regex)
 from proxy_codegen import TARGETS, generate
 import proxy_redact
+import devices
+importlib.reload(devices)
 from proxy_compose import ComposerStore, normalize_request
 from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, find_jwts)
 
@@ -147,6 +149,7 @@ def patch_mitmweb_js(source, warn=None):
 
 class ProxyPanel:
     def __init__(self):
+        self._device_jobs = devices.Jobs()
         self.project_only = False
         self.show_dns = False
         self.focused_host = None
@@ -914,6 +917,28 @@ class ProxyPanel:
                         "flow_id": f.id}
         raise PanelError("no Authorization: Bearer JWT seen for %s yet" % host)
 
+    # ── devices (Proxyman's Certificate → Simulator / Emulator menu) ───────────
+    def _proxy_port(self):
+        for mode in ctx.options.mode or []:
+            m = re.match(r"^regular@(?:[^:]+:)?(\d+)$", mode)
+            if m:
+                return int(m.group(1))
+        return ctx.options.listen_port or 8080
+
+    def devices_state(self):
+        want = devices.ca_sha256(os.path.join(os.path.expanduser(ctx.options.confdir), "mitmproxy-ca-cert.pem"))
+        pins = os.path.join(HERE, "android", "magisk.pins")
+        version = ""
+        try:
+            version = next((l.split("=", 1)[1].strip() for l in open(pins) if l.startswith("MAGISK_VERSION=")), "")
+        except OSError:
+            pass
+        magisk = os.environ.get("RIVIS_MAGISK_DIR") or os.path.join(os.path.dirname(os.path.dirname(HERE)), "magisk-" + version)
+        adb = devices.adb_path()
+        return {"ios": devices.ios_devices(want),
+                "android": devices.android_devices(adb, want, STATE_ROOT, self._proxy_port()),
+                "magisk": bool(version) and os.path.isdir(magisk), "job": self._device_jobs.summary()}
+
     # ── actions ───────────────────────────────────────────────────────────────
     def act(self, op, a):
         if not isinstance(a, dict):
@@ -929,6 +954,17 @@ class ProxyPanel:
                     addon.trim()
                     break
             return {"id": flow_id}
+        if op == "devices":
+            return self.devices_state()
+        if op == "device_job":
+            return {"job": self._device_jobs.summary()}
+        if op == "device_setup":
+            try:
+                argv = devices.setup_argv(a.get("platform"), str(a.get("target") or ""), bool(a.get("consent")))
+                label = "%s %s" % ({"ios": "iOS", "android": "Android"}[a["platform"]], a.get("name") or a.get("target"))
+                return {"id": self._device_jobs.start(argv, label)}
+            except (ValueError, KeyError, RuntimeError) as e:
+                raise PanelError(str(e))
         cfg = self.load_cfg()
         if op == "viewer":
             return self._flow_viewer(self.flow(a["flow_id"]))

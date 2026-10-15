@@ -21,7 +21,7 @@ except ImportError as exc:                       # pragma: no cover - environmen
     PW_REASON = ("Playwright is not importable (%s). Enable with: pip3 install --user playwright && "
                  "python3 -m playwright install chromium" % exc)
 
-TABS = ["call", "compose", "map", "bp", "net", "coll", "cmp", "sess", "scripts", "rules"]
+TABS = ["call", "compose", "map", "bp", "net", "dev", "coll", "cmp", "sess", "scripts", "rules"]
 
 
 def shot(page, name):
@@ -146,6 +146,18 @@ class UiSmoke(LiveCase):
                  "user re-sorted by path")
         page.wait_for_timeout(500)
         self.assertNotIn("sort", th.get_attribute("class") or "", "the default must not fight the user's own sort")
+        self.assertEqual(self.errors, [])
+
+    def test_devices_tab_explains_what_to_do_when_nothing_is_running(self):
+        page = self.open()
+        page.locator("#fab").click()
+        page.locator("button[data-t=dev]").click()
+        wait_for(lambda: "iOS Simulators" in self.panel_text(), 15, 0.2, "devices tab rendered")
+        text = self.panel_text()
+        self.assertIn("No simulator is booted", text)
+        self.assertIn("adb was not found", text)                     # hermetic env: no Android SDK
+        self.assertIn("rivis setup", text)
+        shot(page, "devices")
         self.assertEqual(self.errors, [])
 
     def test_open_the_panel_and_click_every_tab(self):

@@ -549,6 +549,12 @@ ui_install_ca() {
     && { ui_tap "$s" "proxy-ca.crt" || { ui_tap "$s" "Show roots" && ui_tap "$s" "Downloads?" && ui_tap "$s" "proxy-ca.crt"; }; }
 }
 ca_fingerprint() { openssl x509 -in "$CA_PEM" -noout -fingerprint -sha256 | cut -d= -f2; }   # AA:BB:… as Settings shows it
+android_record() {   # android_record SERIAL — note "<avd>\t<CA sha256>" after a VERIFIED install (read by the Devices tab)
+  local avd f="$STATE_ROOT/android-ca" fp; fp=$(ca_fingerprint | tr -d ':') || return 0
+  avd=$("$ADB" -s "$1" emu avd name 2>/dev/null | tr -d '\r' | awk 'NF && $0 != "OK" {print; exit}')
+  [[ "$avd" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
+  { grep -v "^$avd	" "$f" 2>/dev/null; printf '%s\t%s\n' "$avd" "$fp"; } > "$f.tmp" && mv "$f.tmp" "$f"
+}
 ui_has_current_ca() {   # does the user store hold THIS CA? (an older "mitmproxy" entry does not count)
   local s="$1" fp n; fp=$(ca_fingerprint) || return 1
   # straight to Trusted credentials → User (under a second); the menu walk is the fallback
@@ -604,7 +610,7 @@ cmd_android() {
         "$ADB" -s "$s" shell "mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/$h.0 $dst \
           && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0" || die "install failed"
         ca_history_add
-        info "$s: CA installed in user store ($h.0)"
+        info "$s: CA installed in user store ($h.0)"; android_record "$s"
       else
         # Google Play images refuse `adb root`. The CA has to go in through Settings once.
         ca_history_add
@@ -612,14 +618,14 @@ cmd_android() {
           || die "could not push the CA to the emulator — proxy NOT enabled"
         local magisk_dir="${RIVIS_MAGISK_DIR:-$SCRIPT_DIR/../magisk-$(sed -n 's/^MAGISK_VERSION=//p' "$SCRIPT_DIR/addons/android/magisk.pins")}"
         if [ "$auto_ui" = 1 ] && ui_has_current_ca "$s"; then
-          info "$s: already trusts this CA — nothing to install"
+          info "$s: already trusts this CA — nothing to install"; android_record "$s"
           "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
         elif [ "$auto_ui" = 1 ] && [ -d "$magisk_dir" ] \
             && ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent; then
-          :   # one-click Play-image path (Proxyman's Magisk approach); it reports its own result
+          android_record "$s"   # one-click Play-image path (Proxyman's Magisk approach); it reports its own result
         elif [ "$auto_ui" = 1 ] && info "$s: Google Play image — installing the CA through Settings (about a minute; hands off the emulator)" \
             && ui_install_ca "$s" && ui_has_current_ca "$s"; then
-          info "$s: CA installed in user store via Settings (verified by fingerprint)"
+          info "$s: CA installed in user store via Settings (verified by fingerprint)"; android_record "$s"
         else
           [ "$auto_ui" = 0 ] && info "$s is a Google Play image (no adb root) — the CA goes in through Settings once."
           [ "$auto_ui" = 1 ] && info "  could not drive this Android build's Settings — do it by hand:"

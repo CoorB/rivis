@@ -218,6 +218,19 @@ class Ops(LiveCase):
                      "mock served for an unreachable host")
         self.assertEqual(r.json(), {})
 
+    def test_devices_tab_lists_and_runs_the_cli_as_one_background_job(self):
+        st = self.panel.ok("devices", {})
+        self.assertIn("ios", st)
+        self.assertIsNone(st["android"])                                  # hermetic env: no adb
+        self.bad("device_setup", {"platform": "ios", "target": "../x"}, "udid")
+        self.bad("device_setup", {"platform": "android", "target": "R58M1"}, "serial")
+        self.bad("device_setup", {"platform": "nope", "target": "all"}, "platform")
+        self.panel.ok("device_setup", {"platform": "ios", "target": "all", "name": "all"})
+        job = wait_for(lambda: (lambda j: j if j and not j["running"] else None)(self.panel.ok("device_job", {})["job"]),
+                       20, 0.3, "setup job finished")
+        self.assertNotEqual(job["rc"], 0)
+        self.assertIn("no booted simulator", "\n".join(job["lines"]))      # the CLI's own message, streamed back
+
     def test_rules_built_from_a_call_match_that_call_on_a_non_default_port(self):
         """FOUND-BUGS B3: flow_regex drops ':port', so mock/quick/breakpoint-from-call never match a call to host:port."""
         self.fetch("/json/small")

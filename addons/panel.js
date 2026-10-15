@@ -185,7 +185,7 @@
     header b small { font-weight: 500; color: var(--rv-text-2); font-size: 13px; }
     .x { border: 0; background: transparent; font-size: 20px; line-height: 1; cursor: pointer; color: var(--rv-text-2); width: 26px; height: 26px; border-radius: var(--rv-r-md); }
     .x:hover { background: var(--rv-surface-2); color: var(--rv-text); }
-    nav { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--rv-border); background: var(--rv-surface); }   /* 5 x 2: every tab visible, even widths */
+    nav { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--rv-border); background: var(--rv-surface); }   /* 6 + 5: every tab visible, even widths */
     nav::-webkit-scrollbar { display: none; }
     nav button { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; border: 0; background: none; padding: 7px 2px 7px; cursor: pointer; font-size: 11.5px; font-weight: 500; color: var(--rv-text-2);
                  border-bottom: 2px solid transparent; border-radius: var(--rv-r-md) var(--rv-r-md) 0 0; white-space: nowrap; min-width: 0; transition: color var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease); }
@@ -384,6 +384,7 @@
       <button data-t="map">${ico("map", "sm")}Map Local<span class="cnt" id="c-map"></span></button>
       <button data-t="bp">${ico("bp", "sm")}Breakpoints<span class="cnt" id="c-bp"></span></button>
       <button data-t="net">${ico("net", "sm")}Network</button>
+      <button data-t="dev">${ico("phone", "sm")}Devices<span class="cnt" id="c-dev"></span></button>
       <button data-t="coll">${ico("coll", "sm")}Collections<span class="cnt" id="c-coll"></span></button>
       <button data-t="cmp">${ico("cmp", "sm")}Compare</button>
       <button data-t="sess">${ico("sess", "sm")}Sessions</button>
@@ -475,6 +476,7 @@
     if (tab === "map") return renderMap(m);
     if (tab === "bp") return renderBp(m);
     if (tab === "net") return renderNet(m);
+    if (tab === "dev") return renderDev(m);
     if (tab === "coll") return renderColl(m);
     if (tab === "cmp") return renderCmp(m, seq);
     if (tab === "sess") return renderSess(m);
@@ -787,6 +789,69 @@
     $("dns").onchange = () => run("view", { project_only: false, show_dns: $("dns").checked }, "Call list updated");
     $("openset").onclick = () => openHelp("settings");
   }
+
+  // ───────────── Devices (Proxyman's Certificate → Simulator / Emulator menu) ─────────────
+  // Status is polled while the tab is open (and every 30 s for the badge); "Set up" runs the CLI's own command as a
+  // background job and streams its output here. Google Play emulators get the same consent text as the terminal.
+  let dev = null, devConsent = null, devTimer = null;
+  const devRefresh = async () => {
+    try { dev = await api("devices", {}); } catch (e) { dev = { error: e.message }; }
+    const notReady = dev && !dev.error ? [...(dev.ios || []), ...(dev.android || [])].filter((d) => !d.ready).length : 0;
+    const c = $("c-dev"); if (c) { c.textContent = notReady ? `! ${notReady}` : ""; c.classList.toggle("err", notReady > 0); }
+    if (tab === "dev" && !editing) renderDev($("main"));
+  };
+  const devLoop = () => { clearTimeout(devTimer); devLoop.fast = tab === "dev"; devTimer = setTimeout(async () => { await devRefresh(); devLoop(); },
+    tab === "dev" ? ((dev && dev.job && dev.job.running) ? 1500 : 4000) : 30000); };
+  function renderDev(m) {
+    if (!devLoop.fast) { devLoop.fast = true; devLoop(); }          // entering the tab: poll every few seconds
+    if (!dev) { m.innerHTML = '<p class="muted">Looking for simulators and emulators…</p>'; devRefresh(); return; }
+    if (dev.error) { m.innerHTML = `<p class="muted">${esc(dev.error)}</p>`; return; }
+    const job = dev.job, busy = !!(job && job.running);
+    const row = (platform, d) => {
+      const detail = platform === "ios" ? (d.ready ? "Trusts the Rivis certificate" : "Certificate not trusted yet")
+        : !d.ca_ok ? (d.play ? "Google Play image — certificate not installed yet" : "Certificate not installed yet")
+        : !d.proxy_ok ? "Certificate OK — proxy not pointing at Rivis" : "Certificate and proxy set";
+      return `<div class="row"><div class="n">${esc(d.name)} <span class="sub">${esc(d.os)}</span><div class="sub">${detail}</div></div>
+        ${d.ready ? `<span class="ok" title="Ready">${ico("check")}</span>`
+          : `<button class="b p" data-dsetup="${platform}" data-id="${esc(d.id)}" data-name="${esc(d.name)}" data-play="${d.play && !d.ca_ok ? 1 : ""}" ${busy ? "disabled" : ""}>Set up</button>`}</div>`;
+    };
+    const section = (platform, title, list, none) => {
+      if (list === null) return `<h4>${title}</h4><div class="sub">${none}</div>`;
+      const todo = list.filter((d) => !d.ready).length;
+      return `<h4>${title}${todo > 1 ? ` <button class="lnk" data-dsetup="${platform}" data-id="all" data-name="all" data-play="${list.some((d) => d.play && !d.ca_ok) ? 1 : ""}" ${busy ? "disabled" : ""}>Set up all ${todo}</button>` : ""}</h4>` +
+        (list.length ? list.map((d) => row(platform, d)).join("") : `<div class="sub">${platform === "ios" ? "No simulator is booted. Start one from Xcode or Simulator.app — it shows up here." : "No emulator is running. Start one from Android Studio's Device Manager — it shows up here."}</div>`);
+    };
+    const consent = devConsent ? `
+      <div class="card on" style="cursor:default;display:block">
+        <b>One-time setup for ${esc(devConsent.name === "all" ? "these Google Play emulators" : devConsent.name)}</b>
+        <div class="sub" style="margin:6px 0">Google Play images refuse adb root, so Rivis installs its certificate the way Proxyman does:
+          Magisk (official release, checksum verified) patches a temporary copy of the ramdisk; the emulator restarts twice —
+          once with that copy, where a one-shot service copies the certificate, then normally. About 2–4 minutes; the window
+          closes and reopens. Nothing else gets root, and the SDK image and AVD settings are not changed.
+          Use test emulators only (no personal Google account).</div>
+        <div class="btns"><button class="b p" id="dyes">Continue</button><button class="b" id="dno">Cancel</button></div>
+        ${dev.magisk ? "" : '<div class="sub">Magisk is not installed with this copy of Rivis, so it will drive the emulator\'s Settings screens instead (about a minute — hands off the emulator).</div>'}
+      </div>` : "";
+    const log = job ? `<h4>${busy ? "Setting up" : job.rc === 0 ? "Done" : "Failed"} — ${esc(job.label)}</h4>
+      <pre class="devlog" style="max-height:220px;overflow:auto;font-size:11.5px;white-space:pre-wrap;margin:0">${esc(job.lines.join("\n")) || "starting…"}</pre>` : "";
+    m.innerHTML = `
+      <div class="sub" style="margin-bottom:8px">Rivis sets up each simulator or emulator once: its certificate, and for Android the proxy. Like Proxyman's Certificate menu — one click per device.</div>
+      ${consent}${log}
+      ${section("ios", "iOS Simulators", dev.ios, "Xcode command-line tools are not installed (xcrun simctl).")}
+      ${section("android", "Android emulators", dev.android, "adb was not found. Install Android Studio (SDK platform-tools) to use emulators.")}
+      <div class="sub" style="margin-top:10px">Same from a terminal: <code>rivis setup</code>. Physical phones need a separate approval.</div>`;
+    const start = (b, consentGiven) => run("device_setup", { platform: b.dataset.dsetup, target: b.dataset.id, name: b.dataset.name, consent: consentGiven },
+      "Setup started").then(() => { devConsent = null; devRefresh(); devLoop(); });
+    m.querySelectorAll("[data-dsetup]").forEach((b) => (b.onclick = () => {
+      if (b.dataset.dsetup === "android" && b.dataset.play) { devConsent = { b, name: b.dataset.name }; renderDev(m); return; }
+      start(b, false);
+    }));
+    if (devConsent) {
+      $("dyes").onclick = () => start(devConsent.b, true);
+      $("dno").onclick = () => { devConsent = null; renderDev(m); };
+    }
+  }
+  devLoop();
 
   // ───────────── Copy URL / cURL ─────────────
   async function copyExport(id, fmt) {
