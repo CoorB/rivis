@@ -452,6 +452,7 @@ footer .label[title="HTTP Proxy Server Address"] { display: none !important; }
 :root:not([data-skin="off"]) .flow-table td.col-path[style*="--sch"] { text-indent: calc(var(--sch) * -1ch); padding-left: 0; }
 .flow-table td.col-icon { padding-right: 8px; }
 .flow-table td.col-path .marker { text-indent: 0; }
+:root[data-narrow="1"]:not([data-skin="off"]) .flow-table td.col-path[style*="--hst"] { text-indent: calc(var(--hst) * -1ch); padding-left: 0; }
 
 /* narrow list (details pane open next to the tools drawer): the path is what matters, so size and the hover quick-action give way */
 :root[data-narrow="1"] .flow-table .col-size, :root[data-narrow="1"] .flow-table .col-quickactions { display: none; }

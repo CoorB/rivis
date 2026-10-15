@@ -327,6 +327,7 @@ class ProxyPanel:
             "projects": project_profiles(),
             "project_state": project_state(self.active_project),
             "rules_file": self.rules_path,
+            "home": os.path.expanduser("~"),          # the panel shows file paths as ~/… (shorter, and no temp-dir noise)
             "rules_error": self._rules_error,
             "rules": cfg["rules"],
             "rules_outside": self._rules_outside(cfg),

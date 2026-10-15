@@ -252,10 +252,10 @@
                padding: 10px; resize: vertical; background: var(--rv-surface-2); color: var(--rv-text); tab-size: 2; }
     textarea[readonly] { opacity: .75; }
     .hrow input, .krow input[type=text], td input { font-family: var(--rv-mono); }
-    .lostbar { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 2147483004; display: none; max-width: min(720px, 92vw);
+    .lostbar { position: fixed; bottom: 34px; left: 50%; transform: translateX(-50%); z-index: 2147483004; display: none; max-width: min(720px, 92vw);
                background: var(--rv-danger, #b42318); color: #fff; padding: 8px 14px; border-radius: var(--rv-r-md); font-size: 13px; box-shadow: var(--rv-shadow-2, 0 4px 14px rgba(0,0,0,.25)); }
     .lostbar.open { display: block; }
-    .lostbar code { background: rgba(255,255,255,.18); color: #fff; padding: 0 4px; border-radius: 3px; }
+    .lostbar code { background: rgba(255,255,255,.18); color: #fff; padding: 0 4px; border-radius: 3px; white-space: nowrap; }
     .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 26px; z-index: 2147483003; background: var(--rv-text); color: var(--rv-surface); padding: 9px 16px; border-radius: var(--rv-r-md);
              font-size: 12.5px; font-weight: 500; display: none; align-items: center; gap: 12px; max-width: 80vw; box-shadow: var(--rv-shadow-2); animation: toast var(--rv-dur) var(--rv-ease); }
     .toast.err { background: var(--rv-danger); color: var(--rv-danger-fg); }
@@ -417,6 +417,7 @@
     if (action) t.querySelector("button").onclick = () => { t.style.display = "none"; action.run(); };
     clearTimeout(toast._t); toast._t = setTimeout(() => (t.style.display = "none"), action ? 8000 : err ? 5000 : 2500);
   };
+  const tilde = (p) => { const h = state && state.home; return h && p && (p === h || String(p).startsWith(h + "/")) ? "~" + String(p).slice(h.length) : p; };
   const busy = new Set();
   const run = async (op, body, ok) => {
     const key = op + JSON.stringify(body || {});
@@ -533,6 +534,7 @@
   // ───────────── This call ─────────────
   async function renderCall(m, seq) {
     const id = selectedFlow();
+    if (id && !m.querySelector(".call")) m.innerHTML = '<p class="muted">Loading this call…</p>';   // never a blank tab while it loads
     const f = id ? await flowsById(id) : null;
     if (seq !== renderSeq) return;
     if (f && f.type === "tcp") {       // a host that is not decrypted: only the tunnel is visible
@@ -1038,7 +1040,7 @@
         <button class="b p" id="snew">New</button></div>
       <p class="sub">Rules run first, then scripts. Scripts are trusted code with your user rights — not a sandbox. ${info("Python and JavaScript scripts run with your user rights. The Node VM omits process, require and network helpers to prevent accidents, but it is NOT a security boundary.")}</p>
       <h4>Scripts (${scripts.length})</h4>${scripts.length ? scripts.map((s, i) => `<div class="row">${sw(`data-si="${i}"`, s.enabled !== false)}
-        <div class="n"><div><b>${esc(s.name)}</b><span class="tag">${esc(s.lang)}</span></div><div class="sub">${esc(s.method || "ANY")} · ${esc(s.match || ".")} · ${esc(s.file)}${s.exists ? "" : " · FILE MISSING"}${errorHTML(status.errors && status.errors[s.file])}</div></div>
+        <div class="n"><div><b>${esc(s.name)}</b><span class="tag">${esc(s.lang)}</span></div><div class="sub">${esc(s.method || "ANY")} · ${esc(s.match || ".")} · ${esc(tilde(s.file))}${s.exists ? "" : " · FILE MISSING"}${errorHTML(status.errors && status.errors[s.file])}</div></div>
         <button class="b" data-sedit="${i}">Edit</button><button class="b d" data-sdelete="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") : emptyState("scripts", "No scripts yet", "Pick a template above and click <b>New</b>. Rules run first; enabled scripts run after them, in filename order.")}`;
     $("snew").onclick = async () => {
       const r = await run("script_new", { name: $("sn").value, lang: $("sl").value, template: $("stpl").value, match: $("smatch").value, method: $("smethod").value }, (x) => "Created " + x.file);
@@ -1055,9 +1057,9 @@
   }
   function renderScriptEditor(m) {
     const e = editing, s = e.script;
-    m.innerHTML = `<div class="btns" style="margin-top:0"><button class="b" id="sback">${ico("back", "sm")}Back</button><b style="flex:1">${esc(s.file)}</b></div>
+    m.innerHTML = `<div class="btns" style="margin-top:0"><button class="b" id="sback">${ico("back", "sm")}Back</button><b style="flex:1">${esc(tilde(s.file))}</b></div>
       <div class="btns"><input id="sematch" type="text" class="grow" value="${esc(s.match || ".")}" placeholder="URL pattern"><select id="semethod"><option value="">ANY</option>${["GET","POST","PUT","PATCH","DELETE"].map((x) => `<option ${s.method === x ? "selected" : ""}>${x}</option>`).join("")}</select></div>
-      <textarea id="sebody" spellcheck="false">${esc(e.content)}</textarea><div class="btns"><button class="b p" id="sesave">Save</button><span class="sub">${esc(e.file)}</span></div>`;
+      <textarea id="sebody" spellcheck="false">${esc(e.content)}</textarea><div class="btns"><button class="b p" id="sesave">Save</button><span class="sub">${esc(tilde(e.file))}</span></div>`;
     $("sback").onclick = () => { editing = null; render(); };
     $("sesave").onclick = async () => {
       const r = await run("script_put", { file:s.file, match:$("sematch").value, method:$("semethod").value, content:$("sebody").value }, "Script saved — hot reloads within 1 s");
@@ -1207,6 +1209,9 @@
       // CSS shifts an https:// scheme out of view (https is the norm); plain http:// stays visible next to the amber strip
       if (/^https:/i.test(t)) { const sch = String(at + 3); if (cell.style.getPropertyValue("--sch") !== sch) cell.style.setProperty("--sch", sch); }
       else if (cell.style.getPropertyValue("--sch")) cell.style.removeProperty("--sch");
+      // a narrow list (13" laptop + tools drawer) shifts the host out too, or every row reads "http://127…"; the full URL is the tooltip
+      const hst = String(end); if (cell.style.getPropertyValue("--hst") !== hst) cell.style.setProperty("--hst", hst);
+      if (cell.title !== t) cell.title = t;
       add(node, at + 3, end, "rv-url-host");
       if (q >= 0) add(node, q, t.length, "rv-url-query");
     });
@@ -1776,7 +1781,7 @@
           <div class="sub">${esc(r.method ? r.method + " " : "")}${esc(pretty(r))} — ${esc(describe(r))}</div></div>
         ${r.action === "map_local" && !(state.rules_outside || []).includes(r.name) ? `<button class="b" data-edit="${i}">Edit</button>` : ""}
         <button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") +
-      `<p class="sub">Saved in ${esc(state.rules_file)} — also editable with <code>${esc(state.product.cli)} rules</code>.</p>`;
+      `<p class="sub">Saved in ${esc(tilde(state.rules_file))} — also editable with <code>${esc(state.product.cli)} rules</code>.</p>`;
     wireRuleRows(m);
   }
   function wireRuleRows(m) {
@@ -1808,7 +1813,7 @@
       <div id="phdr" style="${e.sub === "headers" ? "" : "display:none"}">${headersHTML(e.headers, "hd")}
         <div class="sub">Content-Type defaults to the file type when not set.</div></div>
       <div class="btns"><button class="b p" id="save" ${e.editable ? "" : "disabled"}>Save</button><span class="sub" id="dirty"></span></div>
-      <div class="sub">${esc(e.file)} — the next matching call gets this.</div>`;
+      <div class="sub">${esc(tilde(e.file))} — the next matching call gets this.</div>`;
     const ta = $("body");
     jsonCheck(ta, $("jsonok"));
     ta.oninput = () => { jsonCheck(ta, $("jsonok")); editing.content = ta.value; $("dirty").textContent = "Modified"; };
@@ -1829,7 +1834,8 @@
 
   // ───────────── Paused call sheet (opens by itself) ─────────────
   async function openPaused(id) {
-    try { pausedOpen = await api("paused_get", { id }); pausedOpen.sub = "body"; drawPaused(); }
+    try { pausedOpen = await api("paused_get", { id }); pausedOpen.sub = "body"; drawPaused();
+      if (/NEXT matching call/.test($("toast").textContent)) $("toast").style.display = "none"; }   // it has hit: the hint is stale
     catch (e) { pausedOpen = null; $("pause").classList.remove("open"); toast(e.message, true); }
   }
   function drawPaused() {
