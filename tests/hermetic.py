@@ -23,6 +23,8 @@ def tree_digest(path):
     h = hashlib.sha1()
     n = 0
     for base, dirs, files in os.walk(path):
+        if base == path and os.path.basename(path) == ".rivis" and "logs" in dirs:
+            dirs.remove("logs")      # the user's own running Rivis appends here during a run; anything else still counts
         dirs.sort()
         for name in sorted(files + dirs):
             p = os.path.join(base, name)
