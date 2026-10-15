@@ -525,7 +525,9 @@ switch ($Command) {
               "--set","web_host=127.0.0.1","--set","web_port=$WebPort","--set","web_open_browser=false",
               "-s",(Join-Path $PSScriptRoot "addons\proxy_auth.py"),
               "--set","proxy_auth_token_file=$TokenPath","--set","proxy_bootstrap_file=$BootstrapPath",
-              "--set","confdir=$ConfDir","--set","connection_strategy=lazy","-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_retention.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_operability.py"),
+              "--set","confdir=$ConfDir","--set","connection_strategy=lazy",
+              "--set",("http2=" + $(if ((Config-Env "HTTP2" "0") -eq "1") { "true" } else { "false" })),
+              "-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_retention.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_operability.py"),
               "--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project","--set","proxy_max_flows=$MaxFlows","--set","proxy_log_dir=$(Join-Path $StateRoot 'logs')")
     if ($Insecure) { $margs += @("--set","ssl_insecure=true"); Info "TLS: upstream verification OFF" }
     if ($ProjectOnly -and $ProjectConfig.hosts) {

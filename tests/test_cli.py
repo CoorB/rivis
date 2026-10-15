@@ -514,6 +514,7 @@ class StartArgv(CliBase):
         self.assertIn("regular@%s" % self.env["RIVIS_PORT"], line)
         self.assertIn("web_port=%s" % self.env["RIVIS_WEB_PORT"], line)
         self.assertIn("confdir=" + self.env["RIVIS_CONFDIR"], line)
+        self.assertIn("http2=false", line)
         self.assertNotIn("0.0.0.0", line)
         self.assertNotIn("local:", line)                       # --no-ios: no local capture
         self.assertNotIn("ssl_insecure", line)
@@ -522,6 +523,9 @@ class StartArgv(CliBase):
         self.assertIn("proxy_auth_token_file=" + os.path.join(self.state, "web-token"), line)
         self.assertNotIn(" x", line)
         self.assertEqual(self.suite.shim_log("open.log"), "")  # --no-open really does not open anything
+
+        line, _ = self.start_argv("--no-ios", RIVIS_HTTP2="1")
+        self.assertIn("http2=true", line)
 
     def test_ios_local_capture_is_scoped_to_simulator_processes(self):
         line, _ = self.start_argv()
