@@ -835,7 +835,7 @@ cmd_bug_report() {
   done
   /usr/bin/python3 -I "$SCRIPT_DIR/addons/bug_report.py" \
     --state-root "$STATE_ROOT" --project "$PROJECT" --rules "$RULES" --confdir "$CONFDIR" \
-    --port "$PORT" --web-port "$WEB_PORT" --script-dir "$PROJECT_STATE/scripts" --adb "$ADB" "${out[@]}"
+    --port "$PORT" --web-port "$WEB_PORT" --script-dir "$PROJECT_STATE/scripts" --adb "$ADB" ${out[@]+"${out[@]}"}
 }
 
 cmd_cert() {

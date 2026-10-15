@@ -67,6 +67,16 @@ class Help(CliBase):
         self.assertIn("version 3.2", r.stdout)       # the macOS system bash the installer's users have
 
 
+class BugReport(CliBase):
+    def test_runs_without_options_under_bash_3_2(self):
+        # bash 3.2 + set -u: an empty "${out[@]}" was 'unbound variable' — the pilot kit tells testers to run this bare
+        r = self.ok("bug-report")
+        self.assertNotIn("unbound variable", r.stderr)
+        made = os.listdir(os.path.join(self.state, "bug-reports"))
+        self.assertEqual(len(made), 1, made)
+        self.assertTrue(made[0].startswith("rivis-bug-report-") and made[0].endswith(".zip"), made)
+
+
 class Projects(CliBase):
     def test_list_shows_shipped_profiles_and_marks_default(self):
         out = self.ok("projects", "list").stdout
