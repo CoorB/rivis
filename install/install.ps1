@@ -130,7 +130,20 @@ $Reuse = $null
 $cands = @((Join-Path $MitmDir "mitmdump.exe"))
 $onPath = Get-Command mitmdump -ErrorAction SilentlyContinue
 if ($onPath) { $cands += $onPath.Source }
-foreach ($c in $cands) { if ((Test-Path $c) -and ((Get-MitmVersion $c) -eq $MitmVersion)) { $Reuse = $c; break } }
+# F-10: our own copy was hash-verified at install; any other mitmdump.exe needs a valid Authenticode signature
+# whose signer matches MITMPROXY_WINDOWS_SIGNER in mirror.conf (empty = never reuse an external copy).
+$Signer = Get-Conf "MITMPROXY_WINDOWS_SIGNER"
+function Test-MitmSigned([string]$exe) {
+  if (-not $Signer) { return $false }
+  try { $sig = Get-AuthenticodeSignature -FilePath $exe } catch { return $false }
+  return ($sig.Status -eq "Valid") -and ($sig.SignerCertificate.Subject -like "*$Signer*")
+}
+foreach ($c in $cands) {
+  if (-not (Test-Path $c) -or (Get-MitmVersion $c) -ne $MitmVersion) { continue }
+  $own = $c.StartsWith($MitmDir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+  if (-not $own -and -not (Test-MitmSigned $c)) { Info "not reusing ${c}: not verifiably signed by mitmproxy"; continue }
+  $Reuse = $c; break
+}
 
 Info "$Name ($Cli) installer - tool $ToolVersion, mitmproxy pinned $MitmVersion"
 if ($DryRun) { Info "DRY RUN - nothing below will be changed" }
@@ -190,7 +203,7 @@ try {
   if ($Reuse) {
     $MitmBin = Split-Path -Parent $Reuse
     $MitmByUs = $Reuse.StartsWith($MitmDir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
-    if (-not $MitmByUs) { Warn "reusing external mitmproxy based on its reported version; its binary hash is not covered by the archive pin" }
+    if (-not $MitmByUs) { Info "reusing external mitmproxy: Authenticode signature verified ($Signer)" }
     Info "reusing mitmproxy $MitmVersion at $MitmBin"
   }
   else {
