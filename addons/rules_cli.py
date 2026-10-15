@@ -20,7 +20,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
-from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PRODUCT, breakpoints, confined_path, forbidden_file,
+from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PRODUCT, SAFE_NAME, breakpoints, confined_path, forbidden_file,
                            set_trusted_file, trusted_files, user_regex)
 
 ACTIONS = ACTION_REQUIREMENTS
@@ -177,7 +177,9 @@ def rules_cmd(path, args):
         save(path, cfg)
         print("removed " + name)
     elif cmd == "add":
-        if any(r.get("name") == name for r in cfg.get("rules", [])):
+        if not SAFE_NAME.fullmatch(name) or name.startswith("."):      # F-17: same rule as the panel
+            die("rule name '%s': letters, digits, . _ - only (max 64, not starting with .)" % name)
+        if any(r.get("name", "").lower() == name.lower() for r in cfg.get("rules", [])):
             die("rule '%s' exists — rm it first or pick another name" % name)
         r = {"name": name, "enabled": True}
         for kv in args[2:]:

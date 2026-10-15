@@ -781,5 +781,22 @@ class CaRemoval(CliBase):
         self.assertEqual(os.stat(hist).st_mode & 0o777, 0o600)
 
 
+
+class CliNames(CliBase):
+    """F-17: names and UDIDs are validated before any file is touched."""
+
+    def test_bad_names_and_udids_are_refused_up_front(self):
+        for bad in ("../x", "a/b", ".hidden", "x" * 65, "a b"):
+            self.fail("rules", "add", bad, "match=/x", "action=block", msg="letters, digits")
+            self.fail("mock", bad, "/x", msg="letters, digits")
+        for bad in ("../../etc", "11111111-2222-3333-4444-55555555555/../x", "abc"):
+            self.fail("ios", "off", "--udid", bad, msg="simulator UDID")
+        self.assertFalse(os.path.exists(os.path.join(self.state, "projects", "x.json")))
+
+    def test_rule_names_are_unique_ignoring_case(self):
+        self.ok("rules", "add", "Login", "match=/a", "action=block")
+        self.fail("rules", "add", "login", "match=/b", "action=block", msg="exists")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
