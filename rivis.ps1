@@ -123,6 +123,20 @@ function Get-CaHistoryHashes {
   return @(Get-Content $CaHistoryPath | ForEach-Object { ($_ -split '\s+')[1] } | Where-Object { $_ })
 }
 
+function Protect-StateRoot {
+  # F-24: on shared Windows machines (RDS, terminal servers) the profile ACL may let others read the state dir.
+  # Owner-only, inherited by everything below it. Done once; a marker avoids re-running icacls on every command.
+  $marker = Join-Path $StateRoot ".acl-v1"
+  if (Test-Path $marker) { return }
+  if (($PSVersionTable.PSEdition -eq "Desktop") -or $IsWindows) {
+    & icacls.exe $StateRoot /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" /T /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Host "WARNING: could not restrict $StateRoot to $($env:USERNAME) (icacls exit $LASTEXITCODE)"; return }
+  } else {
+    & chmod 700 $StateRoot
+  }
+  [IO.File]::WriteAllText($marker, "", $Utf8NoBom)
+}
+
 function New-UiBootstrap {
   # one-time login link (addons\proxy_panel.py Bootstrap): the nonce is deleted on first use
   $bytes = New-Object byte[] 16
@@ -179,6 +193,7 @@ function Ensure-Rules {
   foreach ($dir in @($StateRoot,$ProjectState,(Join-Path $ProjectState "mocks"),(Join-Path $ProjectState "collections"),(Join-Path $ProjectState "sessions"),(Join-Path $ProjectState "scripts"),(Join-Path $StateRoot "profiles"))) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
   }
+  Protect-StateRoot
   if (Test-Path $RulesPath) { return }
   $rulesDir = Split-Path -Parent $RulesPath
   if (-not $rulesDir) { $rulesDir = "." }
