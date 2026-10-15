@@ -1008,7 +1008,11 @@
       : emptyState("sess", "No saved sessions yet", "Name the capture above and <b>Save session</b>. Open brings it back into the list; HAR exports it.")}
       ${harSecretsBox("shsec")}
       <p class="sub">Stored in ${esc(state.project_state)}/sessions ${info("Open adds the saved calls to the list (you can choose to replace it first). Per-call notes and bookmarks: use the Comment tab and the Mark button on a call — they are saved with the session.")}</p>`;
-    $("ssave").onclick = () => run("sess_save", { name: $("sn").value.trim(), note: $("snote").value, visible_only: $("svis").checked }, (x) => "Saved " + x.count + " calls");
+    $("ssave").onclick = () => {
+      const name = $("sn").value.trim(), overwrite = ss.some((x) => x.name === name);
+      if (overwrite && !confirm("A session named '" + name + "' already exists. Replace it?\n\nThe earlier capture will be lost.")) return;
+      run("sess_save", { name, note: $("snote").value, visible_only: $("svis").checked, overwrite }, (x) => "Saved " + x.count + " calls");
+    };
     m.querySelectorAll("[data-sload]").forEach((b) => (b.onclick = () => {
       const x = ss[b.dataset.sload];
       // two plain questions, so Cancel can always mean "do nothing" (it used to mean "add to the list")
@@ -1734,7 +1738,9 @@
     };
     const saveAs = async (name) => {
       if (!name) return;
-      const r = await run("compose_save", { name, spec: specOf() }, "Saved " + name);
+      const exists = names.includes(name), current = name === draft.name;
+      if (exists && !current && !confirm("A saved request named '" + name + "' already exists. Replace it?")) return;
+      const r = await run("compose_save", { name, spec: specOf(), overwrite: exists }, "Saved " + name);
       if (r) { draft.name = name; render(); }
     };
     $("csave").onclick = () => (draft.name ? saveAs(draft.name) : saveAs(prompt("Save as (letters, digits . _ -):", "")));

@@ -1392,7 +1392,7 @@ class ProxyPanel:
             except Exception as e:   # flow construction depends on mitmproxy internals — report, don't 500
                 raise PanelError("cannot send: %s: %s" % (type(e).__name__, e))
         elif op == "compose_save":
-            self.composer().save(a.get("name"), self._clean_spec(a.get("spec")))
+            self.composer().save(a.get("name"), self._clean_spec(a.get("spec")), overwrite=a.get("overwrite") is True)
             return {"name": a["name"]}
         elif op == "compose_load":
             return {"spec": self.composer().load(a.get("name"))}
@@ -1423,6 +1423,8 @@ class ProxyPanel:
             from mitmproxy import io as mio
             name = (a.get("name") or "").strip()
             fpath, mpath = self.sess_paths(name)
+            if (os.path.exists(fpath) or os.path.exists(mpath)) and a.get("overwrite") is not True:
+                raise PanelError("a session named '%s' already exists" % name)
             flows = [f for f in self.all_flows() if not getattr(f, "intercepted", False)]
             if a.get("visible_only"):
                 vis = {f.id for f in ctx.master.view}
