@@ -30,7 +30,7 @@ except ImportError:  # Pure helpers are intentionally importable by static tests
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
-from proxy_common import PRODUCT, SAFE_NAME, STATE_ROOT, confined_path, project_state
+from proxy_common import PRODUCT, SAFE_NAME, STATE_ROOT, confined_path, project_state, user_regex
 
 JWT_RE = re.compile(r"(?<![A-Za-z0-9_-])([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)(?![A-Za-z0-9_-])")
 GRAPHQL_OP_RE = re.compile(
@@ -427,7 +427,7 @@ class ProxyScripts:
                         modules[item["file"]] = namespace
                     else:
                         with open(item["path"], encoding="utf-8") as fh: item["code"] = fh.read()
-                    item["_re"] = re.compile(item.get("match") or ".")
+                    item["_re"] = user_regex(item.get("match") or ".")
                     scripts.append(item)
                     self.last_errors.pop(item["file"], None)
                 except BaseException as exc:

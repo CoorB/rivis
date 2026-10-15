@@ -56,7 +56,7 @@ if HERE not in sys.path:
 import proxy_common
 importlib.reload(proxy_common)
 from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PROFILE_VALUES, STATE_ROOT, breakpoints,
-                          rule_file_path, tls_config, tls_options)
+                          rule_file_path, tls_config, tls_options, user_regex)
 
 # Traffic profiles: latency ms, jitter ms, down kbps, up kbps, loss %, extra response delay ms.
 # The first four named ones are FRTMProxy's built-ins, same numbers, so teams see the same thing.
@@ -152,11 +152,11 @@ def _compile_rule(source, state_dir, fallback_name=None):
     missing = [key for key in ACTION_REQUIREMENTS[action] if key not in rule]
     if missing:
         raise ValueError(f"action '{action}' needs: {', '.join(missing)}")
-    rule["_re"] = re.compile(rule.get("match", "."))
+    rule["_re"] = user_regex(rule.get("match", "."))
     if rule.get("method") is not None and not isinstance(rule["method"], str):
         raise TypeError("method must be text")
     if action == "map_remote":
-        rule["_replace"] = re.compile(rule["replace"])
+        rule["_replace"] = user_regex(rule["replace"])
         if not isinstance(rule["with"], str):
             raise TypeError("map_remote with must be text")
     elif action == "respond":
@@ -275,7 +275,7 @@ class ProxyRules:
             bp_filter = _bp_filter(breakpoints(cfg))
             throttle = _parse_throttle(cfg.get("throttle"), cfg.get("manual"))
             tre = cfg.get("throttle_match", "")
-            throttle_re = re.compile(tre) if tre else None
+            throttle_re = user_regex(tre) if tre else None
             # explicit loss wins; otherwise the profile's own loss
             loss = float(cfg.get("loss", 0) or 0) or (throttle[4] if throttle else 0)
             tls = tls_config(cfg)
