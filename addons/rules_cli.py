@@ -32,7 +32,10 @@ def die(msg):
 
 def load(path):
     with open(path) as f:
-        return migrate_rules(json.load(f))
+        try:
+            return migrate_rules(json.load(f))
+        except ValueError as e:              # a hand edit gone wrong: say where, never a traceback
+            die("%s is not valid JSON: %s — fix it (rivis rules edit) or restore it" % (path, e))
 
 
 def save(path, cfg):
@@ -209,7 +212,11 @@ def throttle_cmd(path, args):
     for kv in args[1:]:
         k, _, v = kv.partition("=")
         if k == "match":
-            user_regex(v)
+            v = v.strip()                                 # a pasted " /x " must not silently match nothing
+            try:
+                user_regex(v)
+            except re.error as e:
+                die("throttle: bad regex in match: %s" % e)
             cfg["throttle_match"] = v
         elif k == "loss":
             cfg["loss"] = throttle_number(v, k)

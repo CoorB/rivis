@@ -83,8 +83,8 @@ case "$1" in
 esac
 exec /usr/sbin/networksetup "$@"
 ''',
-    "mitmweb": '#!/bin/sh\necho "mitmweb $@" >> "$SHIM_LOG/mitm-argv.log"\n[ -n "${SHIM_DRYRUN:-}" ] && exit 0\nexec %s "$@"\n' % REAL_MITMWEB,
-    "mitmdump": '#!/bin/sh\necho "mitmdump $@" >> "$SHIM_LOG/mitm-argv.log"\n[ -n "${SHIM_DRYRUN:-}" ] && exit 0\nexec %s "$@"\n' % REAL_MITMDUMP,
+    "mitmweb": "#!/bin/sh\nprintf '%%s\\n' \"mitmweb $*\" >> \"$SHIM_LOG/mitm-argv.log\"\n[ -n \"${SHIM_DRYRUN:-}\" ] && exit 0\nexec %s \"$@\"\n" % REAL_MITMWEB,
+    "mitmdump": "#!/bin/sh\nprintf '%%s\\n' \"mitmdump $*\" >> \"$SHIM_LOG/mitm-argv.log\"\n[ -n \"${SHIM_DRYRUN:-}\" ] && exit 0\nexec %s \"$@\"\n" % REAL_MITMDUMP,
 }
 
 

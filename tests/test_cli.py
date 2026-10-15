@@ -37,7 +37,7 @@ class CliBase(unittest.TestCase):
         self.assertEqual(r.returncode, 0, "rivis %s -> rc=%s\nout=%s\nerr=%s" % (" ".join(args), r.returncode, r.stdout, r.stderr))
         return r
 
-    def fail(self, *args, msg=None, **kw):
+    def refused(self, *args, msg=None, **kw):
         r = self.cli(*args, **kw)
         self.assertNotEqual(r.returncode, 0, "rivis %s unexpectedly succeeded: %s" % (" ".join(args), r.stdout))
         if msg:
@@ -60,7 +60,7 @@ class Help(CliBase):
         self.assertIn("rivis", out)
 
     def test_unknown_command(self):
-        self.fail("frobnicate", msg="unknown command")
+        self.refused("frobnicate", msg="unknown command")
 
     def test_works_under_bash_3_2(self):
         r = self.suite.run(["/bin/bash", "--version"], env=self.env)
@@ -132,13 +132,13 @@ class Projects(CliBase):
         self.assertFalse(os.path.exists(os.path.join(self.home, "x")))
 
     def test_unknown_project(self):
-        self.fail("--project", "nope", "status", msg="unknown project")
-        self.fail("projects", "use", "nope", msg="unknown project")
-        self.fail("projects", "show", "nope", msg="unknown project")
+        self.refused("--project", "nope", "status", msg="unknown project")
+        self.refused("projects", "use", "nope", msg="unknown project")
+        self.refused("projects", "show", "nope", msg="unknown project")
 
     def test_flag_without_value(self):
-        self.fail("status", "--project", msg="needs an ID")
-        self.fail("status", "--project=", msg="needs an ID")
+        self.refused("status", "--project", msg="needs an ID")
+        self.refused("status", "--project=", msg="needs an ID")
 
     def test_bad_or_stale_current_project_falls_back_with_a_warning(self):
         os.makedirs(self.state)
@@ -166,11 +166,11 @@ class Projects(CliBase):
         self.assertEqual(mode(pdir), 0o700)
         self.assertIn("created user profile", r.stdout)
         self.assertRegex(self.ok("projects", "list").stdout, r"(?m)^  bank-a\s+Bank A")
-        self.fail("projects", "new", "bank-a", "--label", "x", "--hosts", "y", msg="already exists")
-        self.fail("projects", "new", "p2", "--hosts", "y", msg="--label is required")
-        self.fail("projects", "new", "p2", "--label", "x", msg="--hosts is required")
-        self.fail("projects", "new", "p2", "--label", "x", "--hosts", "(unclosed", msg="invalid hosts regex")
-        self.fail("projects", "new", "p2", "--label", "x", "--hosts", "y", "--bogus", msg="unknown option")
+        self.refused("projects", "new", "bank-a", "--label", "x", "--hosts", "y", msg="already exists")
+        self.refused("projects", "new", "p2", "--hosts", "y", msg="--label is required")
+        self.refused("projects", "new", "p2", "--label", "x", msg="--hosts is required")
+        self.refused("projects", "new", "p2", "--label", "x", "--hosts", "(unclosed", msg="invalid hosts regex")
+        self.refused("projects", "new", "p2", "--label", "x", "--hosts", "y", "--bogus", msg="unknown option")
         self.assertFalse(os.path.exists(os.path.join(self.state, "profiles", "p2")))
         self.assertEqual([x for x in os.listdir(os.path.join(self.state, "profiles")) if x.startswith(".")], [])   # no temp dirs left
 
@@ -235,36 +235,36 @@ class Rules(CliBase):
         self.assertEqual(rules["r-block"]["method"], "POST")
 
     def test_required_fields_and_bad_input_are_refused(self):
-        self.fail("rules", "add", "a", "action=map_local", msg="needs: file")
-        self.fail("rules", "add", "a", "action=status", msg="needs: status")
-        self.fail("rules", "add", "a", "action=json_patch", msg="needs: set")
-        self.fail("rules", "add", "a", "action=delay", msg="needs: ms")
-        self.fail("rules", "add", "a", "action=set_header", msg="needs: header")
-        self.fail("rules", "add", "a", "action=map_remote", "replace=x", msg="needs: with")
-        self.fail("rules", "add", "a", "action=explode", msg="action must be one of")
-        self.fail("rules", "add", "a", msg="action must be one of")
-        self.fail("rules", "add", "a", "action=block", "match=(unclosed", msg="bad regex")
+        self.refused("rules", "add", "a", "action=map_local", msg="needs: file")
+        self.refused("rules", "add", "a", "action=status", msg="needs: status")
+        self.refused("rules", "add", "a", "action=json_patch", msg="needs: set")
+        self.refused("rules", "add", "a", "action=delay", msg="needs: ms")
+        self.refused("rules", "add", "a", "action=set_header", msg="needs: header")
+        self.refused("rules", "add", "a", "action=map_remote", "replace=x", msg="needs: with")
+        self.refused("rules", "add", "a", "action=explode", msg="action must be one of")
+        self.refused("rules", "add", "a", msg="action must be one of")
+        self.refused("rules", "add", "a", "action=block", "match=(unclosed", msg="bad regex")
         for status in ("0", "99", "600", "99999", "true", "200.5"):
-            r = self.fail("rules", "add", "s" + status.replace(".", "-"), "action=status", "status=" + status,
+            r = self.refused("rules", "add", "s" + status.replace(".", "-"), "action=status", "status=" + status,
                           msg="status must be an integer from 100 to 599")
             self.assertNotIn("Traceback", r.stderr)
-        self.fail("rules", "add", "a", "action=map_local", "file=/no/such/file", msg="file not found")
-        self.fail("rules", "add", "a", "action=block", "noequals", msg="expected key=value")
+        self.refused("rules", "add", "a", "action=map_local", "file=/no/such/file", msg="file not found")
+        self.refused("rules", "add", "a", "action=block", "noequals", msg="expected key=value")
         self.assertEqual(self.cfg()["rules"], [])
         self.ok("rules", "add", "a", "action=block")
-        self.fail("rules", "add", "a", "action=block", msg="exists")
-        self.fail("rules", "on", "missing", msg="no rule named")
-        self.fail("rules", "rm", "missing", msg="no rule named")
-        self.fail("rules", "show", "missing", msg="no rule named")
-        self.fail("rules", "frob", "a", msg="unknown rules command")
-        self.fail("rules", "on", msg="usage")
+        self.refused("rules", "add", "a", "action=block", msg="exists")
+        self.refused("rules", "on", "missing", msg="no rule named")
+        self.refused("rules", "rm", "missing", msg="no rule named")
+        self.refused("rules", "show", "missing", msg="no rule named")
+        self.refused("rules", "frob", "a", msg="unknown rules command")
+        self.refused("rules", "on", msg="usage")
 
     def test_rules_edit_uses_editor_and_detects_broken_json(self):
         self.ok("rules", "list")
         self.ok("rules", "edit")                    # EDITOR=/usr/bin/true: file unchanged, still valid
         with open(self.rules_file(), "w") as fh:
             fh.write("{ not json")
-        r = self.fail("rules", "list")              # reading a corrupt file must fail loudly, not silently reset it
+        r = self.refused("rules", "list")              # reading a corrupt file must fail loudly, not silently reset it
         self.assertIn("not valid JSON", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
         self.assertEqual(open(self.rules_file()).read(), "{ not json")
@@ -310,9 +310,9 @@ class Throttle(CliBase):
         self.assertIn("throttle: lte", self.ok("throttle").stdout)
 
     def test_invalid(self):
-        self.fail("throttle", "warp9", msg="throttle:")
-        self.fail("throttle", "100ms/", msg="throttle:")
-        self.fail("throttle", "lte", "bogus=1", msg="throttle options")
+        self.refused("throttle", "warp9", msg="throttle:")
+        self.refused("throttle", "100ms/", msg="throttle:")
+        self.refused("throttle", "lte", "bogus=1", msg="throttle options")
         r = self.cli("throttle", "lte", "match=(unclosed")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("bad regex", r.stderr)
@@ -366,8 +366,8 @@ class Breakpoints(CliBase):
         self.assertEqual(len(set(names)), 2)
 
     def test_invalid(self):
-        self.fail("breakpoint", "(unclosed", msg="bad regex")
-        self.fail("breakpoint", "/x", "--frob", msg="breakpoint options")
+        self.refused("breakpoint", "(unclosed", msg="bad regex")
+        self.refused("breakpoint", "/x", "--frob", msg="breakpoint options")
         self.assertEqual(self.cfg()["breakpoints"], [])
 
     def test_legacy_singleton_is_migrated(self):
@@ -407,21 +407,21 @@ class Scripts(CliBase):
         self.assertEqual((item["match"], item["method"], item["lang"], item["file"]), ("/api/", "POST", "py", "m.py"))
 
     def test_invalid(self):
-        self.fail("scripts", "new", "../evil", "--lang", "py", msg="bad script name")
-        self.fail("scripts", "new", "ok", "--lang", "rb")
-        bad_rx = self.fail("scripts", "new", "ok", "--lang", "py", "--match", "(x", msg="bad regex")
+        self.refused("scripts", "new", "../evil", "--lang", "py", msg="bad script name")
+        self.refused("scripts", "new", "ok", "--lang", "rb")
+        bad_rx = self.refused("scripts", "new", "ok", "--lang", "py", "--match", "(x", msg="bad regex")
         self.assertNotIn("Traceback", bad_rx.stderr)
         self.ok("scripts", "new", "dup", "--lang", "py")
-        self.fail("scripts", "new", "dup", "--lang", "py", msg="already exists")
-        self.fail("scripts", "on", "ghost", msg="no script named")
-        self.fail("scripts", "frob", "dup", msg="unknown scripts command")
+        self.refused("scripts", "new", "dup", "--lang", "py", msg="already exists")
+        self.refused("scripts", "on", "ghost", msg="no script named")
+        self.refused("scripts", "frob", "dup", msg="unknown scripts command")
         self.assertFalse(os.path.exists(os.path.join(self.home, "evil.py")))
 
     def test_edit_runs_the_editor(self):
         self.ok("scripts", "new", "ed", "--lang", "js")
         self.ok("scripts", "edit", "ed")          # EDITOR=/usr/bin/true
         env = dict(self.env, EDITOR="/usr/bin/false")
-        self.fail("scripts", "edit", "ed", env=env)
+        self.refused("scripts", "edit", "ed", env=env)
 
 
 class Tls(CliBase):
@@ -454,8 +454,8 @@ class Tls(CliBase):
         for bad in ("http://x.test", "a b", "a/b", ".x.test", "x.test:99999", "x.test:0", ""):
             r = self.cli("tls", "allow", "add", bad)
             self.assertNotEqual(r.returncode, 0, repr(bad))
-        self.fail("tls", "mode", "sideways", msg="tls mode")
-        self.fail("tls", "bogus")
+        self.refused("tls", "mode", "sideways", msg="tls mode")
+        self.refused("tls", "bogus")
         self.assertEqual(self.cfg()["tls"]["allow"], [])
 
 
@@ -463,7 +463,7 @@ class Compose(CliBase):
     def test_list_empty_and_send_errors_offline(self):
         self.assertIn("no saved requests", self.ok("compose", "list").stdout)
         self.assertIn("no saved requests", self.ok("compose").stdout)
-        self.fail("compose", "send", "ghost", msg="no saved request")
+        self.refused("compose", "send", "ghost", msg="no saved request")
         d = os.path.join(self.state, "projects", "default", "composer")
         os.makedirs(d)
         json.dump({"method": "POST", "url": "http://x.test/a"}, open(os.path.join(d, "ping.json"), "w"))
@@ -471,11 +471,11 @@ class Compose(CliBase):
         out = self.ok("compose", "list").stdout
         self.assertRegex(out, r"ping\s+POST\s+http://x\.test/a")
         self.assertIn("variables: edge", out)
-        r = self.fail("compose", "send", "ping")            # exists, but no token file / nothing listening
+        r = self.refused("compose", "send", "ping")            # exists, but no token file / nothing listening
         self.assertRegex(r.stderr, r"no token file|cannot reach")
-        self.fail("compose", "send", "../ping")
-        self.fail("compose", "frob")
-        self.fail("compose", "send")
+        self.refused("compose", "send", "../ping")
+        self.refused("compose", "frob")
+        self.refused("compose", "send")
 
 
 class NetReset(CliBase):
@@ -549,7 +549,7 @@ class StartArgv(CliBase):
     def test_capture_filter_can_never_mean_the_whole_mac(self):
         """F-13: an empty spec captures every process; '!x' captures everything except x."""
         for bad in ("", "!CoreSimulator", "Core*", "a,CoreSimulator", "x;y", "CoreSimulator,", ",,"):
-            r = self.fail("start", "--no-open", "--ios-filter", bad)
+            r = self.refused("start", "--no-open", "--ios-filter", bad)
             self.assertRegex(r.stderr, r"--ios-filter (is empty|'.*')", bad)   # refused by the filter check itself
         line, _ = self.start_argv("--ios-filter", "CoreSimulator,MyApp")
         self.assertIn("local:CoreSimulator,MyApp", line)
@@ -586,7 +586,7 @@ class StartArgv(CliBase):
             s.close()
 
     def test_unknown_option(self):
-        self.fail("start", "--bogus", msg="unknown option")
+        self.refused("start", "--bogus", msg="unknown option")
 
     def test_never_touches_the_system_proxy(self):
         self.start_argv("--no-ios")
@@ -608,15 +608,15 @@ class StatusUiStop(CliBase):
         self.assertIn("TLS decryption: all (every host)", out)
 
     def test_ui_needs_a_running_proxy(self):
-        self.fail("ui", msg="not running")
+        self.refused("ui", msg="not running")
         self.assertEqual(self.suite.shim_log("open.log"), "")
 
     def test_stop_with_nothing_running_is_harmless(self):
         self.assertIn("nothing to stop", self.ok("stop").stdout)
 
     def test_mock_needs_a_running_proxy(self):
-        self.fail("mock", "x", "/y", msg="not running")
-        self.fail("mock", "only-one-arg", msg="usage")
+        self.refused("mock", "x", "/y", msg="not running")
+        self.refused("mock", "only-one-arg", msg="usage")
 
     def test_help_on_any_command_prints_help_and_changes_nothing(self):
         """QA TXT-03/04: `stop --help` stopped the proxy, `breakpoint --help` added a breakpoint named 'help'."""
@@ -646,11 +646,11 @@ class StatusUiStop(CliBase):
         wait_for(lambda: not harness.port_open(web), 15, 0.3, "stopped")
 
     def test_android_and_ios_without_devices(self):
-        r = self.fail("android", "on")
+        r = self.refused("android", "on")
         self.assertIn("adb not found", r.stderr)
-        r = self.fail("ios", "frob")
+        r = self.refused("ios", "frob")
         self.assertIn("usage", r.stderr + r.stdout)
-        r = self.fail("android", "frob")
+        r = self.refused("android", "frob")
 
 
 class CertAndCa(CliBase):
@@ -787,8 +787,8 @@ class TrustedFiles(CliBase):
             os.makedirs(os.path.dirname(p), exist_ok=True)
             with open(p, "w") as fh:
                 fh.write("secret")
-            self.fail("rules", "allow-file", p, msg="refusing")
-            self.fail("rules", "add", "k" + str(abs(hash(rel)) % 1000), "match=/x", "action=map_local", "file=" + p,
+            self.refused("rules", "allow-file", p, msg="refusing")
+            self.refused("rules", "add", "k" + str(abs(hash(rel)) % 1000), "match=/x", "action=map_local", "file=" + p,
                       msg="refusing")
         self.assertEqual(self.trust_list(), [])
 
@@ -809,7 +809,7 @@ class CaRemoval(CliBase):
         with open(booted, "w") as fh:
             fh.write("".join("    iPhone %d (%s) (Booted)\n" % (i, u) for i, u in enumerate(udids)))
         try:
-            r = self.fail("ios", "on", msg="several simulators booted")
+            r = self.refused("ios", "on", msg="several simulators booted")
             self.assertIn("ios on --all", r.stderr)
             out = self.ok("ios", "on", "--all").stdout
             for u in udids:
@@ -817,7 +817,7 @@ class CaRemoval(CliBase):
             log = self.suite.shim_log("xcrun.log")
             for u in udids:
                 self.assertIn("simctl keychain %s add-root-cert" % u, log)
-            self.fail("ios", "on", "--all", "--udid", self.UDID, msg="not both")
+            self.refused("ios", "on", "--all", "--udid", self.UDID, msg="not both")
         finally:
             os.remove(booted)
 
@@ -859,15 +859,15 @@ class CliNames(CliBase):
 
     def test_bad_names_and_udids_are_refused_up_front(self):
         for bad in ("../x", "a/b", ".hidden", "x" * 65, "a b"):
-            self.fail("rules", "add", bad, "match=/x", "action=block", msg="letters, digits")
-            self.fail("mock", bad, "/x", msg="letters, digits")
+            self.refused("rules", "add", bad, "match=/x", "action=block", msg="letters, digits")
+            self.refused("mock", bad, "/x", msg="letters, digits")
         for bad in ("../../etc", "11111111-2222-3333-4444-55555555555/../x", "abc"):
-            self.fail("ios", "off", "--udid", bad, msg="simulator UDID")
+            self.refused("ios", "off", "--udid", bad, msg="simulator UDID")
         self.assertFalse(os.path.exists(os.path.join(self.state, "projects", "x.json")))
 
     def test_rule_names_are_unique_ignoring_case(self):
         self.ok("rules", "add", "Login", "match=/a", "action=block")
-        self.fail("rules", "add", "login", "match=/b", "action=block", msg="exists")
+        self.refused("rules", "add", "login", "match=/b", "action=block", msg="exists")
 
 
 if __name__ == "__main__":

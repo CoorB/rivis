@@ -77,7 +77,10 @@ def main(argv):
         p.add_argument("--template", choices=tuple(TEMPLATES["py"]), default="header")
         a = p.parse_args(rest)
         if not SAFE_NAME.fullmatch(a.name): raise SystemExit("bad script name")
-        user_regex(a.match)
+        try:
+            user_regex(a.match)
+        except re.error as e:
+            raise SystemExit("bad regex in --match: %s" % e)
         filename = f"{a.name}.{a.lang}"; path = os.path.join(script_dir, filename)
         if any(x.get("name") == a.name or x.get("file") == filename for x in cfg["scripts"]) or os.path.exists(path):
             raise SystemExit("script already exists")

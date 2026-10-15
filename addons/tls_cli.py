@@ -61,7 +61,7 @@ def main(argv):
             tls_update(cfg, add=pairs if args[1] == "add" else (), remove=pairs if args[1] == "rm" else ())
             message = "%s %s: %s" % (cmd, "added" if args[1] == "add" else "removed", args[2].lower())
         else:
-            die(__doc__)
+            die("usage: tls list | tls mode [all|allow|ignore] | tls allow|ignore add|rm HOST[:PORT]")
     except (OSError, ValueError) as e:
         die(str(e))
     atomic_json(path, cfg)
