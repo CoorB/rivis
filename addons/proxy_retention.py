@@ -58,7 +58,10 @@ class ProxyRetention:
                       and self._completed(f)]
         candidates.sort(key=lambda f: (getattr(getattr(f, "request", None), "timestamp_start", None)
                                        or getattr(f, "timestamp_start", None) or 0, f.id))
-        victims = candidates[:excess]
+        # Drop toward a 90% low-water mark (at most 500 extra) so an all-day session does not
+        # sort the 5k-flow view for every single response after reaching the cap.
+        batch = min(500, limit // 10)
+        victims = candidates[:excess + batch]
         if victims:
             ctx.master.view.remove(victims)
             self.trimmed += len(victims)

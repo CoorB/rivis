@@ -21,11 +21,18 @@ class Retention(LiveCase):
         self.assertEqual(first.status, 200)
         oldest = self.inst.flow_for("oldest=1")["id"]
         flows = self.fill(35)
-        self.assertEqual(len(flows), 25)
+        self.assertGreaterEqual(len(flows), 23)
+        self.assertLessEqual(len(flows), 25)
         self.assertNotIn(oldest, {f["id"] for f in flows})
         state = self.panel.state()
         self.assertEqual(state["retention"]["limit"], 25)
         self.assertGreaterEqual(state["retention"]["trimmed"], 11)
+
+    def test_batch_trim_uses_a_low_water_mark_without_exceeding_the_cap(self):
+        self.fill(26, "batch")
+        count = len(self.inst.flows())
+        self.assertGreaterEqual(count, 23)  # 25 - floor(10%)
+        self.assertLessEqual(count, 25)
 
     def test_selected_call_is_never_trimmed(self):
         self.fetch("/echo?selected=1")
