@@ -160,6 +160,19 @@ class UiSmoke(LiveCase):
         shot(page, "devices")
         self.assertEqual(self.errors, [])
 
+    def test_the_empty_list_offers_device_setup(self):
+        self.page.add_init_script("try { localStorage.setItem('rivis-welcome', 'done') } catch (e) {}")
+        self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))
+        self.page.wait_for_selector("#fab", timeout=20000)
+        btn = self.page.locator("#proxy-panel-host [data-act=devices]")
+        if btn.count() == 0:                       # the list already has calls from other tests: clear it first
+            self.page.evaluate("fetch('./clear', {method: 'POST', credentials: 'same-origin', headers: {'X-XSRFToken': "
+                               "(document.cookie.match(/_mitmproxy_xsrf=([^;]+)/) || [])[1] || ''}})")
+            wait_for(lambda: btn.count() > 0, 15, 0.3, "empty state with Set up a device")
+        btn.click()
+        wait_for(lambda: "iOS Simulators" in self.panel_text(), 15, 0.2, "Devices tab opened from the empty list")
+        self.assertEqual(self.errors, [])
+
     def test_open_the_panel_and_click_every_tab(self):
         page = self.open()
         page.locator("#fab").click()

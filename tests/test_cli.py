@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
-from harness import NEO_MITM, Suite
+from harness import NEO_MITM, Suite, wait_for
 
 
 def mode(path):
@@ -590,6 +590,20 @@ class StatusUiStop(CliBase):
     def test_mock_needs_a_running_proxy(self):
         self.fail("mock", "x", "/y", msg="not running")
         self.fail("mock", "only-one-arg", msg="usage")
+
+    def test_start_background_returns_and_keeps_running_until_stop(self):
+        port, web = harness.free_port(), harness.free_port()
+        env = dict(self.env, RIVIS_PORT=str(port), RIVIS_WEB_PORT=str(web))
+        try:
+            out = self.ok("start", "--background", "--no-open", "--no-ios", env=env, timeout=60).stdout
+            self.assertIn("running in the background", out)
+            self.assertIn("Tools → Devices", out)
+            self.assertTrue(harness.port_open(web), "UI port should still listen after start returned")
+            log = os.path.join(self.state, "logs", "mitmweb.log")
+            self.assertEqual(os.stat(log).st_mode & 0o777, 0o600)
+        finally:
+            self.cli("stop", env=env)
+        wait_for(lambda: not harness.port_open(web), 15, 0.3, "stopped")
 
     def test_android_and_ios_without_devices(self):
         r = self.fail("android", "on")

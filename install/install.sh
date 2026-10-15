@@ -408,6 +408,10 @@ echo "  redirector    $(ext_state | sed -n 's/.*\[\([^]]*\)\].*/\1/p' | grep . |
 [ "$EXT_OK" = 1 ] || echo "  NOTE: iOS Simulator capture needs the Redirector approved (see above). Android and plain proxy work without it."
 echo
 info "next steps"
-echo "  $CLI start          # open a new terminal first if PATH was just updated"
-echo "  $CLI ios on         # installs the CA in the iOS Simulator"
-echo "  $CLI android on     # installs the CA + proxy in the Android emulator"
+echo "  $CLI start          # opens the UI (open a new terminal first if PATH was just updated)"
+echo "  then Tools → Devices: one click per simulator / emulator   (or: $CLI setup)"
+# One less step for a new user: offer to start now (interactive runs only).
+if [ "$YES" = 0 ] && [ -t 0 ] && [ -t 1 ]; then
+  echo; printf 'Start %s now and open its UI? [Y/n] ' "$NAME"; read -r ans || ans=n
+  case "$ans" in ""|y|Y|yes) echo; exec "$LINK" start --background ;; esac   # keeps running when this window closes
+fi

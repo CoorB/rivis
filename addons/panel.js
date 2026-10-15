@@ -2057,14 +2057,15 @@
     if (kind === "first") {
       box.innerHTML = `<div class="box"><div class="glyph">${ico("inbox")}</div>
         <h3>Nothing captured yet</h3>
-        <div class="lede">${esc(state.product.name || "Rivis")} is listening${label ? " for <b>" + esc(label) + "</b>" : ""}. Run one command for the device you test on, then use the app — its calls show up here within a second.</div>
+        <div class="lede">${esc(state.product.name || "Rivis")} is listening${label ? " for <b>" + esc(label) + "</b>" : ""}. Set up the simulator or emulator you test on (once), then use the app — its calls show up here within a second.</div>
+        <div class="btns" style="justify-content:center;margin:4px 0 14px"><button class="b p" data-act="devices">${ico("phone", "sm")}Set up a device</button></div>
         <div class="cols">
           <div class="opt"><h5>${ico("phone", "sm")} iOS Simulator</h5><code class="cmd" data-copy="${esc(cli + proj + " ios on")}" title="Click to copy">${esc(cli + proj + " ios on")}</code>
             <div class="sub">Trusts the certificate on the booted simulator (once). Then open the app.</div></div>
           <div class="opt"><h5>${ico("phone", "sm")} Android emulator</h5><code class="cmd" data-copy="${esc(cli + proj + " android on")}" title="Click to copy">${esc(cli + proj + " android on")}</code>
             <div class="sub">Points the emulator at ${esc(state.product.name || "Rivis")} and installs the certificate. Then open the app.</div></div>
         </div>
-        <div class="foot">Run these in a terminal. Nothing from a simulator? Quit any other proxy app first — only one tool can own the system proxy.</div></div>`;
+        <div class="foot">Or from a terminal, as above (<code>${esc(cli + proj + " setup")}</code> does every running device). Nothing from a simulator? Quit any other proxy app first — only one tool can own the system proxy.</div></div>`;
     } else {
       const why = q ? `No calls match <b>${esc(q)}</b>` : "Every call is hidden by your view settings";
       const sub = q ? "Try a shorter word, or the host name only. Filters with <code>~</code> must be written exactly (see the examples in the search box)."
@@ -2075,7 +2076,8 @@
     box.classList.add("open"); setAttr(DOC, "data-rv-empty", kind === "first" ? "1" : null);
     box.querySelectorAll("[data-copy]").forEach((c) => (c.onclick = () => navigator.clipboard.writeText(c.dataset.copy).then(() => toast("Copied — paste it in a terminal"), () => toast("Select the command and copy it"))));
     box.querySelectorAll("[data-act]").forEach((b) => (b.onclick = async () => {
-      if (b.dataset.act === "clear") { sq().value = ""; sbSync(); commitSearch(""); }
+      if (b.dataset.act === "devices") { tab = "dev"; editing = null; if (!$("drawer").classList.contains("open")) setOpen(true); render(); }
+      else if (b.dataset.act === "clear") { sq().value = ""; sbSync(); commitSearch(""); }
       else { if (state.focus_host) await run("focus_host", { host: null }); if (state.graphql_operation) await run("graphql_filter", { name: null }); await run("view", { project_only: false, show_dns: state.show_dns }, "Showing all traffic"); }
     }));
   }

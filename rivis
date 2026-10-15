@@ -9,8 +9,10 @@
 #   * one CA per workstation (~/.mitmproxy), installed only on sims/emulators,
 #     and `off` removes it again.
 #
-#   <cli> [--project ID] start [--insecure] [--project-only] [--all] [--no-ios] [--no-open]
+#   <cli> [--project ID] start [--insecure] [--project-only] [--all] [--no-ios] [--no-open] [--background]
 #                                 mitmweb: proxy 127.0.0.1:8080, UI 127.0.0.1:8083 (opens logged in)
+#                                 --background keep running after this Terminal window closes
+#                                              (like an app; '<cli> stop' ends it, log in ~/.rivis/logs)
 #                                 --insecure   disable upstream TLS verification (--dev alias)
 #                                 --project-only show only the active project's hosts (--neo-only alias)
 #                                 --all        also show DNS/UDP rows (hidden by default)
@@ -355,8 +357,10 @@ check_capture_filter() {
 }
 
 cmd_start() {
-  local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0 private_hosts=""
+  local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0 private_hosts="" bg=0 fwd=()
+  local a; for a in "$@"; do [ "$a" = --background ] || fwd+=("$a"); done
   while [ $# -gt 0 ]; do case "$1" in
+    --background) bg=1 ;;
     --insecure|--dev) insecure=1 ;; --no-ios) ios=0 ;; --ios-filter) filter="$2"; shift ;;
     --allow-private-hosts) [ $# -ge 2 ] || die "--allow-private-hosts needs a regex"; private_hosts="$2"; shift ;;
     --project-only|--neo-only) project_only=1 ;; --no-open) open_ui=0 ;; --all) show_all=1 ;;
@@ -366,6 +370,17 @@ cmd_start() {
   ensure_ca; ensure_rules
   local o; o=$(port_owner "$PORT"); [ -n "$o" ] && die "port $PORT already taken: $o  (a previous $CLI? run: $CLI stop)"
   o=$(port_owner "$WEB_PORT"); [ -n "$o" ] && die "UI port $WEB_PORT already taken: $o"
+  if [ "$bg" = 1 ]; then   # same start, detached from this terminal; output goes to a private log
+    mkdir -p "$STATE_ROOT/logs"; local log="$STATE_ROOT/logs/mitmweb.log"
+    nohup "$0" --project "$PROJECT" start ${fwd[@]+"${fwd[@]}"} < /dev/null > "$log" 2>&1 &
+    local child=$! i; disown "$child" 2>/dev/null || true
+    for i in $(seq 1 60); do [ -n "$(port_owner "$WEB_PORT")" ] && break; kill -0 "$child" 2>/dev/null || break; sleep 0.5; done
+    [ -n "$(port_owner "$WEB_PORT")" ] || { tail -5 "$log" >&2; die "did not start — full log: $log"; }
+    info "$PRODUCT_NAME is running in the background (proxy 127.0.0.1:$PORT, UI http://127.0.0.1:$WEB_PORT/)"
+    info "devices  in the UI: Tools → Devices, one click per simulator / emulator (or: $CLI setup)"
+    info "reopen the UI: $CLI ui   ·   stop: $CLI stop   ·   log: $log"
+    return 0
+  fi
   # UI login: one token per run (or the product-prefixed WEB_PASSWORD). We open the browser ourselves
   # WITH the token — mitmweb's own auto-open lands on a "403 Authentication Required" page.
   local token="${WEB_PASSWORD:-$(openssl rand -hex 16)}"
@@ -413,7 +428,8 @@ cmd_start() {
   info "project $PROJECT ($PROJECT_LABEL)"
   info "rules  $RULES  ($CLI rules list)"
   info "UI     $url (opens signed in; the password is never printed)"
-  info "       (reopen any time: $CLI ui)   — Ctrl-C to stop"
+  info "       (reopen any time: $CLI ui)   — Ctrl-C to stop (or start with --background)"
+  info "devices  in the UI: Tools → Devices, one click per simulator / emulator (or: $CLI setup)"
   if [ "$open_ui" = 1 ]; then
     ( for _ in $(seq 1 40); do [ -n "$(port_owner "$WEB_PORT")" ] && { open "$bootstrap_url"; break; }; sleep 0.25; done ) &
   fi
