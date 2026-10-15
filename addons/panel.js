@@ -1828,13 +1828,16 @@
   root.querySelectorAll("nav button").forEach((b) => (b.onclick = () => { tab = b.dataset.t; editing = null; render(); }));
   // mitmweb changes the selection with history.replaceState, which fires no "hashchange" —
   // so watch the selected call id ourselves
+  // tells flow retention which call to keep; mitmweb sets its XSRF cookie only after its first requests,
+  // so skip until then (a POST without it is refused and logs a console error)
+  const noteSelected = (id) => { if (xsrf()) api("flow_selected", { id }).catch(() => {}); };
   let lastSel = selectedFlow();
-  api("flow_selected", { id:lastSel }).catch(() => {});
+  noteSelected(lastSel);
   setInterval(() => {
     const cur = selectedFlow();
     if (cur === lastSel) return;
     lastSel = cur;
-    api("flow_selected", { id:cur }).catch(() => {});
+    noteSelected(cur);
     if ($("drawer").classList.contains("open") && (tab === "call" || tab === "cmp") && !editing) render();
   }, 300);
   // ───────────── Help · shortcuts · "Coming from Proxyman?" · settings · empty state ─────────────
