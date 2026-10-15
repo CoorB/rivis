@@ -2,7 +2,7 @@
 # One-step installer (macOS, bash 3.2). Idempotent; safe to re-run.
 #
 #   install.sh [--dry-run] [--from-mirror URL] [--mitmproxy-tarball PATH] [--tool-tarball PATH]
-#              [--allow-official] [--skip-local-capture] [--no-rc] [--yes]
+#              [--allow-official] [--trust-mitmdump PATH] [--skip-local-capture] [--no-rc] [--yes]
 #   install.sh --uninstall [--dry-run]
 #
 # mitmproxy source, in priority order (the pinned SHA-256 in mirror.conf is verified in EVERY case; mismatch = refuse):
@@ -23,7 +23,7 @@ CONF="$HERE/mirror.conf"
 RC_BEGIN="# >>> proxy-tool installer (managed) >>>"
 RC_END="# <<< proxy-tool installer (managed) <<<"
 
-DRY=0; UNINSTALL=0; MIRROR=""; MITM_TARBALL=""; TOOL_TARBALL=""; SKIP_LOCAL=0; NO_RC=0; YES=0; ALLOW_OFFICIAL=0
+DRY=0; UNINSTALL=0; MIRROR=""; MITM_TARBALL=""; TOOL_TARBALL=""; SKIP_LOCAL=0; NO_RC=0; YES=0; ALLOW_OFFICIAL=0; TRUST_MITMDUMP=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
@@ -32,6 +32,7 @@ while [ $# -gt 0 ]; do
     --mitmproxy-tarball) [ $# -ge 2 ] || { echo "needs a path" >&2; exit 2; }; MITM_TARBALL="$2"; shift ;;
     --tool-tarball) [ $# -ge 2 ] || { echo "needs a path" >&2; exit 2; }; TOOL_TARBALL="$2"; shift ;;
     --allow-official) ALLOW_OFFICIAL=1 ;;
+    --trust-mitmdump) [ $# -ge 2 ] || { echo "--trust-mitmdump needs a path" >&2; exit 2; }; TRUST_MITMDUMP="$2"; shift ;;
     --skip-local-capture) SKIP_LOCAL=1 ;;
     --no-rc) NO_RC=1 ;;
     --yes|-y) YES=1 ;;
@@ -168,6 +169,9 @@ for cand in "$MITM_DIR/mitmproxy.app/Contents/MacOS/mitmdump" "$(command -v mitm
   [ -n "$cand" ] && [ -x "$cand" ] || continue
   [ "$(installed_mitm_version "$cand")" = "$MITM_VERSION" ] || continue
   case "$cand" in "$MITM_DIR"/*) ;; *)
+    if [ -n "$TRUST_MITMDUMP" ] && [ "$cand" = "$TRUST_MITMDUMP" ]; then
+      warn "reusing $cand because you passed --trust-mitmdump (its signature was not checked)"; REUSE="$cand"; break
+    fi
     signed_by_mitmproxy "$cand" || { info "not reusing $cand: its app is not verifiably signed by mitmproxy (team ${MITM_TEAM:-?})"; continue; } ;;
   esac
   REUSE="$cand"; break

@@ -2,6 +2,7 @@
 net-reset, the neo-mitm shim, `start` argv, migration. Offline: no proxy is started."""
 import hashlib
 import json
+import subprocess
 import os
 import re
 import stat
@@ -736,6 +737,48 @@ class TrustedFiles(CliBase):
             self.fail("rules", "add", "k" + str(abs(hash(rel)) % 1000), "match=/x", "action=map_local", "file=" + p,
                       msg="refusing")
         self.assertEqual(self.trust_list(), [])
+
+
+
+class CaRemoval(CliBase):
+    """F-07: `ios off` removes every CA Rivis ever trusted on the Simulator, also after the CA was regenerated."""
+    UDID = "11111111-2222-3333-4444-555555555555"
+
+    def sha(self, pem):
+        out = subprocess.run(["openssl", "x509", "-in", pem, "-noout", "-fingerprint", "-sha256"],
+                             capture_output=True, text=True, check=True).stdout
+        return out.split("=", 1)[1].strip().replace(":", "")
+
+    def test_ios_off_removes_current_and_earlier_cas_but_nothing_else(self):
+        import sqlite3
+        pem = os.path.join(self.env["RIVIS_CONFDIR"], "mitmproxy-ca-cert.pem")
+        self.ok("ios", "on", "--udid", self.UDID)
+        old = self.sha(pem)
+        # regenerate: a different CA in the same place (what "delete ~/.mitmproxy and start" does)
+        key = os.path.join(self.home, "k.pem")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", pem,
+                        "-days", "2", "-subj", "/CN=mitmproxy"], capture_output=True, check=True)
+        self.ok("ios", "on", "--udid", self.UDID)
+        new = self.sha(pem)
+        self.assertNotEqual(old, new)
+        trustd = os.path.join(self.home, "Library/Developer/CoreSimulator/Devices", self.UDID,
+                              "data/private/var/protected/trustd")
+        os.makedirs(trustd)
+        db = sqlite3.connect(os.path.join(trustd, "TrustStore.sqlite3"))
+        db.execute("create table tsettings (sha256 blob, subj blob, tset blob, data blob)")
+        other = "AB" * 32
+        for h in (old, new, other):
+            db.execute("insert into tsettings (sha256) values (?)", (bytes.fromhex(h),))
+        db.commit()
+        db.close()
+        out = self.ok("ios", "off", "--udid", self.UDID).stdout
+        self.assertIn("removed 2 trust entries", out)
+        db = sqlite3.connect(os.path.join(trustd, "TrustStore.sqlite3"))
+        left = [r[0].hex().upper() for r in db.execute("select sha256 from tsettings")]
+        db.close()
+        self.assertEqual(left, [other])
+        hist = os.path.join(self.state, "ca-history")
+        self.assertEqual(os.stat(hist).st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

@@ -109,6 +109,20 @@ function Write-PrivateFile([string]$path, [string]$text) {
   [IO.File]::WriteAllText($path, $text + [Environment]::NewLine, $Utf8NoBom)
 }
 
+$CaHistoryPath = Join-Path $StateRoot "ca-history"
+function Add-CaHistory([string]$hash) {
+  # lines "<sha256|-> <android-hash>"; the bash edition adds the sha256 (used by `ios off`)
+  if (-not $hash) { return }
+  New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
+  if ((Get-CaHistoryHashes) -contains $hash) { return }
+  if (-not (Test-Path $CaHistoryPath)) { Write-PrivateFile $CaHistoryPath "- $hash"; return }
+  Add-Content -Path $CaHistoryPath -Value "- $hash" -Encoding ascii
+}
+function Get-CaHistoryHashes {
+  if (-not (Test-Path $CaHistoryPath)) { return @() }
+  return @(Get-Content $CaHistoryPath | ForEach-Object { ($_ -split '\s+')[1] } | Where-Object { $_ })
+}
+
 function New-UiBootstrap {
   # one-time login link (addons\proxy_panel.py Bootstrap): the nonce is deleted on first use
   $bytes = New-Object byte[] 16
@@ -706,9 +720,11 @@ switch ($Command) {
       if ($root) {
         & $adb -s $s push $CaPem "/data/local/tmp/$h.0" | Out-Null; Run "push CA"
         & $adb -s $s shell "mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/$h.0 $dst && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0"; Run "install CA"
+        Add-CaHistory $h
         Info "${s}: CA installed in user store ($h.0)"
       } else {
         & $adb -s $s push $CaCer /sdcard/Download/proxy-ca.crt | Out-Null; Run "push CA (proxy NOT enabled)"
+        Add-CaHistory $h
         Info "$s is a Google Play image (no adb root). CA pushed to Downloads. On the emulator:"
         Info "  Settings > Security > More security > Encryption & credentials > Install a certificate"
         Info "  > CA certificate > Install anyway > Downloads > proxy-ca.crt"
@@ -726,9 +742,13 @@ switch ($Command) {
       if ($now -notin @(":0", "null")) { Die "${s}: proxy still set ($now)" }
       Info "${s}: proxy cleared"
       if ($root) {
-        if (-not $h) { Die "${s}: CA file is gone, cannot tell which cert to remove - check /data/misc/user/0/cacerts-added by hand" }
-        & $adb -s $s shell "rm -f $dst /sdcard/Download/proxy-ca.crt"; Run "remove CA"
-        Info "${s}: CA removed"
+        # F-07: also the CAs of earlier regenerations (state root ca-history, shared with the bash edition)
+        $hashes = @(@($h) + @(Get-CaHistoryHashes) | Where-Object { $_ -match '^[0-9a-fA-F]+$' } | Select-Object -Unique)
+        if (-not $hashes.Count) { Die "${s}: no CA on record and the CA file is gone, cannot tell which cert to remove - check /data/misc/user/0/cacerts-added by hand" }
+        $files = ($hashes | ForEach-Object { "/data/misc/user/0/cacerts-added/$_.0" }) -join " "
+        & $adb -s $s shell "rm -f $files /sdcard/Download/proxy-ca.crt"; Run "remove CA"
+        foreach ($f in $files.Split(" ")) { & $adb -s $s shell "[ ! -e $f ]"; if ($LASTEXITCODE -ne 0) { Die "${s}: CA still present at $f" } }
+        Info "${s}: CA removed ($($hashes.Count) recorded CA(s) checked)"
       } else {
         & $adb -s $s shell rm -f /sdcard/Download/proxy-ca.crt
         Info "${s}: remove the CA by hand: Encryption & credentials > Trusted credentials > User > mitmproxy > Uninstall"

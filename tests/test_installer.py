@@ -45,8 +45,12 @@ class InstallerBase(unittest.TestCase):
             fh.write("# mine\nexport A=1\n")
 
     def install(self, *args, env=None, timeout=240, bin=None):
-        return self.suite.run(["/bin/bash", bin or INSTALL] + list(args), home=self.home,
-                              env=env or self.suite.env(self.home), timeout=timeout)
+        env = env or self.suite.env(self.home)
+        shim = os.path.join(self.suite.root, "shim", "mitmdump")
+        if "--uninstall" not in args and "--help" not in args and os.path.isfile(shim) \
+                and os.path.join(self.suite.root, "shim") in env.get("PATH", "").split(":"):
+            args = args + ("--trust-mitmdump", shim)   # the hermetic shim is unsigned (F-10 refuses it otherwise)
+        return self.suite.run(["/bin/bash", bin or INSTALL] + list(args), home=self.home, env=env, timeout=timeout)
 
     def ok(self, *args, **kw):
         cp = self.install(*args, **kw)
