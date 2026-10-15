@@ -71,7 +71,10 @@ def wait_for(fn, timeout=10.0, interval=0.1, desc="condition"):
 SHIMS = {
     "bash": '#!/bin/sh\nexec /bin/bash "$@"\n',
     "open": '#!/bin/sh\necho "$@" >> "$SHIM_LOG/open.log"\nexit 0\n',
-    "xcrun": '#!/bin/sh\necho "$@" >> "$SHIM_LOG/xcrun.log"\nexit 0\n',
+    # `simctl list devices booted` prints $SHIM_LOG/booted (one "Name (UDID) (Booted)" per line) when a test writes it
+    "xcrun": '#!/bin/sh\necho "$@" >> "$SHIM_LOG/xcrun.log"\n'
+             'if [ "$1 $2 $3 $4" = "simctl list devices booted" ] && [ -f "$SHIM_LOG/booted" ]; then cat "$SHIM_LOG/booted"; fi\n'
+             'exit 0\n',
     "networksetup": '''#!/bin/sh
 echo "$@" >> "$SHIM_LOG/networksetup.log"
 case "$1" in

@@ -79,7 +79,7 @@ The profile's `hosts` regex drives the “<label> only” panel view, `record_ma
 ```bash
 rivis start [--project-only] [--insecure] [--all] [--no-ios] [--no-open]
 rivis stop | ui | status | cert
-rivis ios on|off [--udid UDID]
+rivis ios on|off [--udid UDID | --all]     # --all: every booted simulator
 rivis android on|off [-s emulator-5554] [--auto-ui]
 rivis rules list | on NAME | off NAME | show NAME | rm NAME | edit
 rivis rules add NAME match=REGEX action=ACTION [key=value ...]

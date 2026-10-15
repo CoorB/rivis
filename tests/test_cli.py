@@ -749,6 +749,24 @@ class CaRemoval(CliBase):
                              capture_output=True, text=True, check=True).stdout
         return out.split("=", 1)[1].strip().replace(":", "")
 
+    def test_ios_on_all_trusts_every_booted_simulator(self):
+        udids = [self.UDID, "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"]
+        booted = os.path.join(self.suite.shimlog, "booted")
+        with open(booted, "w") as fh:
+            fh.write("".join("    iPhone %d (%s) (Booted)\n" % (i, u) for i, u in enumerate(udids)))
+        try:
+            r = self.fail("ios", "on", msg="several simulators booted")
+            self.assertIn("ios on --all", r.stderr)
+            out = self.ok("ios", "on", "--all").stdout
+            for u in udids:
+                self.assertIn("%s: mitmproxy CA trusted" % u, out)
+            log = self.suite.shim_log("xcrun.log")
+            for u in udids:
+                self.assertIn("simctl keychain %s add-root-cert" % u, log)
+            self.fail("ios", "on", "--all", "--udid", self.UDID, msg="not both")
+        finally:
+            os.remove(booted)
+
     def test_ios_off_removes_current_and_earlier_cas_but_nothing_else(self):
         import sqlite3
         pem = os.path.join(self.env["RIVIS_CONFDIR"], "mitmproxy-ca-cert.pem")

@@ -339,24 +339,27 @@ else
 ─── iOS Simulator capture needs a one-time approval ───────────────────────────────────────────────
 mitmproxy copies its signed 'Mitmproxy Redirector' app to /Applications and asks macOS to load its
 network extension. macOS will show a prompt; you must approve it yourself:
-  1. A dialog appears — click "Open System Settings" (or open System Settings manually).
-  2. Go to  General → Login Items & Extensions → Network Extensions (under "Extensions")
-     and switch ON "Mitmproxy Redirector" (wording can differ slightly by macOS version).
-  3. If macOS asks to "Allow" a network content filter / proxy configuration, click Allow
-     and enter your Mac password or Touch ID. (This is Apple's prompt, not this installer's.)
+  1. System Settings opens at  General → Login Items & Extensions. Scroll down to "Extensions".
+  2. Click "By Category", then the ⓘ button at the end of the "Network Extensions" row.
+     (It is NOT in the "By App" list until it is approved.)
+  3. Switch ON "Mitmproxy Redirector", click Done, and confirm with Touch ID or your password.
+  4. If macOS asks to "Allow" a proxy configuration, click Allow. (Apple's prompt, not this installer's.)
+  Don't see it? Quit System Settings (⌘Q) and open it again — a window opened earlier shows an old list.
 It only captures the processes named by the tool (the Simulator); it does not touch the system proxy.
 EOF
     if [ "$YES" = 0 ]; then printf 'Press Enter to start the approval (or type s + Enter to skip): '; read -r ans || ans=s
     else ans=""; fi
     if [ "$ans" = s ] || [ "$ans" = S ]; then info "skipped — iOS capture will not work until approved"
     else
+      "$MITMDUMP" --listen-host 127.0.0.1 --listen-port "$(free_port)" --set confdir="$CONFDIR" --mode local:CoreSimulator >/dev/null 2>&1 & lp=$!
+      # open Settings only once macOS lists the extension, or the page shows a list without it
+      for i in $(seq 1 15); do ext_state | grep -q . && break; kill -0 "$lp" 2>/dev/null || break; sleep 1; done
       open "x-apple.systempreferences:com.apple.LoginItems-Settings.extension" 2>/dev/null \
         || open "x-apple.systempreferences:com.apple.preference.security" 2>/dev/null
-      "$MITMDUMP" --listen-host 127.0.0.1 --listen-port "$(free_port)" --set confdir="$CONFDIR" --mode local:CoreSimulator >/dev/null 2>&1 & lp=$!
-      for i in $(seq 1 60); do
+      for i in $(seq 1 90); do
         ext_state | grep -q 'activated enabled' && { EXT_OK=1; break; }
         kill -0 "$lp" 2>/dev/null || break
-        [ "$i" = 1 ] && info "waiting up to 2 minutes for your approval…"
+        [ "$i" = 1 ] && info "waiting up to 3 minutes for your approval…"
         sleep 2
       done
       kill "$lp" 2>/dev/null; wait "$lp" 2>/dev/null

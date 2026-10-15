@@ -7,7 +7,7 @@ changes your system proxy, or listens outside your own computer.
 1. Download the installer folder from the internal mirror and open Terminal in it.
 2. Run `./install.sh` (add `--dry-run` first to see what it will do without changing anything).
 3. For iOS Simulator capture, macOS asks you to approve "Mitmproxy Redirector" once. The installer opens the
-   right System Settings page (General → Login Items & Extensions → Network Extensions) and waits: switch it on,
+   right System Settings page and waits. Under Extensions, click By Category, then the ⓘ next to Network Extensions: switch it on,
    confirm with Touch ID or your password, and the installer carries on by itself. Skip it and everything else
    still works; only iOS capture needs it. To approve later, run `./install.sh` again.
 4. Open a new Terminal window, then: `<cli> start`, `<cli> ios on`, `<cli> android on`.
