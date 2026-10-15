@@ -47,6 +47,10 @@ class Profiles(LiveCase):
         self.assertEqual(self.panel.state()["throttle"], "manual")
         wait_for(lambda: timed(self.fetch, "/json/small")[1] >= 0.45, 12, 0.3, "manual latency applied")
 
+    def test_scope_is_trimmed(self):
+        self.panel.ok("profile", {"id": "3g-urban", "match": "  /json/small \n"})
+        self.assertEqual(self.panel.state()["throttle_match"], "/json/small")
+
     def test_off_removes_the_delay(self):
         self.reset_state(throttle="600ms")
         self.reset_state(throttle="off")

@@ -190,7 +190,7 @@ class Modes(LiveCase):
         self.panel.ok("compose_save", {"name": "r1", "spec": {"method": "GET", "url": "https://h.test/"}})
         self.panel.ok("compose_vars", {"vars": {"a": "1"}})
         self.panel.ok("script_new", {"name": "s1", "lang": "py"})
-        self.panel.ok("add", {"rule": {"name": "r", "action": "block"}})
+        self.panel.ok("add", {"rule": {"name": "r", "match": "/r-only", "action": "block"}})
         self.panel.ok("bp_add", {"host": "127.0.0.1", "path": "/x", "request": True})
         self.panel.ok("tls_set", {"mode": "all"})
         self.panel.ok("mock", {"flow_id": self.inst.flow_for("/json/small")["id"]})

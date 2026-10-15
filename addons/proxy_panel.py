@@ -17,6 +17,7 @@ import math
 import os
 import re
 import secrets
+import subprocess
 import sys
 import tempfile
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
@@ -47,7 +48,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
-from proxy_common import (ACTIONS, PANEL_PROFILES, PRODUCT, SAFE_NAME, STATE_ROOT, atomic_json,
+from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRODUCT, SAFE_NAME, STATE_ROOT, atomic_json,
                           atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
                           confined_path, migrate_collection, migrate_rules, project_profile,
                           project_profiles, project_state, tls_config, tls_covering, tls_update,
@@ -285,10 +286,27 @@ class ProxyPanel:
                     user_regex(r[k])
                 except re.error as e:
                     raise PanelError(f"bad regex in {k}: {e}")
-        if r["action"] == "respond" and "status" in r and not str(r["status"]).isdigit():
-            raise PanelError("status must be a number")
-        if r["action"] == "status" and not str(r.get("status", "")).isdigit():
-            raise PanelError("status must be a number")
+        missing = [k for k in ACTION_REQUIREMENTS[r["action"]] if k not in r]
+        if missing:                       # the engine would skip it later; say so now, not after a "saved"
+            raise PanelError(f"action '{r['action']}' needs: {', '.join(missing)}")
+        if r["action"] in ("respond", "status") and ("status" in r or r["action"] == "status"):
+            if not str(r.get("status", "")).isdigit():
+                raise PanelError("status must be a number")
+            if not 100 <= int(r["status"]) <= 599:
+                raise PanelError("status must be 100..599")
+        if r["action"] == "delay":
+            try:
+                ms = float(r["ms"])
+            except (TypeError, ValueError):
+                raise PanelError("delay ms must be a number")
+            if not 0 <= ms <= 600000:
+                raise PanelError("delay ms must be 0..600000")
+        if r["action"] == "set_header" and not isinstance(r["header"], str):
+            raise PanelError("header must be text")
+        if r["action"] == "json_patch" and not (isinstance(r["set"], dict) and r["set"]):
+            raise PanelError("set must be an object of path: value")
+        if r["action"] == "map_remote" and not isinstance(r["with"], str):
+            raise PanelError("with must be text")
 
     # ── mock files: only ever <active-project>/mocks/<safe-name>.json ──────────
     @staticmethod
@@ -394,6 +412,30 @@ class ProxyPanel:
             if addon.__class__.__name__ == "ProxyRetention":
                 return {"limit": int(ctx.options.proxy_max_flows), "trimmed": int(getattr(addon, "trimmed", 0))}
         return {"limit": 5000, "trimmed": 0}
+
+    @staticmethod
+    def script_syntax(filename, content):
+        """Compile without running: a Python or JavaScript syntax error as one line, or None."""
+        if filename.endswith(".py"):
+            try:
+                compile(content, filename, "exec")
+            except SyntaxError as e:
+                return f"line {e.lineno}: {e.msg}"
+            except ValueError as e:
+                return str(e)
+            return None
+        from proxy_scripts import find_node
+        node = find_node()
+        if not node:
+            return None
+        check = ('let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{new (require("vm").Script)'
+                 '("\\"use strict\\";\\n"+s,{filename:"script.js"})}catch(e){const m=/:(\\d+)/.exec(String(e.stack||""));'
+                 'console.log((m?"line "+(m[1]-1)+": ":"")+e.message)}})')
+        try:
+            p = subprocess.run([node, "-e", check], input=content, capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return p.stdout.strip() or None
 
     def clear_script_error(self, filename):
         for addon in self._addons():
@@ -1007,6 +1049,12 @@ class ProxyPanel:
             item.update(match=match, method=method)
             self.save_cfg(cfg)
             self.clear_script_error(filename)
+            problem = self.script_syntax(filename, a.get("content") or "")
+            if problem:                  # saved anyway (never lose the user's edit), but flagged now, not on the next call
+                for addon in self._addons():
+                    if addon.__class__.__name__ == "ProxyScripts":
+                        addon._error(filename, "syntax", SyntaxError(problem))
+                return {"syntax_error": problem}
         elif op == "script_toggle":
             item = next((x for x in cfg.get("scripts", []) if x.get("file") == a.get("file")), None)
             if item is None: raise PanelError("no such script")
@@ -1033,8 +1081,9 @@ class ProxyPanel:
             if "file" in r or "body_file" in r:
                 raise PanelError("file-backed rules are created with Map Local in the panel, or with the product CLI")
             r.setdefault("enabled", True)
-            r.setdefault("match", ".")
             self.validate(r)
+            if not str(r.get("match", "")).strip():     # an omitted match used to mean "every call": too easy to break everything
+                raise PanelError("match is required (a regex on the URL; '.' means every call)")
             if any(x.get("name") == r["name"] for x in cfg["rules"]):
                 raise PanelError("a rule with that name exists")
             cfg["rules"].append(r)
@@ -1206,12 +1255,16 @@ class ProxyPanel:
                         cap = 100 if k == "loss_pct" else 120000 if k in (
                             "latency_ms", "jitter_ms", "response_delay_ms") else 1000000
                         if not math.isfinite(v) or v < 0 or v > cap:
-                            raise PanelError(f"{k} out of range")
+                            raise PanelError(f"{k.replace('_pct', ' %').replace('_ms', ' (ms)').replace('_', ' ')} must be 0..{cap:,}")
                         m[k] = v
             if "match" in a:
-                if a["match"]:
-                    user_regex(a["match"])
-                cfg["throttle_match"] = a["match"]
+                scope = str(a["match"] or "").strip()      # a pasted "  /echo \n" must not silently match nothing
+                if scope:
+                    try:
+                        user_regex(scope)
+                    except re.error as e:
+                        raise PanelError(f"the URL scope is a regex: {e}")
+                cfg["throttle_match"] = scope
             self.save_cfg(cfg)
         elif op == "maplocal_add":       # manual Map Local rule: host/path wildcards, like FRTMProxy "Add Rule"
             name = (a.get("name") or "").strip() or re.sub(r"[^A-Za-z0-9._-]", "-",

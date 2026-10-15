@@ -1062,7 +1062,7 @@
       <textarea id="sebody" spellcheck="false">${esc(e.content)}</textarea><div class="btns"><button class="b p" id="sesave">Save</button><span class="sub">${esc(tilde(e.file))}</span></div>`;
     $("sback").onclick = () => { editing = null; render(); };
     $("sesave").onclick = async () => {
-      const r = await run("script_put", { file:s.file, match:$("sematch").value, method:$("semethod").value, content:$("sebody").value }, "Script saved — hot reloads within 1 s");
+      const r = await run("script_put", { file:s.file, match:$("sematch").value, method:$("semethod").value, content:$("sebody").value }, (x) => x.syntax_error ? "Saved, but it has a syntax error — " + x.syntax_error : "Script saved — hot reloads within 1 s");
       if (r) { editing = null; tab = "scripts"; render(); }
     };
   }

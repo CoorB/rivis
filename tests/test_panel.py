@@ -156,8 +156,13 @@ class Ops(LiveCase):
         self.bad("add", {"rule": {"name": "x", "action": "respond", "body_file": "/etc/hosts"}}, "file-backed")
         self.bad("add", {"rule": {"name": "x" * 65, "action": "respond"}})
         self.bad("add", {})
-        self.panel.ok("add", {"rule": {"name": "dup", "action": "block"}})
-        self.bad("add", {"rule": {"name": "dup", "action": "block"}}, "exists")
+        self.bad("add", {"rule": {"name": "x", "action": "block"}}, "match is required")
+        self.bad("add", {"rule": {"name": "x", "match": "/a", "action": "set_header"}}, "needs: header")
+        self.bad("add", {"rule": {"name": "x", "match": "/a", "action": "delay", "ms": -5}}, "0..600000")
+        self.bad("add", {"rule": {"name": "x", "match": "/a", "action": "delay", "ms": "abc"}}, "number")
+        self.bad("add", {"rule": {"name": "x", "match": "/a", "action": "status", "status": 99999}}, "100..599")
+        self.panel.ok("add", {"rule": {"name": "dup", "match": "/dup", "action": "block"}})
+        self.bad("add", {"rule": {"name": "dup", "match": "/dup", "action": "block"}}, "exists")
         self.bad("toggle", {"name": "ghost", "enabled": True}, "no rule")
         self.bad("delete", {"name": "ghost"}, "no rule")
 
@@ -281,7 +286,7 @@ class Ops(LiveCase):
         self.assertEqual(self.fetch("/echoo").status, 404)
         self.bad("maplocal_add", {"path": "/x"}, "host")
         self.assertEqual(self.panel.post("maplocal_add", {"host": "h", "status": "abc"})[0], 400)
-        self.panel.ok("add", {"rule": {"name": "plain", "action": "block"}})
+        self.panel.ok("add", {"rule": {"name": "plain", "match": ".", "action": "block"}})
         self.bad("mockfile_get", {"name": "plain"}, "not a map local")
         self.bad("mockfile_put", {"name": "plain", "content": "x"}, "not a map local")
 
@@ -496,6 +501,17 @@ class Ops(LiveCase):
         self.panel.ok("script_put", {"file": "s-py-header.py", "content": "def on_request(context, url, request):\n    return None\n",
                                      "match": "/other", "method": ""})
         self.assertEqual(self.panel.ok("script_get", {"file": "s-py-header.py"})["script"]["match"], "/other")
+        bad = self.panel.ok("script_put", {"file": "s-py-header.py", "content": "def on_request(context, url, request)\n    return None\n"})
+        self.assertIn("line 1", bad["syntax_error"])                    # flagged on Save, not on the next matching call
+        self.assertIn("s-py-header.py", bad["state"]["script_status"]["errors"])
+        js = next(s["file"] for s in self.panel.state()["scripts"] if s["file"].endswith(".js"))
+        bad = self.panel.ok("script_put", {"file": js, "content": "async function onRequest(c, u, request) {\n  request.x = ;\n  return request\n}\n"})
+        self.assertIn("line 2", bad.get("syntax_error") or "")
+        good = self.panel.ok("script_put", {"file": js, "content": "async function onRequest(c, u, request) { return request }\n"})
+        self.assertNotIn("syntax_error", good)
+        self.assertNotIn(js, good["state"]["script_status"]["errors"])
+        self.panel.ok("script_put", {"file": "s-py-header.py", "content": "def on_request(context, url, request):\n    return None\n",
+                                     "match": "/other", "method": ""})
         self.assertEqual(mode(self.inst.path("scripts", "s-py-header.py")), 0o600)
         self.panel.ok("script_toggle", {"file": "s-py-header.py", "enabled": False})
         self.assertFalse(next(s for s in self.panel.state()["scripts"] if s["file"] == "s-py-header.py")["enabled"])
