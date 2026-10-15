@@ -355,6 +355,8 @@ class WindowsInstallerSource(unittest.TestCase):
         src = open(os.path.join(harness.REPO, "install", "install.ps1")).read()
         self.assertIn("function Remove-Junction", src)
         self.assertNotRegex(src, r"Remove-Item -Recurse -Force \$Current")
+        self.assertNotIn('cmd.exe /c rmdir', src)
+        self.assertIn('[IO.FileAttributes]::ReparsePoint', src)
         self.assertIn("[switch]$AllowOfficial", src)
         self.assertIn("official site (explicitly allowed)", src)
 

@@ -57,6 +57,12 @@ $ProductConfig = Get-Content -Raw (Join-Path $PSScriptRoot "product.json") | Con
 $ProductName = $ProductConfig.name
 $Cli = $ProductConfig.cli
 $EnvPrefix = $ProductConfig.env_prefix
+$PinnedMitmproxy = "12.2.3"
+$MirrorConf = Join-Path $PSScriptRoot "install\mirror.conf"
+if (Test-Path $MirrorConf) {
+  $pin = Get-Content $MirrorConf | Where-Object { $_ -match '^MITMPROXY_VERSION=' } | Select-Object -First 1
+  if ($pin -and $pin -match '^MITMPROXY_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$') { $PinnedMitmproxy = $Matches[1] }
+}
 function Config-Env($suffix, $fallback) {
   $value = [Environment]::GetEnvironmentVariable("${EnvPrefix}_$suffix")
   if (-not $value) { $value = [Environment]::GetEnvironmentVariable("NEO_MITM_$suffix") }
@@ -801,13 +807,18 @@ switch ($Command) {
   }
   "doctor" {
     # Prefer the shared Python checker (same logic as macOS). Read-only.
-    $py = $null
+    $pythonExe = $null
+    $pyArgs = @()
     foreach ($cand in @("py","python3","python")) {
       $c = Get-Command $cand -ErrorAction SilentlyContinue
-      if ($c) { $py = if ($cand -eq "py") { @($c.Source,"-3") } else { @($c.Source) }; break }
+      if ($c) {
+        $pythonExe = $c.Source
+        if ($cand -eq "py") { $pyArgs = @("-3") }
+        break
+      }
     }
     $doctorPy = Join-Path $PSScriptRoot "addons\doctor.py"
-    if ($py -and (Test-Path $doctorPy)) {
+    if ($pythonExe -and (Test-Path $doctorPy)) {
       $adbPath = (Get-Command adb -ErrorAction SilentlyContinue).Source
       $argv = @($doctorPy, "--project", $Project, "--rules", $RulesPath, "--confdir", $ConfDir,
                 "--port", $Port, "--web-port", $WebPort, "--script-dir", (Join-Path $ProjectState "scripts"))
@@ -817,30 +828,32 @@ switch ($Command) {
       if ($AllowProfileNetwork) { $argv += "--allow-profile-network" }
       if ($FixSafe) { $argv += "--fix-safe" }
       if ($Yes)     { $argv += "--yes" }
-      & $py[0] @($py[1..($py.Count-1)]) @argv
+      & $pythonExe @pyArgs @argv
       exit $LASTEXITCODE
     }
     # Reduced native subset when Python is unavailable.
     Write-Host "doctor (native subset — install Python for the full check)"
+    $doctorExit = 0
     $mitm = Get-Command mitmdump -ErrorAction SilentlyContinue
     if ($mitm) {
       $v = (& $mitm.Source --version 2>&1 | Select-String -Pattern 'itmproxy:?\s*v?([0-9.]+)')
       $ver = if ($v) { $v.Matches[0].Groups[1].Value } else { "unknown" }
-      $mark = if ($ver -eq "12.2.3") { "ok" } else { "warn" }
+      $mark = if ($ver -eq $PinnedMitmproxy) { "ok" } else { $doctorExit = [Math]::Max($doctorExit, 1); "warn" }
       Write-Host ("  [{0}] mitmproxy {1} at {2}" -f $mark, $ver, $mitm.Source)
     } else {
-      Write-Host "  [error] mitmproxy not found (brew/choco install mitmproxy, pinned 12.2.3)"
+      $doctorExit = 2
+      Write-Host "  [error] mitmproxy not found (install the pinned $PinnedMitmproxy build from the internal mirror)"
     }
     foreach ($pp in @(@("proxy",$Port),@("web UI",$WebPort))) {
       $o = Port-Owner $pp[1]
-      if ($o) { Write-Host ("  [warn] {0} port :{1} owned by {2}" -f $pp[0],$pp[1],$o) }
+      if ($o) { $doctorExit = [Math]::Max($doctorExit, 1); Write-Host ("  [warn] {0} port :{1} owned by {2}" -f $pp[0],$pp[1],$o) }
       else    { Write-Host ("  [ok] {0} port :{1} is free" -f $pp[0],$pp[1]) }
     }
     $cur = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction SilentlyContinue
     if ($cur.ProxyEnable -eq 1) {
       $stale = Test-StaleLocalProxy $cur.ProxyServer
-      if ($stale) { Write-Host ("  [error] stale WinINET proxy {0} — run: {1}.ps1 net-reset" -f $cur.ProxyServer,$Cli) }
-      else        { Write-Host ("  [warn] WinINET system proxy set: {0} (steals emulator traffic)" -f $cur.ProxyServer) }
+      if ($stale) { $doctorExit = 2; Write-Host ("  [error] stale WinINET proxy {0} — run: {1}.ps1 net-reset" -f $cur.ProxyServer,$Cli) }
+      else        { $doctorExit = [Math]::Max($doctorExit, 1); Write-Host ("  [warn] WinINET system proxy set: {0} (steals emulator traffic)" -f $cur.ProxyServer) }
     } else { Write-Host "  [ok] no WinINET system proxy" }
     $whLine = (netsh winhttp show proxy 2>$null | Select-String 'Proxy Server')
     if ($whLine) { Write-Host ("  [info] WinHTTP: {0}" -f ($whLine.ToString().Trim())) }
@@ -851,7 +864,7 @@ switch ($Command) {
         Write-Host ("  [info] android {0}: http_proxy={1}" -f $e, ((& adb -s $e shell settings get global http_proxy) -replace "`r",''))
       }
     } else { Write-Host "  [info] adb not found" }
-    exit 0
+    exit $doctorExit
   }
   "status" {
     Ensure-Rules

@@ -79,8 +79,12 @@ function Path-Has([string]$dir) {
 }
 function Remove-Junction([string]$path) {
   if (Test-Path $path) {
-    & cmd.exe /c rmdir "$path" | Out-Null
-    if ($LASTEXITCODE) { Die "cannot remove junction $path" }
+    $item = Get-Item -LiteralPath $path -Force
+    if (-not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      Die "refusing to remove non-junction path $path"
+    }
+    try { [IO.Directory]::Delete($item.FullName) }
+    catch { Die "cannot remove junction ${path}: $($_.Exception.Message)" }
   }
 }
 

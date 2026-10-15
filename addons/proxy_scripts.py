@@ -734,7 +734,8 @@ class ProxyScripts:
                         if "content-type" not in header_map:
                             header_map["content-type"] = ("content-type", ["application/json"])
                     elif not isinstance(body, bytes): body = str(body).encode()
-                    headers = {name: ", ".join(values) for name, values in header_map.values()}
+                    headers = [(name.encode("utf-8"), value.encode("utf-8"))
+                               for name, values in header_map.values() for value in values]
                     flow.response = http.Response.make(int(result.get("statusCode", 200)), body, headers)
                     flow.metadata["proxy_local"] = True; self._tag(flow, item); break
                 target = flow.response if response_side else flow.request

@@ -135,6 +135,20 @@ class Commands(unittest.TestCase):
         self.assertRegex(src, r'Start-Process mitmdump[^\n]+"--listen-host","127\.0\.0\.1"')
         self.assertIn('$argv += "--allow-profile-network"', src)
 
+    def test_doctor_runs_with_single_element_python_command(self):
+        """C1 review #1: a one-element python3 command must not expand PowerShell's descending 1..0 range."""
+        cp = self.ps("doctor", "-NoNet", "-Json")
+        self.assertNotIn("can't open file ''", cp.stdout + cp.stderr)
+        self.assertNotIn("doctor.py: error", cp.stdout + cp.stderr)
+        self.assertTrue((cp.stdout.strip().startswith("[") or cp.stdout.strip().startswith("{")), cp.stdout + cp.stderr)
+
+    def test_native_doctor_uses_the_configured_pin_and_propagates_warn_error_exit_codes(self):
+        with open(os.path.join(harness.REPO, "rivis.ps1")) as fh:
+            src = fh.read()
+        self.assertIn('$PinnedMitmproxy', src)
+        self.assertIn('$doctorExit = 2', src)
+        self.assertIn('exit $doctorExit', src)
+
     def test_projects_list_new_use_show_and_validation(self):
         out = self.ok("projects", "list")
         self.assertIn("* default", out)

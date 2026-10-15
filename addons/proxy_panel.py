@@ -188,7 +188,6 @@ class ProxyPanel:
             for rule in cfg["rules"]:
                 if not isinstance(rule, dict):
                     raise ValueError("each rule must be an object")
-                self.validate(rule)
             throttle = str(cfg.get("throttle", "off") or "off").lower()
             if throttle not in {p["id"] for p in PROFILES} and not re.fullmatch(r"\d+ms(/\d+kbps)?", throttle):
                 raise ValueError("unknown throttle '%s'" % throttle)

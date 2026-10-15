@@ -26,6 +26,8 @@ Exit: 0 all ✓, 1 any ⚠, 2 any ✗.
 """
 import argparse
 import calendar
+import csv
+import io
 import json
 import os
 import re
@@ -35,6 +37,7 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
@@ -201,10 +204,41 @@ def executable_is_safe(path):
 
 
 def port_owner(port):
+    if WIN:
+        rc, out, _ = run(["netstat", "-ano", "-p", "tcp"])
+        if rc is None:
+            return []
+        rows = parse_netstat_listener(out, port)
+        for row in rows:
+            rc, listing, _ = run(["tasklist", "/FI", "PID eq %s" % row["pid"], "/FO", "CSV", "/NH"])
+            try:
+                record = next(csv.reader(io.StringIO(listing))) if rc == 0 else []
+            except (csv.Error, StopIteration):
+                record = []
+            if record and not record[0].startswith("INFO:"):
+                row["command"] = record[0]
+        return rows
     rc, out, _ = run(["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN"])
     if rc is None:
         return []
     return parse_lsof_listener(out)
+
+
+def parse_netstat_listener(text, port):
+    """Parse Windows `netstat -ano -p tcp`; return listeners for exactly `port`."""
+    rows = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0].upper() != "TCP" or parts[-2].upper() != "LISTENING":
+            continue
+        endpoint, pid = parts[1], parts[-1]
+        try:
+            found_port = int(endpoint.rsplit(":", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if found_port == int(port) and pid.isdigit():
+            rows.append({"command": "process", "pid": pid, "name": endpoint})
+    return rows
 
 
 # ───────────────────────── checks ─────────────────────────
@@ -681,16 +715,24 @@ def _trusted_panel_listener(owners, rules_path):
         return False, "listener is not bound to loopback (%s)" % (endpoint or "unknown address")
     if not str(owner.get("pid", "")).isdigit():
         return False, "listener PID is unavailable"
-    rc, out, err = run(["ps", "-p", owner["pid"], "-o", "uid=", "-o", "command="])
+    if WIN:
+        query = ("$p=Get-CimInstance Win32_Process -Filter 'ProcessId = %s'; "
+                 "if ($p) { [Console]::Out.Write($p.CommandLine) }") % owner["pid"]
+        rc, out, err = run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query])
+        command = out.strip()
+        first = ""
+    else:
+        rc, out, err = run(["ps", "-p", owner["pid"], "-o", "uid=", "-o", "command="])
+        first, _, command = out.strip().partition(" ")
     if rc != 0 or not out.strip():
         return False, "cannot inspect listener process: %s" % (err.strip() or "ps failed")
-    first, _, command = out.strip().partition(" ")
-    try:
-        uid = int(first)
-    except ValueError:
-        return False, "cannot read listener owner"
-    if not WIN and uid != os.getuid():
-        return False, "listener belongs to uid %d" % uid
+    if not WIN:
+        try:
+            uid = int(first)
+        except ValueError:
+            return False, "cannot read listener owner"
+        if uid != os.getuid():
+            return False, "listener belongs to uid %d" % uid
     expected_panel = os.path.realpath(os.path.join(HERE, "proxy_panel.py"))
     if "mitmweb" not in command or expected_panel not in command:
         return False, "listener command is not this Rivis mitmweb"
@@ -710,6 +752,11 @@ def check_running(rep, web_port, rules_path=""):
         return
     trusted, detail = _trusted_panel_listener(owners, rules_path)
     if not trusted:
+        if detail == "listener serves a different rules file":
+            rep.add(sec, WARN, "another verified %s project is running on :%d" % (PRODUCT["name"], web_port),
+                    detail + "; the saved UI token was not sent",
+                    "run doctor with that project's --project, or stop it before starting this project")
+            return
         rep.add(sec, ERR, "web port :%d is not a verified %s instance" % (web_port, PRODUCT["name"]),
                 detail + "; the saved UI token was not sent",
                 "stop the other listener or choose another %s_WEB_PORT" % PRODUCT["env_prefix"])
@@ -720,15 +767,22 @@ def check_running(rep, web_port, rules_path=""):
                 "%s absent — likely a different/older instance" % tokfile,
                 "if it is a leftover: `%s stop`" % PRODUCT["cli"])
         return
-    token = open(tokfile).read().strip()
+    try:
+        with open(tokfile) as fh:
+            token = fh.read().strip()
+    except OSError as e:
+        rep.add(sec, WARN, "running, but the saved UI token is unreadable", str(e),
+                "repair the file permissions, or `%s stop` then `%s start`" % (PRODUCT["cli"], PRODUCT["cli"]))
+        return
     import http.cookiejar
     import urllib.request
     jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     base = "http://127.0.0.1:%d" % web_port
     try:
-        opener.open(base + "/?token=" + token, timeout=NET_TIMEOUT).read(1)
-        body = opener.open(base + "/proxy/api/state?token=" + token, timeout=NET_TIMEOUT).read()
+        query = urllib.parse.urlencode({"token": token})
+        opener.open(base + "/?" + query, timeout=NET_TIMEOUT).read(1)
+        body = opener.open(base + "/proxy/api/state?" + query, timeout=NET_TIMEOUT).read()
         state = json.loads(body.decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         rep.add(sec, WARN, "running, but the saved token did not authenticate (HTTP %d)" % e.code,
