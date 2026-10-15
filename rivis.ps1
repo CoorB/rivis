@@ -95,6 +95,43 @@ $CaCer   = Join-Path $ConfDir "mitmproxy-ca-cert.cer"
 $ProjectState = Join-Path (Join-Path $StateRoot "projects") $Project
 $RulesPath = Config-Env "RULES" (Join-Path $ProjectState "rules.json")
 $TokenPath = Join-Path $StateRoot "web-token"
+$BootstrapPath = Join-Path $StateRoot "web-bootstrap"
+
+function Write-PrivateFile([string]$path, [string]$text) {
+  # create empty, restrict to the current user, then write: the secret never exists with wider access
+  [IO.File]::WriteAllText($path, "", $Utf8NoBom)
+  if (($PSVersionTable.PSEdition -eq "Desktop") -or $IsWindows) {
+    & icacls.exe $path /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+    if ($LASTEXITCODE -ne 0) { Remove-Item -Force $path; Die "could not restrict access to $path" }
+  } else {
+    & chmod 600 $path
+  }
+  [IO.File]::WriteAllText($path, $text + [Environment]::NewLine, $Utf8NoBom)
+}
+
+$CaHistoryPath = Join-Path $StateRoot "ca-history"
+function Add-CaHistory([string]$hash) {
+  # lines "<sha256|-> <android-hash>"; the bash edition adds the sha256 (used by `ios off`)
+  if (-not $hash) { return }
+  New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
+  if ((Get-CaHistoryHashes) -contains $hash) { return }
+  if (-not (Test-Path $CaHistoryPath)) { Write-PrivateFile $CaHistoryPath "- $hash"; return }
+  Add-Content -Path $CaHistoryPath -Value "- $hash" -Encoding ascii
+}
+function Get-CaHistoryHashes {
+  if (-not (Test-Path $CaHistoryPath)) { return @() }
+  return @(Get-Content $CaHistoryPath | ForEach-Object { ($_ -split '\s+')[1] } | Where-Object { $_ })
+}
+
+function New-UiBootstrap {
+  # one-time login link (addons\proxy_panel.py Bootstrap): the nonce is deleted on first use
+  $bytes = New-Object byte[] 16
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+  $nonce = (($bytes | ForEach-Object { $_.ToString("x2") }) -join "")
+  Write-PrivateFile $BootstrapPath $nonce
+  return "http://127.0.0.1:$WebPort/proxy/bootstrap/$nonce"
+}
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Info($m) { Write-Host "* $m" }
@@ -389,11 +426,15 @@ switch ($Command) {
       try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
       $token = (($bytes | ForEach-Object { $_.ToString("x2") }) -join "")
     }
-    [IO.File]::WriteAllText($TokenPath, $token + [Environment]::NewLine, $Utf8NoBom)
-    $url = "http://127.0.0.1:$WebPort/?token=$token"
+    # F-03: the password lives only in a private file read by addons\proxy_auth.py — never on argv (visible to
+    # every local user) or in the output; the browser signs in through a one-time bootstrap link instead.
+    Write-PrivateFile $TokenPath $token
+    $url = "http://127.0.0.1:$WebPort/"
+    $bootstrapUrl = New-UiBootstrap
     $margs = @("--listen-host","127.0.0.1","--mode","regular@$Port",
-              "--set","web_host=127.0.0.1","--set","web_port=$WebPort",
-              "--set","web_password=$token","--set","web_open_browser=false",
+              "--set","web_host=127.0.0.1","--set","web_port=$WebPort","--set","web_open_browser=false",
+              "-s",(Join-Path $PSScriptRoot "addons\proxy_auth.py"),
+              "--set","proxy_auth_token_file=$TokenPath","--set","proxy_bootstrap_file=$BootstrapPath",
               "--set","confdir=$ConfDir","--set","connection_strategy=lazy","-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),
               "--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project")
     if ($Insecure) { $margs += @("--set","ssl_insecure=true"); Info "TLS: upstream verification OFF" }
@@ -405,11 +446,11 @@ switch ($Command) {
     Info "proxy  127.0.0.1:$Port   (Android emulator: 10.0.2.2:$Port)"
     Info "project $Project ($($ProjectConfig.label))"
     Info "rules  $RulesPath  (${Cli}.ps1 rules list)"
-    Info "UI     $url"
+    Info "UI     $url (opens signed in; the password is never printed)"
     Info "       (reopen any time: .\${Cli}.ps1 ui)   - Ctrl-C to stop"
     if (-not $NoOpen) {
       $portOwnerDefinition = ${function:Port-Owner}.ToString()
-      Start-Job -ArgumentList $url,$WebPort,$portOwnerDefinition -ScriptBlock {
+      Start-Job -ArgumentList $bootstrapUrl,$WebPort,$portOwnerDefinition -ScriptBlock {
         param($uiUrl, $uiPort, $definition)
         Set-Item -Path Function:\Port-Owner -Value $definition
         for ($i = 0; $i -lt 40; $i++) {
@@ -423,9 +464,7 @@ switch ($Command) {
   "ui" {
     if (-not (Port-Owner $WebPort)) { Die "mitmweb is not running - ${Cli}.ps1 start" }
     if (-not (Test-Path $TokenPath)) { Die "no token file - restart with ${Cli}.ps1 start" }
-    $token = (Get-Content -Raw $TokenPath).Trim()
-    if (-not $token) { Die "token file is empty - restart with ${Cli}.ps1 start" }
-    Start-Process "http://127.0.0.1:$WebPort/?token=$token"
+    Start-Process (New-UiBootstrap)
   }
   "rules" {
     Ensure-Rules
@@ -681,9 +720,11 @@ switch ($Command) {
       if ($root) {
         & $adb -s $s push $CaPem "/data/local/tmp/$h.0" | Out-Null; Run "push CA"
         & $adb -s $s shell "mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/$h.0 $dst && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0"; Run "install CA"
+        Add-CaHistory $h
         Info "${s}: CA installed in user store ($h.0)"
       } else {
         & $adb -s $s push $CaCer /sdcard/Download/proxy-ca.crt | Out-Null; Run "push CA (proxy NOT enabled)"
+        Add-CaHistory $h
         Info "$s is a Google Play image (no adb root). CA pushed to Downloads. On the emulator:"
         Info "  Settings > Security > More security > Encryption & credentials > Install a certificate"
         Info "  > CA certificate > Install anyway > Downloads > proxy-ca.crt"
@@ -701,9 +742,13 @@ switch ($Command) {
       if ($now -notin @(":0", "null")) { Die "${s}: proxy still set ($now)" }
       Info "${s}: proxy cleared"
       if ($root) {
-        if (-not $h) { Die "${s}: CA file is gone, cannot tell which cert to remove - check /data/misc/user/0/cacerts-added by hand" }
-        & $adb -s $s shell "rm -f $dst /sdcard/Download/proxy-ca.crt"; Run "remove CA"
-        Info "${s}: CA removed"
+        # F-07: also the CAs of earlier regenerations (state root ca-history, shared with the bash edition)
+        $hashes = @(@($h) + @(Get-CaHistoryHashes) | Where-Object { $_ -match '^[0-9a-fA-F]+$' } | Select-Object -Unique)
+        if (-not $hashes.Count) { Die "${s}: no CA on record and the CA file is gone, cannot tell which cert to remove - check /data/misc/user/0/cacerts-added by hand" }
+        $files = ($hashes | ForEach-Object { "/data/misc/user/0/cacerts-added/$_.0" }) -join " "
+        & $adb -s $s shell "rm -f $files /sdcard/Download/proxy-ca.crt"; Run "remove CA"
+        foreach ($f in $files.Split(" ")) { & $adb -s $s shell "[ ! -e $f ]"; if ($LASTEXITCODE -ne 0) { Die "${s}: CA still present at $f" } }
+        Info "${s}: CA removed ($($hashes.Count) recorded CA(s) checked)"
       } else {
         & $adb -s $s shell rm -f /sdcard/Download/proxy-ca.crt
         Info "${s}: remove the CA by hand: Encryption & credentials > Trusted credentials > User > mitmproxy > Uninstall"

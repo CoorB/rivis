@@ -154,6 +154,20 @@ ensure_ca() {
 ca_hash()   { openssl x509 -inform PEM -subject_hash_old -noout -in "$CA_PEM"; }
 ca_sha256() { openssl x509 -in "$CA_PEM" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d :; }
 
+# F-07: every CA we ever put on a device is remembered (sha256 + Android subject-hash name), so `off` also removes
+# the CAs of earlier regenerations — not just the one in $CONFDIR now.
+CA_HISTORY="$STATE_ROOT/ca-history"
+ca_history_add() {
+  [ -f "$CA_PEM" ] || return 0
+  local entry; entry="$(ca_sha256) $(ca_hash)"
+  (umask 077; mkdir -p "$STATE_ROOT"; touch "$CA_HISTORY")
+  grep -qxF "$entry" "$CA_HISTORY" 2>/dev/null || printf '%s\n' "$entry" >> "$CA_HISTORY"
+}
+ca_history_field() {  # 1 = sha256, 2 = android hash; current CA first, then every recorded one
+  { [ -f "$CA_PEM" ] && { [ "$1" = 1 ] && ca_sha256 || ca_hash; }
+    [ -f "$CA_HISTORY" ] && awk -v f="$1" '$f ~ /^[0-9A-Fa-f]+$/ {print $f}' "$CA_HISTORY"; } | awk '!seen[$0]++'
+}
+
 port_owner() { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==2{print $1" pid "$2" "$9}'; }
 
 secure_dirs() {
@@ -305,6 +319,20 @@ PY
 }
 
 # ───────────────────────── start ─────────────────────────
+# F-13: local capture must only ever name the Simulator or explicit apps. mitmproxy reads an empty spec as "every
+# process" and "!name" as "everything except name" — either would capture this Mac's own traffic (mail, Teams, VPN).
+check_capture_filter() {
+  local spec="$1" item
+  [ -n "$spec" ] || die "--ios-filter is empty: that would capture every app on this Mac. Name the Simulator or an app."
+  case "$spec" in ,*|*,|*,,*) die "--ios-filter '$spec': an empty name between commas would match every app" ;; esac
+  case "$spec" in *[!A-Za-z0-9\ ._,-]*) die "--ios-filter '$spec': only app/process names separated by commas (no '!' or patterns)" ;; esac
+  local IFS=,
+  for item in $spec; do
+    item="${item# }"; item="${item% }"
+    [ ${#item} -ge 3 ] || die "--ios-filter '$spec': each name needs at least 3 characters (a short name matches too many apps)"
+  done
+}
+
 cmd_start() {
   local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0 private_hosts=""
   while [ $# -gt 0 ]; do case "$1" in
@@ -312,6 +340,7 @@ cmd_start() {
     --allow-private-hosts) [ $# -ge 2 ] || die "--allow-private-hosts needs a regex"; private_hosts="$2"; shift ;;
     --project-only|--neo-only) project_only=1 ;; --no-open) open_ui=0 ;; --all) show_all=1 ;;
     *) die "start: unknown option $1" ;; esac; shift; done
+  [ "$ios" = 1 ] && check_capture_filter "$filter"
   command -v mitmweb >/dev/null || die "mitmweb not found (brew install --cask mitmproxy)"
   ensure_ca; ensure_rules
   local o; o=$(port_owner "$PORT"); [ -n "$o" ] && die "port $PORT already taken: $o  (a previous $CLI? run: $CLI stop)"
@@ -528,9 +557,11 @@ cmd_android() {
         "$ADB" -s "$s" push "$CA_PEM" "/data/local/tmp/$h.0" >/dev/null 2>&1 || die "push failed"
         "$ADB" -s "$s" shell "mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/$h.0 $dst \
           && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0" || die "install failed"
+        ca_history_add
         info "$s: CA installed in user store ($h.0)"
       else
         # Google Play images refuse `adb root`. The CA has to go in through Settings once.
+        ca_history_add
         "$ADB" -s "$s" push "$CONFDIR/mitmproxy-ca-cert.cer" /sdcard/Download/proxy-ca.crt >/dev/null 2>&1 \
           || die "could not push the CA to the emulator — proxy NOT enabled"
         info "$s is a Google Play image (no adb root) — the CA goes in through Settings once."
@@ -561,10 +592,12 @@ cmd_android() {
         || die "$s: could not verify the cleared proxy"
       case "$now" in ":0"|null) info "$s: proxy cleared" ;; "") die "$s: empty proxy result — could not verify it was cleared" ;; *) die "$s: proxy still set ($now)" ;; esac
       if have_root "$s"; then
-        [ -n "$h" ] || die "$s: CA file $CA_PEM is gone, cannot tell which cert to remove — list /data/misc/user/0/cacerts-added by hand"
-        "$ADB" -s "$s" shell "rm -f $dst /sdcard/Download/proxy-ca.crt"
-        "$ADB" -s "$s" shell "[ ! -e $dst ]" || die "$s: CA still present at $dst"
-        info "$s: CA removed"
+        local hashes hh files=""; hashes=$(ca_history_field 2)
+        [ -n "$hashes" ] || die "$s: no CA on record and $CA_PEM is gone, cannot tell which cert to remove — list /data/misc/user/0/cacerts-added by hand"
+        for hh in $hashes; do files="$files /data/misc/user/0/cacerts-added/$hh.0"; done
+        "$ADB" -s "$s" shell "rm -f$files /sdcard/Download/proxy-ca.crt"
+        for hh in $files; do "$ADB" -s "$s" shell "[ ! -e $hh ]" || die "$s: CA still present at $hh"; done
+        info "$s: CA removed ($(echo $hashes | wc -w | tr -d ' ') recorded CA(s) checked)"
       else
         "$ADB" -s "$s" shell rm -f /sdcard/Download/proxy-ca.crt
         local n
@@ -592,6 +625,7 @@ cmd_ios() {
     on)
       ensure_ca
       xcrun simctl keychain "$udid" add-root-cert "$CA_PEM" || die "add-root-cert failed"
+      ca_history_add
       info "$udid: mitmproxy CA trusted. Use a build configured to trust the workstation CA."
       ;;
     off)
@@ -599,11 +633,12 @@ cmd_ios() {
       # passcode) and force a re-onboard. Delete only our row from the trust store.
       local db; db=$(sim_truststore "$udid")
       if [ -z "$db" ]; then info "$udid: no trust store — nothing to remove"; return; fi
-      [ -f "$CA_PEM" ] || die "CA file $CA_PEM is gone, cannot tell which cert to remove"
-      local sha; sha=$(ca_sha256)
-      local n; n=$(sqlite3 "$db" "begin immediate; delete from tsettings where hex(sha256)='$sha'; select changes(); commit;") \
+      local shas; shas=$(ca_history_field 1 | tr '[:lower:]' '[:upper:]')
+      [ -n "$shas" ] || die "no CA on record and $CA_PEM is gone, cannot tell which cert to remove"
+      local in_list; in_list="'$(echo $shas | sed "s/ /','/g")'"     # hex digits only (filtered above)
+      local n; n=$(sqlite3 "$db" "begin immediate; delete from tsettings where hex(sha256) in ($in_list); select changes(); commit;") \
         || die "$udid: could not edit the trust store (sim busy? shut it down and retry)"
-      [ "$(sqlite3 "$db" "select count(*) from tsettings where hex(sha256)='$sha';")" = 0 ] || die "$udid: CA still trusted"
+      [ "$(sqlite3 "$db" "select count(*) from tsettings where hex(sha256) in ($in_list);")" = 0 ] || die "$udid: CA still trusted"
       info "$udid: removed $n trust entr$( [ "$n" = 1 ] && echo y || echo ies ) for the mitmproxy CA (restart the app; reboot the sim if it still trusts it)"
       ;;
     *) die "usage: $CLI ios on|off [--udid UDID]" ;;

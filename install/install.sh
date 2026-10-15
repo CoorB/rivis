@@ -2,14 +2,15 @@
 # One-step installer (macOS, bash 3.2). Idempotent; safe to re-run.
 #
 #   install.sh [--dry-run] [--from-mirror URL] [--mitmproxy-tarball PATH] [--tool-tarball PATH]
-#              [--allow-official] [--skip-local-capture] [--no-rc] [--yes]
+#              [--allow-official] [--trust-mitmdump PATH] [--skip-local-capture] [--no-rc] [--yes]
 #   install.sh --uninstall [--dry-run]
 #
 # mitmproxy source, in priority order (the pinned SHA-256 in mirror.conf is verified in EVERY case; mismatch = refuse):
 #   1. --from-mirror URL   (or MIRROR_BASE_URL in mirror.conf, once IT publishes it)
 #   2. --mitmproxy-tarball PATH
 #   3. the official URL, only with --allow-official
-# A compatible mitmproxy (same pinned version) already on PATH, e.g. the Homebrew cask, is reused.
+# A compatible mitmproxy (same pinned version) already on PATH, e.g. the Homebrew cask, is reused only when its
+# app signature verifies against MITMPROXY_TEAM_ID (codesign); otherwise the pinned archive is installed.
 #
 # Never: sudo, system proxy changes, listening beyond 127.0.0.1, touching an existing ~/.mitmproxy CA,
 # deleting user data. Uninstall removes binaries, the link and the rc block; it keeps state and the CA.
@@ -22,7 +23,7 @@ CONF="$HERE/mirror.conf"
 RC_BEGIN="# >>> proxy-tool installer (managed) >>>"
 RC_END="# <<< proxy-tool installer (managed) <<<"
 
-DRY=0; UNINSTALL=0; MIRROR=""; MITM_TARBALL=""; TOOL_TARBALL=""; SKIP_LOCAL=0; NO_RC=0; YES=0; ALLOW_OFFICIAL=0
+DRY=0; UNINSTALL=0; MIRROR=""; MITM_TARBALL=""; TOOL_TARBALL=""; SKIP_LOCAL=0; NO_RC=0; YES=0; ALLOW_OFFICIAL=0; TRUST_MITMDUMP=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
@@ -31,6 +32,7 @@ while [ $# -gt 0 ]; do
     --mitmproxy-tarball) [ $# -ge 2 ] || { echo "needs a path" >&2; exit 2; }; MITM_TARBALL="$2"; shift ;;
     --tool-tarball) [ $# -ge 2 ] || { echo "needs a path" >&2; exit 2; }; TOOL_TARBALL="$2"; shift ;;
     --allow-official) ALLOW_OFFICIAL=1 ;;
+    --trust-mitmdump) [ $# -ge 2 ] || { echo "--trust-mitmdump needs a path" >&2; exit 2; }; TRUST_MITMDUMP="$2"; shift ;;
     --skip-local-capture) SKIP_LOCAL=1 ;;
     --no-rc) NO_RC=1 ;;
     --yes|-y) YES=1 ;;
@@ -69,7 +71,7 @@ VERIFIED_TOOL_TARBALL=""
 if [ -n "$TOOL_TARBALL" ]; then
   [ -f "$TOOL_TARBALL" ] || die "no such file: $TOOL_TARBALL"
   cp "$TOOL_TARBALL" "$TMP/tool-local.tar.gz" || die "cannot copy tool tarball"
-  verify "$TMP/tool-local.tar.gz" "$(conf TOOL_SHA256)" "tool tarball"
+  verify "$TMP/tool-local.tar.gz" "$(conf TOOL_SHA256)" "tool tarball (TOOL_SHA256)"
   VERIFIED_TOOL_TARBALL="$TMP/tool-local.tar.gz"
 fi
 
@@ -151,10 +153,28 @@ MIRROR="${MIRROR%/}"
 installed_mitm_version() {  # prints version of a mitmdump binary, or nothing
   "$1" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}'
 }
+# F-10: a version string proves nothing. Our own copy was hash-verified when we installed it; any other mitmproxy
+# (e.g. the Homebrew cask) is reused only when macOS verifies the app's signature by mitmproxy's developer team.
+MITM_TEAM=$(conf MITMPROXY_TEAM_ID)
+signed_by_mitmproxy() {  # signed_by_mitmproxy MITMDUMP
+  [ -n "$MITM_TEAM" ] && command -v codesign >/dev/null || return 1
+  local real app
+  real=$(/usr/bin/python3 -I -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null) || return 1
+  case "$real" in */Contents/MacOS/mitmdump) app="${real%/Contents/MacOS/mitmdump}" ;; *) return 1 ;; esac
+  codesign --verify --deep --strict "$app" 2>/dev/null || return 1
+  codesign -dv "$app" 2>&1 | grep -qx "TeamIdentifier=$MITM_TEAM"
+}
 REUSE=""
 for cand in "$MITM_DIR/mitmproxy.app/Contents/MacOS/mitmdump" "$(command -v mitmdump 2>/dev/null)"; do
   [ -n "$cand" ] && [ -x "$cand" ] || continue
-  [ "$(installed_mitm_version "$cand")" = "$MITM_VERSION" ] && { REUSE="$cand"; break; }
+  [ "$(installed_mitm_version "$cand")" = "$MITM_VERSION" ] || continue
+  case "$cand" in "$MITM_DIR"/*) ;; *)
+    if [ -n "$TRUST_MITMDUMP" ] && [ "$cand" = "$TRUST_MITMDUMP" ]; then
+      warn "reusing $cand because you passed --trust-mitmdump (its signature was not checked)"; REUSE="$cand"; break
+    fi
+    signed_by_mitmproxy "$cand" || { info "not reusing $cand: its app is not verifiably signed by mitmproxy (team ${MITM_TEAM:-?})"; continue; } ;;
+  esac
+  REUSE="$cand"; break
 done
 
 info "$NAME ($CLI) installer — tool $TOOL_VERSION, mitmproxy pinned $MITM_VERSION, $ARCH"
@@ -200,7 +220,7 @@ fetch() {  # fetch URL DEST
 MITM_BIN_DIR=""; MITM_BY_US=0
 if [ -n "$REUSE" ]; then
   MITM_BIN_DIR="$(dirname "$REUSE")"
-  case "$REUSE" in "$MITM_DIR"/*) MITM_BY_US=1 ;; *) warn "reusing external mitmproxy based on its reported version; its binary hash is not covered by the archive pin" ;; esac
+  case "$REUSE" in "$MITM_DIR"/*) MITM_BY_US=1 ;; *) info "reusing external mitmproxy: signature verified (team $MITM_TEAM)" ;; esac
   info "reusing mitmproxy $MITM_VERSION at $MITM_BIN_DIR"
 else
   mkdir -p "$ROOT"
@@ -210,7 +230,7 @@ else
     [ -f "$MITM_TARBALL" ] || die "no such file: $MITM_TARBALL"
     cp "$MITM_TARBALL" "$TMP/mitm-local.tar.gz"; MITM_FILE="$TMP/mitm-local.tar.gz"
   fi
-  verify "$MITM_FILE" "$M_SHA" "mitmproxy tarball"
+  verify "$MITM_FILE" "$M_SHA" "mitmproxy tarball (MITMPROXY_SHA256_$KEY)"
   rm -rf "$TMP/mitm-x"; mkdir "$TMP/mitm-x"
   tar -xzf "$MITM_FILE" -C "$TMP/mitm-x" || die "cannot extract mitmproxy tarball"
   [ -x "$TMP/mitm-x/mitmproxy.app/Contents/MacOS/mitmdump" ] || die "tarball has no mitmproxy.app/Contents/MacOS/mitmdump"
@@ -233,7 +253,7 @@ elif [ -f "$SRC_ROOT/$CLI" ]; then
   ( cd "$SRC_ROOT" && tar -cf - --exclude './install' --exclude '.DS_Store' --exclude '*.pyc' --exclude '__pycache__' . ) | tar -xf - -C "$TMP/tool-x"
 else
   fetch "$MIRROR/$CLI/$CLI-$TOOL_VERSION.tar.gz" "$TMP/tool.tar.gz"
-  verify "$TMP/tool.tar.gz" "$T_SHA" "tool tarball"
+  verify "$TMP/tool.tar.gz" "$T_SHA" "tool tarball (TOOL_SHA256)"
   tar -xzf "$TMP/tool.tar.gz" -C "$TMP/tool-x" --strip-components=1 || die "cannot extract tool tarball"
 fi
 [ -f "$TMP/tool-x/$CLI" ] || die "tool payload has no '$CLI' entry point"

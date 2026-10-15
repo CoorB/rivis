@@ -45,8 +45,12 @@ class InstallerBase(unittest.TestCase):
             fh.write("# mine\nexport A=1\n")
 
     def install(self, *args, env=None, timeout=240, bin=None):
-        return self.suite.run(["/bin/bash", bin or INSTALL] + list(args), home=self.home,
-                              env=env or self.suite.env(self.home), timeout=timeout)
+        env = env or self.suite.env(self.home)
+        shim = os.path.join(self.suite.root, "shim", "mitmdump")
+        if "--uninstall" not in args and "--help" not in args and os.path.isfile(shim) \
+                and os.path.join(self.suite.root, "shim") in env.get("PATH", "").split(":"):
+            args = args + ("--trust-mitmdump", shim)   # the hermetic shim is unsigned (F-10 refuses it otherwise)
+        return self.suite.run(["/bin/bash", bin or INSTALL] + list(args), home=self.home, env=env, timeout=timeout)
 
     def ok(self, *args, **kw):
         cp = self.install(*args, **kw)
@@ -89,6 +93,24 @@ class DryRun(InstallerBase):
         cp = self.install("--dry-run", "--allow-official", env=env)
         self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
         self.assertIn("explicitly allowed", cp.stdout)
+
+    def test_a_mitmdump_that_only_claims_the_pinned_version_is_not_reused(self):
+        """F-10: a fake `mitmdump` printing the right version must not be trusted; the signed cask still is."""
+        fake_bin = os.path.join(self.home, "fakebin")
+        os.makedirs(fake_bin)
+        fake = os.path.join(fake_bin, "mitmdump")
+        with open(fake, "w") as fh:
+            fh.write("#!/bin/sh\necho 'Mitmproxy: 12.2.3'\n")
+        os.chmod(fake, 0o755)
+        env = self.suite.env(self.home, extra={"PATH": fake_bin + ":/usr/bin:/bin:/usr/sbin:/sbin"})
+        cp = self.install("--dry-run", "--allow-official", env=env)
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertIn("not reusing " + fake, cp.stdout)
+        self.assertNotIn("reuse (no download)", cp.stdout)
+        cask = "/opt/homebrew/Caskroom/mitmproxy/12.2.3/mitmproxy.app/Contents/MacOS"
+        if os.path.isdir(cask):      # positive control on machines with the signed Homebrew cask
+            env = self.suite.env(self.home, extra={"PATH": cask + ":/usr/bin:/bin:/usr/sbin:/sbin"})
+            self.assertIn("reuse (no download)", self.ok("--dry-run", env=env).stdout)
 
     def test_installer_bundle_carries_product_identity(self):
         bundle = os.path.join(self.suite.root, "installer-bundle")
@@ -336,11 +358,11 @@ class WindowsInstallerSource(unittest.TestCase):
         self.assertIn("[switch]$AllowOfficial", src)
         self.assertIn("official site (explicitly allowed)", src)
 
-    def test_own_reuse_restores_installed_by_us_and_external_reuse_warns(self):
+    def test_own_reuse_restores_installed_by_us_and_external_reuse_needs_a_signature(self):
         for rel in ("install/install.sh", "install/install.ps1"):
             src = open(os.path.join(harness.REPO, rel)).read()
             self.assertRegex(src, r"MITM_BY_US=1|MitmByUs = .*StartsWith")
-            self.assertIn("binary hash is not covered by the archive pin", src)
+            self.assertRegex(src, r"signed_by_mitmproxy|Test-MitmSigned")      # F-10: never trust a version string alone
 
 
 if __name__ == "__main__":
