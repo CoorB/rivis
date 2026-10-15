@@ -1670,9 +1670,9 @@
     if (!state.rules.length && !skipped.length) { m.innerHTML = emptyState("rules", "No rules yet", "Select a call and use <b>This call</b> — Map Local, a forced status, a block or a delay all become rules here."); return; }
     m.innerHTML = (state.rules_error ? `<div class="banner bad"><b>${ico("warn", "sm")} rules.json has an error:</b> ${esc(state.rules_error)}</div>` : "") + (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") + state.rules.map((r, i) => `
       <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
-        <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(ACTION_NAME[r.action] || r.action)}</span>${(state.rules_outside || []).includes(r.name) ? `<span class="tag" title="Reads a file outside the project. Allowed only for files you trusted on this machine (${esc(state.product.cli)} rules trusted-files).">outside project</span>` : ""}</div>
+        <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(ACTION_NAME[r.action] || r.action)}</span>${(state.rules_outside || []).includes(r.name) ? `<span class="tag" title="Reads a file outside the project. Allowed only for files you trusted on this machine (${esc(state.product.cli)} rules trusted-files). Edit it in your own editor.">external file</span>` : ""}</div>
           <div class="sub">${esc(r.method ? r.method + " " : "")}${esc(pretty(r))} — ${esc(describe(r))}</div></div>
-        ${r.action === "map_local" ? `<button class="b" data-edit="${i}">Edit</button>` : ""}
+        ${r.action === "map_local" && !(state.rules_outside || []).includes(r.name) ? `<button class="b" data-edit="${i}">Edit</button>` : ""}
         <button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") +
       `<p class="sub">Saved in ${esc(state.rules_file)} — also editable with <code>${esc(state.product.cli)} rules</code>.</p>`;
     wireRuleRows(m);
