@@ -1,4 +1,5 @@
 """Unit tests for addons/proxy_redact.py: HAR exports are redacted by default (security finding F-08)."""
+import base64
 import json
 import unittest
 
@@ -112,6 +113,49 @@ class DeepJson(unittest.TestCase):
         self.assertIn("<redacted>", out)
 
 
+class RoundThreeAuditShapes(unittest.TestCase):
+    def test_secret_containers_variants_redirects_and_encoded_bodies(self):
+        markers = {
+            "object": "LEAK-object", "list": "LEAK-list", "pair": "LEAK-pair", "named": "LEAK-named",
+            "pin": "LEAK-pin", "otp": "LEAK-otp", "password": "LEAK-password", "cvv": "LEAK-cvv",
+            "auth": "LEAK-auth", "verifier": "LEAK-verifier", "header": "LEAK-header",
+            "location": "LEAK-location", "form": "LEAK-form", "xml": "LEAK-xml", "bearer": "LEAK-bearer",
+            "encoded_token": "LEAK-encoded-token", "encoded_password": "LEAK-encoded-password",
+            "multipart": "LEAK-multipart", "html": "LEAK-html", "jsonp": "LEAK-jsonp", "plain": "LEAK-plain",
+        }
+        body = json.dumps({
+            "token": {"value": markers["object"]}, "otpList": [markers["list"]],
+            "headers": [["Authorization", markers["pair"]], {"name": "password", "value": markers["named"]}],
+            "pinCode": markers["pin"], "otpCode": markers["otp"], "passwordConfirm": markers["password"],
+            "cvv2": markers["cvv"], "authCode": markers["auth"], "code_verifier": markers["verifier"],
+            "echoed_form": "grant_type=password&password=%s&safe=kept" % markers["form"],
+        })
+        latin1 = ('{"token":"%s","password":"%s","name":"René"}' %
+                  (markers["encoded_token"], markers["encoded_password"])).encode("latin-1")
+        encoded = base64.b64encode(latin1).decode()
+        entries = [
+            entry(text=body, resp_headers=[("X-OTP", markers["header"]),
+                                           ("Location", "https://app.test/cb?code=" + markers["location"])]),
+            entry(text="<password>%s</password> Bearer %s" % (markers["xml"], markers["bearer"]), mime="text/xml"),
+            entry(text='--x\r\nContent-Disposition: form-data; name="password"\r\n\r\n%s\r\n--x--\r\n' %
+                       markers["multipart"], mime="multipart/form-data; boundary=x"),
+            entry(text='<input type="hidden" name="csrf_token" value="%s">' % markers["html"], mime="text/html"),
+            entry(text='cb({"access_token":"%s","safe":"kept"})' % markers["jsonp"], mime="application/javascript"),
+            entry(text="password=%s safe=kept" % markers["plain"], mime="text/plain"),
+            entry(text=encoded, mime="application/json; charset=ISO-8859-1"),
+        ]
+        entries[-1]["response"]["content"]["encoding"] = "base64"
+        dumped = json.dumps(R.har(har(entries)))
+        for name, marker in markers.items():
+            self.assertNotIn(marker, dumped, name)
+        self.assertIn("safe=kept", dumped)
+
+        raw = ("POST /login?code=LEAK-raw-code HTTP/1.1\r\nX-Pin: LEAK-raw-header\r\n"
+               "Content-Type: application/x-www-form-urlencoded\r\n\r\npassword=LEAK-raw-body&safe=kept")
+        masked_raw = R.raw_text(raw)
+        for marker in ("LEAK-raw-code", "LEAK-raw-header", "LEAK-raw-body"):
+            self.assertNotIn(marker, masked_raw)
+
+
 if __name__ == "__main__":
     unittest.main()
-

@@ -10,6 +10,8 @@ What becomes ``<redacted>``:
 Structure (keys, status codes, non-secret values) is kept, so a redacted HAR still imports and replays.
 """
 
+import base64
+import binascii
 import json
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -22,6 +24,7 @@ SECRET_HEADERS = frozenset((
     "x-csrf-token", "x-xsrf-token", "x-session-id", "x-session-token", "x-amz-security-token",
 ))
 _SECRET_HEADER_PART = re.compile(r"token|secret|session|api[-_]?key|auth", re.I)
+_SECRET_HEADER_FIELD = re.compile(r"(^|[-_])(otp|pin|pass(word|code)?|pwd|cvv|cvc|csrf|xsrf|mfa)([-_]|$)", re.I)
 # field names: whole-word-ish match so "pinned"/"opinion"/"spine" are not caught but "pin", "user_pin", "newPin" are
 _SECRET_KEY = re.compile(
     r"(^|[_\-.])(pass(word|wd|code)?|pwd|otp|pin|cvv|cvc|secret|token|session(id)?|cookie|authorization|"
@@ -29,23 +32,47 @@ _SECRET_KEY = re.compile(
     r"|(password|passcode|otp|pin|secret|token|apikey|apiKey|sessionid|sessionId)$"
     r"|^(access|refresh|id|auth|bearer)[_\-]?token", re.I)
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
+_EXTRA_SECRET_KEY = re.compile(
+    r"^(password|passcode|otp|pin|cvv|cvc|secret)(_|\d|$)|^(auth_?code|code(_verifier)?|mfa_?code)$", re.I)
+_BEARER = re.compile(r"\b(Bearer)[ \t]+(?!<redacted>)[A-Za-z0-9._~+/=-]{6,}", re.I)
+_XML_VALUE = re.compile(r"(<(?P<key>[A-Za-z_][\w:.-]*)\b[^>]*>)(?P<value>.*?)(</(?P=key)\s*>)", re.I | re.S)
+_ASSIGN_VALUE = re.compile(
+    r"(?P<key>[A-Za-z_][\w.-]{0,63})(?P<sep>\s*=\s*)(?P<quote>[\"']?)(?P<value>[^&\s<>\"']+)(?P=quote)")
+_JSON_VALUE = re.compile(
+    r"(?P<prefix>[\"'](?P<key>[A-Za-z_][\w.-]{0,63})[\"']\s*:\s*[\"'])(?P<value>.*?)(?P<suffix>[\"'])")
+_MULTIPART_VALUE = re.compile(
+    r"(?P<prefix>\bname=[\"'](?P<key>[A-Za-z_][\w.-]{0,63})[\"'][^\r\n]*\r?\n(?:[^\r\n]*\r?\n)*\r?\n)"
+    r"(?P<value>.*?)(?=\r?\n--)", re.I | re.S)
+_HTML_INPUT = re.compile(r"<input\b[^>]*>", re.I)
+_HTML_NAME = re.compile(r"\bname\s*=\s*([\"'])(.*?)\1", re.I)
+_HTML_VALUE = re.compile(r"(\bvalue\s*=\s*)([\"'])(.*?)\2", re.I)
 
 
 def secret_header(name):
     lower = (name or "").lower()
-    return lower in SECRET_HEADERS or bool(_SECRET_HEADER_PART.search(lower))
+    return lower in SECRET_HEADERS or bool(_SECRET_HEADER_PART.search(lower) or _SECRET_HEADER_FIELD.search(lower))
 
 
 def secret_key(key):
-    return isinstance(key, str) and bool(_SECRET_KEY.search(key))
+    if not isinstance(key, str):
+        return False
+    normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key).replace("-", "_").replace(".", "_")
+    return bool(_SECRET_KEY.search(key) or _EXTRA_SECRET_KEY.search(normalized))
 
 
 def _value(obj, depth=0):
     """Redact secret-named fields and JWT-shaped strings inside parsed JSON (and JSON nested in strings)."""
     if isinstance(obj, dict):
-        return {k: (REDACTED if secret_key(k) and v not in (None, "") and not isinstance(v, (dict, list)) else _value(v, depth))
+        name = obj.get("name")
+        if isinstance(name, str) and (secret_header(name) or secret_key(name)) and "value" in obj:
+            obj = dict(obj)
+            if obj["value"] not in (None, ""):
+                obj["value"] = REDACTED
+        return {k: (REDACTED if secret_key(k) and v not in (None, "") else _value(v, depth))
                 for k, v in obj.items()}
     if isinstance(obj, list):
+        if len(obj) == 2 and isinstance(obj[0], str) and (secret_header(obj[0]) or secret_key(obj[0])):
+            return [obj[0], REDACTED if obj[1] not in (None, "") else obj[1]]
         return [_value(v, depth) for v in obj]
     if isinstance(obj, str):
         stripped = obj.strip()
@@ -54,8 +81,45 @@ def _value(obj, depth=0):
                 return json.dumps(_value(json.loads(stripped), depth + 1), ensure_ascii=False)
             except (ValueError, RecursionError):
                 pass
-        return _JWT.sub(REDACTED, obj)
+        if "=" in stripped and ("&" in stripped or secret_key(stripped.split("=", 1)[0])):
+            pairs = parse_qsl(stripped, keep_blank_values=True)
+            if pairs and any(secret_key(k) for k, _ in pairs):
+                return query(stripped)
+        return _loose(obj)
     return obj
+
+
+def _loose(body):
+    """Best-effort masking for non-JSON text (XML, multipart, JSONP, plain assignments, opaque Bearer tokens)."""
+    def xml_value(m):
+        return m.group(1) + (REDACTED if secret_key(m.group("key")) and m.group("value") else m.group("value")) + m.group(4)
+
+    def assigned(m):
+        value = REDACTED if secret_key(m.group("key")) and m.group("value") else m.group("value")
+        return m.group("key") + m.group("sep") + m.group("quote") + value + m.group("quote")
+
+    def json_value(m):
+        value = REDACTED if secret_key(m.group("key")) and m.group("value") else m.group("value")
+        return m.group("prefix") + value + m.group("suffix")
+
+    def multipart_value(m):
+        value = REDACTED if secret_key(m.group("key")) and m.group("value") else m.group("value")
+        return m.group("prefix") + value
+
+    def html_input(m):
+        tag = m.group(0)
+        name = _HTML_NAME.search(tag)
+        if not name or not secret_key(name.group(2)):
+            return tag
+        return _HTML_VALUE.sub(lambda v: v.group(1) + v.group(2) + REDACTED + v.group(2), tag)
+
+    body = _MULTIPART_VALUE.sub(multipart_value, body)
+    body = _HTML_INPUT.sub(html_input, body)
+    body = _XML_VALUE.sub(xml_value, body)
+    body = _JSON_VALUE.sub(json_value, body)
+    body = _ASSIGN_VALUE.sub(assigned, body)
+    body = _BEARER.sub(lambda m: m.group(1) + " " + REDACTED, body)
+    return _JWT.sub(REDACTED, body)
 
 
 def text(body, mime=""):
@@ -70,7 +134,7 @@ def text(body, mime=""):
             pass
     if "x-www-form-urlencoded" in (mime or "").lower():
         return query(body)
-    return _JWT.sub(REDACTED, body)
+    return _loose(body)
 
 
 def query(qs):
@@ -89,8 +153,39 @@ def url(u):
 
 
 def _headers(rows):
-    return [{**h, "value": REDACTED if secret_header(h.get("name")) else _JWT.sub(REDACTED, h.get("value") or "")}
-            for h in rows or []]
+    out = []
+    for h in rows or []:
+        name, value = h.get("name"), h.get("value") or ""
+        if secret_header(name):
+            value = REDACTED
+        elif (name or "").lower() in ("location", "content-location"):
+            value = url(value)
+        else:
+            value = _loose(value)
+        out.append({**h, "value": value})
+    return out
+
+
+def _base64_text(value, mime):
+    """Decode/redact/re-encode HAR base64 content, preserving the original bytes when nothing can be masked."""
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (ValueError, binascii.Error):
+        return value
+    charset = re.search(r"charset\s*=\s*[\"']?([A-Za-z0-9._-]+)", mime or "", re.I)
+    encodings = ([charset.group(1)] if charset else []) + ["utf-8", "latin-1"]
+    for encoding in encodings:
+        try:
+            decoded = raw.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+        masked = text(decoded, mime)
+        if masked != decoded:
+            try:
+                return base64.b64encode(masked.encode(encoding)).decode("ascii")
+            except (LookupError, UnicodeEncodeError):
+                continue
+    return value
 
 
 def har(doc):
@@ -109,8 +204,11 @@ def har(doc):
         if post and post.get("text"):
             post["text"] = text(post["text"], post.get("mimeType", ""))
         content = resp.get("content") or {}
-        if content.get("text") and content.get("encoding") != "base64":
-            content["text"] = text(content["text"], content.get("mimeType", ""))
+        if content.get("text"):
+            if content.get("encoding") == "base64":
+                content["text"] = _base64_text(content["text"], content.get("mimeType", ""))
+            else:
+                content["text"] = text(content["text"], content.get("mimeType", ""))
             content["size"] = len(content["text"])
     doc.setdefault("log", {})["comment"] = "Secrets redacted by Rivis (credential headers, cookies, secret fields, JWTs)."
     return doc
@@ -136,4 +234,4 @@ def raw_text(raw):
         elif not in_head and bare.lstrip()[:1] in ("{", "["):
             line = text(bare, ctype) + line[len(bare):]       # a JSON body line: redact by field name too
         out.append(line)
-    return _JWT.sub(REDACTED, "".join(out))
+    return _loose("".join(out))
