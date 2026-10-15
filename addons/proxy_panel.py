@@ -120,6 +120,31 @@ def _session_meta(doc, fallback_name):
             "count": int(number(doc.get("count"))), "created": float(number(doc.get("created"))),
             "hosts": [h for h in hosts if isinstance(h, str)][:8]}
 
+# ── mitmweb bundle fix ──────────────────────────────────────────────────────────
+# mitmweb 12's FlowTable.onViewportUpdate stores min(scrollTop, end * rowHeight) as viewportTop but compares the
+# UNclamped scrollTop against it. Whenever scrollTop is past the last rendered row (the sticky header's height, a list
+# that just shrank under the retention cap, a very short list pane) the two never match, every componentDidUpdate
+# calls setState again, and React aborts the page with error #185 ("mitmproxy has crashed") while the user scrolls.
+# The fix compares the clamped value. Matched by shape, not minified names; if a future mitmweb changes the code the
+# bundle is served unchanged and a warning is logged.
+MITMWEB_PATCH_VERSION = "1"
+_VIEWPORT_LOOP = re.compile(
+    r"if\(this\.state\.viewportTop!==(\w+)\|\|!(\w+)\(this\.state\.vScroll,(\w+)\)\)\{"
+    r"const (\w+)=Math\.min\(\1,\3\.end\*this\.props\.rowHeight\);"
+    r"this\.setState\(\{vScroll:\3,viewportTop:\4\}\)\}")
+
+
+def patch_mitmweb_js(source, warn=None):
+    patched, n = _VIEWPORT_LOOP.subn(
+        lambda m: ("{const %(t)s=Math.min(%(s)s,%(v)s.end*this.props.rowHeight);"
+                   "if(this.state.viewportTop!==%(t)s||!%(eq)s(this.state.vScroll,%(v)s))"
+                   "this.setState({vScroll:%(v)s,viewportTop:%(t)s})}")
+        % {"s": m.group(1), "eq": m.group(2), "v": m.group(3), "t": m.group(4)}, source)
+    if n != 1 and warn and "this.state.viewportTop" in source:
+        warn("proxy_panel: mitmweb's flow-list code changed; the scroll-crash fix was not applied")
+    return patched if n == 1 else source
+
+
 class ProxyPanel:
     def __init__(self):
         self.project_only = False
@@ -1601,6 +1626,7 @@ class ProxyPanel:
                     s = chunk.decode() if isinstance(chunk, bytes) else chunk
                     if "</head>" in s and "proxy/boot.js" not in s:
                         s = s.replace("</head>", THEME_BOOT + "</head>", 1)
+                    s = re.sub(r'(src="\./static/index-[\w-]+\.js)"', r'\1?rivis=%s"' % MITMWEB_PATCH_VERSION, s, count=1)
                     if "</body>" in s and "proxy/panel.js" not in s:
                         s = s.replace("</body>", '<script src="./proxy/panel.js"></script></body>')
                     chunk = s
@@ -1612,6 +1638,21 @@ class ProxyPanel:
                     self.set_header("Content-Type", "application/javascript")
                     self.set_header("Cache-Control", "no-store")
                     self.write(fh.read())
+
+        class MitmwebIndexJS(webapp.RequestHandler):
+            """mitmweb's own bundle with patch_mitmweb_js applied (see there). no-store, and the index page asks for it
+            with ?rivis=N, so a browser never keeps running a cached unpatched copy."""
+
+            def get(self, name):
+                path = os.path.join(os.path.dirname(webapp.__file__), "static", name)
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        source = fh.read()
+                except OSError:
+                    raise tornado.web.HTTPError(404)
+                self.set_header("Content-Type", "application/javascript")
+                self.set_header("Cache-Control", "no-store")
+                self.write(patch_mitmweb_js(source, ctx.log.warn))
 
         class ThemeCSS(webapp.RequestHandler):
             def get(self):
@@ -1724,6 +1765,7 @@ class ProxyPanel:
             (r"/", ProxyIndex),
             (r"/proxy/panel\.js", PanelJS),
             (r"/proxy/theme\.css", ThemeCSS),
+            (r"/static/(index-[A-Za-z0-9_-]+\.js)", MitmwebIndexJS),
             (r"/proxy/boot\.js", BootJS),
             (r"/proxy/bootstrap/([0-9a-f]{32})", Bootstrap),
             (r"/proxy/api/([a-z_]+)", Api),

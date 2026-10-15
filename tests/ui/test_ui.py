@@ -120,6 +120,21 @@ class UiSmoke(LiveCase):
             self.assertEqual(page.locator("text=mitmproxy has crashed").count(), 0)
         self.assertEqual(self.errors, [])
 
+    def test_scrolling_past_the_last_row_does_not_crash_the_list(self):
+        """mitmweb compares the unclamped scrollTop with the clamped viewportTop it stored, so a scroll position past
+        the last rendered row looped setState until React gave up (#185, "mitmproxy has crashed"). A list pane shorter
+        than the sticky header is the quickest way to get there; Rivis serves mitmweb's bundle with that fixed."""
+        self.many_flows(120)
+        page = self.open()
+        wait_for(lambda: page.locator(".flow-table tbody tr td.col-path").count() > 10, 15, 0.2, "rows rendered")
+        self.assertIn("?rivis=", page.evaluate("document.querySelector('script[type=module]').src"))
+        page.add_style_tag(content=".flow-table { height: 12px !important; flex: none !important; }")
+        for _ in range(5):
+            page.evaluate("const v = document.querySelector('.flow-table'); v.scrollTop = v.scrollHeight")
+            page.wait_for_timeout(200)
+        self.assertEqual(page.locator("text=mitmproxy has crashed").count(), 0)
+        self.assertEqual(self.errors, [])
+
     def test_the_list_opens_newest_first_and_the_user_can_still_re_sort(self):
         page = self.open()
         th = page.locator(".flow-table th.col-timestamp")
