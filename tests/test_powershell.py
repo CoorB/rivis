@@ -86,6 +86,28 @@ class Commands(unittest.TestCase):
         self.ok("rules", "disallow-file", mine)
         self.assertIn("no files outside", self.ok("rules", "trusted-files"))
 
+    def test_start_keeps_the_ui_password_off_argv_and_out_of_the_output(self):
+        """F-03 parity: the password is in a private file read by proxy_auth.py; the browser gets a one-time link."""
+        log = os.path.join(self.suite.shimlog, "mitm-argv.log")
+        open(log, "w").close()
+        env = dict(self.env, SHIM_DRYRUN="1", RIVIS_WEB_PASSWORD="ps-secret-0123456789abcdef")
+        cp = self.suite.run([PWSH, "-NoProfile", "-NonInteractive", "-File", os.path.join(harness.REPO, "rivis.ps1"),
+                             "start", "-NoOpen"], home=self.home, env=env, timeout=120)
+        lines = [l for l in self.suite.shim_log("mitm-argv.log").splitlines() if l.startswith("mitmweb ")]
+        self.assertEqual(len(lines), 1, cp.stdout + cp.stderr)
+        line = lines[0]
+        self.assertNotIn("ps-secret", line)
+        self.assertNotIn("web_password", line)
+        self.assertNotIn("ps-secret", cp.stdout + cp.stderr)
+        self.assertIn("proxy_auth.py", line)
+        token = os.path.join(self.state, "web-token")
+        self.assertIn("proxy_auth_token_file=" + token, line)
+        self.assertIn("proxy_bootstrap_file=" + os.path.join(self.state, "web-bootstrap"), line)
+        for path in (token, os.path.join(self.state, "web-bootstrap")):
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600, path)
+        with open(token) as fh:
+            self.assertEqual(fh.read().strip(), "ps-secret-0123456789abcdef")
+
     def bash(self, *args):
         cp = self.suite.rivis(*args, home=self.home, env=self.env)
         self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
