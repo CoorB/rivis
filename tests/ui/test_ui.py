@@ -364,6 +364,65 @@ class UiSmoke(UiBase):
         self.assertIn("Quit Proxyman", text)
         self.assertEqual(self.errors, [])
 
+    def test_an_available_update_shows_a_banner_and_installs_on_click(self):
+        import json as _json
+        installs = []
+        def patch(route):
+            resp = route.fetch()
+            doc = resp.json()
+            doc["update"] = {"configured": True, "installed": True, "signed_in": True, "repo": "CoorB/rivis",
+                             "available": {"version": "9.9.9", "notes": "Faster everything.", "url": "x"},
+                             "installing": None, "login": None, "error": None}
+            route.fulfill(response=resp, body=_json.dumps(doc), headers={**resp.headers, "content-type": "application/json"})
+        self.page.route("**/proxy/api/state", patch)
+        self.page.route("**/proxy/api/update_install", lambda r: (installs.append(1),
+                        r.fulfill(status=200, content_type="application/json", body="{}")))
+        page = self.open()
+        bar = page.locator("#proxy-panel-host #updatebar")
+        wait_for(lambda: bar.is_visible(), 10, 0.2, "update banner")
+        self.assertIn("9.9.9 is available", bar.inner_text())
+        page.locator("#proxy-panel-host #upd-notes").click()             # What's new -> Settings shows the notes
+        wait_for(lambda: "Faster everything." in self.panel_text(), 5, 0.2, "notes in Settings")
+        page.locator("#proxy-panel-host #hclose").click()
+        page.locator("#proxy-panel-host #upd-go").click()
+        wait_for(lambda: installs, 5, 0.1, "update_install called")
+        self.assertEqual(self.errors, [])
+
+    def test_later_hides_the_banner_for_that_version(self):
+        import json as _json
+        def patch(route):
+            resp = route.fetch()
+            doc = resp.json()
+            doc["update"] = {"configured": True, "installed": True, "signed_in": True,
+                             "available": {"version": "9.9.8", "notes": "", "url": "x"}, "installing": None, "login": None}
+            route.fulfill(response=resp, body=_json.dumps(doc), headers={**resp.headers, "content-type": "application/json"})
+        self.page.route("**/proxy/api/state", patch)
+        page = self.open()
+        bar = page.locator("#proxy-panel-host #updatebar")
+        wait_for(lambda: bar.is_visible(), 10, 0.2, "update banner")
+        page.locator("#proxy-panel-host #upd-later").click()
+        page.wait_for_timeout(2500)                                       # through a couple of state polls
+        self.assertFalse(bar.is_visible())
+        self.assertEqual(self.errors, [])
+
+    def test_sign_in_shows_the_github_code_in_settings(self):
+        import json as _json
+        def patch(route):
+            resp = route.fetch()
+            doc = resp.json()
+            doc["update"] = {"configured": True, "installed": True, "signed_in": False, "repo": "CoorB/rivis",
+                             "available": None, "installing": None,
+                             "login": {"status": "waiting", "user_code": "WXYZ-1234", "uri": "https://github.com/login/device"}}
+            route.fulfill(response=resp, body=_json.dumps(doc), headers={**resp.headers, "content-type": "application/json"})
+        self.page.route("**/proxy/api/state", patch)
+        page = self.open()
+        page.locator("#proxy-panel-host #fab").click()                    # the gear lives in the Tools drawer
+        page.locator("#proxy-panel-host #gear").click()
+        wait_for(lambda: "WXYZ-1234" in self.panel_text(), 10, 0.2, "device code shown")
+        link = page.locator("#proxy-panel-host #set-updates a")
+        self.assertEqual(link.get_attribute("href"), "https://github.com/login/device")
+        self.assertEqual(self.errors, [])
+
     def test_the_empty_list_offers_device_setup(self):
         self.page.add_init_script("try { localStorage.setItem('rivis-welcome', 'done') } catch (e) {}")
         self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))

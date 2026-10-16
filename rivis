@@ -61,6 +61,7 @@
 #                                 sim/emulator trust, running state, host reachability, disk.
 #                                 --fix-safe does only safe, reversible fixes (asks y/N)
 #   <cli> bug-report [--output PATH]     create a redacted support bundle (no flows or tokens)
+#   <cli> update [check|install|login|logout|status]   signed in-app updates from the team's GitHub releases
 set -uo pipefail
 umask 077
 
@@ -386,6 +387,10 @@ cmd_start() {
   ensure_ca; ensure_rules
   local o; o=$(port_owner "$PORT"); [ -n "$o" ] && die "port $PORT already taken: $o  (a previous $CLI? run: $CLI stop)"
   o=$(port_owner "$WEB_PORT"); [ -n "$o" ] && die "UI port $WEB_PORT already taken: $o"
+  # how this instance was started, so an in-app update can restart it the same way (addons/update_install.sh)
+  { printf 'START_PORT=%q\nSTART_WEB_PORT=%q\nSTART_ARGS=(' "$PORT" "$WEB_PORT"
+    printf '%q ' --project "$PROJECT" start --background --no-open "${fwd[@]}"; printf ')\n'; } > "$STATE_ROOT/last-start.tmp" \
+    && chmod 600 "$STATE_ROOT/last-start.tmp" && mv -f "$STATE_ROOT/last-start.tmp" "$STATE_ROOT/last-start"
   if [ "$bg" = 1 ]; then   # same start, detached from this terminal; output goes to a private log
     mkdir -p "$STATE_ROOT/logs"; local log="$STATE_ROOT/logs/mitmweb.log"
     nohup "$0" --project "$PROJECT" start ${fwd[@]+"${fwd[@]}"} < /dev/null > "$log" 2>&1 &
@@ -468,6 +473,37 @@ our_mitmweb() {   # our_mitmweb PID — a mitmweb started from THIS state dir (n
   ps -ww -o args= -p "$1" 2>/dev/null | grep -qF "proxy_auth_token_file=$STATE_ROOT/web-token"
 }
 our_listeners() { local pid; for pid in $(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u); do our_mitmweb "$pid" && echo "$pid"; done; true; }
+# ───────────────────────── update ─────────────────────────
+# Signed updates from the team's private GitHub releases (addons/updater.py: device-flow sign-in, Keychain, signature +
+# SHA-256 checks). The install runs detached (addons/update_install.sh) because it stops and restarts this proxy.
+cmd_update() {
+  local U=(/usr/bin/python3 -I "$SCRIPT_DIR/addons/updater.py") action="${1:-check}" out yes=0
+  [ "${2:-}" = --yes ] && yes=1
+  case "$action" in
+    login|logout) "${U[@]}" "$action" ;;
+    status) "${U[@]}" status ;;
+    check|install)
+      out=$("${U[@]}" check) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error","update check failed"))' 2>/dev/null)"
+      local v notes; v=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; a=json.load(sys.stdin)["available"]; print(a["version"] if a else "")')
+      if [ -z "$v" ]; then info "$PRODUCT_NAME $(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["current"])') is up to date"; return 0; fi
+      notes=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["available"]["notes"])')
+      info "$PRODUCT_NAME $v is available"; [ -n "$notes" ] && printf '%s\n' "$notes" | sed 's/^/    /'
+      [ "$action" = install ] || [ -t 0 ] || return 0
+      if [ "$action" = check ]; then printf 'Install it now? %s restarts by itself. [Y/n] ' "$PRODUCT_NAME"; read -r ans || ans=n
+        case "$ans" in ""|y|Y|yes) ;; *) return 0 ;; esac; fi
+      printf '%s' "$("${U[@]}" status)" | /usr/bin/python3 -I -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["installed"] else 1)' \
+        || die "this copy runs from a source checkout — update it with git, not with '$CLI update'"
+      out=$("${U[@]}" download) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error","download failed"))' 2>/dev/null)"
+      local zip; zip=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["path"])')
+      mkdir -p -m 700 "$STATE_ROOT/updates"
+      nohup /bin/bash "$SCRIPT_DIR/addons/update_install.sh" "$zip" > "$STATE_ROOT/updates/install.log" 2>&1 < /dev/null &
+      disown $! 2>/dev/null || true
+      info "installing $PRODUCT_NAME $v in the background (verified: signature + SHA-256). It restarts by itself in about a minute."
+      info "log: $STATE_ROOT/updates/install.log" ;;
+    *) die "usage: $CLI update [check|install|login|logout|status]" ;;
+  esac
+}
+
 cmd_stop() {   # stop our mitmweb on our ports (only ours — never another app, HOME or user)
   local pids pid i other; pids=$(our_listeners)
   if [ -z "$pids" ]; then
@@ -1088,6 +1124,7 @@ case "${1:-}" in
   mock)      shift; cmd_mock "$@" ;;
   doctor)    shift; cmd_doctor "$@" ;;
   bug-report) shift; cmd_bug_report "$@" ;;
+  update)    shift; cmd_update "$@" ;;
   cert)      cmd_cert ;;
   --version|-V|version)   # installed copies carry VERSION at their root; a repo checkout keeps it in install/
     v=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || cat "$SCRIPT_DIR/install/VERSION" 2>/dev/null || echo dev)

@@ -957,3 +957,30 @@ class LeftoverSystemProxyWhileRunning(LiveCase):
         time.sleep(6)
         self.panel.state()
         self.assertEqual(self.changes(), [], "a live proxy must never be cleared")
+
+
+class InAppUpdates(LiveCase):
+    def test_state_reports_version_and_update_status_without_blocking(self):
+        doc = self.panel.state()
+        self.assertEqual(doc["version"], open(os.path.join(harness.REPO, "install", "VERSION")).read().strip())
+        upd = wait_for(lambda: (lambda u: u if u and not u.get("pending") else None)(self.panel.state().get("update")),
+                       20, 0.5, "first background update status")
+        self.assertFalse(upd["configured"])                 # this repo build ships without a GitHub App client id
+        self.assertFalse(upd["installed"])                  # a source checkout updates with git
+        self.panel.ok("update_check", {})
+
+    def test_sign_in_on_a_build_without_updates_says_so_and_sign_out_is_harmless(self):
+        self.panel.ok("update_login_start", {})
+        login = wait_for(lambda: (lambda l: l if l and l.get("status") == "error" else None)(
+            (self.panel.state().get("update") or {}).get("login")), 20, 0.5, "sign-in result")
+        self.assertIn("not set up", login["error"])           # no client id in this build: GitHub is never contacted
+        self.panel.ok("update_logout", {})
+        upd = wait_for(lambda: (lambda u: u if u and not u.get("pending") else None)(self.panel.state().get("update")),
+                       20, 0.5, "update status after sign-out")
+        self.assertFalse(upd["signed_in"])
+
+    def test_install_is_refused_when_there_is_nothing_to_install(self):
+        code, doc, _ = self.panel.post("update_install", {})
+        self.assertEqual(code, 400)
+        self.assertIn("no update", doc["error"])
+

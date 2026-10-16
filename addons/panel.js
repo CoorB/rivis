@@ -255,6 +255,11 @@
     .lostbar { position: fixed; bottom: 34px; left: 50%; transform: translateX(-50%); z-index: 2147483004; display: none; max-width: min(720px, 92vw);
                background: var(--rv-danger, #b42318); color: #fff; padding: 8px 14px; border-radius: var(--rv-r-md); font-size: 13px; box-shadow: var(--rv-shadow-2, 0 4px 14px rgba(0,0,0,.25)); }
     .lostbar.open { display: block; }
+    .lostbar.info { background: var(--rv-text); color: var(--rv-surface); bottom: 78px; }
+    .lostbar.info .b { margin-left: 8px; }
+    .lostbar.info .lnk { color: inherit; text-decoration: underline; margin-left: 8px; }
+    .updnotes { white-space: pre-wrap; font-size: 12.5px; margin: 6px 0 0; max-height: 240px; overflow: auto; }
+    .devcode { font: 600 20px/1.2 var(--rv-mono); letter-spacing: 2px; margin: 4px 0 6px; }
     .lostbar code { background: rgba(255,255,255,.18); color: #fff; padding: 0 4px; border-radius: 3px; white-space: nowrap; }
     .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 26px; z-index: 2147483003; background: var(--rv-text); color: var(--rv-surface); padding: 9px 16px; border-radius: var(--rv-r-md);
              font-size: 12.5px; font-weight: 500; display: none; align-items: center; gap: 12px; max-width: 80vw; box-shadow: var(--rv-shadow-2); animation: toast var(--rv-dur) var(--rv-ease); }
@@ -407,7 +412,8 @@
   <div class="emptylist" id="emptylist"></div>
   <div class="toast" id="toast"></div>
   <div class="lostbar" id="lostbar" role="alert"></div>
-  <div class="lostbar" id="proxybar" role="alert"></div>`;
+  <div class="lostbar" id="proxybar" role="alert"></div>
+  <div class="lostbar info" id="updatebar" role="status"></div>`;
 
   const $ = (id) => root.getElementById(id);
   let tab = "call", state = null, editing = null, pausedOpen = null, dismissed = new Set();
@@ -1981,6 +1987,26 @@
   // Another proxy app as the Mac's proxy: the iOS Simulator's calls go there instead (a leftover on a dead port is
   // cleared by the add-on itself and reported once)
   let proxyFixShown = false;
+  // In-app updates (signed releases, addons/updater.py). The page reloads itself once the restarted proxy is the new version.
+  let loadedVersion = null;
+  const updateLater = (v) => LS.set("rivis-update-later", v);
+  const showUpdateBar = (s) => {
+    const bar = $("updatebar"), u = s.update || {}, name = (s.product && s.product.name) || "Rivis";
+    if (loadedVersion === null && s.version) loadedVersion = s.version;
+    if (loadedVersion && s.version && s.version !== loadedVersion) { location.reload(); return; }
+    let html = "";
+    if (u.installing) html = `Updating ${esc(name)} to ${esc(u.installing.version)}… It restarts by itself in about a minute, and this page reloads.`;
+    else if (u.available && LS.get("rivis-update-later", "") !== u.available.version)
+      html = `${esc(name)} ${esc(u.available.version)} is available.<button class="lnk" id="upd-notes">What's new</button>` +
+        `<button class="b p" id="upd-go">Update and restart</button><button class="lnk" id="upd-later">Later</button>`;
+    if (bar.dataset.html !== html) {
+      bar.dataset.html = html; bar.innerHTML = html;
+      if ($("upd-go")) $("upd-go").onclick = () => run("update_install", {}, "Updating… it restarts by itself in about a minute");
+      if ($("upd-later")) $("upd-later").onclick = () => { updateLater(u.available.version); showUpdateBar(s); };
+      if ($("upd-notes")) $("upd-notes").onclick = () => openHelp("settings");
+    }
+    bar.classList.toggle("open", !!html && !$("lostbar").classList.contains("open"));
+  };
   const showProxyBar = (sp) => {
     const bar = $("proxybar"), name = (state && state.product && state.product.name) || "Rivis";
     if (sp && sp.fixed && !proxyFixShown) {
@@ -1996,7 +2022,7 @@
     try {
       const s = await Promise.race([api("state"), new Promise((_, no) => setTimeout(() => no(new Error("no answer")), 4000))]);
       missed = 0; lostSince = 0; showLost(false);
-      state = s; badges(); showProxyBar(s.system_proxy);
+      state = s; badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow();
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
       await refreshFlows(); tagCells(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
@@ -2136,6 +2162,45 @@
   const mapTable = (rows) => `<table class="map"><tr><th>In Proxyman you did</th><th>Here</th><th></th></tr>${rows.map(([a, b, g]) =>
     `<tr><td>${a}</td><td>${b}</td><td class="go"><button class="lnk" data-go="${g}">Open →</button></td></tr>`).join("")}</table>`;
   const closeHelp = () => $("help").classList.remove("open");
+  function updatesRowHTML() {
+    const u = (state && state.update) || {}, name = (state && state.product && state.product.name) || "Rivis", v = (state && state.version) || "";
+    let sub = "", act = "", extra = "";
+    if (u.pending) sub = "Checking…";
+    else if (!u.configured) sub = "Updates are not set up in this build.";
+    else if (!u.installed) sub = "This copy runs from a source checkout — update it with git.";
+    else if (!u.signed_in) {
+      const l = u.login || {};
+      if (l.status === "waiting") {
+        sub = "On GitHub, enter this code and click Authorize:";
+        extra = `<div class="devcode">${esc(l.user_code)}</div><div class="btns" style="margin:0"><a class="b p" href="${esc(l.uri)}" target="_blank" rel="noopener">Open GitHub</a>` +
+          `<button class="b" id="upd-copy">Copy code</button></div>`;
+      } else {
+        sub = l.status === "error" ? `Sign-in failed: ${esc(l.error || "")}` : `Sign in once with your GitHub account (read-only access to ${esc(u.repo || "the releases")}).`;
+        act = `<button class="b p" id="upd-login" ${l.status === "starting" ? "disabled" : ""}>Sign in with GitHub</button>`;
+      }
+    } else {
+      sub = u.error ? `Version ${esc(v)} · check failed: ${esc(u.error)}` : u.available ? `Version ${esc(v)} · <b>${esc(u.available.version)} is available</b>` : `Version ${esc(v)} · up to date`;
+      act = (u.available && !u.installing ? `<button class="b p" id="upd-go2">Update and restart</button>` : "") +
+        `<button class="b" id="upd-check">Check now</button><button class="b" id="upd-logout">Sign out</button>`;
+      if (u.available && u.available.notes) extra = `<div class="updnotes">${esc(u.available.notes)}</div>`;
+    }
+    return `<div class="set"><div><b>Updates</b><span class="sub">${sub}</span>${extra}</div><div class="btns" style="margin:0">${act}</div></div>`;
+  }
+  let updatesKey = "";
+  function wireUpdatesRow() {
+    if ($("upd-login")) $("upd-login").onclick = () => run("update_login_start", {}, `Opening the sign-in…`);
+    if ($("upd-check")) $("upd-check").onclick = () => run("update_check", {}, "Checking for updates…");
+    if ($("upd-logout")) $("upd-logout").onclick = () => run("update_logout", {}, "Signed out of GitHub");
+    if ($("upd-go2")) $("upd-go2").onclick = () => run("update_install", {}, "Updating… it restarts by itself in about a minute");
+    if ($("upd-copy")) $("upd-copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(state.update.login.user_code); toast("Code copied"); } catch (e) { toast("Copy failed — type the code", true); } };
+  }
+  function refreshUpdatesRow() {   // the Settings sheet is static HTML: redraw only the Updates row, only when it changes
+    const box = $("set-updates"); if (!box) return;
+    const key = JSON.stringify([state && state.update, state && state.version]);
+    if (key === updatesKey) return;
+    updatesKey = key; box.innerHTML = updatesRowHTML(); wireUpdatesRow();
+  }
   function openHelp(which) {
     const tabs = { map: "Coming from Proxyman?", keys: "Shortcuts", settings: "Settings" };
     const body = {
@@ -2147,7 +2212,8 @@
           <div class="seg" style="margin:0">${["system", "light", "dark"].map((m) => `<button data-theme-set="${m}" class="${themeMode() === m ? "on" : ""}">${m[0].toUpperCase() + m.slice(1)}</button>`).join("")}</div></div>
         <div class="set"><div><b>Compact rows</b><span class="sub">Tighter type and padding in the call list</span></div>${sw('id="set-compact"', compactOn())}</div>
         <div class="set"><div><b>Rivis look</b><span class="sub">Off = the plain built-in look. Also: add <code>?theme=off</code> to the page address</span></div>${sw('id="set-skin"', skinOn())}</div>
-        <div class="set"><div><b>Welcome card</b><span class="sub">The first-open “Coming from Proxyman?” card</span></div><button class="b" id="set-welcome">Show again</button></div>`,
+        <div class="set"><div><b>Welcome card</b><span class="sub">The first-open “Coming from Proxyman?” card</span></div><button class="b" id="set-welcome">Show again</button></div>
+        <div id="set-updates">${updatesRowHTML()}</div>`,
     };
     $("hsheet").innerHTML = `
       <header><span class="mark">${ico("mark")}</span><b>${esc((state && state.product.name) || "Rivis")} <small>/ Help</small></b>
@@ -2162,6 +2228,7 @@
     if ($("set-compact")) $("set-compact").onchange = () => applyDensity($("set-compact").checked);
     if ($("set-skin")) $("set-skin").onchange = () => { setSkin($("set-skin").checked); toast($("set-skin").checked ? "Rivis look on" : "Plain built-in look"); };
     if ($("set-welcome")) $("set-welcome").onclick = () => { LS.set("rivis-welcome", ""); closeHelp(); showWelcome(); };
+    updatesKey = JSON.stringify([state && state.update, state && state.version]); wireUpdatesRow();
   }
   $("help").onclick = (e) => { if (e.target === $("help")) closeHelp(); };
   $("bhelp").onclick = () => openHelp("map");

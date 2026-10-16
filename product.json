@@ -2,5 +2,7 @@
   "name": "Rivis",
   "cli": "rivis",
   "env_prefix": "RIVIS",
-  "state_dir": "~/.rivis"
+  "state_dir": "~/.rivis",
+  "update_repo": "CoorB/rivis",
+  "github_app_client_id": ""
 }

@@ -152,6 +152,8 @@ class Suite:
             "EDITOR": "/usr/bin/true", "VISUAL": "/usr/bin/true",
             "ADB": "/nonexistent/adb", "SHIM_LOG": self.shimlog,
             "NO_COLOR": "1", "PYTHONDONTWRITEBYTECODE": "1",
+            # in-app updates keep the GitHub sign-in in the macOS Keychain: tests use a private file instead
+            "RIVIS_TOKEN_FILE": os.path.join(home_tmp, "update-token"),
         }
         if confdir:
             env["RIVIS_CONFDIR"] = confdir

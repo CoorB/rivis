@@ -61,6 +61,7 @@ from proxy_compose import ComposerStore, normalize_request
 from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, find_jwts)
 
 DEFAULT_STATE = os.path.join(STATE_ROOT, "projects", "default")
+_VERSION_AT_LOAD = None
 STATE_DIR = DEFAULT_STATE          # confinement base for every panel file op (F-09/B5)
 COLL_DIR = os.path.join(DEFAULT_STATE, "collections")
 SESS_DIR = os.path.join(DEFAULT_STATE, "sessions")
@@ -167,6 +168,9 @@ class ProxyPanel:
         self._sysproxy_stale_since = 0.0        # see _system_proxy_check
         self._sysproxy = devices.Snapshot(self._system_proxy_check, 5)       # off the event loop (review R1)
         self._devices = devices.Snapshot(self._devices_check, 2)
+        self._update = devices.Snapshot(self._update_check, 6 * 3600)        # signed in-app updates (addons/updater.py)
+        self._update_login = None                                            # the device-flow sign-in in progress
+        self._update_installing = None
         self._browser_jobs = devices.Jobs("a browser is still starting — wait a moment")
         self.project_only = False
         self.show_dns = False
@@ -396,6 +400,8 @@ class ProxyPanel:
             "scripts": self.scripts(cfg),
             "script_status": self.script_status(),
             "retention": self.retention_state(),
+            "update": self.update_state(),
+            "version": self.product_version(),
             "system_proxy": self.system_proxy_state(),
             "flow_count": len(self.all_flows()),
             "focus_host": self.focused_host,
@@ -489,6 +495,74 @@ class ProxyPanel:
             stale_since = 0.0
         self._sysproxy_stale_since = stale_since
         return info
+
+    # ── in-app updates: everything slow (network, Keychain) runs off the event loop ─────────────────────────────────
+    @staticmethod
+    def _updater(*args, timeout=90):
+        try:
+            r = subprocess.run(["/usr/bin/python3", "-I", os.path.join(HERE, "updater.py"), *args],
+                               capture_output=True, text=True, timeout=timeout)
+            return r.returncode, json.loads(r.stdout or "{}")
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            return 1, {"error": "update check failed: %s" % e}
+
+    def _update_check(self):
+        rc, st = self._updater("status")
+        out = dict(st if rc == 0 else {}, available=None, error=None if rc == 0 else st.get("error"))
+        if rc == 0 and st.get("configured") and st.get("signed_in") and st.get("installed"):
+            rc, j = self._updater("check")
+            if rc == 0:
+                out["available"] = j.get("available")
+            else:
+                out["error"] = j.get("error")
+                out["signed_in"] = self._updater("status")[1].get("signed_in", False)   # a revoked sign-in is forgotten
+        return out
+
+    def _update_login_flow(self):
+        import time
+        rc, j = self._updater("login-start", timeout=30)
+        if rc != 0:
+            self._update_login = {"status": "error", "error": j.get("error")}
+            return
+        self._update_login = {"status": "waiting", "user_code": j["user_code"], "uri": j["verification_uri"],
+                              "expires_at": j["expires_at"]}
+        interval = int(j.get("interval", 5))
+        while time.time() < j["expires_at"]:
+            time.sleep(interval)
+            rc, r = self._updater("login-poll", j["device_code"], timeout=30)
+            if rc != 0:
+                self._update_login = {"status": "error", "error": r.get("error")}
+                return
+            if r.get("result") == "ok":
+                self._update_login = {"status": "ok"}
+                self._update.invalidate()
+                return
+            if r.get("result") == "slow_down":
+                interval += 5
+        self._update_login = {"status": "error", "error": "the code expired — sign in again"}
+
+    def update_state(self):
+        have, snap = self._update.get()
+        out = dict(snap if have and snap else {"pending": True})
+        login = self._update_login
+        out["login"] = {k: v for k, v in login.items() if k != "device_code"} if login else None
+        out["installing"] = self._update_installing
+        return out
+
+    @staticmethod
+    def product_version():
+        """The version this proxy process STARTED with: an update swaps the files before it restarts the proxy, and the
+        page must reload only once the new version is actually running."""
+        global _VERSION_AT_LOAD
+        if _VERSION_AT_LOAD is None:
+            _VERSION_AT_LOAD = ""
+            for p in (os.path.join(os.path.dirname(HERE), "VERSION"), os.path.join(os.path.dirname(HERE), "install", "VERSION")):
+                try:
+                    _VERSION_AT_LOAD = open(p).read().strip()
+                    break
+                except OSError:
+                    continue
+        return _VERSION_AT_LOAD
 
     def retention_state(self):
         for addon in self._addons():
@@ -1131,6 +1205,38 @@ class ProxyPanel:
             return self.devices_state()
         if op == "device_job":
             return {"job": self._device_jobs.summary()}
+        if op == "update_check":
+            self._update.invalidate()
+            return {"update": self.update_state()}
+        if op == "update_login_start":
+            import threading
+            if not (self._update_login and self._update_login.get("status") == "waiting"):
+                self._update_login = {"status": "starting"}
+                threading.Thread(target=self._update_login_flow, daemon=True).start()
+            return {"update": self.update_state()}
+        if op == "update_logout":
+            import threading
+            def _out():
+                self._updater("logout", timeout=30)
+                self._update_login = None
+                self._update.invalidate()
+            threading.Thread(target=_out, daemon=True).start()
+            return {}
+        if op == "update_install":
+            import time
+            have, snap = self._update.get()
+            avail = (snap or {}).get("available") if have else None
+            if not avail:
+                raise PanelError("no update to install — check again")
+            if not (snap or {}).get("installed"):
+                raise PanelError("this copy runs from a source checkout — update it with git")
+            log = os.path.join(STATE_ROOT, "updates", "update.log")
+            os.makedirs(os.path.dirname(log), mode=0o700, exist_ok=True)
+            with open(log, "w") as fh:              # downloads + verifies, then hands over to the detached installer
+                subprocess.Popen([devices.CLI, "update", "install", "--yes"], stdout=fh, stderr=subprocess.STDOUT,
+                                 stdin=subprocess.DEVNULL, start_new_session=True)
+            self._update_installing = {"version": avail["version"], "since": time.time()}
+            return {"update": self.update_state()}
         if op == "browser_open":   # a background job: the CLI asks this proxy for its options (and must never block it)
             try:
                 argv = devices.browser_argv(a.get("browser"), str(a.get("url") or ""))
