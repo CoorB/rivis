@@ -19,7 +19,7 @@ File: the active project's rules.json (option `proxy_rules_file`):
 
 Actions
   respond     status, body | body_file, headers{}   answer locally, never hits the server
-  map_local   file, [status], [headers{}]            serve a local file (content type from extension)
+  map_local   file, [status], [headers{} or [[name,value],...]]  serve a local file
   status      status, [body | body_file]             let the call go through, then rewrite the status
   json_patch  set{ "a.b[0].c": value, ... }          edit fields in the real JSON response
   delay       ms                                     hold the request before sending it
@@ -203,8 +203,14 @@ def _compile_rule(source, state_dir, fallback_name=None):
         # local files: confine to the project state dir (symlinks resolved) unless the
         # user trusted that file on this machine, or skip the rule with this error.
         rule["file"] = rule_file_path(state_dir, rule["file"], "map_local file", (_confdir(),))
-    if "headers" in rule and not isinstance(rule["headers"], dict):
-        raise TypeError("headers must be an object")
+    if "headers" in rule:
+        headers = rule["headers"]
+        if isinstance(headers, dict):
+            rule["headers"] = [[str(k), str(v)] for k, v in headers.items()]
+        elif isinstance(headers, list) and all(isinstance(x, (list, tuple)) and len(x) == 2 for x in headers):
+            rule["headers"] = [[str(k), str(v)] for k, v in headers]
+        else:
+            raise TypeError("headers must be an object or name/value pairs")
     return rule
 
 
@@ -475,7 +481,10 @@ class ProxyRules:
                 else:
                     body = self._body(r)
                     ctype = "application/json"
-                headers = {"Content-Type": ctype, **r.get("headers", {})}
+                headers = list(r.get("headers") or [])
+                if not any(k.lower() == "content-type" for k, _v in headers):
+                    headers.insert(0, ["Content-Type", ctype])
+                headers = http.Headers([(k.encode("ascii"), v.encode("utf-8")) for k, v in headers])
                 flow.response = http.Response.make(int(r.get("status", 200)), body, headers)
                 flow.metadata["proxy_local"] = True     # answered locally: collections must not record it
                 _tag_rule(flow, r, modified=False)

@@ -1155,6 +1155,9 @@ class ProxyPanel:
             r = {"name": name, "enabled": True, "match": self.flow_regex(f), "method": f.request.method,
                  "action": "map_local", "file": path, "status": f.response.status_code if f.response else 200,
                  "note": f"from {f.request.method} {f.request.pretty_url[:120]}"}
+            if f.response:
+                unsafe = {"content-length", "transfer-encoding", "content-encoding"}
+                r["headers"] = [[k, v] for k, v in f.response.headers.items(multi=True) if k.lower() not in unsafe]
             cfg["rules"].append(r)
             self.save_cfg(cfg)
             return {"name": name}
@@ -1599,8 +1602,10 @@ class ProxyPanel:
             if os.path.dirname(path) != os.path.realpath(MOCK_DIR):
                 raise PanelError("only mocks in the active project's state directory can be opened in the panel")
             with open(path, "rb") as fh:
+                headers = r.get("headers") or {}
+                header_rows = list(headers.items()) if isinstance(headers, dict) else headers
                 return {"content": fh.read().decode("utf-8", "replace"), "status": r.get("status", 200),
-                        "headers": [[k, v] for k, v in (r.get("headers") or {}).items()],
+                        "headers": [[k, v] for k, v in header_rows],
                         "match": r.get("match"), "method": r.get("method"),
                         "file": path, "editable": os.path.dirname(path) == os.path.realpath(MOCK_DIR)}
         elif op == "mockfile_put":
@@ -1615,7 +1620,7 @@ class ProxyPanel:
             if str(a.get("status", "")).strip():
                 r["status"] = http_status(a["status"])
             if isinstance(a.get("headers"), list):
-                r["headers"] = {str(k): str(v) for k, v in a["headers"] if str(k).strip()}
+                r["headers"] = [[str(k), str(v)] for k, v in a["headers"] if str(k).strip()]
             self.save_cfg(cfg)
         else:
             raise PanelError(f"unknown op {op}")

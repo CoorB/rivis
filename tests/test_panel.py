@@ -312,6 +312,23 @@ class Ops(LiveCase):
         self.assertTrue(re.search(match, exact), match)
         self.assertFalse(re.search(match, self.up.url("/echo?x=9")), match)
 
+    def test_maplocal_from_call_preserves_safe_response_headers(self):
+        checks = {
+            "/text": lambda r: self.assertEqual(r.header("content-type"), "text/plain"),
+            "/multi": lambda r: self.assertEqual(r.header_all("x-multi"), ["one", "two", "three"]),
+            "/cookies": lambda r: self.assertEqual(r.header_all("set-cookie"),
+                                                     ["a=1; Path=/", "b=2; Path=/; HttpOnly"]),
+            "/grpc/test": lambda r: self.assertEqual((r.header("content-type"), r.header("grpc-status")),
+                                                       ("application/grpc", "0")),
+        }
+        for path, check in checks.items():
+            self.fetch(path)
+            made = self.panel.ok("mock", {"flow_id": self.flow_id(path)})
+            rule = next(r for r in self.rules() if r["name"] == made["name"])
+            names = {k.lower() for k, _v in rule["headers"]}
+            self.assertTrue(names.isdisjoint({"content-length", "transfer-encoding", "content-encoding"}), rule)
+            check(self.fetch(path + "?mocked=1"))
+
     # -- view / filters -------------------------------------------------------------------------------
     def test_focus_host_refuses_filter_injection(self):
         """F-16: the host becomes part of a ~d '...' filter; quotes and spaces must never reach it."""
