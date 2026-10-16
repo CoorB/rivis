@@ -1682,13 +1682,17 @@ class ProxyPanel:
                 doc = migrate_collection(json.load(fh))
             return self._har_reply(self.to_har(doc), a)
         elif op == "coll_import":
+            # review R5: a name already in use silently replaced that recording. Refused unless overwrite is set, and
+            # the old one stays untouched until the new HAR has parsed (the write itself is atomic)
             name = (a.get("name") or "").strip()
-            self.coll_file(name)
-            self.flush_collection(name, forget=True)
+            path = self.coll_file(name)
+            if os.path.exists(path) and a.get("overwrite") is not True:
+                raise PanelError("a collection named '%s' already exists" % name)
             har = a.get("har") or {}
             entries = self.from_har(har)
             if not entries:
                 raise PanelError("no usable entries in that HAR")
+            self.flush_collection(name, forget=True)
             self._write_coll({"name": name, "created": __import__("time").time(), "entries": entries})
             return {"count": len(entries)}
         elif op == "mockfile_get":

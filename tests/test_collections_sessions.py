@@ -222,6 +222,24 @@ class Collections(LiveCase):
         self.assertIn("stop recording", doc["error"])
 
 
+    def test_import_never_silently_replaces_a_collection(self):
+        """Review R5: importing a HAR under a name in use replaced that recording without asking."""
+        self.reset_state(collections=self.coll())
+        one = lambda path: {"log": {"entries": [{"request": {"method": "GET", "url": "https://example.test" + path},
+                                                  "response": {"status": 200, "headers": [], "content": {"text": path}}}]}}
+        self.panel.ok("coll_import", {"name": "same-name", "har": one("/first")})
+        code, doc, _ = self.panel.post("coll_import", {"name": "same-name", "har": one("/second")})
+        self.assertEqual(code, 400)
+        self.assertIn("already exists", doc["error"])
+        self.assertEqual([e["path"] for e in self.entries("same-name")], ["/first"])
+        code, doc, _ = self.panel.post("coll_import", {"name": "same-name", "har": {"log": {"entries": [{"bad": 1}]}},
+                                                      "overwrite": True})
+        self.assertEqual(code, 400)                                   # an unusable HAR never costs the old recording
+        self.assertEqual([e["path"] for e in self.entries("same-name")], ["/first"])
+        self.panel.ok("coll_import", {"name": "same-name", "har": one("/second"), "overwrite": True})   # deliberate
+        self.assertEqual([e["path"] for e in self.entries("same-name")], ["/second"])
+
+
 class Sessions(LiveCase):
     def setUp(self):
         super().setUp()

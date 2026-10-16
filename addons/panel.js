@@ -950,7 +950,9 @@
       if (!file) return toast("Choose a .har file first", true);
       let har; try { har = JSON.parse(await file.text()); } catch (e) { return toast("Not a valid HAR (JSON) file", true); }
       const name = $("chn").value.trim() || file.name.replace(/\.har$|\.json$/i, "").replace(/[^A-Za-z0-9._-]/g, "-");
-      run("coll_import", { name, har }, (x) => "Imported " + x.count + " calls into " + name);
+      const overwrite = c.items.some((x) => x.name === name);
+      if (overwrite && !confirm("A collection named '" + name + "' already exists. Replace it?\n\nIts recorded calls will be lost.")) return;
+      run("coll_import", { name, har, overwrite }, (x) => "Imported " + x.count + " calls into " + name);
     };
     if (collOpen) api("coll_entries", { name: collOpen }).then((r) => {
       const box = $("centries"); if (!box) return;
