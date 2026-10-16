@@ -158,6 +158,23 @@ class Breakpoints(LiveCase):
         self.assertEqual(call.result().json()["body"], "same")
         self.assertIn("breakpoint: skipped", self.comment("/echo"))
 
+    def test_continue_without_changes_is_not_labelled_edited(self):
+        # L1: the paused sheet sends every field back on Continue; untouched it must not say "edited"
+        for phase, path in (("request", "/echo"), ("response", "/json/small")):
+            self.reset_state(breakpoints=[bp(match=path, request=phase == "request", response=phase == "response")])
+            call = self.bg(path + "?same=" + phase, method="POST" if phase == "request" else "GET",
+                           data="same" if phase == "request" else None)
+            p = self.paused()[0]
+            info = self.panel.ok("paused_get", {"id": p["id"]})
+            edits = ({"method": info["method"], "url": info["url"], "headers": info["req_headers"], "body": info["req_body"]}
+                     if phase == "request" else
+                     {"status": info["status"], "headers": info["resp_headers"], "body": info["resp_body"]})
+            self.panel.ok("paused_continue", {"id": p["id"], "edits": edits})
+            self.assertEqual(call.result().status, 200)
+            comment = self.comment(path + "?same=" + phase)
+            self.assertIn("continued unchanged", comment, phase)
+            self.assertNotIn("edited at breakpoint", comment, phase)
+
     def test_request_pause_abort_kills_the_call(self):
         self.reset_state(breakpoints=[bp()])
         call = self.bg("/echo")

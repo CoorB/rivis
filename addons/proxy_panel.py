@@ -1284,13 +1284,16 @@ class ProxyPanel:
             else:
                 if op == "paused_continue":
                     e = a.get("edits") or {}
+                    msg = f.response or f.request
+                    before = (getattr(msg, "status_code", None), f.request.method, f.request.url,
+                              tuple(msg.headers.fields), msg.raw_content or b"")
                     hdr = lambda rows: mhttp.Headers([(str(k).encode(), str(v).encode()) for k, v in rows if str(k).strip()])
                     if f.response:
                         if "status" in e:
                             f.response.status_code = http_status(e["status"])
                         if "headers" in e:
                             f.response.headers = hdr(e["headers"])
-                        if e.get("body") is not None:
+                        if e.get("body") is not None and e["body"] != (f.response.get_text(strict=False) or ""):
                             f.response.text = e["body"]
                     else:
                         if e.get("method"):
@@ -1299,9 +1302,12 @@ class ProxyPanel:
                             f.request.url = e["url"]
                         if "headers" in e:
                             f.request.headers = hdr(e["headers"])
-                        if e.get("body") is not None:
+                        if e.get("body") is not None and e["body"] != (f.request.get_text(strict=False) or ""):
                             f.request.text = e["body"]
-                    tag = "edited at breakpoint"
+                    after = (getattr(msg, "status_code", None), f.request.method, f.request.url,
+                             tuple(msg.headers.fields), msg.raw_content or b"")
+                    # the sheet always sends every field back: only say "edited" when something really changed (L1)
+                    tag = "edited at breakpoint" if after != before else "breakpoint: continued unchanged"
                 else:
                     tag = "breakpoint: skipped (sent unchanged)"
                 f.comment = (f.comment + " | " if f.comment else "") + tag
@@ -1404,9 +1410,12 @@ class ProxyPanel:
                 nf.request.url = e["url"]
             if "headers" in e:
                 nf.request.headers = mhttp.Headers([(str(k).encode(), str(v).encode()) for k, v in e["headers"] if str(k).strip()])
-            if e.get("body") is not None:
+            if e.get("body") is not None and e["body"] != (f.request.get_text(strict=False) or ""):
                 nf.request.text = e["body"]
-            nf.comment = "edit & retry of " + f.request.method + " " + f.request.path[:60]
+            same = (nf.request.method, nf.request.url, tuple(nf.request.headers.fields), nf.request.raw_content or b"") == \
+                (f.request.method, f.request.url, tuple(f.request.headers.fields), f.request.raw_content or b"")
+            # a plain Repeat (or an Edit & Retry left untouched) is a repeat, not an edit (L2 / MQ-19)
+            nf.comment = ("repeat of " if same else "edit & retry of ") + f.request.method + " " + f.request.path[:60]
             ctx.master.view.add([nf])
             ctx.master.commands.call("replay.client", [nf])
             return {"id": nf.id}

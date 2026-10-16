@@ -492,6 +492,19 @@ class Ops(LiveCase):
         self.bad("retry_get", {"flow_id": "nope"}, "no longer")
         self.bad("retry", {"flow_id": "nope"}, "no longer")
 
+    def test_plain_repeat_is_labelled_repeat_not_edit(self):
+        # L2 / MQ-19: a Repeat with no changes was tagged "edit & retry" (COMPOSED in the list)
+        self.fetch("/echo?rep=1")
+        fid = self.flow_id("/echo?rep=1")
+        doc = self.panel.ok("retry", {"flow_id": fid, "edits": {}})
+        flow = wait_for(lambda: self.find_flow(doc["id"]), 10, 0.2, "repeat flow")
+        self.assertTrue(flow["comment"].startswith("repeat of GET"), flow["comment"])
+        info = self.panel.ok("retry_get", {"flow_id": fid})        # Edit & Retry sent back untouched is a repeat too
+        doc = self.panel.ok("retry", {"flow_id": fid, "edits": {"method": info["method"], "url": info["url"],
+                                                               "headers": info["req_headers"], "body": info["req_body"]}})
+        flow = wait_for(lambda: self.find_flow(doc["id"]), 10, 0.2, "untouched edit & retry flow")
+        self.assertTrue(flow["comment"].startswith("repeat of GET"), flow["comment"])
+
     def test_diff_two_calls(self):
         self.fetch("/echo?a=1", headers={"X-One": "1"})
         a = self.flow_id("/echo?a=1")

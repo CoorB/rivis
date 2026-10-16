@@ -317,6 +317,7 @@ input[type="checkbox"] { accent-color: var(--rv-accent); }
 .flow-table td[data-tag="rule"] { --tc: var(--rv-t-rule); }
 .flow-table td[data-tag="script"] { --tc: var(--rv-t-script); }
 .flow-table td[data-tag="composed"] { --tc: var(--rv-t-composed); }
+.flow-table td[data-tag="repeat"] { --tc: var(--rv-t-script); }
 :root[data-wide="1"] .flow-table td.col-path[data-tag] { padding-right: 84px; }
 :root[data-wide="1"] .flow-table td.col-path[data-tag]::after {
   content: attr(data-tag-text); position: absolute; right: 8px; top: 50%; transform: translateY(-50%); text-indent: 0;

@@ -1125,7 +1125,7 @@
     for (let n = 0; f && n < 8; n++, f = f.return) { const p = f.memoizedProps; if (p && p.flow && p.flow.id) return p.flow; }
     return null;
   }
-  const TAG_TEXT = { mock: "MOCK", rule: "RULE", script: "SCRIPT", composed: "COMPOSED" };
+  const TAG_TEXT = { mock: "MOCK", rule: "RULE", script: "SCRIPT", composed: "COMPOSED", repeat: "REPEAT" };
   function tagsOf(comment) {
     const out = new Set(), mockNames = new Set(((state && state.rules) || []).filter((r) => r.action === "map_local").map((r) => r.name));
     for (const part of String(comment || "").split(" | ")) {
@@ -1133,6 +1133,7 @@
       else if (part.startsWith("rule:")) out.add(mockNames.has(part.slice(5).split(" ")[0]) ? "mock" : "rule");
       else if (part.startsWith("script:")) out.add("script");
       else if (part === "composed" || part.startsWith("edit & retry")) out.add("composed");
+      else if (part.startsWith("repeat of")) out.add("repeat");
     }
     return out;
   }
@@ -1157,14 +1158,14 @@
       if (path.style.getPropertyValue("--hl") !== hl) path.style.setProperty("--hl", hl);
       const flow = flowOf(path);
       const tags = flow ? tagsOf(flow.comment) : new Set();
-      const top = ["mock", "rule", "script", "composed"].find((t) => tags.has(t));
+      const top = ["mock", "rule", "script", "composed", "repeat"].find((t) => tags.has(t));
       const icon = tr.querySelector("td.col-icon");
       setAttr(path, "data-tag", top || null);
       setAttr(path, "data-tag-text", top ? TAG_TEXT[top] + (tags.size > 1 ? " +" + (tags.size - 1) : "") : null);
       setAttr(path, "title", top ? flow.comment : null);
       if (icon) {                                          // narrow list: the same tag as a one-letter glyph in the type-icon column
         setAttr(icon, "data-tag", top || null);
-        setAttr(icon, "data-tag-glyph", top ? TAG_TEXT[top][0] : null);
+        setAttr(icon, "data-tag-glyph", top ? (top === "repeat" ? "↻" : TAG_TEXT[top][0]) : null);
         setAttr(icon, "title", top ? TAG_TEXT[top] + " — " + flow.comment : (tr.dataset.tunnel === "1" ? "TLS tunnel — not decrypted (add the host to the decrypt list in Network)" : null));
       }
       if (status) { const g = flow && (errors.has(flow.id) || String(flow.comment || "").split(" | ").includes("graphql:error")); setAttr(status, "data-gql-error", g ? "1" : "0"); setAttr(status, "title", g ? "GraphQL: the response body contains errors" : null); }
@@ -1862,7 +1863,7 @@
                     <input type="text" id="pu" class="grow" value="${esc(p.url)}"></div>`}
         <div class="seg"><button data-psub="body" class="${p.sub === "body" ? "on" : ""}">Body</button><button data-psub="headers" class="${p.sub === "headers" ? "on" : ""}">Headers</button></div>
         <div id="ppb" style="${p.sub === "body" ? "" : "display:none"}"><textarea id="pb" spellcheck="false" placeholder="No body" class="${(isResp ? p.resp_body : p.req_body) ? "" : "nobody"}" ${(isResp ? p.resp_body_editable : p.req_body_editable) ? "" : "readonly"}>${esc(isResp ? p.resp_body : p.req_body)}</textarea>
-          <div class="btns"><button class="b" id="pfmt">Format JSON</button><span class="sub" id="pjs"></span></div></div>
+          <div class="btns">${(isResp ? p.resp_body : p.req_body) && (isResp ? p.resp_body_editable : p.req_body_editable) ? `<button class="b" id="pfmt">Format JSON</button>` : ""}<span class="sub" id="pjs"></span></div></div>
         <div id="pph" style="${p.sub === "headers" ? "" : "display:none"}">${headersHTML(isResp ? p.resp_headers : p.req_headers, "phd")}</div>
       </main>
       <footer><span class="sub" style="margin-right:auto">The app is waiting — continue within its timeout (~30–60 s).<br>
@@ -1876,7 +1877,7 @@
       $("ppb").style.display = b.dataset.psub === "body" ? "" : "none"; $("pph").style.display = b.dataset.psub === "headers" ? "" : "none";
       root.querySelectorAll("[data-psub]").forEach((x) => x.classList.toggle("on", x === b));
     }));
-    $("pfmt").onclick = () => { try { ta.value = JSON.stringify(JSON.parse(ta.value), null, 2); jsonCheck(ta, $("pjs")); } catch (x) { toast("Not JSON", true); } };
+    if ($("pfmt")) $("pfmt").onclick = () => { try { ta.value = JSON.stringify(JSON.parse(ta.value), null, 2); jsonCheck(ta, $("pjs")); } catch (x) { toast("Not JSON", true); } };
     const done = async (op, edits) => {
       const id = p.id;
       const r = await run(op, { id, edits }, op === "paused_continue" ? "Continued with your edits" : op === "paused_skip" ? "Sent unchanged" : "Aborted");
