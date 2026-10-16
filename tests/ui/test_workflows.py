@@ -112,6 +112,19 @@ class Workflows(UiBase):
         wait_for(lambda: not self.panel.state()["paused"], 10, 0.2, "continued")
         self.assertEqual(self.errors, [])
 
+    def test_plain_r_repeats_as_a_new_flow(self):
+        self.fetch("/echo?rkey=1")
+        self.open()
+        self.select("rkey=1")
+        original = self.inst.flow_for("rkey=1")["id"]
+        self.page.keyboard.press("r")
+        matching = lambda: [f for f in self.inst.flows()
+                            if "rkey=1" in ((f.get("request") or {}).get("path") or "")]
+        flows = wait_for(lambda: (lambda rows: rows if len(rows) >= 2 else None)(matching()),
+                         10, 0.2, "plain r created a second flow")
+        self.assertIn(original, [f["id"] for f in flows])
+        self.assertGreaterEqual(len({f["id"] for f in flows}), 2)
+
     def test_response_breakpoint_changes_what_the_app_receives(self):
         self.fetch("/json/small?wfc=1")
         self.open()
