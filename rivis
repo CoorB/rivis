@@ -641,20 +641,31 @@ ui_has_current_ca() {   # does the user store hold THIS CA? (an older "mitmproxy
   done
   return 1
 }
-ui_remove_ca() {   # every user-store entry named mitmproxy
-  local s="$1" n=0
+ui_remove_ca() {   # prints "REMOVED KEPT": user-store "mitmproxy" entries removed / left alone
+  # Only an entry whose SHA-256 is one this workstation recorded (ca-history) is uninstalled. Every mitmproxy CA is
+  # called "mitmproxy", so another workstation's or another tool's CA on the same emulator is left in place (review R3).
+  local s="$1" n=0 i=1 k total fps
+  fps=$(ca_history_field 1 | sed 's/../&:/g; s/:$//' | paste -sd'|' -)
+  [ -n "$fps" ] || return 1
   # straight to Trusted credentials → User, like ui_has_current_ca; the menu walk is the fallback
   if ! "$ADB" -s "$s" shell am start -W -f 0x10008000 -a com.android.settings.TRUSTED_CREDENTIALS_USER 2>/dev/null | grep -q "Status: ok"; then
     open_credentials "$s" && ui_tap "$s" "Trusted credentials" && ui_tap "$s" "USER|User" || return 1
   fi
   sleep 1
-  ui_list_mentions "$s" "mitmproxy" || { echo 0; return 0; }     # nothing to remove (and no 12-scroll search)
-  while [ $n -lt 5 ] && ui_list_mentions "$s" "mitmproxy" && ui_tap "$s" "mitmproxy"; do
-    ui_tap "$s" "Uninstall|REMOVE|Remove" && ui_tap "$s" "OK" || return 1
-    n=$((n+1))
+  ui_list_mentions "$s" "mitmproxy" || { echo "0 0"; return 0; }     # nothing there (and no 12-scroll search)
+  total=$("$ADB" -s "$s" shell cat /sdcard/proxy-ui.xml 2>/dev/null | tr '>' '\n' | grep -cE '(text|content-desc)="mitmproxy"')
+  [ "$total" -le 8 ] 2>/dev/null || total=8
+  for k in $(seq 1 "$total"); do
+    ui_tap "$s" "mitmproxy" "$i" || return 1
+    if ui_screen_has "$s" "$fps"; then
+      ui_tap "$s" "Uninstall|REMOVE|Remove" && ui_tap "$s" "OK" || return 1
+      n=$((n+1))                                   # the list shrank: the next entry is now number $i
+    else
+      ui_tap "$s" "OK" || "$ADB" -s "$s" shell input keyevent KEYCODE_BACK
+      i=$((i+1))
+    fi
   done
-  ui_screen_has "$s" "mitmproxy" && return 1
-  echo "$n"
+  echo "$n $((i-1))"
 }
 
 cmd_android() {
@@ -730,16 +741,29 @@ cmd_android() {
         || die "$s: could not verify the cleared proxy"
       case "$now" in ":0"|null) info "$s: proxy cleared" ;; "") die "$s: empty proxy result — could not verify it was cleared" ;; *) die "$s: proxy still set ($now)" ;; esac
       if have_root "$s"; then
-        local hashes hh files=""; hashes=$(ca_history_field 2)
+        # Every mitmproxy CA has the same subject, so another workstation's CA has the SAME file name (<hash>.0):
+        # a file is removed only when its SHA-256 is one this workstation recorded (review R3).
+        local hashes hh f fp want removed=0 kept=""; hashes=$(ca_history_field 2); want=$(ca_history_field 1)
         [ -n "$hashes" ] || die "$s: no CA on record and $CA_PEM is gone, cannot tell which cert to remove — list /data/misc/user/0/cacerts-added by hand"
-        for hh in $hashes; do files="$files /data/misc/user/0/cacerts-added/$hh.0"; done
-        "$ADB" -s "$s" shell "rm -f$files /sdcard/Download/proxy-ca.crt"
-        for hh in $files; do "$ADB" -s "$s" shell "[ ! -e $hh ]" || die "$s: CA still present at $hh"; done
-        info "$s: CA removed ($(echo $hashes | wc -w | tr -d ' ') recorded CA(s) checked)"
+        for hh in $hashes; do
+          f="/data/misc/user/0/cacerts-added/$hh.0"
+          "$ADB" -s "$s" shell "[ -e $f ]" || continue
+          fp=$("$ADB" -s "$s" shell cat "$f" 2>/dev/null | tr -d '\r' | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 | tr -d :)
+          if [ -n "$fp" ] && printf '%s\n' "$want" | grep -qixF "$fp"; then
+            "$ADB" -s "$s" shell "rm -f $f"
+            "$ADB" -s "$s" shell "[ ! -e $f ]" || die "$s: CA still present at $f"
+            removed=$((removed+1))
+          else kept="$kept $f"; fi
+        done
+        "$ADB" -s "$s" shell rm -f /sdcard/Download/proxy-ca.crt
+        info "$s: removed $removed CA file(s) of this workstation ($(echo $hashes | wc -w | tr -d ' ') recorded CA(s) checked)"
+        [ -z "$kept" ] || info "$s: left in place, not this workstation's CA (another mitmproxy install?):$kept"
       else
         "$ADB" -s "$s" shell rm -f /sdcard/Download/proxy-ca.crt
         local n
-        if [ "$auto_ui" = 1 ] && n=$(ui_remove_ca "$s"); then info "$s: removed $n mitmproxy CA entr$( [ "$n" = 1 ] && echo y || echo ies ) via Settings"
+        if [ "$auto_ui" = 1 ] && n=$(ui_remove_ca "$s"); then
+          info "$s: removed ${n% *} CA entr$( [ "${n% *}" = 1 ] && echo y || echo ies ) of this workstation via Settings"
+          [ "${n#* }" = 0 ] || info "$s: left ${n#* } other \"mitmproxy\" certificate(s) in place — not this workstation's CA"
         else info "$s: remove the CA by hand: Encryption & credentials → Trusted credentials → User → mitmproxy → Uninstall"; fi
         "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
       fi

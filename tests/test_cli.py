@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import os
+import shutil
 import socket
 import re
 import stat
@@ -942,6 +943,49 @@ class CliNames(CliBase):
     def test_rule_names_are_unique_ignoring_case(self):
         self.ok("rules", "add", "Login", "match=/a", "action=block")
         self.refused("rules", "add", "login", "match=/b", "action=block", msg="exists")
+
+
+class AndroidCaRemoval(CliBase):
+    """Review R3: `android off` removed every certificate called "mitmproxy". Every mitmproxy CA has that name and the
+    same subject (so also the same <hash>.0 file name), so another workstation's or another tool's CA on a shared
+    emulator was removed too. Now only a CA whose SHA-256 this workstation recorded is removed.
+    tests/fakes/emulator_adb.py plays the emulator: its CA store, and the Settings → Trusted credentials screens."""
+
+    def setUp(self):
+        super().setUp()
+        self.emu = os.path.join(self.home, "emu")
+        os.makedirs(os.path.join(self.emu, "cacerts"))
+        self.env = dict(self.env, ADB=os.path.join(harness.REPO, "tests", "fakes", "emulator_adb.py"), FAKE_EMU=self.emu)
+        self.ours = os.path.join(self.env["RIVIS_CONFDIR"], "mitmproxy-ca-cert.pem")
+        self.foreign = os.path.join(self.home, "other-mitmproxy-ca.pem")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", os.path.join(self.home, "k.pem"),
+                        "-out", self.foreign, "-days", "2", "-subj", "/CN=mitmproxy/O=mitmproxy"], capture_output=True, check=True)
+        self.hashname = subprocess.run(["openssl", "x509", "-in", self.ours, "-noout", "-subject_hash_old"],
+                                       capture_output=True, text=True, check=True).stdout.strip() + ".0"
+
+    def test_root_image_keeps_another_workstations_ca_under_the_same_file_name(self):
+        open(os.path.join(self.emu, "root"), "w").close()
+        store = os.path.join(self.emu, "cacerts", self.hashname)
+        shutil.copy(self.foreign, store)
+        out = self.ok("android", "off").stdout
+        self.assertTrue(os.path.exists(store), "another workstation's CA was removed")
+        self.assertIn("removed 0 CA file(s)", out)
+        self.assertIn("not this workstation's CA", out)
+        shutil.copy(self.ours, store)
+        out = self.ok("android", "off").stdout
+        self.assertFalse(os.path.exists(store), "this workstation's CA was not removed")
+        self.assertIn("removed 1 CA file(s)", out)
+        self.assertNotIn("not this workstation's CA", out)
+
+    def test_play_image_uninstalls_only_this_workstations_entry_in_settings(self):
+        user = os.path.join(self.emu, "user")
+        os.makedirs(user)
+        for name, pem in (("0.pem", self.foreign), ("1.pem", self.ours), ("2.pem", self.foreign)):
+            shutil.copy(pem, os.path.join(user, name))
+        out = self.ok("android", "off", timeout=180).stdout
+        self.assertEqual(sorted(os.listdir(user)), ["0.pem", "2.pem"], out)
+        self.assertIn("removed 1 CA entry of this workstation", out)
+        self.assertIn("left 2 other", out)
 
 
 if __name__ == "__main__":
