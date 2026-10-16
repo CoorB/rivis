@@ -866,10 +866,12 @@ class ProxyPanel:
             return f.request.pretty_host
         server = getattr(f, "server_conn", None)
         sni = getattr(getattr(f, "client_conn", None), "sni", None) or getattr(server, "sni", None)
-        if sni:
-            return sni
         address = getattr(server, "address", None)
-        return address[0] if address else ""
+        host = sni or (address[0] if address else "")
+        port = address[1] if address and len(address) > 1 else None
+        if host and port and not str(host).endswith(":" + str(port)):
+            return "%s:%s" % (host, port)
+        return host
 
     def tls_host(self, cfg, host, decrypt):
         """'Decrypt this host' / 'Don't decrypt this host' without losing the rest of the list."""

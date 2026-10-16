@@ -539,10 +539,11 @@
     if (seq !== renderSeq) return;
     if (f && f.type === "tcp") {       // a host that is not decrypted: only the tunnel is visible
       const conn = f.server_conn || {}, hostName = conn.sni || (f.client_conn || {}).sni || (conn.address || [""])[0] || "", portNo = (conn.address || [])[1];
-      m.innerHTML = `<div class="call"><span class="m">HOST ONLY</span>${esc(hostName)}${portNo ? ":" + esc(portNo) : ""}
+      const tunnelTarget = hostName && portNo && !String(hostName).endsWith(":" + portNo) ? hostName + ":" + portNo : hostName;
+      m.innerHTML = `<div class="call"><span class="m">HOST ONLY</span>${esc(tunnelTarget)}
           <div class="sub">${ico("lock", "sm")} Not decrypted — you can see the host, but not the URL, headers or body</div></div>
-        ${tlsQuickHTML(hostName)}`;
-      wireTlsQuick(f.id, hostName);
+        ${tlsQuickHTML(tunnelTarget)}`;
+      wireTlsQuick(f.id, tunnelTarget);
       return;
     }
     if (!f || f.type !== "http") {
@@ -1463,7 +1464,9 @@
     if (!tr.classList.contains("selected")) tr.click();                  // select it first, exactly like a left click
     const f = await flowsById(mf.id);
     const m = $("cmenu"), mod = KMOD;
-    const isHttp = !!f && f.type === "http", hostName = isHttp ? f.request.pretty_host : ((f && (f.server_conn || {}).sni) || ((f && f.server_conn && f.server_conn.address) || [""])[0] || "");
+    const isHttp = !!f && f.type === "http", address = (f && f.server_conn && f.server_conn.address) || [],
+      tunnelHost = (f && ((f.client_conn || {}).sni || (f.server_conn || {}).sni)) || address[0] || "",
+      hostName = isHttp ? f.request.pretty_host : (tunnelHost && address[1] && !String(tunnelHost).endsWith(":" + address[1]) ? tunnelHost + ":" + address[1] : tunnelHost);
     const item = (k, label, icon, extra = "", cls = "", dis = false) => `<button role="menuitem" data-k="${k}" class="${cls}" ${dis ? "disabled" : ""}>${ico(icon, "sm")}${label}${extra}</button>`;
     const focused = state && isHttp && state.focus_host === hostName;
     m.innerHTML = (isHttp

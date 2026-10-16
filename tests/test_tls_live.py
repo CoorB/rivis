@@ -70,6 +70,17 @@ class TlsLive(LiveCase):
         wait_for(self.decrypted, 10, 0.3, "decrypt via panel")
         self.assertEqual(self.panel.state()["tls"]["ignore"], ["keep.example.test"])
 
+    def test_panel_tls_host_from_tunnel_flow_keeps_the_port(self):
+        self.apply({"mode": "allow", "allow": []}, False)
+        self.panel.state()                 # include host-only TCP rows in mitmweb's current view
+        self.assertTrue(self.tunnelled())
+        tunnel = wait_for(lambda: next((f for f in reversed(self.inst.flows()) if f.get("type") == "tcp"), None),
+                          10, 0.2, "tunnel flow")
+        doc = self.panel.ok("tls_host", {"flow_id": tunnel["id"], "decrypt": True})
+        expected = "127.0.0.1:%d" % self.up.https_port
+        self.assertEqual(doc["host"], expected)
+        self.assertEqual(self.panel.state()["tls"]["allow"], [expected])
+
     def test_cli_tls_commands_reach_the_running_proxy(self):
         env = dict(self.inst.env)
         for args in (["tls", "ignore", "add", "127.0.0.1"], ["tls", "mode", "ignore"]):

@@ -96,6 +96,20 @@ class UiSmoke(UiBase):
         self.assertTrue(groups.first.evaluate("e => e.hidden && e.getAttribute('aria-hidden') === 'true'"))
         self.assertEqual(self.errors, [])
 
+    def test_tunnel_context_decrypt_keeps_explicit_port(self):
+        self.reset_state(tls={"mode": "allow", "allow": []})
+        self.panel.state()                 # include host-only TCP rows in mitmweb's current view
+        self.assertEqual(self.fetch("/echo", tls=True, cacert=self.up.cert).status, 200)
+        page = self.open()
+        row = page.locator('.flow-table tbody tr[data-tunnel="1"]:has(td)').first
+        row.wait_for(timeout=10000)
+        row.click(button="right")
+        page.locator("#proxy-panel-host #cmenu button[data-k=tlson]").click()
+        expected = "127.0.0.1:%d" % self.up.https_port
+        wait_for(lambda: self.panel.state()["tls"]["allow"] == [expected], 10, 0.2,
+                 "context action added host with port")
+        self.assertEqual(self.errors, [])
+
     def test_first_run_welcome_shows_once_and_closes_on_escape(self):
         page = self.open(first_run=True)
         welcome = page.locator("#proxy-panel-host #welcome.open")
