@@ -20,6 +20,10 @@
 #                                 --ios-filter local-capture process filter (default CoreSimulator)
 #   <cli> projects list|use ID|show ID|new ID --label L --hosts REGEX
 #   <cli> ui | stop | status | cert
+#   <cli> browser [URL] [--browser chrome|edge|chromium|brave] [--fresh] [--list]
+#                                 web apps: a separate browser window with its own profile, pointed at the
+#                                 proxy and trusting only this CA. Your normal browser, the system proxy
+#                                 and the keychain are not touched. --fresh: a temporary profile
 #   <cli> rules list|on NAME|off NAME|show NAME|rm NAME|edit|allow-file PATH|disallow-file PATH|trusted-files
 #   <cli> rules add NAME match=REGEX action=ACTION [key=value ...]
 #                                 Proxyman-style rules, hot-reloaded, kept across restarts:
@@ -489,6 +493,74 @@ cmd_ui() {
   bootstrap=$(openssl rand -hex 16) || die "could not generate a one-time UI login"
   atomic_private_text "$STATE_ROOT/web-bootstrap" "$bootstrap" || die "could not save one-time UI login"
   open "http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap"
+}
+
+# browser — a separate Chrome/Edge window for web apps (HTTP Toolkit / Proxyman's "open a browser with the proxy").
+# Its own profile under $STATE_ROOT/browser, pointed at our proxy, trusting ONLY this CA (by public-key pin) — the
+# user's normal browser, the macOS system proxy and the keychain are never touched.
+browser_bin() {   # browser_bin ID — path of that browser's executable, or nothing
+  local id="$1" entry name dir
+  for entry in "chrome:Google Chrome" "edge:Microsoft Edge" "chromium:Chromium" "brave:Brave Browser"; do
+    [ "${entry%%:*}" = "$id" ] || continue
+    name="${entry#*:}"
+    local IFS=:
+    for dir in $(env_value BROWSER_APPS "/Applications:$HOME/Applications"); do
+      [ -x "$dir/$name.app/Contents/MacOS/$name" ] && { printf '%s' "$dir/$name.app/Contents/MacOS/$name"; return 0; }
+    done
+  done
+  return 1
+}
+browser_list() { local entry; for entry in "chrome:Google Chrome" "edge:Microsoft Edge" "chromium:Chromium" "brave:Brave Browser"; do
+  browser_bin "${entry%%:*}" >/dev/null && printf '%s\t%s\n' "${entry%%:*}" "${entry#*:}"; done; true; }
+cmd_browser() {
+  local id="" url="about:blank" fresh=0 list=0 bin profile spki pid
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --browser) [ $# -ge 2 ] || die "browser: --browser needs chrome, edge, chromium or brave"; id="$2"; shift ;;
+      --chrome|--edge|--chromium|--brave) id="${1#--}" ;;
+      --fresh) fresh=1 ;;
+      --list) list=1 ;;
+      -*) die "browser: unknown option $1" ;;
+      *) [ "$url" = "about:blank" ] || die "browser: only one URL"
+         url="$1"
+         # a bare host (or host:port) gets https://; any other scheme (javascript:, file:, data:) is refused
+         [[ "$url" == *://* ]] || { [[ "$url" =~ ^[A-Za-z][A-Za-z0-9+.-]*:([^0-9]|$) ]] || url="https://$url"; }
+         [[ "$url" =~ ^https?://[^[:space:]]+$ ]] || die "browser: '$1' is not an http(s) URL" ;;
+    esac
+    shift
+  done
+  if [ "$list" = 1 ]; then browser_list; return 0; fi
+  if [ -n "$id" ]; then
+    case "$id" in chrome|edge|chromium|brave) ;; *) die "browser: unknown browser '$id' (chrome, edge, chromium or brave)" ;; esac
+    bin=$(browser_bin "$id") || die "browser: $id is not installed (looked in $(env_value BROWSER_APPS "/Applications:$HOME/Applications"))"
+  else
+    id=$(browser_list | awk -F'\t' 'NR==1{print $1}')
+    [ -n "$id" ] || die "browser: no Chrome, Edge, Chromium or Brave found in /Applications (Firefox is not supported yet)"
+    bin=$(browser_bin "$id")
+  fi
+  pid=$(lsof -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1)
+  [ -n "$pid" ] || die "$PRODUCT_NAME is not running on :$PORT — $CLI start"
+  our_mitmweb "$pid" || die "port $PORT is held by $(port_owner "$PORT"), not by this $PRODUCT_NAME — the browser would not be captured"
+  ensure_ca
+  spki=$(openssl x509 -in "$CA_PEM" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64) \
+    && [ -n "$spki" ] || die "browser: could not read the CA's public key"
+  if [ "$fresh" = 1 ]; then
+    profile=$(mktemp -d "${TMPDIR:-/tmp}/$CLI-browser.XXXXXX") || die "browser: could not create a temporary profile"
+  else
+    profile="$STATE_ROOT/browser/$id"
+    (umask 077; mkdir -p "$profile") || die "browser: could not create $profile"
+    chmod 700 "$STATE_ROOT/browser" "$profile" 2>/dev/null || true
+  fi
+  # <-loopback> also captures web apps on localhost; the Rivis UI itself stays direct (it would record itself).
+  local flags=(--user-data-dir="$profile" --proxy-server="127.0.0.1:$PORT"
+    --proxy-bypass-list="<-loopback>;127.0.0.1:$WEB_PORT;localhost:$WEB_PORT"
+    --ignore-certificate-errors-spki-list="$spki" --use-mock-keychain
+    --no-first-run --no-default-browser-check --disable-sync)
+  nohup "$bin" "${flags[@]}" "$url" </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+  info "opened ${bin##*/} with its own $PRODUCT_NAME profile → proxy 127.0.0.1:$PORT"
+  info "profile $profile$( [ "$fresh" = 1 ] && echo " (temporary)" )"
+  info "your normal browser, the system proxy and the keychain are not touched; close that window when done"
 }
 
 # ───────────────────────── rules / throttle ─────────────────────────
@@ -964,6 +1036,7 @@ case "${1:-}" in
   net-reset) shift; cmd_net_reset "$@" ;;
   status)    cmd_status ;;
   ui)        cmd_ui ;;
+  browser)   shift; cmd_browser "$@" ;;
   stop)      cmd_stop ;;
   rules)     shift; cmd_rules "$@" ;;
   scripts)   shift; cmd_scripts "$@" ;;

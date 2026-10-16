@@ -20,6 +20,7 @@ Built on [mitmproxy](https://mitmproxy.org) (unchanged). Runs only on your Mac, 
 | Compare two calls | Right-click → **Compare** |
 | Keep or share evidence | Save a **session**, or export a **HAR** (secrets are masked) |
 | Set up a simulator or emulator | **Tools → Devices → Set up**, one click per device |
+| Test a web app | **Tools → Devices → Web browser**, or `rivis browser https://your.app`: a separate Chrome/Edge window with its own profile, pointed at Rivis. Your normal browser is not touched |
 
 Coming from Proxyman? The full side-by-side is in [docs/COMING-FROM-PROXYMAN.md](docs/COMING-FROM-PROXYMAN.md),
 and inside Rivis: press `?`.
@@ -64,6 +65,7 @@ Mac with Apple Silicon. No admin password, nothing else to download.
 ```bash
 rivis start --background   # start (keeps running after you close Terminal)
 rivis ui                   # reopen the browser tab
+rivis browser URL          # web apps: open a separate Chrome/Edge window that goes through Rivis
 rivis status               # is it running?
 rivis stop                 # stop
 rivis --version            # which version you have

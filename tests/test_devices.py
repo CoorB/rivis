@@ -120,6 +120,14 @@ class Commands(unittest.TestCase):
         self.assertIn(snap.get()[1], (1, 3))                              # never None after a failed check
         self.assertLessEqual(len(calls), 4)
 
+    def test_browser_argv_only_from_known_browsers_and_never_an_option(self):
+        self.assertEqual(devices.browser_argv("chrome")[1:], ["browser", "--browser", "chrome"])
+        self.assertEqual(devices.browser_argv("edge", " https://a.test/x ")[1:], ["browser", "--browser", "edge", "--", "https://a.test/x"])
+        for browser, url in (("opera", ""), ("chrome --x", ""), ("chrome", "--user-data-dir=/tmp/x"), ("chrome", "a b"),
+                             ("chrome", "https://a.test/\n--x"), ("chrome", "https://a.test/" + "x" * 2000)):
+            with self.assertRaises(ValueError):
+                devices.browser_argv(browser, url)
+
     def test_one_job_at_a_time_and_output_is_kept(self):
         jobs = devices.Jobs()
         jobs.start(["/bin/sh", "-c", "echo one; sleep 1; echo two"], "test")

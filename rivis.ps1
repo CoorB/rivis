@@ -7,6 +7,10 @@ system proxy, one CA per workstation, removed again with `off`.
   .\<cli>.ps1 start [-Insecure] [-ProjectOnly] [-NoOpen] [-Project ID]
                                             mitmweb: proxy 127.0.0.1:8080, UI http://127.0.0.1:8083
   .\<cli>.ps1 stop | ui | status | cert
+  .\<cli>.ps1 browser [URL] [-Browser chrome|edge|chromium|brave] [-Fresh] [-List]
+                                            web apps: a separate browser window with its own profile, pointed
+                                            at the proxy and trusting only this CA. Your normal browser, the
+                                            system proxy and the certificate store are not touched
   .\<cli>.ps1 projects list|use|show|new
   .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|edit|allow-file PATH|disallow-file PATH|trusted-files
                                             manage hot-reloaded interception rules
@@ -44,6 +48,7 @@ param(
   [string]$Label = "",
   [string]$Hosts = "",
   [string]$Output = "",
+  [ValidateSet("chrome","edge","chromium","brave")][string]$Browser = "",
   [Alias("-method")][string]$Method = "",
   [ValidateSet("py","js")][string]$Lang = "",
   [double]$Loss,
@@ -58,6 +63,8 @@ param(
   [switch]$FixSafe,
   [switch]$Yes,
   [switch]$ProxyOnly,
+  [switch]$Fresh,
+  [switch]$List,
   [Alias("-request")][switch]$Request,
   [Alias("-response")][switch]$Response,
   [Alias("-all")][switch]$All,
@@ -266,6 +273,8 @@ function Listening-Pids([int[]]$ports) {
     foreach ($p in $ports) {
       $pids += @(Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess })
     }
+  } elseif ($IsMacOS -and (Get-Command lsof -ErrorAction SilentlyContinue)) {   # pwsh on a Mac: netstat has no PIDs
+    foreach ($p in $ports) { $pids += @(& lsof -t "-iTCP:$p" -sTCP:LISTEN 2>$null) }
   } else {
     foreach ($line in @(netstat -ano -p tcp | Select-String "LISTENING")) {
       $fields = $line.ToString().Trim() -split '\s+'
@@ -468,6 +477,43 @@ function Test-StaleLocalProxy($spec) {
   return $true
 }
 
+# browser: a separate Chrome/Edge window for web apps, own profile, pinned to this CA (same as the bash `browser`)
+$BrowserNames = [ordered]@{ chrome = "Google Chrome"; edge = "Microsoft Edge"; chromium = "Chromium"; brave = "Brave Browser" }
+function Find-Browser([string]$id) {
+  $override = Config-Env "BROWSER_APPS" ""
+  if ($IsMacOS -or $override) {
+    $roots = if ($override) { $override -split [IO.Path]::PathSeparator } else { @("/Applications", (Join-Path $HOME "Applications")) }
+    $name = $BrowserNames[$id]
+    foreach ($r in $roots) { $p = Join-Path $r "$name.app/Contents/MacOS/$name"; if ($r -and (Test-Path -LiteralPath $p -PathType Leaf)) { return $p } }
+    return $null
+  }
+  $rel = @{ chrome = "Google\Chrome\Application\chrome.exe"; edge = "Microsoft\Edge\Application\msedge.exe"
+            chromium = "Chromium\Application\chrome.exe"; brave = "BraveSoftware\Brave-Browser\Application\brave.exe" }[$id]
+  foreach ($r in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA)) {
+    if ($r) { $p = Join-Path $r $rel; if (Test-Path -LiteralPath $p -PathType Leaf) { return $p } }
+  }
+  return $null
+}
+function Get-DerLength([int]$n) {
+  if ($n -lt 128) { return ,[byte[]]@($n) }
+  if ($n -lt 256) { return ,[byte[]]@(0x81, $n) }
+  return ,[byte[]]@(0x82, [byte]($n -shr 8), [byte]($n -band 0xff))
+}
+# base64(SHA-256(SubjectPublicKeyInfo)) of the CA — what Chrome's --ignore-certificate-errors-spki-list pins.
+# Built by hand for RSA (the mitmproxy CA) so it also works on Windows PowerShell 5.1, which has no SPKI export.
+function Get-CaSpki {
+  $pk = (New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $CaCer).PublicKey
+  if ($pk.Oid.Value -eq "1.2.840.113549.1.1.1") {
+    $key = $pk.EncodedKeyValue.RawData
+    $alg = [byte[]]@(0x30,0x0D,0x06,0x09,0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x01,0x05,0x00)
+    $bits = [byte[]](@(0x03) + (Get-DerLength ($key.Length + 1)) + @(0x00) + $key)
+    $spki = [byte[]](@(0x30) + (Get-DerLength ($alg.Length + $bits.Length)) + $alg + $bits)
+  } elseif ($pk.PSObject.Methods.Name -contains "ExportSubjectPublicKeyInfo") { $spki = $pk.ExportSubjectPublicKeyInfo() }
+  else { Die "browser: unsupported CA key type $($pk.Oid.Value)" }
+  return [Convert]::ToBase64String([System.Security.Cryptography.SHA256]::Create().ComputeHash($spki))
+}
+function Quote-Arg([string]$a) { return '"' + ($a -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' }
+
 $helpTokens = @("-h","--help","-Help")
 $helpRequested = $Help -or $Action -in $helpTokens -or $Name -in $helpTokens -or @($Rest | Where-Object { $_ -in $helpTokens }).Count
 if ($helpRequested -or $Command -in @("-h","--help")) { Write-Usage $Command; exit 0 }
@@ -484,6 +530,8 @@ if ($Command -notin @("help","cert","doctor","bug-report","-h","--help","")) { M
 $unexpected = @()
 if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report","status","cert","help")) {
   if ($Action) { $unexpected += $Action }; if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
+} elseif ($Command -eq "browser") {
+  if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif ($Action -eq "list" -and $Command -in @("projects","rules","scripts","compose")) {
   if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif (@($Rest).Count -and $Command -ne "throttle" -and
@@ -1127,6 +1175,43 @@ switch ($Command) {
         Write-Host "scripts: Node.js not installed - JS scripts disabled (Python scripts still work)"
       }
     }
+  }
+  "browser" {
+    if ($List) { foreach ($id in $BrowserNames.Keys) { if (Find-Browser $id) { Write-Output "$id`t$($BrowserNames[$id])" } }; break }
+    $url = "about:blank"
+    if ($Action) {
+      $url = $Action
+      # a bare host (or host:port) gets https://; any other scheme (javascript:, file:, data:) is refused
+      if ($url -notmatch '://' -and $url -notmatch '^[A-Za-z][A-Za-z0-9+.-]*:([^0-9]|$)') { $url = "https://$url" }
+      if ($url -notmatch '^https?://\S+$') { Die "browser: '$Action' is not an http(s) URL" }
+    }
+    $id = $Browser
+    if (-not $id) { $id = @($BrowserNames.Keys | Where-Object { Find-Browser $_ } | Select-Object -First 1)[0] }
+    if (-not $id) { Die "browser: no Chrome, Edge, Chromium or Brave found (Firefox is not supported yet)" }
+    $bin = Find-Browser $id
+    if (-not $bin) { Die "browser: $id is not installed" }
+    $owner = @(Listening-Pids @([int]$Port))
+    if (-not $owner.Count) { Die "$ProductName is not running on :$Port - ${Cli}.ps1 start" }
+    if (-not (Test-OurMitmweb ([int]$owner[0]))) { Die "port $Port is held by another program, not by this $ProductName - the browser would not be captured" }
+    Ensure-Ca
+    $spki = Get-CaSpki
+    if ($Fresh) {
+      $browserProfile = Join-Path ([IO.Path]::GetTempPath()) ("$Cli-browser." + [IO.Path]::GetRandomFileName())
+      New-Item -ItemType Directory -Force -Path $browserProfile | Out-Null
+    } else {
+      $browserProfile = Join-Path (Join-Path $StateRoot "browser") $id
+      New-Item -ItemType Directory -Force -Path $browserProfile | Out-Null     # under the state root, private (Protect-StateRoot)
+      if (-not $IsWindows -and $PSVersionTable.PSEdition -ne "Desktop") { & chmod 700 (Join-Path $StateRoot "browser") $browserProfile }
+    }
+    # <-loopback> also captures web apps on localhost; the UI itself stays direct (it would record itself)
+    $flags = @("--user-data-dir=$browserProfile", "--proxy-server=127.0.0.1:$Port",
+               "--proxy-bypass-list=<-loopback>;127.0.0.1:$WebPort;localhost:$WebPort",
+               "--ignore-certificate-errors-spki-list=$spki", "--use-mock-keychain",
+               "--no-first-run", "--no-default-browser-check", "--disable-sync", $url)
+    Start-Process -FilePath $bin -ArgumentList (($flags | ForEach-Object { Quote-Arg $_ }) -join " ") | Out-Null
+    Info "opened $id with its own $ProductName profile -> proxy 127.0.0.1:$Port"
+    Info "profile $browserProfile$(if ($Fresh) { ' (temporary)' })"
+    Info "your normal browser, the system proxy and the certificate store are not touched; close that window when done"
   }
   "cert" {
     Ensure-Ca

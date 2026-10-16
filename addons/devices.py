@@ -15,14 +15,15 @@ import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-def _cli_name():
+def _product(key, default):
     try:
-        return json.load(open(os.path.join(os.path.dirname(HERE), "product.json"))).get("cli") or "rivis"
+        return json.load(open(os.path.join(os.path.dirname(HERE), "product.json"))).get(key) or default
     except (OSError, ValueError):
-        return "rivis"
+        return default
 
 
-CLI = os.path.join(os.path.dirname(HERE), _cli_name())   # the product's own CLI
+CLI = os.path.join(os.path.dirname(HERE), _product("cli", "rivis"))   # the product's own CLI
+ENV_PREFIX = _product("env_prefix", "RIVIS")
 UDID = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$")
 SERIAL = re.compile(r"^emulator-[0-9]{1,5}$")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -231,3 +232,47 @@ def setup_argv(platform, target, consent=False):
             raise ValueError("not an emulator serial")
         return argv + (["--yes"] if consent else [])
     raise ValueError("platform must be ios or android")
+
+
+# ── web browser (`<cli> browser`): a separate Chrome/Edge profile pointed at this proxy ──
+BROWSER_IDS = ("chrome", "edge", "chromium", "brave")
+BROWSER_URL_MAX = 2000
+_browsers = {"at": 0.0, "list": None}
+
+
+def browsers(ttl=60):
+    """Installed browsers, as the CLI finds them (`<cli> browser --list`, one source of truth); cached for ttl s."""
+    now = time.time()
+    if _browsers["list"] is None or now - _browsers["at"] > ttl:
+        rc, out = _run([CLI, "browser", "--list"])
+        found = []
+        for line in out.splitlines() if rc == 0 else []:
+            bid, _, name = line.partition("\t")
+            if bid in BROWSER_IDS and name:
+                found.append({"id": bid, "name": name})
+        _browsers.update(at=now, list=found)
+    return _browsers["list"]
+
+
+def browser_argv(browser, url=""):
+    """CLI command that opens one browser; the URL goes after `--` so it can never be read as an option."""
+    if browser not in BROWSER_IDS:
+        raise ValueError("browser must be one of: " + ", ".join(BROWSER_IDS))
+    url = (url or "").strip()
+    if len(url) > BROWSER_URL_MAX or any(c.isspace() for c in url) or url.startswith("-"):
+        raise ValueError("not a URL")
+    return [CLI, "browser", "--browser", browser] + (["--", url] if url else [])
+
+
+def open_browser(browser, url, proxy_port, web_port):
+    """Run the CLI for this proxy's ports. Own session: a Ctrl-C in mitmweb's terminal must not close the browser."""
+    env = dict(os.environ, **{ENV_PREFIX + "_PORT": str(proxy_port), ENV_PREFIX + "_WEB_PORT": str(web_port)})
+    try:
+        p = subprocess.run(browser_argv(browser, url), capture_output=True, text=True, timeout=30, env=env,
+                           stdin=subprocess.DEVNULL, start_new_session=True)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("the browser did not start within 30 s")
+    text = ANSI.sub("", (p.stdout + p.stderr).replace("\r", "")).strip()
+    if p.returncode != 0:
+        raise RuntimeError(text.splitlines()[-1] if text else "could not open the browser (exit %s)" % p.returncode)
+    return text

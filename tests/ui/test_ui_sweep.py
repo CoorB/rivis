@@ -4,7 +4,8 @@ Added 2026-10-15: of 246 UI controls only 22 had ever been clicked in a browser 
 the API underneath, 55 not at all — and the demo that failed was driven through the UI. Each control is clicked on a
 freshly rendered tab with a call selected; the page must raise no JavaScript error, no panel API call may answer 5xx,
 and the page must still answer afterwards. Device-setup buttons are listed but never clicked: they would run
-`rivis ios/android on` against whatever simulators and emulators are attached to this Mac.
+`rivis ios/android on` against whatever simulators and emulators are attached to this Mac. Nor are the Web browser
+"Open …" buttons (a real browser window; the harness also hides every real browser from the tests).
 """
 import os
 import sys
@@ -15,7 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from harness import wait_for            # noqa: E402
 from test_ui import PW_REASON, TABS, UiBase, shot   # noqa: E402
 
-NEVER_CLICK = ("set up", "setup", "turn off", "install", "remove ca", "reset network")   # device actions (real hardware)
+NEVER_CLICK = ("set up", "setup", "turn off", "install", "remove ca", "reset network",   # device actions (real hardware)
+               "open ")                                                                    # Web browser: opens a browser window
 import re  # noqa: E402
 _PANEL = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "addons", "panel.js")).read()
 # every data-* hook panel.js wires a click handler to (profile cards, session rows, theme picker …), read from the source

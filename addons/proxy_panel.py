@@ -1107,6 +1107,7 @@ class ProxyPanel:
         adb = devices.adb_path()
         return {"ios": devices.ios_devices(want),
                 "android": devices.android_devices(adb, want, STATE_ROOT, self._proxy_port()),
+                "browsers": devices.browsers(),
                 "magisk": bool(version) and os.path.isdir(magisk)}
 
     # ── actions ───────────────────────────────────────────────────────────────
@@ -1128,6 +1129,12 @@ class ProxyPanel:
             return self.devices_state()
         if op == "device_job":
             return {"job": self._device_jobs.summary()}
+        if op == "browser_open":
+            try:
+                return {"output": devices.open_browser(a.get("browser"), str(a.get("url") or ""), self._proxy_port(),
+                                                       ctx.options.web_port)}
+            except (ValueError, RuntimeError) as e:
+                raise PanelError(str(e))
         if op == "device_setup":
             try:
                 argv = devices.setup_argv(a.get("platform"), str(a.get("target") or ""), bool(a.get("consent")))

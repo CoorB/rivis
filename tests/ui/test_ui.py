@@ -307,6 +307,31 @@ class UiSmoke(UiBase):
                          "an active Set up button while the setup is starting invites a second click")
         self.assertEqual(self.errors, [])
 
+    def test_devices_web_browser_row_keeps_the_typed_url_and_opens_the_chosen_browser(self):
+        """Web apps: Tools → Devices → Web browser. The tab redraws every few seconds; that must not wipe the URL."""
+        import json as _json
+        fake = {"ios": [], "android": [], "magisk": False, "job": None,
+                "browsers": [{"id": "chrome", "name": "Google Chrome"}, {"id": "edge", "name": "Microsoft Edge"}]}
+        opened = []
+        self.page.route("**/proxy/api/devices", lambda r: r.fulfill(status=200, content_type="application/json", body=_json.dumps(fake)))
+        self.page.route("**/proxy/api/browser_open", lambda r: (opened.append(_json.loads(r.request.post_data)),
+                        r.fulfill(status=200, content_type="application/json", body='{"output": "opened"}')))
+        page = self.open()
+        page.locator("#fab").click()
+        page.locator("button[data-t=dev]").click()
+        wait_for(lambda: "Web browser" in self.panel_text(), 15, 0.2, "web browser row drawn")
+        url = page.locator("#proxy-panel-host #dburl")
+        url.click()
+        url.type("https://app.example.test")
+        page.wait_for_timeout(4800)                                  # through at least one devices poll
+        page.keyboard.type("/login")                                 # still typing: focus must not have been lost
+        self.assertEqual(url.input_value(), "https://app.example.test/login")
+        page.locator("#proxy-panel-host [data-dbrowser=edge]").click()
+        wait_for(lambda: opened, 5, 0.1, "browser_open requested")
+        self.assertEqual(opened, [{"browser": "edge", "url": "https://app.example.test/login"}])
+        self.assertIn("rivis browser", self.panel_text())
+        self.assertEqual(self.errors, [])
+
     def test_alt_shift_e_shows_the_https_section_on_a_small_screen(self):
         # R3-NET-06b: at 1280x800 the chord opened Network at the top, HTTPS decryption below the fold
         self.page.set_viewport_size({"width": 1280, "height": 800})

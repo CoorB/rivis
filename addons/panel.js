@@ -830,11 +830,13 @@
   // Status is polled while the tab is open (and every 30 s for the badge); "Set up" runs the CLI's own command as a
   // background job and streams its output here. Google Play emulators get the same consent text as the terminal.
   let dev = null, devConsent = null, devTimer = null, devStarting = null;   // devStarting: clicked, job not reported yet (R3-DEV-01)
+  let devUrl = "";                                                          // the web-app URL typed in the Web browser row
   const devRefresh = async () => {
     try { dev = await api("devices", {}); } catch (e) { dev = { error: e.message }; }
     const notReady = dev && !dev.error ? [...(dev.ios || []), ...(dev.android || [])].filter((d) => !d.ready).length : 0;
     const c = $("c-dev"); if (c) { c.textContent = notReady ? `! ${notReady}` : ""; c.classList.toggle("err", notReady > 0); }
-    if (tab === "dev" && !editing) renderDev($("main"));
+    const typing = root.activeElement && root.activeElement.id === "dburl";   // a poll must not wipe the URL being typed
+    if (tab === "dev" && !editing && !typing) renderDev($("main"));
   };
   const devLoop = () => { clearTimeout(devTimer); devLoop.fast = tab === "dev"; devTimer = setTimeout(async () => { await devRefresh(); devLoop(); },
     tab === "dev" ? ((dev && dev.pending) ? 600 : (dev && dev.job && dev.job.running) ? 1500 : 4000) : 30000); };
@@ -884,7 +886,17 @@
       ${consent}${log}
       ${section("ios", "iOS Simulators", dev.ios, "Xcode command-line tools are not installed (xcrun simctl).")}
       ${section("android", "Android emulators", dev.android, "adb was not found. Install Android Studio (SDK platform-tools) to use emulators.")}
-      <div class="sub" style="margin-top:10px">Same from a terminal: <code>rivis setup</code>. Physical phones need a separate approval.</div>`;
+      <div class="sub" style="margin-top:10px">Same from a terminal: <code>rivis setup</code>. Physical phones need a separate approval.</div>
+      <h4>Web browser</h4>
+      <div class="sub">For web apps: a separate browser window with its own profile, pointed at Rivis. Your normal browser, the Mac's proxy settings and the keychain are not touched.</div>
+      ${(dev.browsers || []).length ? `<div class="btns"><input type="text" id="dburl" class="grow" value="${esc(devUrl)}" placeholder="Web app URL (optional), e.g. https://app.example.com" aria-label="Web app URL" spellcheck="false" autocomplete="off">
+        ${dev.browsers.map((b) => `<button class="b p" data-dbrowser="${esc(b.id)}">Open ${esc(b.name)}</button>`).join("")}</div>
+        <div class="sub">Same from a terminal: <code>rivis browser [URL]</code>.</div>`
+        : `<div class="sub">No Chrome, Edge, Chromium or Brave found in Applications (Firefox is not supported yet).</div>`}`;
+    const url = $("dburl");
+    if (url) url.oninput = () => { devUrl = url.value; };
+    m.querySelectorAll("[data-dbrowser]").forEach((b) => (b.onclick = () =>
+      run("browser_open", { browser: b.dataset.dbrowser, url: devUrl.trim() }, `${b.textContent.replace(/^Open /, "")} opened — its calls show up here`)));
     const start = (b, consentGiven) => {
       devStarting = { platform: b.dataset.dsetup, target: b.dataset.id, at: Date.now() }; devConsent = null; renderDev(m);
       return run("device_setup", { platform: b.dataset.dsetup, target: b.dataset.id, name: b.dataset.name, consent: consentGiven },

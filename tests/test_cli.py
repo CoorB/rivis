@@ -664,6 +664,11 @@ class StatusUiStop(CliBase):
         self.assertIn("project: default (All)", out)
         self.assertIn("TLS decryption: all (every host)", out)
 
+    def test_tests_never_see_a_real_browser(self):
+        # the UI sweep once clicked "Open Microsoft Edge" and real windows opened on the tester's desktop
+        self.assertEqual(self.ok("browser", "--list").stdout, "")
+        self.refused("browser", msg="no Chrome, Edge")
+
     def test_ui_needs_a_running_proxy(self):
         self.refused("ui", msg="not running")
         self.assertEqual(self.suite.shim_log("open.log"), "")

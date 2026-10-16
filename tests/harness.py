@@ -149,6 +149,9 @@ class Suite:
         env["RIVIS_PORT"], env["RIVIS_WEB_PORT"] = str(ports[0]), str(ports[1])
         if password:
             env["RIVIS_WEB_PASSWORD"] = password
+        # no real browser, ever: `rivis browser` looks only here (2026-10-16 the UI sweep clicked "Open Microsoft Edge"
+        # and real Chrome/Edge windows opened on the desktop, Edge asking for a keychain). test_browser.py sets its own.
+        env["RIVIS_BROWSER_APPS"] = os.path.join(self.root, "no-browsers")
         env.update(extra or {})
         for k in ("RIVIS_PORT", "RIVIS_WEB_PORT"):
             if int(env[k]) in FORBIDDEN_PORTS:

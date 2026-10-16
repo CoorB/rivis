@@ -80,6 +80,7 @@ The profile's `hosts` regex drives the “<label> only” panel view, `record_ma
 ```bash
 rivis start [--project-only] [--insecure] [--all] [--no-ios] [--no-open]
 rivis stop | ui | status | cert
+rivis browser [URL] [--browser chrome|edge|chromium|brave] [--fresh] [--list]   # web apps, see below
 rivis ios on|off [--udid UDID | --all]     # --all: every booted simulator
 rivis android on|off [-s emulator-5554 | --all] [--manual] [--yes] [--strict] [--proxy-only]   # Play images: one restart, like Proxyman (--strict: back to normal at once, 2–4 min)
 rivis setup                                          # every booted simulator + running emulator
@@ -99,6 +100,15 @@ rivis net-reset [--dry-run]
 exits with status 2 (not done), so no emulator is left with a proxy it cannot use. After installing the CA by
 hand where Rivis cannot read the emulator's Settings, `--proxy-only` turns the proxy on anyway. `android off`
 removes only CAs whose SHA-256 this workstation recorded, never another workstation's "mitmproxy" CA.
+
+### Web apps (`rivis browser`)
+
+`rivis browser https://app.example.com` (or **Tools → Devices → Web browser**) opens a separate Chrome, Edge,
+Chromium or Brave window with its own profile in `~/.rivis/browser/<browser>` (logins stay between runs; `--fresh`
+uses a temporary profile). That window uses the proxy on `127.0.0.1` and trusts only this workstation's Rivis
+certificate, pinned by its public key (`--ignore-certificate-errors-spki-list`), so nothing is added to the keychain
+and the macOS system proxy is not changed. Web apps on `localhost` are captured too. Your normal browser and its
+profiles are not touched. Firefox is not supported yet.
 
 `rivis.ps1` supports the same cross-platform commands, including `stop`, `breakpoint`, `mock`, and `setup`.
 Windows has no iOS Simulator, so `setup` says so and configures every running Android emulator (`android on -All`).
