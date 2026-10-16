@@ -21,7 +21,8 @@ system proxy, one CA per workstation, removed again with `off`.
                                             replay a request saved in the panel's Compose tab
   .\<cli>.ps1 breakpoint URL-REGEX [-Request|-Response] [-Method M] | off [NAME] | list
   .\<cli>.ps1 mock NAME URL-REGEX
-  .\<cli>.ps1 android on|off [-Serial emulator-5554 | -All]
+  .\<cli>.ps1 android on|off [-Serial emulator-5554 | -All] [-ProxyOnly]
+                                            Play images: the CA goes in by hand, then `android on -ProxyOnly`
   .\<cli>.ps1 setup                         configure every running Android emulator (iOS is unavailable on Windows)
   .\<cli>.ps1 net-reset [-DryRun] | status | cert
   .\<cli>.ps1 doctor [-Json] [-NoNet] [-FixSafe [-Yes]]
@@ -56,6 +57,7 @@ param(
   [switch]$AllowProfileNetwork,
   [switch]$FixSafe,
   [switch]$Yes,
+  [switch]$ProxyOnly,
   [Alias("-request")][switch]$Request,
   [Alias("-response")][switch]$Response,
   [Alias("-all")][switch]$All,
@@ -137,14 +139,25 @@ function Write-PrivateFile([string]$path, [string]$text) {
 }
 
 $CaHistoryPath = Join-Path $StateRoot "ca-history"
+function Get-CertSha256([string]$path) {
+  # SHA256 of the DER bytes, upper-case hex (GetCertHashString(HashAlgorithmName) needs .NET 4.8, not always on PS 5.1)
+  $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $path
+  return (([System.Security.Cryptography.SHA256]::Create().ComputeHash($cert.RawData) | ForEach-Object { $_.ToString('X2') }) -join '')
+}
 function Add-CaHistory([string]$hash) {
-  # lines "<sha256|-> <android-hash>"; the bash edition adds the sha256 (used by `ios off`)
+  # lines "<sha256> <android-hash>", the same as the bash edition. Every mitmproxy CA has the same android hash,
+  # so the sha256 is what tells them apart (`android off` removes only recorded fingerprints: review R3)
   if (-not $hash) { return }
   New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
-  if ((Get-CaHistoryHashes) -contains $hash) { return }
-  if (-not (Test-Path $CaHistoryPath)) { Write-PrivateFile $CaHistoryPath "- $hash"; return }
-  $lines = @((Get-Content $CaHistoryPath) + "- $hash")
-  Write-PrivateFile $CaHistoryPath ($lines -join [Environment]::NewLine)
+  $entry = "$(if (Test-Path $CaCer) { Get-CertSha256 $CaCer } else { '-' }) $hash"
+  $lines = @(if (Test-Path $CaHistoryPath) { Get-Content $CaHistoryPath })
+  if ($lines -contains $entry) { return }
+  Write-PrivateFile $CaHistoryPath (@($lines + $entry) -join [Environment]::NewLine)
+}
+function Get-CaHistoryShas {
+  $shas = @(if (Test-Path $CaCer) { Get-CertSha256 $CaCer })
+  if (Test-Path $CaHistoryPath) { $shas += @(Get-Content $CaHistoryPath | ForEach-Object { ($_ -split '\s+')[0] } | Where-Object { $_ -match '^[0-9A-Fa-f]{64}$' }) }
+  return @($shas | ForEach-Object { $_.ToUpperInvariant() } | Select-Object -Unique)
 }
 function Get-CaHistoryHashes {
   if (-not (Test-Path $CaHistoryPath)) { return @() }
@@ -896,10 +909,13 @@ switch ($Command) {
       $devices = & $adb devices; Run "adb devices"
       $emulators = @($devices | Select-String '^(emulator-\d+)\s+device$' | ForEach-Object { $_.Matches[0].Groups[1].Value })
       if (-not $emulators.Count) { Die "no running emulator. Physical devices need a separate approval." }
-      foreach ($emulator in $emulators) {
-        & $PSCommandPath android $Action -Serial $emulator -Project $Project
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      $failed = @()
+      foreach ($emulator in $emulators) {   # every emulator gets its turn; any one not done fails the command (review R7)
+        if ($ProxyOnly) { & $PSCommandPath android $Action -Serial $emulator -Project $Project -ProxyOnly }
+        else { & $PSCommandPath android $Action -Serial $emulator -Project $Project }
+        if ($LASTEXITCODE -ne 0) { $failed += $emulator }
       }
+      if ($failed.Count) { Die "android ${Action}: not done on $($failed -join ' ') (see above)" }
       break
     }
     $adb = Find-Adb; $s = Pick-Serial $adb
@@ -923,6 +939,13 @@ switch ($Command) {
         Info "  Settings > Security > More security > Encryption & credentials > Install a certificate"
         Info "  > CA certificate > Install anyway > Downloads > proxy-ca.crt"
         Info "  (or use a 'Google APIs' AVD without Play Store and this step is automatic)"
+        if (-not $ProxyOnly) {
+          # review R7: with the proxy on and no trusted CA every HTTPS call fails, so the proxy waits for the CA
+          Info "${s}: NOT DONE - the CA cannot be verified from Windows, so the proxy was left off."
+          Info "  After installing it as above, run: .\${Cli}.ps1 android on -Serial $s -ProxyOnly"
+          exit 2
+        }
+        Info "${s}: -ProxyOnly: proxy on (you installed the CA by hand)"
       }
       & $adb -s $s shell settings put global http_proxy "10.0.2.2:$Port"; Run "set proxy"
       $now = ((& $adb -s $s shell settings get global http_proxy) -replace "`r","").Trim(); Run "verify proxy"
@@ -939,10 +962,24 @@ switch ($Command) {
         # F-07: also the CAs of earlier regenerations (state root ca-history, shared with the bash edition)
         $hashes = @(@($h) + @(Get-CaHistoryHashes) | Where-Object { $_ -match '^[0-9a-fA-F]+$' } | Select-Object -Unique)
         if (-not $hashes.Count) { Die "${s}: no CA on record and the CA file is gone, cannot tell which cert to remove - check /data/misc/user/0/cacerts-added by hand" }
-        $files = ($hashes | ForEach-Object { "/data/misc/user/0/cacerts-added/$_.0" }) -join " "
-        & $adb -s $s shell "rm -f $files /sdcard/Download/proxy-ca.crt"; Run "remove CA"
-        foreach ($f in $files.Split(" ")) { & $adb -s $s shell "[ ! -e $f ]"; if ($LASTEXITCODE -ne 0) { Die "${s}: CA still present at $f" } }
-        Info "${s}: CA removed ($($hashes.Count) recorded CA(s) checked)"
+        # every mitmproxy CA has the same file name: remove a file only when its SHA-256 is recorded (review R3)
+        $want = Get-CaHistoryShas; $removed = 0; $kept = @()
+        foreach ($f in @($hashes | ForEach-Object { "/data/misc/user/0/cacerts-added/$_.0" })) {
+          & $adb -s $s shell "[ -e $f ]"; if ($LASTEXITCODE -ne 0) { continue }
+          $tmp = [IO.Path]::GetTempFileName(); $sha = ""
+          try {
+            ((& $adb -s $s shell cat $f) -join "`n") -replace "`r","" | Set-Content -LiteralPath $tmp -Encoding ascii
+            $sha = Get-CertSha256 $tmp
+          } catch { $sha = "" } finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
+          if ($sha -and ($want -contains $sha)) {
+            & $adb -s $s shell "rm -f $f"; Run "remove CA"
+            & $adb -s $s shell "[ ! -e $f ]"; if ($LASTEXITCODE -ne 0) { Die "${s}: CA still present at $f" }
+            $removed++
+          } else { $kept += $f }
+        }
+        & $adb -s $s shell rm -f /sdcard/Download/proxy-ca.crt
+        Info "${s}: removed $removed CA file(s) of this workstation ($($hashes.Count) recorded CA(s) checked)"
+        if ($kept.Count) { Info "${s}: left in place, not this workstation's CA (another mitmproxy install?): $($kept -join ' ')" }
       } else {
         & $adb -s $s shell rm -f /sdcard/Download/proxy-ca.crt
         Info "${s}: remove the CA by hand: Encryption & credentials > Trusted credentials > User > mitmproxy > Uninstall"

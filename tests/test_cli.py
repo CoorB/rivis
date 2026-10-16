@@ -977,6 +977,68 @@ class AndroidCaRemoval(CliBase):
         self.assertIn("removed 1 CA file(s)", out)
         self.assertNotIn("not this workstation's CA", out)
 
+    def proxy(self):
+        try:
+            return open(os.path.join(self.emu, "proxy")).read().strip()
+        except FileNotFoundError:
+            return ":0"
+
+    def test_root_image_installs_the_ca_then_turns_the_proxy_on(self):
+        open(os.path.join(self.emu, "root"), "w").close()
+        out = self.ok("android", "on").stdout
+        self.assertTrue(os.path.exists(os.path.join(self.emu, "cacerts", self.hashname)))
+        self.assertEqual(self.proxy(), "10.0.2.2:" + self.env["RIVIS_PORT"])
+        self.assertNotIn("NOT DONE", out)
+
+    def test_without_a_verified_ca_the_proxy_stays_off_and_the_command_is_not_done(self):
+        """Review R7: the proxy was turned on and the command (and the Devices tab) said done while no CA was trusted,
+        so every HTTPS call from the emulator failed."""
+        r = self.cli("android", "on", "--manual")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("NOT DONE", r.stdout)
+        self.assertIn("--proxy-only", r.stdout)
+        self.assertEqual(self.proxy(), ":0", "the proxy was turned on without a trusted CA")
+        r = self.cli("android", "on", "--all", "--manual")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not done on emulator-5554", r.stderr)
+        self.assertEqual(self.proxy(), ":0")
+        out = self.ok("android", "on", "--manual", "--proxy-only").stdout      # deliberate: installed by hand
+        self.assertIn("--proxy-only", out)
+        self.assertEqual(self.proxy(), "10.0.2.2:" + self.env["RIVIS_PORT"])
+
+    def ps(self, *args):
+        bindir = os.path.join(self.home, "adb-bin")
+        os.makedirs(bindir, exist_ok=True)
+        if not os.path.exists(os.path.join(bindir, "adb")):
+            os.symlink(self.env["ADB"], os.path.join(bindir, "adb"))
+        env = dict(self.env, PATH=bindir + ":" + self.env["PATH"])
+        return self.suite.run([harness.PWSH, "-NoProfile", "-NonInteractive", "-File", os.path.join(harness.REPO, "rivis.ps1")]
+                              + list(args), home=self.home, env=env, timeout=120)
+
+    @unittest.skipUnless(os.access(harness.PWSH, os.X_OK), "portable pwsh not found")
+    def test_powershell_edition_keeps_foreign_cas_and_waits_for_the_ca(self):
+        open(os.path.join(self.emu, "root"), "w").close()
+        r = self.ps("android", "on")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        store = os.path.join(self.emu, "cacerts", self.hashname)
+        self.assertTrue(os.path.exists(store))
+        shutil.copy(self.foreign, store)                                    # another workstation's CA, same name
+        r = self.ps("android", "off")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(os.path.exists(store), "another workstation's CA was removed")
+        self.assertIn("not this workstation's CA", r.stdout)
+        shutil.copy(self.ours, store)
+        self.assertIn("removed 1 CA file", self.ps("android", "off").stdout)
+        self.assertFalse(os.path.exists(store))
+        os.remove(os.path.join(self.emu, "root"))                            # a Google Play image: no verification possible
+        r = self.ps("android", "on")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("NOT DONE", r.stdout)
+        self.assertEqual(self.proxy(), ":0")
+        r = self.ps("android", "on", "-ProxyOnly")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.proxy(), "10.0.2.2:" + self.env["RIVIS_PORT"])
+
     def test_play_image_uninstalls_only_this_workstations_entry_in_settings(self):
         user = os.path.join(self.emu, "user")
         os.makedirs(user)

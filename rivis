@@ -38,13 +38,15 @@
 #   <cli> mock NAME URL-REGEX              save the last matching response and Map-Local it
 #   <cli> setup                            ios on --all + android on --all: every booted simulator and
 #                                 running emulator, in one go (each one is skipped if already done)
-#   <cli> android on|off [-s SERIAL | --all] [--manual] [--yes] [--strict]
+#   <cli> android on|off [-s SERIAL | --all] [--manual] [--yes] [--strict] [--proxy-only]
 #                                 CA + proxy on an emulator. Google APIs image (no Play Store): direct
 #                                 copy via adb root. Google Play image: drives the Settings screens itself,
 #                                 skips them when the emulator already trusts this CA (fingerprint check),
 #                                 and verifies the result; prints the steps if a screen does not match.
 #                                 --manual: only print the steps. --yes: consent to the one-time
-#                                 Play-image setup without asking (scripts)
+#                                 Play-image setup without asking (scripts). The proxy is turned on only
+#                                 once the CA is verified (exit 2 = not done yet); --proxy-only turns it
+#                                 on anyway, for a CA installed by hand where Settings cannot be read
 #   <cli> ios on|off [--udid UDID | --all] CA on a simulator (default: the booted one; --all: every booted one)
 #   <cli> net-reset [--dry-run|--auto]     clear stale local web/https/socks proxies on every network
 #                                         service — fixes "no internet after closing the proxy app"
@@ -670,9 +672,10 @@ ui_remove_ca() {   # prints "REMOVED KEPT": user-store "mitmproxy" entries remov
 
 cmd_android() {
   local action="${1:-}"; shift || true
-  local auto_ui=1 all=0 consent="" strict=""
+  local auto_ui=1 all=0 consent="" strict="" proxy_only=0
   while [ $# -gt 0 ]; do case "$1" in
     -s) SERIAL="$2"; shift ;; --all) all=1 ;; --manual) auto_ui=0 ;; --yes) consent=--yes ;;
+    --proxy-only) proxy_only=1 ;;                   # CA installed by hand where Rivis cannot read Settings: proxy anyway
     --strict) strict=--strict ;;                    # Play images: restart back to normal at once (two restarts)
     --auto-ui) ;;                                   # the default now; still accepted
     *) die "android: unknown option $1" ;; esac; shift; done
@@ -680,9 +683,14 @@ cmd_android() {
   [ -x "$ADB" ] || die "adb not found"
   if [ "$all" = 1 ]; then
     [ -z "${SERIAL:-}" ] || die "android: pass -s or --all, not both"
-    local e list; list=$("$ADB" devices | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
+    local e list failed=""; list=$("$ADB" devices | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
     [ -n "$list" ] || die "no running emulator (adb devices)"
-    for e in $list; do ( SERIAL="$e"; cmd_android "$action" $([ "$auto_ui" = 0 ] && echo --manual) $consent $strict ) || info "WARNING: $e: android $action failed"; done
+    for e in $list; do
+      ( SERIAL="$e"; cmd_android "$action" $([ "$auto_ui" = 0 ] && echo --manual) $([ "$proxy_only" = 1 ] && echo --proxy-only) $consent $strict ) \
+        || failed="$failed $e"
+    done
+    # review R7: one emulator not done means the command is not done (the Devices tab and scripts read the exit code)
+    [ -z "$failed" ] || die "android $action: not done on$failed (see above)"
     return
   fi
   local s; s=$(pick_serial) || exit 1
@@ -694,12 +702,13 @@ cmd_android() {
   "$ADB" -s "$s" wait-for-device || die "$s: wait-for-device failed"
   case "$action" in
     on)
+      local ca_ok=0                    # set only once the CA is verified on the emulator (review R7)
       if have_root "$s"; then
         "$ADB" -s "$s" push "$CA_PEM" "/data/local/tmp/$h.0" >/dev/null 2>&1 || die "push failed"
         "$ADB" -s "$s" shell "mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/$h.0 $dst \
           && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0" || die "install failed"
         ca_history_add
-        info "$s: CA installed in user store ($h.0)"; android_record "$s"
+        info "$s: CA installed in user store ($h.0)"; android_record "$s"; ca_ok=1
       else
         # Google Play images refuse `adb root`. The CA has to go in through Settings once.
         ca_history_add
@@ -707,14 +716,14 @@ cmd_android() {
           || die "could not push the CA to the emulator — proxy NOT enabled"
         local magisk_dir="${RIVIS_MAGISK_DIR:-$SCRIPT_DIR/../magisk-$(sed -n 's/^MAGISK_VERSION=//p' "$SCRIPT_DIR/addons/android/magisk.pins")}"
         if [ "$auto_ui" = 1 ] && ui_has_current_ca "$s"; then
-          info "$s: already trusts this CA — nothing to install"; android_record "$s"
+          info "$s: already trusts this CA — nothing to install"; android_record "$s"; ca_ok=1
           "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
         elif [ "$auto_ui" = 1 ] && [ -d "$magisk_dir" ] \
             && ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent $strict; then
-          android_record "$s"   # one-click Play-image path (Proxyman's Magisk approach); it reports its own result
+          android_record "$s"; ca_ok=1   # one-click Play-image path (Proxyman's Magisk approach); it verifies and reports
         elif [ "$auto_ui" = 1 ] && info "$s: Google Play image — installing the CA through Settings (about a minute; hands off the emulator)" \
             && ui_install_ca "$s" && ui_has_current_ca "$s"; then
-          info "$s: CA installed in user store via Settings (verified by fingerprint)"; android_record "$s"
+          info "$s: CA installed in user store via Settings (verified by fingerprint)"; android_record "$s"; ca_ok=1
         else
           [ "$auto_ui" = 0 ] && info "$s is a Google Play image (no adb root) — the CA goes in through Settings once."
           [ "$auto_ui" = 1 ] && info "  could not drive this Android build's Settings — do it by hand:"
@@ -725,6 +734,14 @@ cmd_android() {
         fi
         "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
       fi
+      if [ "$ca_ok" = 0 ] && [ "$proxy_only" = 0 ]; then
+        # review R7: with the proxy on and no trusted CA every HTTPS call fails, so the proxy waits for the CA
+        info "$s: NOT DONE — the CA is not verified on this emulator yet, so the proxy was left off."
+        info "  After installing it as above, run: $CLI android on -s $s   (it checks the CA, then turns the proxy on)"
+        info "  If $PRODUCT_NAME cannot read this emulator's Settings: $CLI android on -s $s --proxy-only"
+        exit 2
+      fi
+      [ "$ca_ok" = 1 ] || info "$s: --proxy-only: proxy on without a verified CA (you installed it by hand)"
       "$ADB" -s "$s" shell settings put global http_proxy "10.0.2.2:$PORT" || die "$s: setting the proxy failed"
       local now; now=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') \
         || die "$s: could not verify the proxy"

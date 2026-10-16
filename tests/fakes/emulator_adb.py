@@ -4,6 +4,8 @@
   cacerts/<h>.0   the user CA store (root path)
   user/<n>.pem    the Settings → Trusted credentials → User list, in order (Play path)
   screen          what Settings shows: list | detail:<n> | confirm:<n>
+  proxy           the global http_proxy setting (":0" when absent)
+  tmp/<name>      files pushed to /data/local/tmp (a root install copies them into cacerts/)
   log             every call
 Only what `rivis android off` uses is implemented; anything else answers nothing, exit 0."""
 import os
@@ -77,7 +79,17 @@ elif cmd == "shell id -u":
 elif cmd in ("shell getprop ro.kernel.qemu", "shell getprop ro.boot.qemu"):
     print("1")
 elif cmd.startswith("shell settings get global http_proxy"):
-    print(":0")
+    print(read("proxy", ":0").strip() or ":0")
+elif cmd.startswith("shell settings put global http_proxy"):
+    open(os.path.join(D, "proxy"), "w").write(args[-1])
+elif args[0] == "push":
+    dst = args[2]
+    if dst.startswith("/data/local/tmp/"):
+        os.makedirs(os.path.join(D, "tmp"), exist_ok=True)
+        open(os.path.join(D, "tmp", os.path.basename(dst)), "w").write(open(args[1]).read())
+elif cmd.startswith("shell mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/"):
+    name = re.search(r"cp /data/local/tmp/(\S+)", cmd).group(1)
+    os.rename(os.path.join(D, "tmp", name), os.path.join(D, "cacerts", name))
 elif cmd == "shell wm size":
     print("Physical size: %dx%d" % (W, H))
 elif cmd.startswith("shell am start -W") and "TRUSTED_CREDENTIALS_USER" in cmd:

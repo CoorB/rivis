@@ -81,7 +81,7 @@ The profile's `hosts` regex drives the “<label> only” panel view, `record_ma
 rivis start [--project-only] [--insecure] [--all] [--no-ios] [--no-open]
 rivis stop | ui | status | cert
 rivis ios on|off [--udid UDID | --all]     # --all: every booted simulator
-rivis android on|off [-s emulator-5554 | --all] [--manual] [--yes] [--strict]   # Play images: one restart, like Proxyman (--strict: back to normal at once, 2–4 min)
+rivis android on|off [-s emulator-5554 | --all] [--manual] [--yes] [--strict] [--proxy-only]   # Play images: one restart, like Proxyman (--strict: back to normal at once, 2–4 min)
 rivis setup                                          # every booted simulator + running emulator
 rivis rules list | on NAME | off NAME | show NAME | rm NAME | edit
 rivis rules add NAME match=REGEX action=ACTION [key=value ...]
@@ -94,6 +94,11 @@ rivis breakpoint REGEX [--request|--response] [--method M] | off [NAME]
 rivis mock NAME URL-REGEX
 rivis net-reset [--dry-run]
 ```
+
+`android on` turns the emulator's proxy on only once the CA is verified on it; otherwise it prints the steps and
+exits with status 2 (not done), so no emulator is left with a proxy it cannot use. After installing the CA by
+hand where Rivis cannot read the emulator's Settings, `--proxy-only` turns the proxy on anyway. `android off`
+removes only CAs whose SHA-256 this workstation recorded, never another workstation's "mitmproxy" CA.
 
 `rivis.ps1` supports the same cross-platform commands, including `stop`, `breakpoint`, `mock`, and `setup`.
 Windows has no iOS Simulator, so `setup` says so and configures every running Android emulator (`android on -All`).
