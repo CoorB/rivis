@@ -28,7 +28,10 @@ ARTIFACTS = os.path.join(TESTS, ".artifacts")
 FORBIDDEN_PORTS = {8080, 8083, 8090, 8093, 9090, 9091}
 REAL_MITMWEB = shutil.which("mitmweb") or "/opt/homebrew/bin/mitmweb"
 REAL_MITMDUMP = shutil.which("mitmdump") or "/opt/homebrew/bin/mitmdump"
-PWSH = "/opt/pwsh/pwsh"
+# portable PowerShell for the rivis.ps1 tests: $RIVIS_TEST_PWSH, else pwsh on PATH, else the team's tools folder
+# (it used to live in a session scratch folder: when that was cleared, 21 tests skipped without anyone noticing)
+PWSH = (os.environ.get("RIVIS_TEST_PWSH") or shutil.which("pwsh")
+        or os.path.expanduser("~/Work/NEO/proxy-replacement/tools/pwsh/pwsh"))
 NODE = shutil.which("node")
 REAL_HOME = os.path.expanduser("~")
 
