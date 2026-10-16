@@ -67,5 +67,28 @@ class LeftoverCheckIsPerRun(unittest.TestCase):
         self.assertEqual(out, ["rivis-t-zz1mine-", "True", "False"])
 
 
+class LeftoverCheckIgnoresTheUsersLiveRivis(unittest.TestCase):
+    """2026-10-16: an open `rivis browser` window writes its profile under ~/.rivis/browser, and the check reported
+    "$HOME/.rivis changed" for a run that never touched it. logs/ and browser/ are the live app's; the rest counts."""
+
+    def test_browser_and_logs_are_ignored_but_project_state_is_not(self):
+        import tempfile
+        import hermetic
+        home = tempfile.mkdtemp(prefix="rivis-hermetic-")
+        try:
+            root = os.path.join(home, ".rivis")
+            for d in ("logs", "browser/chrome", "projects/default"):
+                os.makedirs(os.path.join(root, d))
+            before = hermetic.tree_digest(root)
+            for f in ("logs/mitmweb.log", "browser/chrome/Cookies"):
+                open(os.path.join(root, f), "w").write("x")
+            self.assertEqual(hermetic.tree_digest(root), before)
+            open(os.path.join(root, "projects", "default", "rules.json"), "w").write("{}")
+            self.assertNotEqual(hermetic.tree_digest(root), before)
+        finally:
+            import shutil
+            shutil.rmtree(home, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()
