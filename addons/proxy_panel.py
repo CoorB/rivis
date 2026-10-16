@@ -383,6 +383,7 @@ class ProxyPanel:
             "scripts": self.scripts(cfg),
             "script_status": self.script_status(),
             "retention": self.retention_state(),
+            "flow_count": len(self.all_flows()),
             "focus_host": self.focused_host,
             "project_only": self.project_only,
             "show_dns": self.show_dns,

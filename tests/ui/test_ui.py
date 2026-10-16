@@ -222,6 +222,15 @@ class UiSmoke(UiBase):
         self.assertLessEqual(b["x"] + b["width"], ft["x"] + ft["width"] + 1, "message must not spill into the detail pane")
         self.assertEqual(self.errors, [])
 
+    def test_view_filter_with_zero_matches_is_not_first_run(self):
+        page = self.open()
+        self.panel.ok("focus_host", {"host": "no-match.example"})
+        box = page.locator("#proxy-panel-host #emptylist.open")
+        box.wait_for(timeout=10000)
+        self.assertIn("No matching calls", box.text_content())
+        self.assertNotIn("Nothing captured yet", box.text_content())
+        self.assertEqual(self.errors, [])
+
     def test_the_list_opens_newest_first_and_the_user_can_still_re_sort(self):
         page = self.open()
         th = page.locator(".flow-table th.col-timestamp")

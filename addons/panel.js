@@ -2134,8 +2134,8 @@
     if (!document.querySelector(".flow-table, .main-view > div[style*='padding: 1em 2em']")) return null;   // the Capture tab etc. are showing instead of the list
     let f; try { f = st.getState().flows; } catch (e) { return null; }
     if (!f || !f.list) return null;
-    if (f.list.length === 0) return "first";
-    return f.view.length === 0 ? "hidden" : null;
+    if (Number(state.flow_count || 0) === 0) return "first";
+    return f.list.length === 0 || f.view.length === 0 ? "hidden" : null;
   }
   // Over the call list only: with a call open, mitmweb's detail pane sits to the right of the list
   function placeEmptyList(box) {
@@ -2172,7 +2172,7 @@
         </div>
         <div class="foot">Or from a terminal, as above (<code>${esc(cli + proj + " setup")}</code> does every running device). Nothing from a simulator? Another proxy app (Proxyman, Charles) may have set the Mac's system proxy — quit it, or run <code>${esc(cli)} net-reset</code>.</div></div>`;
     } else {
-      const why = q ? `No calls match <b>${esc(q)}</b>` : "Every call is hidden by your view settings";
+      const why = q ? `No calls match <b>${esc(q)}</b>` : "No matching calls";
       const sub = q ? "Try a shorter word, or the host name only. Filters with <code>~</code> must be written exactly (see the examples in the search box)."
                     : `Showing ${esc(limits.join(" and "))}. The calls are still captured — remove the limit to see them.`;
       box.innerHTML = `<div class="box"><div class="glyph">${ico("search")}</div><h3>${why}</h3><div class="lede">${sub}</div>
