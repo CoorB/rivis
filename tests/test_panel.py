@@ -280,6 +280,58 @@ class Ops(LiveCase):
         rule = self.rules()[0]
         self.assertTrue(re.search(rule["match"], url), "%r does not match %s" % (rule["match"], url))
 
+    def test_rules_built_from_a_call_match_only_that_endpoint(self):
+        """Review R6: a one-click rule also matched a suffix host, another port and a URL with this one in its query."""
+        from types import SimpleNamespace
+        sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+        from proxy_common import user_regex
+        build = lambda scheme, host, port, path: self.inst_flow_regex(SimpleNamespace(request=SimpleNamespace(
+            scheme=scheme, pretty_host=host, port=port, path=path)))
+        rx = user_regex(build("https", "api.example.test", 443, "/accounts?page=2"))   # also passes the regex guard
+        for url, want in (("https://api.example.test/accounts", True), ("https://api.example.test:443/accounts", True),
+                          ("https://api.example.test/accounts?page=3", True),
+                          ("https://otherapi.example.test/accounts", False), ("https://api.example.test.evil/accounts", False),
+                          ("https://unrelated.test/redirect?next=https://api.example.test/accounts", False),
+                          ("https://api.example.test:8443/accounts", False), ("https://api.example.test/accounts/2", False),
+                          ("http://api.example.test/accounts", False)):
+            self.assertEqual(bool(rx.search(url)), want, url)
+        rx = user_regex(build("http", "127.0.0.1", 50123, "/json/small"))
+        self.assertTrue(rx.search("http://127.0.0.1:50123/json/small"))
+        self.assertFalse(rx.search("http://127.0.0.1:50124/json/small"))
+        self.assertFalse(rx.search("http://127.0.0.1/json/small"))
+
+    @staticmethod
+    def inst_flow_regex(f):
+        """ProxyPanel.flow_regex taken from the source (proxy_panel imports mitmproxy, which this Python lacks)."""
+        import ast
+        src = open(os.path.join(harness.REPO, "addons", "proxy_panel.py")).read()
+        fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "flow_regex")
+        fn.decorator_list = []
+        ns = {"re": re}
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), "proxy_panel.py", "exec"), ns)
+        return ns["flow_regex"](f)
+
+    def test_a_rule_saved_in_the_old_form_is_updated_not_duplicated(self):
+        self.fetch("/json/small?r6old=1")
+        f = self.inst.flow_for("/json/small?r6old=1")
+        old = r"127\.0\.0\.1(:\d+)?/json/small(\?|$)"
+        self.reset_state(rules=[self.rule("old-block", "block", old, method="GET")])
+        self.panel.ok("quick", {"flow_id": f["id"], "kind": "block"})
+        rules = [r for r in self.rules() if r.get("action") == "block"]
+        self.assertEqual(len(rules), 1, rules)
+        self.assertTrue(rules[0]["match"].startswith("^http://"), rules[0])        # and it now has the strict form
+
+    def test_a_rule_from_a_real_call_matches_it_and_not_its_neighbours(self):
+        self.fetch("/json/small?r6=1")
+        f = self.inst.flow_for("/json/small?r6=1")
+        self.panel.ok("quick", {"flow_id": f["id"], "kind": "block"})
+        rx = re.compile(self.rules()[0]["match"])
+        url = self.up.url("/json/small")
+        port = int(url.rsplit(":", 1)[1].split("/")[0])
+        self.assertTrue(rx.search(url + "?x=1"))
+        self.assertFalse(rx.search(url.replace(":%d/" % port, ":%d/" % (port + 1))))
+        self.assertFalse(rx.search("http://other.test/?next=" + url))
+
     def test_maplocal_add_wildcards(self):
         self.panel.ok("maplocal_add", {"name": "ml", "host": "127.0.0.1", "path": "/ech?", "body": '{"m":1}', "status": 203,
                                        "method": "get"})

@@ -890,7 +890,19 @@ class ProxyPanel:
 
     @staticmethod
     def flow_regex(f):
-        # host + path, query string ignored, anchored on the path end
+        """This call's endpoint, matched against pretty_url: scheme, exact host and port, path; query ignored.
+        Review R6: the pattern was unanchored, so it also matched otherapi.example.test and any URL carrying this one
+        in its query string (…?next=https://api.example.test/accounts), and every port of the host.
+        pretty_url leaves out a default port (443/80), so that one is optional; any other port must be the same."""
+        req = f.request
+        scheme = req.scheme if req.scheme in ("http", "https") else "https"
+        default = {"http": 80, "https": 443}[scheme]
+        port = "(?::%d)?" % default if req.port == default else ":%d" % req.port
+        return ("^" + scheme + "://" + re.escape(req.pretty_host) + port + re.escape(req.path.split("?")[0]) + r"(\?|$)")
+
+    @staticmethod
+    def flow_regex_before_r6(f):
+        """The unanchored form saved by earlier versions: a click on the same call still finds (and updates) it."""
         return re.escape(f.request.pretty_host) + r"(:\d+)?" + re.escape(f.request.path.split("?")[0]) + r"(\?|$)"
 
     @staticmethod
@@ -1247,8 +1259,9 @@ class ProxyPanel:
                 r.update(action="delay", ms=int(a["ms"]))
             else:
                 raise PanelError("unknown quick action")
+            same = {r["match"], self.flow_regex_before_r6(f)}
             for x in cfg["rules"]:   # same quick action on the same endpoint: update it, don't stack copies
-                if x.get("match") == r["match"] and x.get("method") == r["method"] and x.get("action") == r["action"]:
+                if x.get("match") in same and x.get("method") == r["method"] and x.get("action") == r["action"]:
                     x.update(r)
                     cfg["rules"].remove(x)
                     cfg["rules"].insert(0, x)  # request-local actions are first-match-wins
@@ -1263,17 +1276,19 @@ class ProxyPanel:
             if a.get("flow_id"):
                 f = self.flow(a["flow_id"])
                 match, method = self.flow_regex(f), f.request.method
+                same = {match, self.flow_regex_before_r6(f)}
                 label = f.request.pretty_host + f.request.path.split("?")[0]
             else:
                 match = wildcard_regex(a.get("host"), a.get("path"))
+                same = {match}
                 method = (a.get("method") or "").upper() or None
                 label = (a.get("host") or "") + (a.get("path") or "/")
             if not (a.get("request") or a.get("response")):
                 raise PanelError("pick Request, Response or both")
             bps = breakpoints(cfg, migrate=True)
             for b in bps:                 # same endpoint+method: update phases instead of stacking copies
-                if b.get("match") == match and b.get("method") == method:
-                    b.update(request=bool(a.get("request")), response=bool(a.get("response")), enabled=True)
+                if b.get("match") in same and b.get("method") == method:
+                    b.update(match=match, request=bool(a.get("request")), response=bool(a.get("response")), enabled=True)
                     self.save_cfg(cfg)
                     return {"name": b["name"]}
             names = {b.get("name") for b in bps}
