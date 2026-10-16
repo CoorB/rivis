@@ -284,6 +284,21 @@ class UiSmoke(UiBase):
                          "an active Set up button while the setup is starting invites a second click")
         self.assertEqual(self.errors, [])
 
+    def test_alt_shift_e_shows_the_https_section_on_a_small_screen(self):
+        # R3-NET-06b: at 1280x800 the chord opened Network at the top, HTTPS decryption below the fold
+        self.page.set_viewport_size({"width": 1280, "height": 800})
+        page = self.open()
+        page.locator("body").click(position={"x": 5, "y": 5})
+        page.keyboard.press("Alt+Shift+E")
+        sec = page.locator("#proxy-panel-host #tlssec")
+        wait_for(lambda: sec.count() > 0, 10, 0.2, "HTTPS section drawn")
+        page.wait_for_timeout(3500)                                  # through a few state polls (the Net tab redraws)
+        box = sec.bounding_box()
+        self.assertIsNotNone(box)
+        self.assertLess(box["y"], 800 - 60, "HTTPS decryption heading is below the fold: %r" % box)
+        self.assertGreaterEqual(box["y"], 0)
+        self.assertEqual(self.errors, [])
+
     def test_the_empty_list_offers_device_setup(self):
         self.page.add_init_script("try { localStorage.setItem('rivis-welcome', 'done') } catch (e) {}")
         self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))

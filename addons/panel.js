@@ -1618,7 +1618,7 @@
       <div class="sub" style="margin-top:8px"><b>${title}</b>${t.mode === which ? " · in use" : ""}</div>
       <div class="btns" style="margin-top:4px">${t[which].map((p) => `<span class="chip">${esc(p)} <span data-tlsrm="${which}" data-p="${esc(p)}" title="Remove">${ico("x", "sm")}</span></span>`).join("") || '<span class="sub">(none)</span>'}</div>
       <div class="btns"><input type="text" class="grow" data-tlsadd="${which}" placeholder="*.example.test or api.example.test:8443"><button class="b" data-tlsaddbtn="${which}">Add</button></div>`;
-    return `<h4>HTTPS decryption ${info("Which hosts are decrypted so you can read their calls. Same idea as an SSL Proxying list.")}</h4>
+    return `<h4 id="tlssec">HTTPS decryption ${info("Which hosts are decrypted so you can read their calls. Same idea as an SSL Proxying list.")}</h4>
       <div class="seg" id="tlsmode">${modes.map(([id, label]) => `<button data-tm="${id}" class="${t.mode === id ? "on" : ""}">${label}</button>`).join("")}</div>
       ${t.error ? `<div class="errbox">${esc(t.error)}</div>` : ""}
       ${list("allow", "Hosts to decrypt")}${list("ignore", "Hosts to leave alone")}
@@ -2014,6 +2014,8 @@
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   const KMOD = isMac ? "⌘" : "Ctrl", KALT = isMac ? "⌥" : "Alt", KSHIFT = isMac ? "⇧" : "Shift";
   const kb = (...k) => k.map((x) => `<kbd>${x}</kbd>`).join(" ");
+  // a chord that targets a section lower in a tab: scroll it into view once the tab has drawn (R3-NET-06b)
+  const revealWhenDrawn = (id, tries = 30) => { const el = $(id); if (el) el.scrollIntoView({ block: "start" }); else if (tries > 0) setTimeout(() => revealWhenDrawn(id, tries - 1), 100); };
   const openDrawer = (t) => {
     if (!$("drawer").classList.contains("open")) { setOpen(true); state = null; }
     if (t) { tab = t; editing = null; }
@@ -2037,7 +2039,7 @@
     KeyL: ["Map Local", () => openDrawer("map")],
     KeyB: ["Breakpoints", () => openDrawer("bp")],
     KeyN: ["Network conditions", () => openDrawer("net")],
-    KeyE: ["TLS decryption list (SSL proxying)", () => openDrawer("net")],
+    KeyE: ["TLS decryption list (SSL proxying)", () => { openDrawer("net"); revealWhenDrawn("tlssec"); }],
     KeyS: ["Scripts", () => openDrawer("scripts")],
     KeyD: ["Compare (diff) two calls", () => openDrawer("cmp")],
     KeyV: ["Devices: set up simulators / emulators", () => openDrawer("dev")],
