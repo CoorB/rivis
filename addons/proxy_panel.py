@@ -1419,6 +1419,15 @@ class ProxyPanel:
                                              "allow": a.get("allow", current["allow"]),
                                              "ignore": a.get("ignore", current["ignore"])}})
             self.save_cfg(cfg)
+        elif op == "tls_update":       # one list mutation; preserve concurrent CLI changes
+            which, action = a.get("list"), a.get("action")
+            if which not in ("allow", "ignore"):
+                raise PanelError("list must be allow or ignore")
+            if action not in ("add", "remove"):
+                raise PanelError("action must be add or remove")
+            pattern = str(a.get("pattern") or "").strip().lower()
+            tls_update(cfg, **{action: [(which, pattern)]})
+            self.save_cfg(cfg)
         elif op == "tls_host":         # quick action on the This-call tab
             host = a.get("host") or self._flow_host(self.flow_any(a["flow_id"]))
             message = self.tls_host(cfg, host, bool(a.get("decrypt")))

@@ -473,6 +473,19 @@ class Ops(LiveCase):
         self.panel.ok("tls_set", {"mode": "all", "ignore": [], "allow": []})
         self.assertIn("already decrypted", self.panel.ok("tls_host", {"host": "h.test", "decrypt": True})["message"])
 
+    def test_tls_incremental_update_preserves_concurrent_cli_changes(self):
+        self.panel.ok("tls_set", {"mode": "allow", "allow": ["initial.example"]})
+        cfg = self.inst.cfg()
+        cfg["tls"]["allow"].append("cli.example")
+        self.inst.write_cfg(cfg)
+        self.panel.ok("tls_update", {"list": "allow", "action": "add", "pattern": "UI.Example"})
+        self.assertEqual(self.panel.state()["tls"]["allow"],
+                         ["initial.example", "cli.example", "ui.example"])
+        self.panel.ok("tls_update", {"list": "allow", "action": "remove", "pattern": "initial.example"})
+        self.assertEqual(self.panel.state()["tls"]["allow"], ["cli.example", "ui.example"])
+        self.bad("tls_update", {"list": "other", "action": "add", "pattern": "x.test"}, "list must")
+        self.bad("tls_update", {"list": "allow", "action": "replace", "pattern": "x.test"}, "action must")
+
     # -- viewers -------------------------------------------------------------------------------------
     def test_viewer_ops(self):
         self.fetch("/jwt/body")

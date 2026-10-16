@@ -1606,12 +1606,11 @@
       <div class="sub" style="margin-top:6px">Changes apply to new connections — no restart. ${info(t.note || "")}</div>`;
   }
   function wireTlsSection() {
-    const t = state.tls;
     root.querySelectorAll("[data-tm]").forEach((b) => (b.onclick = () => run("tls_set", { mode: b.dataset.tm }, "Decrypting: " + ({ all: "every host", allow: "only listed hosts", ignore: "everything except listed hosts" }[b.dataset.tm] || b.dataset.tm))));
-    root.querySelectorAll("[data-tlsrm]").forEach((x) => (x.onclick = () => run("tls_set", { [x.dataset.tlsrm]: t[x.dataset.tlsrm].filter((p) => p !== x.dataset.p) }, "Removed " + x.dataset.p)));
+    root.querySelectorAll("[data-tlsrm]").forEach((x) => (x.onclick = () => run("tls_update", { list: x.dataset.tlsrm, action: "remove", pattern: x.dataset.p }, "Removed " + x.dataset.p)));
     const add = (which) => {
       const input = root.querySelector(`[data-tlsadd="${which}"]`), value = input.value.trim().toLowerCase();
-      if (value) run("tls_set", { [which]: t[which].concat(t[which].includes(value) ? [] : [value]) }, "Added " + value);
+      if (value) run("tls_update", { list: which, action: "add", pattern: value }, "Added " + value);
     };
     root.querySelectorAll("[data-tlsaddbtn]").forEach((b) => (b.onclick = () => add(b.dataset.tlsaddbtn)));
     root.querySelectorAll("[data-tlsadd]").forEach((i) => (i.onkeydown = (e) => { if (e.key === "Enter") add(i.dataset.tlsadd); }));
