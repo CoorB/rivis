@@ -555,14 +555,30 @@ switch ($Command) {
   }
   "stop" {
     $stopped = 0
+    $stoppedPids = @()
     foreach ($ownerPid in @(Listening-Pids @([int]$Port,[int]$WebPort))) {
       $process = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
       if ($process -and $process.ProcessName -eq "mitmweb") {
-        try { Stop-Process -Id $ownerPid -ErrorAction Stop; $stopped++ }
+        try { Stop-Process -Id $ownerPid -ErrorAction Stop; $stoppedPids += $ownerPid; $stopped++ }
         catch { Die "could not stop mitmweb pid ${ownerPid}: $($_.Exception.Message)" }
       }
     }
-    if ($stopped) { Info "stopped mitmweb on :$Port/:$WebPort" }
+    if ($stopped) {
+      try { Wait-Process -Id $stoppedPids -Timeout 10 -ErrorAction Stop }
+      catch {
+        foreach ($ownerPid in @(Listening-Pids @([int]$Port,[int]$WebPort))) {
+          $process = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+          if ($process -and $process.ProcessName -eq "mitmweb") {
+            Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+          }
+        }
+      }
+      for ($i = 0; $i -lt 20 -and -not (Ports-Free @([int]$Port,[int]$WebPort)); $i++) {
+        Start-Sleep -Milliseconds 100
+      }
+      if (-not (Ports-Free @([int]$Port,[int]$WebPort))) { Die "ports $Port/$WebPort are still in use after stopping mitmweb" }
+      Info "stopped mitmweb on :$Port/:$WebPort"
+    }
     else { Info "nothing to stop on :$Port/:$WebPort" }
   }
   "ui" {

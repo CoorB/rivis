@@ -643,7 +643,8 @@ class StatusUiStop(CliBase):
             self.assertEqual(os.stat(log).st_mode & 0o777, 0o600)
         finally:
             self.cli("stop", env=env)
-        wait_for(lambda: not harness.port_open(web), 15, 0.3, "stopped")
+        self.assertFalse(harness.port_open(port), "stop returned while the proxy port was still listening")
+        self.assertFalse(harness.port_open(web), "stop returned while the UI port was still listening")
 
     def test_android_and_ios_without_devices(self):
         r = self.refused("android", "on")

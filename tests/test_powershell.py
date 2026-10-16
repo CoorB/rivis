@@ -49,6 +49,13 @@ class PowerShellSource(unittest.TestCase):
         self.assertIn('& $PSCommandPath android on -All', self.src)
         self.assertIn('iOS: unavailable on Windows', self.src)
 
+    def test_stop_waits_for_both_ports_and_has_a_forced_bounded_fallback(self):
+        stop = self.src[self.src.index('  "stop" {'):self.src.index('  "ui" {')]
+        self.assertIn('Wait-Process', stop)
+        self.assertIn('-Timeout 10', stop)
+        self.assertIn('-Force', stop)
+        self.assertIn('Ports-Free', stop)
+
 
 @unittest.skipUnless(HAVE_PWSH, NO_PWSH)
 class Parse(unittest.TestCase):
