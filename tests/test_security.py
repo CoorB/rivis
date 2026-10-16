@@ -1,7 +1,9 @@
 """Security regressions: loopback-only listeners, no outbound connections by Rivis itself, no system-proxy change,
 private file modes, no secrets in argv, nothing written outside the state dirs."""
+import json
 import os
 import re
+import shutil
 import socket
 import stat
 import subprocess
@@ -138,6 +140,55 @@ class PrivateRelay(LiveCase):
         self.assertEqual(status, 403)
         self.assertEqual(self.up.hits_for("/secret"), [], "origin-form request reached the Host destination")
         self.assertNotIn(b"RivisUpstream", body)
+
+
+def _vpnapp_profile(inst):
+    """A project whose own server is on a private address (the suite's upstream on 127.0.0.1, like an app whose
+    servers resolve to VPN addresses through internal DNS)."""
+    d = os.path.join(inst.home, ".rivis", "profiles", "vpnapp")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "project.json"), "w") as fh:
+        json.dump({"id": "vpnapp", "label": "VPN app", "description": "servers on private addresses", "hosts": "localhost",
+                   "record_match": ".", "throttle_match": ".", "android_packages": [], "ios_bundle_ids": []}, fh)
+    shutil.copy(os.path.join(harness.REPO, "projects", "default", "rules.example.json"), d)
+
+
+class ProjectServersOnPrivateAddresses(LiveCase):
+    """2026-10-16, a tester's Mac: the NEO servers resolved to private VPN addresses, so the F-01 relay guard answered
+    every app call with 403. The project's own declared hosts are now allowed there — by name, and only when the
+    address the app connected to is what that name resolves to. No --allow-private-hosts here."""
+    PROJECT = "vpnapp"
+    INSTANCE_KW = {"start_args": ("--insecure",), "allow_private": False, "pre": _vpnapp_profile}
+
+    def setUp(self):
+        self.up.reset_hits()
+
+    def test_a_project_host_on_a_private_address_is_allowed(self):
+        r = self.inst.fetch("http://localhost:%d/json/small?ph=1" % self.up.http_port)
+        self.assertEqual(r.status, 200)
+        self.assertTrue(self.up.hits_for("/json/small"))
+
+    def test_the_simulator_case_ip_destination_with_its_project_name_is_allowed(self):
+        # local capture records the server IP as the destination; the name travels in the Host header / SNI
+        status, body, _ = raw_http(self.inst.proxy_port, "GET", "http://127.0.0.1:%d/json/small?ph=2" % self.up.http_port,
+                                   {"Host": "localhost:%d" % self.up.http_port, "Connection": "close"})
+        self.assertEqual(status, 200, body[:120])
+
+    def test_a_bare_private_ip_is_still_refused(self):
+        r = self.inst.fetch("http://127.0.0.1:%d/json/small?ph=3" % self.up.http_port)
+        self.assertEqual(r.status, 403)
+        self.assertEqual(self.up.hits_for("/json/small"), [])
+
+    def test_a_project_name_cannot_borrow_another_private_address(self):
+        status, _, _ = raw_http(self.inst.proxy_port, "GET", "http://10.255.255.1:9/x",
+                                {"Host": "localhost", "Connection": "close"})
+        self.assertEqual(status, 403)
+
+    def test_origin_form_relay_is_still_refused(self):
+        status, _, _ = raw_http(self.inst.proxy_port, "GET", "/secret",
+                                {"Host": "127.0.0.1:%d" % self.up.http_port, "Connection": "close"})
+        self.assertEqual(status, 403)
+        self.assertEqual(self.up.hits_for("/secret"), [])
 
 
 class FreshCa(LiveCase):

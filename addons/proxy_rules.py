@@ -56,7 +56,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
-from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PROFILE_VALUES, STATE_ROOT, breakpoints,
+from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PROFILE_VALUES, STATE_ROOT, breakpoints, project_profile,
                           migrate_rules, rule_file_path, tls_config, tls_options, user_regex)
 
 # Traffic profiles: latency ms, jitter ms, down kbps, up kbps, loss %, extra response delay ms.
@@ -230,6 +230,7 @@ class ProxyRules:
         self.tls = tls_config({})
         self._tls_set = _UNSET
         self.private_hosts_re = None
+        self.project_hosts_re = None
         self._address_cache = {}
 
     def load(self, loader):
@@ -253,6 +254,16 @@ class ProxyRules:
             self._reload(force=True)
         if "proxy_private_hosts" in updated:
             self.private_hosts_re = re.compile(ctx.options.proxy_private_hosts) if ctx.options.proxy_private_hosts else None
+        if "proxy_project" in updated:
+            # the project's own servers may live on private VPN addresses (internal DNS): its declared host domains are
+            # allowed there, matched as whole domains — "x.neo.sa" yes, "neo.sa.attacker.com" no
+            self.project_hosts_re = None
+            try:
+                hosts = (project_profile(ctx.options.proxy_project).get("hosts") or "").strip()
+                if hosts:
+                    self.project_hosts_re = re.compile(r"(?:[a-z0-9-]+\.)*(?:%s)" % hosts, re.I)
+            except (ValueError, OSError, re.error):
+                self.project_hosts_re = None
 
     # ── file handling ────────────────────────────────────────────
     def _reload(self, force=False):
@@ -401,28 +412,64 @@ class ProxyRules:
         DNS-rebinding variants. Private test services require an explicit allow-list.
         """
         host = flow.request.host
-        if not host or (self.private_hosts_re and self.private_hosts_re.fullmatch(host)):
+        if not host or self._trusted_name(host):
             return
-        now = time.monotonic()
-        cached = self._address_cache.get(host)
-        if cached and now - cached[0] < 60:
-            addresses = cached[1]
-        else:
-            try:
-                addresses = {row[4][0] for row in socket.getaddrinfo(host, flow.request.port, type=socket.SOCK_STREAM)}
-            except OSError:
-                return  # mitmproxy reports the normal DNS error; no destination was reached
-            self._address_cache[host] = (now, addresses)
+        addresses = self._resolve(host, flow.request.port)
+        if addresses is None:
+            return  # mitmproxy reports the normal DNS error; no destination was reached
         unsafe = []
         for address in addresses:
             ip = ipaddress.ip_address(address)
             if not ip.is_global:
                 unsafe.append(address)
+        if unsafe and self._named_project_server(flow, host):
+            return
         if unsafe:
             ctx.log.warn(f"proxy_rules: refused private upstream {host} -> {', '.join(sorted(unsafe))}; "
                          "use --allow-private-hosts for an intentional local test service")
             flow.response = http.Response.make(403, b"Private upstream destinations are blocked by Rivis.\n",
                                                {"Content-Type": "text/plain"})
+
+    def _trusted_name(self, name):
+        """A hostname (never an IP literal) the user or the project allows on private addresses."""
+        if not name:
+            return False
+        try:
+            ipaddress.ip_address(name.strip("[]"))
+            literal = True
+        except ValueError:
+            literal = False
+        if self.private_hosts_re and self.private_hosts_re.fullmatch(name):
+            return True                                   # explicit --allow-private-hosts (may name an IP on purpose)
+        return not literal and bool(self.project_hosts_re and self.project_hosts_re.fullmatch(name.rstrip(".")))
+
+    def _resolve(self, host, port):
+        now = time.monotonic()
+        cached = self._address_cache.get(host)
+        if cached and now - cached[0] < 60:
+            return cached[1]
+        try:
+            addresses = {row[4][0] for row in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)}
+        except OSError:
+            return None
+        self._address_cache[host] = (now, addresses)
+        return addresses
+
+    def _named_project_server(self, flow, ip):
+        """Simulator capture records the server's IP as the destination; its name is in the Host header / TLS SNI.
+        Allowed only when that name is trusted AND really resolves to the address the app connected to — so no call
+        to some other internal machine can borrow a project name."""
+        try:
+            ipaddress.ip_address(ip.strip("[]"))
+        except ValueError:
+            return False                                      # a hostname destination was judged by _trusted_name
+        names = {flow.request.pretty_host, getattr(flow.client_conn, "sni", None)} - {None, "", ip}
+        for name in names:
+            if self._trusted_name(name):
+                resolved = self._resolve(name, flow.request.port)
+                if resolved and ip.strip("[]") in resolved:
+                    return True
+        return False
 
     @staticmethod
     def _body(r):
