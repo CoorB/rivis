@@ -177,9 +177,22 @@ class MagiskRestarts(MagiskFixture):
             env["FAKE_STATUS"] = status
         r = subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", self.magisk, self.state, *extra],
                            capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120)
-        import time; time.sleep(0.5)                                  # the emulator is started in the background
-        starts = [l for l in open(self.log).read().splitlines() if l.startswith("emulator ")]
-        return r, starts
+        return r, self.emulator_starts()
+
+    def emulator_starts(self):
+        """The emulator is started in the background: wait until its start is logged and no more follow (a fixed
+        0.5 s sleep failed when the suite ran four modules at once)."""
+        import time
+        read = lambda: [l for l in open(self.log).read().splitlines() if l.startswith("emulator ")]
+        end, last, steady = time.time() + 10, None, 0
+        while time.time() < end:
+            now = read()
+            steady = steady + 1 if now == last and now else 0
+            if steady >= 5:                                           # 0.5 s without a new start
+                break
+            last = now
+            time.sleep(0.1)
+        return read()
 
     def test_default_restarts_once_into_the_setup_boot_and_stops_there(self):
         r, starts = self.run_flow("--yes")
@@ -205,8 +218,7 @@ class MagiskRestarts(MagiskFixture):
                    FAKE_LOG=self.log, FAKE_DIR=self.root, HOME=self.root)
         r = subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", "-", self.state, "--restore"],
                            capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120)
-        import time; time.sleep(0.5)
-        starts = [l for l in open(self.log).read().splitlines() if l.startswith("emulator ")]
+        starts = self.emulator_starts()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(len(starts), 1, starts)
         self.assertNotIn("-ramdisk", starts[0])
