@@ -458,6 +458,13 @@ function Test-StaleLocalProxy($spec) {
 $helpTokens = @("-h","--help","-Help")
 $helpRequested = $Help -or $Action -in $helpTokens -or $Name -in $helpTokens -or @($Rest | Where-Object { $_ -in $helpTokens }).Count
 if ($helpRequested -or $Command -in @("-h","--help")) { Write-Usage $Command; exit 0 }
+if ($Command -in @("version","--version") -or ($Command -eq "help" -and -not $Action -and @($Rest) -contains "--version")) {   # PowerShell binds a bare --version to $Rest      # installed copies carry VERSION at their root; a repo keeps it in install\
+  $v = "dev"
+  foreach ($f in @((Join-Path $PSScriptRoot "VERSION"), (Join-Path (Join-Path $PSScriptRoot "install") "VERSION"))) {
+    if (Test-Path -LiteralPath $f) { $v = (Get-Content -Raw -LiteralPath $f).Trim(); break }
+  }
+  Write-Output "$($ProductConfig.cli) $v"; exit 0
+}
 
 if ($Command -notin @("help","cert","doctor","bug-report","-h","--help","")) { Migrate-Legacy }
 

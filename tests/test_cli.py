@@ -53,6 +53,12 @@ class CliBase(unittest.TestCase):
 
 
 class Help(CliBase):
+    def test_version_prints_the_release(self):
+        # pilot support: "which version are you on?" (the repo copy reads install/VERSION)
+        want = open(os.path.join(harness.REPO, "install", "VERSION")).read().strip()
+        for flag in ("--version", "-V", "version"):
+            self.assertEqual(self.ok(flag).stdout.strip(), "rivis " + want, flag)
+
     def test_help_lists_commands(self):
         out = self.ok("--help").stdout
         for word in ("start", "projects", "rules", "scripts", "throttle", "tls", "compose", "breakpoint", "net-reset", "bug-report", "android", "ios"):

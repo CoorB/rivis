@@ -164,6 +164,11 @@ class Commands(unittest.TestCase):
         with open(self.rules_file(project)) as fh:
             return json.load(fh)
 
+    def test_version_prints_the_release(self):
+        want = open(os.path.join(harness.REPO, "install", "VERSION")).read().strip()
+        for flag in ("--version", "version"):
+            self.assertEqual(self.ok(flag).strip(), "rivis " + want, flag)
+
     def test_help_lists_commands(self):
         out = self.ok("help")
         for word in ("start", "projects", "rules", "scripts", "throttle", "tls", "compose", "android", "net-reset"):

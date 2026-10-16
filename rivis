@@ -890,6 +890,9 @@ case "${1:-}" in
   doctor)    shift; cmd_doctor "$@" ;;
   bug-report) shift; cmd_bug_report "$@" ;;
   cert)      cmd_cert ;;
+  --version|-V|version)   # installed copies carry VERSION at their root; a repo checkout keeps it in install/
+    v=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || cat "$SCRIPT_DIR/install/VERSION" 2>/dev/null || echo dev)
+    echo "$CLI $(echo "$v" | tr -d '[:space:]')" ;;
   -h|--help|help|"") usage ;;
   *) die "unknown command '$1' ($CLI --help)" ;;
 esac
