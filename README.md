@@ -1,6 +1,6 @@
 # Rivis
 
-A free, in-house replacement for **Proxyman**, built for NEO mobile QA.
+A free, in-house replacement for **Proxyman**, for mobile QA teams.
 See, pause, change and mock the calls your iOS Simulator or Android emulator makes, from a browser tab.
 
 Built on [mitmproxy](https://mitmproxy.org) (unchanged). Runs only on your Mac, only for simulators and emulators.
@@ -11,7 +11,7 @@ Built on [mitmproxy](https://mitmproxy.org) (unchanged). Runs only on your Mac, 
 
 | You want to… | In Rivis |
 |---|---|
-| See every call the app makes | The call list, with a filter box and a *NEO only* view |
+| See every call the app makes | The call list, with a filter box and a view of just your app's hosts |
 | Pause a call and edit it before it continues | **Breakpoint** on a call: change the request or the response, then *Continue* |
 | Serve your own response instead of the server's | **Map Local this call**, then edit the mock |
 | Force an error, a delay or a dropped call | One click on a call: status `503`, delay, block |
@@ -29,7 +29,7 @@ and inside Rivis: press `?`.
 ## How it fits
 
 ```
-  iOS Simulator / Android emulator  ──►  Rivis on your Mac (127.0.0.1)  ──►  NEO servers
+  iOS Simulator / Android emulator  ──►  Rivis on your Mac (127.0.0.1)  ──►  your app's servers
                                               │
                                               └── browser tab: call list + Tools panel
 ```
@@ -95,7 +95,7 @@ Everything else is in the browser panel. The full command list is in [docs/REFER
 ```
 rivis              # the command (macOS)        rivis.ps1   # the command (Windows, not in the pilot yet)
 addons/            # what runs inside mitmproxy, plus the browser panel
-projects/          # per-app settings (NEO: hosts, example rules)
+projects/          # one profile per app: its hosts and example rules
 install/           # installer, offline bundle builder
 docs/              # reference, Proxyman comparison, SBOM
 tests/             # automated test suite (bash tests/run.sh --fast)
