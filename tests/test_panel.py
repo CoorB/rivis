@@ -292,6 +292,26 @@ class Ops(LiveCase):
         self.bad("mockfile_get", {"name": "plain"}, "not a map local")
         self.bad("mockfile_put", {"name": "plain", "content": "x"}, "not a map local")
 
+    def test_maplocal_reuses_matching_manual_rule_and_rejects_duplicates(self):
+        self.panel.ok("maplocal_add", {"name": "manual", "host": "127.0.0.1:%d" % self.up.http_port,
+                                       "path": "/json/small", "body": '{"manual":1}', "status": 218})
+        response = self.fetch("/json/small?from=manual")
+        opened = self.panel.ok("mock", {"flow_id": self.flow_id("/json/small?from=manual")})
+        self.assertEqual((opened["name"], opened["existing"]), ("manual", True))
+        self.assertEqual(len([r for r in self.rules() if r["action"] == "map_local"]), 1)
+        duplicate = self.panel.ok("maplocal_add", {"host": "127.0.0.1:%d" % self.up.http_port,
+                                                    "path": "/json/small", "status": 218})
+        self.assertEqual((duplicate["name"], duplicate["existing"]), ("manual", True))
+        self.bad("maplocal_add", {"name": "manual", "host": "other.test", "path": "/x"}, "name exists")
+        self.assertEqual(response.status, 218)
+
+    def test_maplocal_full_url_keeps_query_string(self):
+        exact = self.up.url("/echo?x=1")
+        self.panel.ok("maplocal_add", {"name": "query", "host": exact, "status": 219})
+        match = next(r["match"] for r in self.rules() if r["name"] == "query")
+        self.assertTrue(re.search(match, exact), match)
+        self.assertFalse(re.search(match, self.up.url("/echo?x=9")), match)
+
     # -- view / filters -------------------------------------------------------------------------------
     def test_focus_host_refuses_filter_injection(self):
         """F-16: the host becomes part of a ~d '...' filter; quotes and spaces must never reach it."""

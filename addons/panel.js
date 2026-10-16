@@ -30,7 +30,7 @@
   const emptyState = (icon, title, hint) =>
     `<div class="empty">${ico(icon)}<b>${esc(title)}</b><span class="sub">${hint}</span></div>`;
   const info = (t) => `<span class="info" tabindex="0" role="img" aria-label="${esc(t)}" title="${esc(t)}">ⓘ</span>`;
-  const hostPath = (u) => { try { const x = new URL(u); return [x.host, x.pathname]; } catch (e) { return ["", u]; } };
+  const hostPath = (u) => { try { const x = new URL(u); return [x.host, x.pathname + x.search]; } catch (e) { return ["", u]; } };
   // a rule's match regex → readable "host/path" for lists
   const pretty = (r) => {
     if (r.note && r.note.startsWith("from ")) { const u = r.note.split(" ").pop(); const [h, p] = hostPath(u); return h + p; }
@@ -717,11 +717,14 @@
             <div class="sub">${esc(r.method || "ANY")} · status ${esc(r.status || 200)} · ${esc(r.name)}</div></div>
           <button class="b" data-edit="${i}">Edit</button><button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
       : emptyState("map", "No Map Local rules yet", "Select a call and use <b>Map Local this call</b>, or add one above with a host and path. <b>*</b> and <b>?</b> are wildcards.")}`;
-    const split = () => { const v = $("mh").value.trim(); if (/^https?:\/\//.test(v)) { const [h, p] = hostPath(v); $("mh").value = h; $("mp").value = p; } };
+    let pastedQuery = false;
+    const split = () => { const v = $("mh").value.trim(); if (/^https?:\/\//.test(v)) { const [h, p] = hostPath(v); $("mh").value = h; $("mp").value = p; pastedQuery = p.includes("?"); } };
     $("mh").onchange = split;
     $("madd").onclick = async () => {
       split();
-      const res = await run("maplocal_add", { host: $("mh").value, path: $("mp").value, method: $("mm").value, status: $("ms2").value }, (x) => "Map Local '" + x.name + "' added");
+      const path = $("mp").value;
+      const res = await run("maplocal_add", { host: $("mh").value, path, method: $("mm").value, status: $("ms2").value,
+        literal_query: pastedQuery || /\?[^#]*=/.test(path) }, (x) => "Map Local '" + x.name + (x.existing ? "' already exists" : "' added"));
       if (res) openEditor(res.name);
     };
     wireRuleRows(m);

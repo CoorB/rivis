@@ -83,23 +83,27 @@ MAX_PANEL_VALUES = 10000
 MAX_PANEL_DEPTH = 16
 
 
-def wildcard_regex(host, path):
+def wildcard_regex(host, path, literal_query=False):
     """FRTMProxy-style host/path with * and ? wildcards → URL regex used by the rules engine."""
     def wc(t, star):
         return "".join(star if c == "*" else "." if c == "?" else re.escape(c) for c in t)
-    host = (host or "").strip().lower()
+    host = (host or "").strip()
     path = (path or "/").strip() or "/"
     full_url = host.startswith(("http://", "https://"))
     if full_url:                             # a full URL pasted into the host box
         parsed = urlsplit(host)
-        host = parsed.netloc
-        path = parsed.path or path
+        host = parsed.netloc.lower()
+        path = (parsed.path or "/") + (("?" + parsed.query) if parsed.query else "")
+        literal_query = bool(parsed.query)
+    else:
+        host = host.lower()
     if not host:
         raise PanelError("host is required")
-    if full_url:
-        path = path.split("?", 1)[0]
     if not path.startswith("/"):
         path = "/" + path
+    if literal_query and "?" in path:
+        route, query = path.split("?", 1)
+        return r"^https?://" + wc(host, r"[^/:]*") + r"(:\d+)?" + wc(route, ".*") + r"\?" + wc(query, ".*") + "$"
     return r"^https?://" + wc(host, r"[^/:]*") + r"(:\d+)?" + wc(path, ".*") + r"(\?|$)"
 
 
@@ -1129,9 +1133,12 @@ class ProxyPanel:
             self.save_cfg(cfg)
         elif op == "mock":          # Map Local from the selected call
             f = self.flow(a["flow_id"])
-            match = self.flow_regex(f)
-            for r in cfg["rules"]:   # one mock per endpoint: reopen it instead of duplicating
-                if r.get("action") == "map_local" and r.get("match") == match and r.get("method") == f.request.method:
+            for r in cfg["rules"]:   # first matching mock wins: reopen it instead of creating a dead duplicate
+                try:
+                    matches = re.search(r.get("match") or r"(?!x)x", f.request.pretty_url)
+                except re.error:
+                    matches = False
+                if r.get("action") == "map_local" and matches and r.get("method") in (None, "", f.request.method):
                     r["enabled"] = True
                     self.save_cfg(cfg)
                     return {"name": r["name"], "existing": True}
@@ -1309,18 +1316,29 @@ class ProxyPanel:
                 cfg["throttle_match"] = scope
             self.save_cfg(cfg)
         elif op == "maplocal_add":       # manual Map Local rule: host/path wildcards, like FRTMProxy "Add Rule"
-            name = (a.get("name") or "").strip() or re.sub(r"[^A-Za-z0-9._-]", "-",
-                    "mock-" + ((a.get("path") or "/").strip("/").split("/")[-1] or a.get("host", "x")))[:60]
-            name = self.unique(cfg, name)
+            requested_name = (a.get("name") or "").strip()
+            base_name = requested_name or re.sub(r"[^A-Za-z0-9._-]", "-",
+                        "mock-" + ((a.get("path") or "/").strip("/").split("/")[-1] or a.get("host", "x")))[:60]
+            method = (a.get("method") or "").upper() or None
+            match = wildcard_regex(a.get("host"), a.get("path"), bool(a.get("literal_query")))
+            for existing in cfg["rules"]:
+                if (existing.get("action") == "map_local" and existing.get("match") == match
+                        and existing.get("method") == method):
+                    existing["enabled"] = True
+                    self.save_cfg(cfg)
+                    return {"name": existing["name"], "existing": True}
+            if requested_name and any(r.get("name") == requested_name for r in cfg["rules"]):
+                raise PanelError("a rule with that name exists")
+            name = self.unique(cfg, base_name)
             os.makedirs(MOCK_DIR, exist_ok=True)
             path = self.mock_path(name)
             atomic_write_text(path, a.get("body") or "{}\n")
-            r = {"name": name, "enabled": True, "match": wildcard_regex(a.get("host"), a.get("path")),
+            r = {"name": name, "enabled": True, "match": match,
                  "action": "map_local", "file": path, "status": http_status(200 if a.get("status") in (None, "") else a["status"]),
                  "headers": {"Content-Type": "application/json"},
                  "note": f"manual: {a.get('host')}{a.get('path') or '/'}"}
-            if a.get("method"):
-                r["method"] = a["method"].upper()
+            if method:
+                r["method"] = method
             self.validate(r)
             cfg["rules"].append(r)
             self.save_cfg(cfg)

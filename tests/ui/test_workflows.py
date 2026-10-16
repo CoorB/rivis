@@ -6,6 +6,7 @@ skipped breakpoints. Unit tests had covered each piece alone; these cover the pi
 """
 import json
 import os
+import re
 import sys
 import threading
 import unittest
@@ -176,6 +177,17 @@ class Workflows(UiBase):
         self.P("#save").click()
         self.page.wait_for_timeout(1200)
         self.assertEqual(self.fetch("/json/small?wfg=1").json(), {"v": 2})
+
+    def test_map_local_pasted_url_keeps_its_query(self):
+        self.open()
+        self.tab("map")
+        exact = self.up.url("/echo?x=1")
+        self.P("#mh").fill(exact)
+        self.P("#madd").click()
+        self.P("#body").wait_for(timeout=10000)
+        rule = next(r for r in self.inst.cfg()["rules"] if r.get("action") == "map_local")
+        self.assertTrue(re.search(rule["match"], exact), rule["match"])
+        self.assertFalse(re.search(rule["match"], self.up.url("/echo?x=9")), rule["match"])
 
     def test_breakpoint_and_map_local_on_one_endpoint_pause_first(self):
         """Proxyman order: the breakpoint stops the call before Map Local answers it."""
