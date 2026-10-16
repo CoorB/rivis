@@ -315,6 +315,150 @@ def _nested_repeat(items):
     return False
 
 
+def _unbounded(av):
+    return av[1] == _sre.MAXREPEAT or av[1] > 100
+
+
+def _ambiguous_repeat(items):
+    """An unbounded repeat whose body can split the same text in several ways (review R2), which backtracks
+    exponentially: alternatives that can start with the same character, as in (a|aa)+ or (ab|ab)+, or an optional
+    character that the next one can also take, as in (a?a)+. (foo|bar)+ and (ab?)+ are unambiguous and allowed."""
+    for op, av in items:
+        if op in _REPEATS:
+            sub = av[2]
+            if _unbounded(av) and (_overlapping_branch(sub) or _optional_overlap(sub)):
+                return True
+            if _ambiguous_repeat(sub):
+                return True
+        elif op == _sre.SUBPATTERN:
+            if _ambiguous_repeat(av[-1]):
+                return True
+        elif op == _sre.BRANCH:
+            if any(_ambiguous_repeat(b) for b in av[1]):
+                return True
+        elif op in (_sre.ASSERT, _sre.ASSERT_NOT):
+            if _ambiguous_repeat(av[1]):
+                return True
+    return False
+
+
+def _first_chars(items):
+    """Probe characters a sequence can start with; everything when it can match empty or is not simple."""
+    acc = set()
+    for op, av in _flatten(items):
+        if op in (_sre.AT,):
+            continue
+        if op in _REPEATS:
+            acc |= _first_chars(av[2])
+            if av[0] > 0:
+                return acc
+            continue
+        if op == _sre.BRANCH:
+            for b in av[1]:
+                acc |= _first_chars(b)
+            return acc
+        chars = _char_set(op, av)
+        return acc | (set(_PROBE) if chars is None else chars)
+    return set(_PROBE)
+
+
+def _overlapping_branch(sub):
+    for op, av in _flatten(sub):
+        if op == _sre.BRANCH:
+            seen = set()
+            for b in av[1]:
+                first = _first_chars(b)
+                if seen & first:
+                    return True
+                seen |= first
+        elif op in _REPEATS and _overlapping_branch(av[2]):
+            return True
+    return False
+
+
+def _optional_overlap(sub):
+    """In a repeated body: an optional one-character item followed by an item (or, at the end, the body's start
+    on the next round) that can take the same character."""
+    flat = _flatten(sub)
+    for i, (op, av) in enumerate(flat):
+        if op in _REPEATS and av[0] == 0 and len(av[2]) == 1:
+            chars = _char_set(*list(av[2])[0])
+            if chars is None:
+                continue
+            nxt = _first_chars(flat[i + 1:]) if i + 1 < len(flat) else _first_chars(flat)
+            if chars & nxt:
+                return True
+    return False
+
+
+def _flatten(items):
+    """The items of a sequence with plain groups opened up: (a*)(a*) is a*a*."""
+    out = []
+    for op, av in items:
+        if op == _sre.SUBPATTERN:
+            out.extend(_flatten(av[-1]))
+        else:
+            out.append((op, av))
+    return out
+
+
+_PROBE = [chr(c) for c in range(32, 127)] + ["\t", "\n", "\u00e9"]
+
+
+def _char_set(op, av):
+    """The probe characters a one-character item matches (None: not a one-character item)."""
+    if op == _sre.SUBPATTERN and len(av[-1]) == 1:
+        return _char_set(*list(av[-1])[0])
+    if op not in (_sre.LITERAL, _sre.NOT_LITERAL, _sre.ANY, _sre.IN, _sre.CATEGORY):
+        return None
+    sub = _sre.SubPattern(_sre.State(), [(op, av)])
+    try:
+        rx = re.compile(_sre_compile_items(sub))
+    except Exception:  # noqa: BLE001 - when in doubt, treat it as matching everything
+        return set(_PROBE)
+    return {c for c in _PROBE if rx.fullmatch(c)}
+
+
+def _sre_compile_items(sub):
+    try:
+        from re import _compiler as _sc
+    except ImportError:                 # pragma: no cover - Python < 3.11
+        import sre_compile as _sc
+    return _sc.compile(sub)
+
+
+def _adjacent_overlap(items):
+    """Unbounded repeats next to each other that can take the same characters (a*a*, .*.*, \\d+\\d*): each extra one
+    multiplies the work by the URL length. Optional items between them do not separate them (a*b?a*)."""
+    prev = None                         # the character set of the last unbounded repeat still "open"
+    for op, av in _flatten(items):
+        if op in _REPEATS:
+            body = list(av[2])
+            if _ambiguous_nested(body):
+                return True
+            chars = _char_set(*body[0]) if len(body) == 1 else None
+            if _unbounded(av) and chars is not None:
+                if prev is not None and prev & chars:
+                    return True
+                prev = chars if prev is None or av[0] > 0 else (prev | chars)
+                continue
+            if av[0] > 0:
+                prev = None
+        elif op == _sre.BRANCH:
+            if any(_adjacent_overlap(b) for b in av[1]):
+                return True
+            prev = None
+        elif op in (_sre.AT, _sre.ASSERT, _sre.ASSERT_NOT):
+            continue                     # zero width: does not separate
+        else:
+            prev = None
+    return False
+
+
+def _ambiguous_nested(body):
+    return any(op in _REPEATS and _adjacent_overlap(av[2]) for op, av in body)
+
+
 def user_regex(pattern, flags=0):
     """Compile a user-, rule- or profile-supplied regex, refusing the shapes that hang the proxy (F-05).
 
@@ -326,9 +470,16 @@ def user_regex(pattern, flags=0):
     if len(pattern) > MAX_PATTERN:
         raise re.error("pattern is longer than %d characters" % MAX_PATTERN)
     compiled = re.compile(pattern, flags)
-    if _nested_repeat(_sre.parse(pattern, flags)):
+    parsed = _sre.parse(pattern, flags)
+    if _nested_repeat(parsed):
         raise re.error("nested repetition such as (a+)+ or (.*)* can freeze the proxy; "
                        "simplify it (e.g. a+ instead of (a+)+)")
+    if _ambiguous_repeat(parsed):
+        raise re.error("a repeated group with alternatives or optional parts, such as (a|aa)+ or (a?a)+, can freeze "
+                       "the proxy; repeat one thing, or use a character class such as [ab]+")
+    if _adjacent_overlap(parsed):
+        raise re.error("two repeats in a row that can match the same characters, such as .*.* or \\d+\\d*, can freeze "
+                       "the proxy on a long URL; keep one of them")
     return compiled
 
 
