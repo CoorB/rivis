@@ -299,6 +299,23 @@ class UiSmoke(UiBase):
         self.assertLess(box["y"], 800 - 60, "HTTPS decryption heading is below the fold: %r" % box)
         self.assertEqual(self.errors, [])
 
+    def test_another_proxy_app_holding_the_mac_proxy_is_named_in_a_banner(self):
+        # the iOS Simulator follows the Mac's proxy: when another app holds it, say which one and what to do
+        import json as _json
+        def patch(route):
+            resp = route.fetch()
+            doc = resp.json()
+            doc["system_proxy"] = {"host": "127.0.0.1", "port": "9090", "owner": "Proxyman", "ours": False, "stale": False}
+            route.fulfill(response=resp, body=_json.dumps(doc), headers={**resp.headers, "content-type": "application/json"})
+        self.page.route("**/proxy/api/state", patch)
+        page = self.open()
+        bar = page.locator("#proxy-panel-host #proxybar")
+        wait_for(lambda: bar.is_visible(), 10, 0.2, "banner shown")
+        text = bar.inner_text()
+        self.assertIn("Proxyman", text)
+        self.assertIn("Quit Proxyman", text)
+        self.assertEqual(self.errors, [])
+
     def test_the_empty_list_offers_device_setup(self):
         self.page.add_init_script("try { localStorage.setItem('rivis-welcome', 'done') } catch (e) {}")
         self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))

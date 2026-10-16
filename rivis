@@ -46,7 +46,7 @@
 #                                 --manual: only print the steps. --yes: consent to the one-time
 #                                 Play-image setup without asking (scripts)
 #   <cli> ios on|off [--udid UDID | --all] CA on a simulator (default: the booted one; --all: every booted one)
-#   <cli> net-reset [--dry-run]            clear stale local web/https/socks proxies on every network
+#   <cli> net-reset [--dry-run|--auto]     clear stale local web/https/socks proxies on every network
 #                                         service — fixes "no internet after closing the proxy app"
 #   <cli> doctor [--json] [--no-net] [--fix-safe [--yes]]
 #                                 read-only health check: versions, CA, ports, system proxy,
@@ -426,11 +426,18 @@ cmd_start() {
   info "proxy  127.0.0.1:$PORT   (Android emulator: 10.0.2.2:$PORT)"
   # Another tool (Proxyman, FRTMProxy) as system proxy = the simulator sends its traffic THERE;
   # local capture then only sees DNS rows. Seen 2026-10-14: Proxyman on :9091 stole every call.
+  # A proxy app that quit (or crashed) often leaves the Mac's proxy on its dead loopback port: every Mac app and the
+  # Simulator then lose the network. Clear exactly those leftovers on every start (2026-10-16, a tester's Mac).
+  [ "$(uname)" = Darwin ] && cmd_net_reset --auto
   local sp; sp=$(scutil --proxy | awk '/HTTPSEnable/{e=$3} /HTTPSProxy/{h=$3} /HTTPSPort/{p=$3} END{if(e==1)print h":"p}')
   if [ "$ios" = 1 ] && [ -n "$sp" ]; then
     local who; who=$(port_owner "${sp##*:}" | awk '{print $1}')
-    echo "!! WARNING: macOS system proxy is $sp (${who:-nothing listening}) — iOS Simulator traffic goes there," >&2
-    echo "!!          not to $PRODUCT_NAME. Quit ${who:-that tool} (or: $CLI net-reset) before testing iOS." >&2
+    if [ -n "$who" ]; then
+      echo "!! $who is your Mac's proxy ($sp): the iOS Simulator sends its traffic there, not to $PRODUCT_NAME." >&2
+      echo "!! Quit $who, then run: $CLI start --background   (any setting it leaves behind is cleared automatically)" >&2
+    else
+      echo "!! WARNING: macOS system proxy is $sp — iOS Simulator traffic goes there, not to $PRODUCT_NAME." >&2
+    fi
   fi
   [ "$ios" = 1 ] && info "iOS    local capture of processes matching '$filter' (no system proxy)"
   [ "$insecure" = 1 ] && info "TLS    upstream verification OFF"
@@ -771,9 +778,9 @@ cmd_ios() {
 # FRTMProxy / Proxyman restore whatever proxy state they found at launch. If that was a
 # leftover 127.0.0.1 from a crashed session, every Mac app loses the network once the
 # proxy app quits. Only stale local-loopback entries are safe to clear.
-cmd_net_reset() {
-  local dry=0; [ "${1:-}" = "--dry-run" ] && dry=1
-  local changed=0 enabled=0
+cmd_net_reset() {   # [--dry-run | --auto]  --auto: silent unless it clears something (used by start and the installer)
+  local dry=0 auto=0; [ "${1:-}" = "--dry-run" ] && dry=1; [ "${1:-}" = "--auto" ] && auto=1
+  local changed=0 enabled=0 stale_seen=""
   while IFS= read -r svc; do
     case "$svc" in ""|"An asterisk"*|\**) continue ;; esac
     local kind getter setter details on host port label
@@ -792,13 +799,18 @@ cmd_net_reset() {
       if { [ "$host" = 127.0.0.1 ] || [ "$host" = localhost ] || [ "$host" = ::1 ]; } \
           && [ -n "$port" ] && [ -z "$(port_owner "$port")" ]; then
         changed=1
-        echo "  $svc: $label=$host:$port — $([ "$dry" = 1 ] && echo 'would clear' || echo 'clearing')"
+        [ "$auto" = 1 ] || echo "  $svc: $label=$host:$port — $([ "$dry" = 1 ] && echo 'would clear' || echo 'clearing')"
         [ "$dry" = 1 ] || networksetup "$setter" "$svc" off || die "could not clear $label proxy on $svc"
+        [ "$auto" = 1 ] && stale_seen="$host:$port"
       else
-        echo "  $svc: $label=$host:$port — left alone (not a local leftover)"
+        [ "$auto" = 1 ] || echo "  $svc: $label=$host:$port — left alone (not a local leftover)"
       fi
     done
   done < <(networksetup -listallnetworkservices)
+  if [ "$auto" = 1 ]; then
+    [ "$changed" = 1 ] && info "fixed: another proxy app (Proxyman, Charles…) had left your Mac's proxy set to $stale_seen with nothing listening — cleared, so Mac apps and the Simulator reach the network again"
+    return 0
+  fi
   if [ "$enabled" = 0 ]; then info "no system proxy set on any service — network is clean"
   elif [ "$changed" = 0 ]; then info "no stale local proxy found — enabled proxies were left alone"
   elif [ "$dry" = 1 ]; then info "dry run: only the stale local proxies above would be cleared"

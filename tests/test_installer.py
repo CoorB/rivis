@@ -3,10 +3,12 @@ idempotent and reversible, hash pins are enforced, releases carry no state/secre
 import hashlib
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tarfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -505,6 +507,72 @@ class OfflineBundle(InstallerBase):
         self.assertNotEqual(cp.returncode, 0)
         self.assertIn("must be an https:// URL", cp.stderr)
         self.assertNotIn("web filter", cp.stdout + cp.stderr)
+
+
+class RedirectorApproval(InstallerBase):
+    """macOS can list the Redirector twice: an old copy "terminated waiting to uninstall on reboot" FIRST, the approved
+    one second (seen on a second Mac, 2026-10-16). The installer read only the first line, so it sat out the full
+    3-minute wait after the user had approved. Fakes: systemextensionsctl prints a fixed state, mitmdump is a stand-in."""
+    STALE = "\t\tS8XHQB96PW\torg.mitmproxy.macos-redirector.network-extension (2.0/1)\tnetwork-extension\t[terminated waiting to uninstall on reboot]"
+    APPROVED = "*\t*\tS8XHQB96PW\torg.mitmproxy.macos-redirector.network-extension (2.0/1)\tnetwork-extension\t[activated enabled]"
+    WAITING = "*\t\tS8XHQB96PW\torg.mitmproxy.macos-redirector.network-extension (2.0/1)\tnetwork-extension\t[activated waiting for user]"
+
+    def fakes(self, ext_lines):
+        d = os.path.join(self.home, "fakebin")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "systemextensionsctl"), "w") as fh:
+            fh.write("#!/bin/sh\ncat <<'X'\n%s\nX\n" % "\n".join(ext_lines))
+        pidfile = os.path.join(self.home, "helper.pid")
+        with open(os.path.join(d, "mitmdump"), "w") as fh:          # version check passes; anything else = the helper
+            fh.write('#!/bin/sh\n[ "$1" = --version ] && { echo "Mitmproxy: 12.2.3"; exit 0; }\n'
+                     'echo $$ > "%s"\nexec sleep 600\n' % pidfile)
+        for f in ("systemextensionsctl", "mitmdump"):
+            os.chmod(os.path.join(d, f), 0o755)
+        shutil.copytree(self.suite.ca_dir, os.path.join(self.home, ".mitmproxy"), dirs_exist_ok=True)   # no CA step
+        env = self.suite.env(self.home)
+        env["PATH"] = d + ":" + env["PATH"]
+        self.addCleanup(lambda: os.path.exists(pidfile) and subprocess.run(["kill", "-9", open(pidfile).read().strip()],
+                                                                          capture_output=True))
+        return env, os.path.join(d, "mitmdump"), pidfile
+
+    def test_an_approved_redirector_listed_after_a_stale_one_counts_as_approved(self):
+        env, fake, pidfile = self.fakes([self.STALE, self.APPROVED])
+        started = time.time()
+        cp = self.suite.run(["/bin/bash", INSTALL, "--yes", "--no-rc", "--trust-mitmdump", fake], home=self.home, env=env, timeout=120)
+        out = cp.stdout + cp.stderr
+        self.assertEqual(cp.returncode, 0, out[-1500:])
+        self.assertIn("already approved", out)
+        self.assertNotIn("waiting for the approval", out)
+        self.assertFalse(os.path.exists(pidfile), "the approval helper was started although the Redirector is approved")
+        self.assertLess(time.time() - started, 60)
+
+    def test_ctrl_c_during_the_approval_wait_leaves_no_helper_running(self):
+        env, fake, pidfile = self.fakes([self.WAITING])
+        p = subprocess.Popen(["/bin/bash", INSTALL, "--yes", "--no-rc", "--trust-mitmdump", fake], env=env, cwd=self.home,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True,
+                             # tests/run.sh runs modules as background jobs, which inherit SIGINT *ignored*; bash cannot
+                             # trap a signal ignored at entry. A user's Terminal has the default, so restore it here.
+                             preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+        try:
+            out = ""
+            deadline = time.time() + 90
+            while time.time() < deadline and "waiting for the approval" not in out:
+                line = p.stdout.readline()
+                if not line:
+                    break
+                out += line
+            self.assertIn("waiting for the approval", out, out[-2500:])
+            helper = int(open(pidfile).read().strip())
+            os.kill(p.pid, signal.SIGINT)                               # Ctrl-C reaches the installer
+            p.wait(timeout=30)
+            time.sleep(0.5)
+            alive = subprocess.run(["kill", "-0", str(helper)], capture_output=True).returncode == 0
+            self.assertFalse(alive, "the local-capture helper kept running after Ctrl-C")
+        finally:
+            if p.poll() is None:
+                os.killpg(p.pid, signal.SIGKILL)
+            if os.path.exists(pidfile):
+                subprocess.run(["kill", "-9", open(pidfile).read().strip()], capture_output=True)
 
 
 class WindowsInstallerSource(unittest.TestCase):

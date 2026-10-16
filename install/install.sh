@@ -55,7 +55,10 @@ conf() {  # conf KEY — value from mirror.conf (plain KEY=VALUE, never sourced)
 }
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/rivis-inst.XXXXXX") || die "cannot create a private temporary directory"
-trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+LP=""                                            # the temporary local-capture helper, if one is running
+cleanup() { rm -rf "$TMP"; [ -n "$LP" ] && kill "$LP" 2>/dev/null; LP=""; }
+trap cleanup EXIT
+trap 'cleanup; exit 130' HUP INT TERM            # Ctrl-C must not leave the helper running
 sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
 verify() {  # verify FILE EXPECTED_SHA LABEL
   [ -n "$2" ] || die "$3: no pinned SHA-256 in mirror.conf — refusing to use an unverified file"
@@ -363,46 +366,43 @@ else
 fi
 
 # ---- 5. local capture (iOS Simulator) --------------------------------------------------------------------------
-ext_state() { systemextensionsctl list 2>/dev/null | grep 'org.mitmproxy.macos-redirector' | head -1; }
+# macOS can list the Redirector more than once (an old copy "terminated waiting to uninstall on reboot" plus the
+# current one): approved = ANY entry is "activated enabled", never just the first line.
+ext_approved() { systemextensionsctl list 2>/dev/null | grep 'org.mitmproxy.macos-redirector' | grep -q 'activated enabled'; }
+ext_listed()   { systemextensionsctl list 2>/dev/null | grep -q 'org.mitmproxy.macos-redirector'; }
 EXT_OK=0
 if [ "$SKIP_LOCAL" = 1 ]; then
   info "local capture skipped by request"
+elif ext_approved; then
+  info "Mitmproxy Redirector already approved"; EXT_OK=1
 else
-  st=$(ext_state)
-  if echo "$st" | grep -q 'activated enabled'; then
-    info "Mitmproxy Redirector already approved and active"; EXT_OK=1
-  else
-    cat <<EOF
+  cat <<EOF
 
-─── iOS Simulator capture needs a one-time approval ───────────────────────────────────────────────
-mitmproxy copies its signed 'Mitmproxy Redirector' app to /Applications and asks macOS to load its
-network extension. macOS will show a prompt; you must approve it yourself:
-  1. System Settings opens at  General → Login Items & Extensions. Scroll down to "Extensions".
-  2. Click "By Category", then the ⓘ button at the end of the "Network Extensions" row.
-     (It is NOT in the "By App" list until it is approved.)
-  3. Switch ON "Mitmproxy Redirector", click Done, and confirm with Touch ID or your password.
-  4. If macOS asks to "Allow" a proxy configuration, click Allow. (Apple's prompt, not this installer's.)
-  Don't see it? Quit System Settings (⌘Q) and open it again — a window opened earlier shows an old list.
-It only captures the processes named by the tool (the Simulator); it does not touch the system proxy.
+─── iOS Simulator only: one approval in System Settings ───────────────────────────
+  System Settings is opening. Under Extensions → By Category → Network Extensions (ⓘ),
+  switch ON "Mitmproxy Redirector" and confirm. Click Allow if macOS asks.
+  Android emulators and plain proxying work without this.
 EOF
-    if [ "$YES" = 0 ]; then printf 'Press Enter to start the approval (or type s + Enter to skip): '; read -r ans || ans=s
-    else ans=""; fi
-    if [ "$ans" = s ] || [ "$ans" = S ]; then info "skipped — iOS capture will not work until approved"
-    else
-      "$MITMDUMP" --listen-host 127.0.0.1 --listen-port "$(free_port)" --set confdir="$CONFDIR" --mode local:CoreSimulator >/dev/null 2>&1 & lp=$!
-      # open Settings only once macOS lists the extension, or the page shows a list without it
-      for i in $(seq 1 15); do ext_state | grep -q . && break; kill -0 "$lp" 2>/dev/null || break; sleep 1; done
-      open "x-apple.systempreferences:com.apple.LoginItems-Settings.extension" 2>/dev/null \
-        || open "x-apple.systempreferences:com.apple.preference.security" 2>/dev/null
-      for i in $(seq 1 90); do
-        ext_state | grep -q 'activated enabled' && { EXT_OK=1; break; }
-        kill -0 "$lp" 2>/dev/null || break
-        [ "$i" = 1 ] && info "waiting up to 3 minutes for your approval…"
-        sleep 2
-      done
-      kill "$lp" 2>/dev/null; wait "$lp" 2>/dev/null
-      [ "$EXT_OK" = 1 ] && info "Mitmproxy Redirector approved" || warn "not approved yet — re-run install.sh after approving, or approve in System Settings"
-    fi
+  if [ "$YES" = 0 ]; then printf '  Press Enter to continue, or type s + Enter to skip: '; read -r ans || ans=s
+  else ans=""; fi
+  if [ "$ans" = s ] || [ "$ans" = S ]; then info "skipped — approve later by re-running ./install.sh (iOS capture needs it)"
+  else
+    "$MITMDUMP" --listen-host 127.0.0.1 --listen-port "$(free_port)" --set confdir="$CONFDIR" --mode local:CoreSimulator >/dev/null 2>&1 & LP=$!
+    # open Settings only once macOS lists the extension, or the page shows a list without it
+    for i in $(seq 1 15); do ext_listed && break; kill -0 "$LP" 2>/dev/null || break; sleep 1; done
+    open "x-apple.systempreferences:com.apple.LoginItems-Settings.extension" 2>/dev/null \
+      || open "x-apple.systempreferences:com.apple.preference.security" 2>/dev/null
+    INTERACTIVE=0; [ "$YES" = 0 ] && [ -t 0 ] && INTERACTIVE=1
+    info "waiting for the approval (up to 3 min)$([ "$INTERACTIVE" = 1 ] && echo ' — press Enter to stop waiting')…"
+    end=$(( $(date +%s) + 180 ))
+    while [ "$(date +%s)" -lt "$end" ]; do
+      ext_approved && { EXT_OK=1; break; }
+      kill -0 "$LP" 2>/dev/null || break
+      if [ "$INTERACTIVE" = 1 ]; then read -r -t 2 _ && break; else sleep 2; fi
+    done
+    kill "$LP" 2>/dev/null; wait "$LP" 2>/dev/null; LP=""
+    [ "$EXT_OK" = 1 ] && info "Mitmproxy Redirector approved ✓" \
+      || warn "not approved yet — iOS capture needs it. Approve it in System Settings, then re-run ./install.sh"
   fi
 fi
 
@@ -412,12 +412,15 @@ info "self-check"
 echo "  tool          $NAME $TOOL_VERSION  ($ROOT/current)"
 echo "  mitmproxy     $("$MITMDUMP" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}')  ($MITM_BIN_DIR)"
 echo "  CA sha256     $(openssl x509 -in "$CA_PEM" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)"
-echo "  redirector    $(ext_state | sed -n 's/.*\[\([^]]*\)\].*/\1/p' | grep . || echo 'not installed')"
+echo "  redirector    $(if ext_approved; then echo approved; elif ext_listed; then echo 'waiting for approval'; else echo 'not installed'; fi)"
 [ "$EXT_OK" = 1 ] || echo "  NOTE: iOS Simulator capture needs the Redirector approved (see above). Android and plain proxy work without it."
 echo
 info "next steps"
 echo "  $CLI start          # opens the UI (open a new terminal first if PATH was just updated)"
 echo "  then Tools → Devices: one click per simulator / emulator   (or: $CLI setup)"
+# A proxy app that quit (Proxyman, Charles…) can leave the Mac's proxy on its dead loopback port, so the Simulator and
+# every Mac app lose the network. Clear exactly those leftovers now, even if the user does not start Rivis yet.
+[ "$DRY" = 0 ] && [ -x "$LINK" ] && { "$LINK" net-reset --auto || true; }
 # One less step for a new user: offer to start now (interactive runs only).
 if [ "$YES" = 0 ] && [ -t 0 ] && [ -t 1 ]; then
   echo; printf 'Start %s now and open its UI? [Y/n] ' "$NAME"; read -r ans || ans=n

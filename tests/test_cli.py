@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import os
+import socket
 import re
 import stat
 import sys
@@ -513,6 +514,55 @@ class NeoMitmShim(CliBase):
         self.ok("rules", "add", "viashim", "action=block", bin=NEO_MITM)
         self.assertTrue(os.path.isfile(self.rules_file("neo")))
         self.assertIn("viashim", self.cfg("neo")["rules"][-1]["name"])
+
+
+class LeftoverSystemProxy(CliBase):
+    """A proxy app that quit (Proxyman, Charles…) left the Mac's proxy on its dead loopback port: the Simulator and every
+    Mac app lost the network until `rivis net-reset` (a tester's Mac, 2026-10-16). Fake networksetup: Wi-Fi web+https
+    proxy on PORT; every change is logged, nothing real is touched."""
+
+    def fake(self, host, port):
+        d = os.path.join(self.home, "fakenet")
+        os.makedirs(d, exist_ok=True)
+        log = os.path.join(d, "set.log")
+        with open(os.path.join(d, "networksetup"), "w") as fh:
+            fh.write("""#!/bin/sh
+case "$1" in
+  -listallnetworkservices) printf 'An asterisk (*) denotes that a network service is disabled.\\nWi-Fi\\n' ;;
+  -getwebproxy|-getsecurewebproxy) printf 'Enabled: Yes\\nServer: %s\\nPort: %s\\nAuthenticated Proxy Enabled: 0\\n' ;;
+  -getsocksfirewallproxy) printf 'Enabled: No\\nServer: \\nPort: 0\\n' ;;
+  -set*) echo "$*" >> "%s" ;;
+esac
+exit 0
+""" % (host, port, log))
+        os.chmod(os.path.join(d, "networksetup"), 0o755)
+        return dict(self.env, PATH=d + ":" + self.env["PATH"]), log
+
+    def changes(self, log):
+        return open(log).read().split("\n")[:-1] if os.path.exists(log) else []
+
+    def test_auto_clears_a_dead_loopback_proxy_and_says_so(self):
+        env, log = self.fake("127.0.0.1", harness.free_port())
+        r = self.ok("net-reset", "--auto", env=env)
+        self.assertEqual(sorted(self.changes(log)), ["-setsecurewebproxystate Wi-Fi off", "-setwebproxystate Wi-Fi off"])
+        self.assertIn("fixed:", r.stdout)
+
+    def test_never_touches_a_live_or_a_remote_proxy(self):
+        busy = socket.socket(); busy.bind(("127.0.0.1", 0)); busy.listen(1)     # another proxy app still running
+        self.addCleanup(busy.close)
+        for host, port in (("127.0.0.1", busy.getsockname()[1]), ("10.1.2.3", 3128)):
+            env, log = self.fake(host, port)
+            if os.path.exists(log):
+                os.remove(log)
+            r = self.ok("net-reset", "--auto", env=env)
+            self.assertEqual(self.changes(log), [], (host, port))
+            self.assertEqual(r.stdout.strip(), "", "--auto must stay silent when it changes nothing")
+
+    def test_start_clears_the_leftover_before_capturing(self):
+        env, log = self.fake("127.0.0.1", harness.free_port())
+        env["SHIM_DRYRUN"] = "1"
+        r = self.suite.rivis("start", "--no-open", "--no-ios", home=self.home, env=env)
+        self.assertIn("-setsecurewebproxystate Wi-Fi off", self.changes(log), r.stdout + r.stderr)
 
 
 class StartArgv(CliBase):

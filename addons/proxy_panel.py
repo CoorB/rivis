@@ -164,6 +164,7 @@ def patch_mitmweb_js(source, warn=None):
 class ProxyPanel:
     def __init__(self):
         self._device_jobs = devices.Jobs()
+        self._sysproxy = (0.0, None, 0.0)       # (checked at, state, stale since) — see system_proxy_state
         self.project_only = False
         self.show_dns = False
         self.focused_host = None
@@ -392,6 +393,7 @@ class ProxyPanel:
             "scripts": self.scripts(cfg),
             "script_status": self.script_status(),
             "retention": self.retention_state(),
+            "system_proxy": self.system_proxy_state(),
             "flow_count": len(self.all_flows()),
             "focus_host": self.focused_host,
             "project_only": self.project_only,
@@ -437,6 +439,49 @@ class ProxyPanel:
                         "node_message": None if getattr(addon, "node", None) else "Node.js not installed — JS scripts disabled",
                         "errors": dict(getattr(addon, "last_errors", {}))}
         return {"node": False, "node_message": "Scripting add-on is not loaded", "errors": {}}
+
+    def system_proxy_state(self):
+        """The Mac's system proxy, as the iOS Simulator sees it (checked at most every 5 s).
+        A proxy app that quit (Proxyman, Charles…) can leave it on a dead loopback port: the Simulator and every Mac
+        app lose the network. Still dead on the next check -> cleared with `<cli> net-reset --auto` (stale loopback
+        entries only, never a live or a remote proxy). A LIVE other app is reported so the panel can name it."""
+        import time
+        now = time.time()
+        checked, cur, stale_since = self._sysproxy
+        if now - checked < 5 or sys.platform != "darwin":
+            return cur
+        info = None
+        try:
+            txt = subprocess.run(["scutil", "--proxy"], capture_output=True, text=True, timeout=3).stdout
+            kv = dict(re.findall(r"^\s*(\w+)\s*:\s*(\S+)", txt, re.M))
+            for pre in ("HTTPS", "HTTP"):
+                if kv.get(pre + "Enable") == "1":
+                    host, port = kv.get(pre + "Proxy", ""), kv.get(pre + "Port", "")
+                    owner, ours = "", False
+                    if port.isdigit():
+                        rows = subprocess.run(["lsof", "-nP", "-iTCP:%s" % port, "-sTCP:LISTEN"], capture_output=True,
+                                              text=True, timeout=3).stdout.splitlines()[1:]
+                        if rows:
+                            owner, ours = rows[0].split()[0], rows[0].split()[1] == str(os.getpid())
+                    info = {"host": host, "port": port, "owner": owner, "ours": ours,
+                            "stale": host in ("127.0.0.1", "localhost", "::1") and not owner}
+                    break
+        except (OSError, subprocess.SubprocessError, IndexError):
+            info = None
+        if info and info["stale"]:
+            if stale_since and now - stale_since >= 4:          # not a proxy app in the middle of quitting
+                try:
+                    subprocess.run([devices.CLI, "net-reset", "--auto"], capture_output=True, text=True, timeout=30)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+                info = dict(info, fixed=True)
+                stale_since = 0.0
+            elif not stale_since:
+                stale_since = now
+        else:
+            stale_since = 0.0
+        self._sysproxy = (now, info, stale_since)
+        return info
 
     def retention_state(self):
         for addon in self._addons():

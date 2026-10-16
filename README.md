@@ -42,21 +42,20 @@ Your Mac's system proxy is never changed, and nothing is reachable from outside 
 
 Mac with Apple Silicon. No admin password, nothing else to download.
 
-1. Quit Proxyman (it takes the simulator's traffic while it runs).
-2. Download `rivis-installer-<version>.zip` from the [latest release](https://github.com/CoorB/rivis/releases),
-   and check it matches the SHA-256 on the release page: `shasum -a 256 rivis-installer-*.zip`
-3. Unzip it and run the installer:
+1. Quit Proxyman, Charles or any other proxy app (while it runs it takes the simulator's traffic). If it leaves your
+   Mac's proxy setting behind, Rivis clears it for you.
+2. Download the zip from the [latest release](https://github.com/CoorB/rivis/releases) into **Downloads**.
+3. Paste this into Terminal (the release page has the same line for its version):
    ```bash
-   cd rivis-installer-*/ && ./install.sh
+   cd ~/Downloads && { [ -d rivis-installer-0.9.2 ] || unzip -q rivis-installer-0.9.2.zip; } && ./rivis-installer-0.9.2/install.sh
    ```
+   It works whether or not Safari already unzipped the file. For iOS, approve *Mitmproxy Redirector* when
+   System Settings opens; the installer continues by itself as soon as you do (or press Enter to skip).
 4. Open a new Terminal window, then:
    ```bash
    rivis start --background
    ```
    Rivis opens in your browser. Go to **Tools → Devices** and click **Set up** for your simulator or emulator.
-
-For iOS, macOS asks once to allow *Mitmproxy Redirector* (System Settings → Network Extensions). The installer
-shows you where.
 
 ---
 

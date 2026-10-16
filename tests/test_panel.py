@@ -2,13 +2,16 @@
 import json
 import os
 import re
+import socket
 import stat
 import sys
+import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
-from harness import LiveCase, raw_http, wait_for
+from harness import Instance, LiveCase, Suite, free_port, raw_http, wait_for
 from upstream import JWT_FRESH, SMALL_JSON
 
 ADDONS = os.path.join(harness.REPO, "addons")
@@ -806,3 +809,56 @@ class MalformedInput(LiveCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class LeftoverSystemProxyWhileRunning(LiveCase):
+    """While Rivis runs, another proxy app quits and leaves the Mac's proxy on its dead loopback port (a tester's Mac,
+    2026-10-16): the add-on clears it once it is still dead on the next check, and reports it. Fakes on PATH: scutil
+    (the proxy settings) and networksetup (logs every change). A live listener on the port must never be touched."""
+    @classmethod
+    def make_instance(cls):
+        suite = Suite.get()
+        cls.fakedir = tempfile.mkdtemp(dir=suite.root, prefix="fakenet-")
+        cls.portfile = os.path.join(cls.fakedir, "port")
+        cls.setlog = os.path.join(cls.fakedir, "set.log")
+        with open(os.path.join(cls.fakedir, "scutil"), "w") as fh:
+            fh.write('#!/bin/sh\nP=$(cat "%s" 2>/dev/null || echo 0)\n'
+                     'printf "<dictionary> {\\n  HTTPSEnable : 1\\n  HTTPSPort : %%s\\n  HTTPSProxy : 127.0.0.1\\n}\\n" "$P"\n' % cls.portfile)
+        with open(os.path.join(cls.fakedir, "networksetup"), "w") as fh:
+            fh.write('#!/bin/sh\nP=$(cat "%s" 2>/dev/null || echo 0)\ncase "$1" in\n'
+                     '  -listallnetworkservices) printf "An asterisk (*) denotes that a network service is disabled.\\nWi-Fi\\n" ;;\n'
+                     '  -getsecurewebproxy) printf "Enabled: Yes\\nServer: 127.0.0.1\\nPort: %%s\\n" "$P" ;;\n'
+                     '  -get*) printf "Enabled: No\\nServer: \\nPort: 0\\n" ;;\n'
+                     '  -set*) echo "$*" >> "%s" ;;\nesac\nexit 0\n' % (cls.portfile, cls.setlog))
+        for f in ("scutil", "networksetup"):
+            os.chmod(os.path.join(cls.fakedir, f), 0o755)
+        path = ":".join([cls.fakedir, suite.shim, "/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin"])
+        return Instance(suite, cls.__name__.lower(), extra_env={"PATH": path})
+
+    def set_port(self, port):
+        with open(self.portfile, "w") as fh:
+            fh.write(str(port))
+        if os.path.exists(self.setlog):
+            os.remove(self.setlog)
+
+    def changes(self):
+        return open(self.setlog).read().split("\n")[:-1] if os.path.exists(self.setlog) else []
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS system proxy")
+    def test_a_dead_leftover_is_cleared_and_reported_once_it_stays_dead(self):
+        self.set_port(free_port())
+        fixed = wait_for(lambda: (self.panel.state().get("system_proxy") or {}).get("fixed") or None, 20, 1.0, "auto-fix")
+        self.assertTrue(fixed)
+        self.assertIn("-setsecurewebproxystate Wi-Fi off", self.changes())
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS system proxy")
+    def test_a_live_proxy_app_is_named_and_never_touched(self):
+        busy = socket.socket(); busy.bind(("127.0.0.1", 0)); busy.listen(1)
+        self.addCleanup(busy.close)
+        self.set_port(busy.getsockname()[1])
+        sp = wait_for(lambda: (lambda x: x if x and x.get("port") == str(busy.getsockname()[1]) else None)(
+            self.panel.state().get("system_proxy")), 15, 1.0, "fresh system proxy state")
+        self.assertTrue(sp["owner"] and not sp["ours"] and not sp["stale"], sp)
+        time.sleep(6)
+        self.panel.state()
+        self.assertEqual(self.changes(), [], "a live proxy must never be cleared")

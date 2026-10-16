@@ -406,7 +406,8 @@
   <div class="welcome" id="welcome" role="dialog" aria-label="Coming from Proxyman?"></div><div class="wscrim" id="wscrim"></div>
   <div class="emptylist" id="emptylist"></div>
   <div class="toast" id="toast"></div>
-  <div class="lostbar" id="lostbar" role="alert"></div>`;
+  <div class="lostbar" id="lostbar" role="alert"></div>
+  <div class="lostbar" id="proxybar" role="alert"></div>`;
 
   const $ = (id) => root.getElementById(id);
   let tab = "call", state = null, editing = null, pausedOpen = null, dismissed = new Set();
@@ -1949,11 +1950,25 @@
     if (on) bar.innerHTML = `Can't reach ${esc((state && state.product && state.product.name) || "Rivis")} for ${Math.round((Date.now() - lostSince) / 1000)} s — calls are <b>not</b> being captured. Check it with <code>${esc(cli)} status</code>; start it with <code>${esc(cli)} start --background</code>.`;
     bar.classList.toggle("open", on);
   };
+  // Another proxy app as the Mac's proxy: the iOS Simulator's calls go there instead (a leftover on a dead port is
+  // cleared by the add-on itself and reported once)
+  let proxyFixShown = false;
+  const showProxyBar = (sp) => {
+    const bar = $("proxybar"), name = (state && state.product && state.product.name) || "Rivis";
+    if (sp && sp.fixed && !proxyFixShown) {
+      proxyFixShown = true;
+      toast(`Fixed: another proxy app had left your Mac's proxy on ${sp.host}:${sp.port} with nothing running there. The Simulator and your Mac apps can connect again.`);
+    }
+    if (sp && !sp.fixed) proxyFixShown = false;
+    const other = sp && sp.owner && !sp.ours;
+    if (other) bar.innerHTML = `<b>${esc(sp.owner)}</b> is your Mac's proxy (${esc(sp.host)}:${esc(sp.port)}): the iOS Simulator sends its calls there, not to ${esc(name)}. Quit ${esc(sp.owner)}; ${esc(name)} cleans up what it leaves behind.`;
+    bar.classList.toggle("open", !!other && !$("lostbar").classList.contains("open"));
+  };
   async function poll() {
     try {
       const s = await Promise.race([api("state"), new Promise((_, no) => setTimeout(() => no(new Error("no answer")), 4000))]);
       missed = 0; lostSince = 0; showLost(false);
-      state = s; badges();
+      state = s; badges(); showProxyBar(s.system_proxy);
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
       await refreshFlows(); tagCells(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
