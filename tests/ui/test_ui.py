@@ -87,6 +87,15 @@ class UiSmoke(UiBase):
         shot(page, "flows")
         self.assertEqual(self.errors, [])
 
+    def test_native_unredacted_export_group_is_hidden(self):
+        page = self.open()
+        page.locator(".flow-table tbody tr:has(td.col-path)").first.click()
+        groups = page.locator("#container > header .menu-group").filter(
+            has=page.locator(".menu-legend", has_text="Export"))
+        wait_for(lambda: groups.count() > 0, 10, 0.2, "native Export group rendered")
+        self.assertTrue(groups.first.evaluate("e => e.hidden && e.getAttribute('aria-hidden') === 'true'"))
+        self.assertEqual(self.errors, [])
+
     def test_first_run_welcome_shows_once_and_closes_on_escape(self):
         page = self.open(first_run=True)
         welcome = page.locator("#proxy-panel-host #welcome.open")

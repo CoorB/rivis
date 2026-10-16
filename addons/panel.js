@@ -2197,6 +2197,18 @@
   setInterval(() => { try { drawEmptyList(); } catch (err) { /* cosmetic */ } }, 1500);
   window.addEventListener("resize", () => { const b = $("emptylist"); if (b.classList.contains("open")) placeEmptyList(b); });
 
+  // mitmweb's native Export group copies raw credentials and bodies without Rivis redaction. Keep it unavailable even
+  // when the optional visual skin is off; masked Copy as… / HAR exports remain in the Rivis panel.
+  const hideNativeExport = () => document.querySelectorAll("#container > header .menu-group").forEach((group) => {
+    const legend = group.querySelector(".menu-legend");
+    if (legend && legend.textContent.trim().toLowerCase() === "export") {
+      group.hidden = true;
+      group.setAttribute("aria-hidden", "true");
+    }
+  });
+  new MutationObserver(hideNativeExport).observe(document.body, { childList: true, subtree: true });
+  hideNativeExport();
+
   // Scroll anchoring, like Proxyman: at the very top the newest calls come into view; once you scroll away, the rows
   // you are looking at stay put while calls keep arriving (or old ones are trimmed). The anchor is the first visible
   // row's call id and its offset; after each list update the scroll position is corrected before the next paint.
