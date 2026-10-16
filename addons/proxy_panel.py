@@ -1061,7 +1061,7 @@ class ProxyPanel:
             try:
                 argv = devices.setup_argv(a.get("platform"), str(a.get("target") or ""), bool(a.get("consent")))
                 label = "%s %s" % ({"ios": "iOS", "android": "Android"}[a["platform"]], a.get("name") or a.get("target"))
-                return {"id": self._device_jobs.start(argv, label)}
+                return {"id": self._device_jobs.start(argv, label, a["platform"], str(a.get("target") or ""))}
             except (ValueError, KeyError, RuntimeError) as e:
                 raise PanelError(str(e))
         cfg = self.load_cfg()

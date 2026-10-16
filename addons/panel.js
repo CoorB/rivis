@@ -828,7 +828,7 @@
   // ───────────── Devices (Proxyman's Certificate → Simulator / Emulator menu) ─────────────
   // Status is polled while the tab is open (and every 30 s for the badge); "Set up" runs the CLI's own command as a
   // background job and streams its output here. Google Play emulators get the same consent text as the terminal.
-  let dev = null, devConsent = null, devTimer = null;
+  let dev = null, devConsent = null, devTimer = null, devStarting = null;   // devStarting: clicked, job not reported yet (R3-DEV-01)
   const devRefresh = async () => {
     try { dev = await api("devices", {}); } catch (e) { dev = { error: e.message }; }
     const notReady = dev && !dev.error ? [...(dev.ios || []), ...(dev.android || [])].filter((d) => !d.ready).length : 0;
@@ -841,13 +841,20 @@
     if (!devLoop.fast) { devLoop.fast = true; devLoop(); }          // entering the tab: poll every few seconds
     if (!dev) { m.innerHTML = '<p class="muted">Looking for simulators and emulators…</p>'; devRefresh(); return; }
     if (dev.error) { m.innerHTML = `<p class="muted">${esc(dev.error)}</p>`; return; }
-    const job = dev.job, busy = !!(job && job.running);
+    const job = dev.job, running = !!(job && job.running);
+    if (running || (job && devStarting && job.started * 1000 >= devStarting.at - 2000)) devStarting = null;  // the server has it now
+    const busy = running || !!devStarting;
+    const mine = (platform, id) => (running && job.platform === platform && (job.target === "all" || job.target === id))
+      || (devStarting && devStarting.platform === platform && (devStarting.target === "all" || devStarting.target === id));
     const row = (platform, d) => {
-      const detail = platform === "ios" ? (d.ready ? "Trusts the Rivis certificate" : "Certificate not trusted yet")
+      const settingUp = !d.ready && mine(platform, d.id);
+      const detail = settingUp ? (d.play && !d.ca_ok ? "Setting up… 2–4 min — the emulator restarts twice, hands off" : "Setting up…")
+        : platform === "ios" ? (d.ready ? "Trusts the Rivis certificate" : "Certificate not trusted yet")
         : !d.ca_ok ? (d.play ? "Google Play image — certificate not installed yet" : "Certificate not installed yet")
         : !d.proxy_ok ? "Certificate OK — proxy not pointing at Rivis" : "Certificate and proxy set";
       return `<div class="row"><div class="n">${esc(d.name)} <span class="sub">${esc(d.os)}</span><div class="sub">${detail}</div></div>
         ${d.ready ? `<span class="ok" title="Ready">${ico("check")}</span>`
+          : settingUp ? `<button class="b" disabled aria-busy="true">Setting up…</button>`
           : `<button class="b p" data-dsetup="${platform}" data-id="${esc(d.id)}" data-name="${esc(d.name)}" data-play="${d.play && !d.ca_ok ? 1 : ""}" ${busy ? "disabled" : ""}>Set up</button>`}</div>`;
     };
     const section = (platform, title, list, none) => {
@@ -859,15 +866,16 @@
     const consent = devConsent ? `
       <div class="card on" style="cursor:default;display:block">
         <b>One-time setup for ${esc(devConsent.name === "all" ? "these Google Play emulators" : devConsent.name)}</b>
-        <div class="sub" style="margin:6px 0">Google Play images refuse adb root, so Rivis installs its certificate the way Proxyman does:
+        <div class="sub" style="margin:6px 0">${dev.magisk ? `Google Play images refuse adb root, so Rivis installs its certificate the way Proxyman does:
           Magisk (official release, checksum verified) patches a temporary copy of the ramdisk; the emulator restarts twice —
           once with that copy, where a one-shot service copies the certificate, then normally. About 2–4 minutes; the window
-          closes and reopens. Nothing else gets root, and the SDK image and AVD settings are not changed.
+          closes and reopens. Nothing else gets root, and the SDK image and AVD settings are not changed.`
+          : `Google Play images refuse adb root. This copy of Rivis has no Magisk, so it will drive the emulator's Settings screens
+          to install the certificate instead — about a minute; hands off the emulator while it runs.`}
           Use test emulators only (no personal Google account).</div>
         <div class="btns"><button class="b p" id="dyes">Continue</button><button class="b" id="dno">Cancel</button></div>
-        ${dev.magisk ? "" : '<div class="sub">Magisk is not installed with this copy of Rivis, so it will drive the emulator\'s Settings screens instead (about a minute — hands off the emulator).</div>'}
       </div>` : "";
-    const log = job ? `<h4>${busy ? "Setting up" : job.rc === 0 ? "Done" : "Failed"} — ${esc(job.label)}</h4>
+    const log = job && !devStarting ? `<h4>${running ? "Setting up" : job.rc === 0 ? "Done" : "Failed"} — ${esc(job.label)}</h4>
       <pre class="devlog" style="max-height:220px;overflow:auto;font-size:11.5px;white-space:pre-wrap;margin:0">${esc(job.lines.join("\n")) || "starting…"}</pre>` : "";
     m.innerHTML = `
       <div class="sub" style="margin-bottom:8px">Rivis sets up each simulator or emulator once: its certificate, and for Android the proxy. Like Proxyman's Certificate menu — one click per device.</div>
@@ -875,8 +883,11 @@
       ${section("ios", "iOS Simulators", dev.ios, "Xcode command-line tools are not installed (xcrun simctl).")}
       ${section("android", "Android emulators", dev.android, "adb was not found. Install Android Studio (SDK platform-tools) to use emulators.")}
       <div class="sub" style="margin-top:10px">Same from a terminal: <code>rivis setup</code>. Physical phones need a separate approval.</div>`;
-    const start = (b, consentGiven) => run("device_setup", { platform: b.dataset.dsetup, target: b.dataset.id, name: b.dataset.name, consent: consentGiven },
-      "Setup started").then(() => { devConsent = null; devRefresh(); devLoop(); });
+    const start = (b, consentGiven) => {
+      devStarting = { platform: b.dataset.dsetup, target: b.dataset.id, at: Date.now() }; devConsent = null; renderDev(m);
+      return run("device_setup", { platform: b.dataset.dsetup, target: b.dataset.id, name: b.dataset.name, consent: consentGiven },
+        "Setup started").then((ok) => { if (!ok) devStarting = null; devRefresh(); devLoop(); });
+    };
     m.querySelectorAll("[data-dsetup]").forEach((b) => (b.onclick = () => {
       if (b.dataset.dsetup === "android" && b.dataset.play) { devConsent = { b, name: b.dataset.name }; renderDev(m); return; }
       start(b, false);

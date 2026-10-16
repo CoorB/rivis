@@ -146,14 +146,16 @@ class Jobs:
                 return None
             j = self.job
             return {"id": j["id"], "label": j["label"], "running": j["rc"] is None, "rc": j["rc"],
+                    "platform": j.get("platform"), "target": j.get("target"),
                     "lines": list(j["lines"][-60:]), "started": j["started"], "ended": j["ended"]}
 
-    def start(self, argv, label):
+    def start(self, argv, label, platform=None, target=None):
         with self.lock:
             if self.job and self.job["rc"] is None:
                 raise RuntimeError("a device setup is already running — wait for it to finish")
             self.seq += 1
-            job = {"id": self.seq, "label": label, "lines": [], "rc": None, "started": time.time(), "ended": None}
+            job = {"id": self.seq, "label": label, "lines": [], "rc": None, "started": time.time(), "ended": None,
+                   "platform": platform, "target": target}
             self.job = job
         threading.Thread(target=self._run, args=(job, argv), daemon=True).start()
         return job["id"]

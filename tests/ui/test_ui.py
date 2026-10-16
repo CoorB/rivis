@@ -256,6 +256,34 @@ class UiSmoke(UiBase):
         shot(page, "devices")
         self.assertEqual(self.errors, [])
 
+    def test_device_setup_shows_busy_at_once_and_one_consent_text(self):
+        """R3-DEV-01: right after Set up the row looked untouched (old text, active button) until the job showed up.
+        R3-DEV-02: the consent box gave the Magisk and the Settings-screens explanations at once. No real device:
+        the panel's devices/device_setup calls are answered by the test."""
+        import json as _json
+        fake = {"ios": [], "android": [{"id": "emulator-5590", "name": "Pixel Play", "os": "Android 15", "ready": False,
+                                         "ca_ok": False, "proxy_ok": False, "play": True}], "magisk": False, "job": None}
+        started = []
+        self.page.route("**/proxy/api/devices", lambda r: r.fulfill(status=200, content_type="application/json", body=_json.dumps(fake)))
+        self.page.route("**/proxy/api/device_setup", lambda r: (started.append(r.request.post_data),
+                        r.fulfill(status=200, content_type="application/json", body='{"id": 1}')))
+        page = self.open()
+        page.locator("#fab").click()
+        page.locator("button[data-t=dev]").click()
+        wait_for(lambda: "Pixel Play" in self.panel_text(), 15, 0.2, "fake emulator listed")
+        page.locator("#proxy-panel-host [data-dsetup=android][data-id=emulator-5590]").click()
+        text = self.panel_text()
+        self.assertIn("Settings screens", text)
+        self.assertNotIn("Magisk (official", text, "both explanations shown")
+        page.locator("#proxy-panel-host #dyes").click()
+        wait_for(lambda: started, 5, 0.1, "setup requested")
+        page.wait_for_timeout(600)                                   # a devices poll that still reports no job
+        row = page.locator("#proxy-panel-host .row", has_text="Pixel Play")
+        self.assertIn("Setting up", row.inner_text())
+        self.assertEqual(page.locator("#proxy-panel-host [data-dsetup=android][data-id=emulator-5590]").count(), 0,
+                         "an active Set up button while the setup is starting invites a second click")
+        self.assertEqual(self.errors, [])
+
     def test_the_empty_list_offers_device_setup(self):
         self.page.add_init_script("try { localStorage.setItem('rivis-welcome', 'done') } catch (e) {}")
         self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))
