@@ -132,11 +132,16 @@ class Suite:
         }
         if confdir:
             env["RIVIS_CONFDIR"] = confdir
-        if ports:
-            env["RIVIS_PORT"], env["RIVIS_WEB_PORT"] = str(ports[0]), str(ports[1])
+        # never the defaults: a test that starts, stops or uninstalls with 8080/8083 acts on the user's live Rivis
+        # (2026-10-16 an uninstall test's `rivis stop` killed the live proxy mid-session)
+        ports = ports or (free_port(), free_port())
+        env["RIVIS_PORT"], env["RIVIS_WEB_PORT"] = str(ports[0]), str(ports[1])
         if password:
             env["RIVIS_WEB_PASSWORD"] = password
         env.update(extra or {})
+        for k in ("RIVIS_PORT", "RIVIS_WEB_PORT"):
+            if int(env[k]) in FORBIDDEN_PORTS:
+                raise AssertionError("tests must never use the live ports (%s=%s)" % (k, env[k]))
         return env
 
     def new_home(self, name=None):

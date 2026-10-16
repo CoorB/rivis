@@ -448,34 +448,29 @@ cmd_start() {
   exec mitmweb "${args[@]}"
 }
 
-cmd_stop() {   # stop mitmweb on our ports (only mitmweb — never another app)
-  local pids pid i; pids=$(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u)
-  local stopped=0
-  for pid in $pids; do
-    if ps -o comm= -p "$pid" | grep -q mitmweb; then kill "$pid" && stopped=1; fi
-  done
-  if [ "$stopped" = 1 ]; then
-    # SIGTERM is asynchronous.  Do not let `stop && start` race the old
-    # listeners; give mitmweb time to flush, then bound shutdown with SIGKILL.
-    for i in $(seq 1 100); do
-      [ -z "$(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null)" ] && break
-      sleep 0.1
-    done
-    if [ -n "$(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null)" ]; then
-      for pid in $(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u); do
-        ps -o comm= -p "$pid" | grep -q mitmweb && kill -9 "$pid" 2>/dev/null || true
-      done
-      for i in $(seq 1 20); do
-        [ -z "$(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null)" ] && break
-        sleep 0.1
-      done
-    fi
-    [ -z "$(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null)" ] || \
-      die "ports $PORT/$WEB_PORT are still in use after stopping mitmweb"
-    info "stopped mitmweb on :$PORT/:$WEB_PORT"
-  else
-    info "nothing to stop on :$PORT/:$WEB_PORT"
+our_mitmweb() {   # our_mitmweb PID — a mitmweb started from THIS state dir (never another HOME's or user's)
+  ps -o comm= -p "$1" 2>/dev/null | grep -q mitmweb || return 1
+  ps -ww -o args= -p "$1" 2>/dev/null | grep -qF "proxy_auth_token_file=$STATE_ROOT/web-token"
+}
+our_listeners() { local pid; for pid in $(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u); do our_mitmweb "$pid" && echo "$pid"; done; true; }
+cmd_stop() {   # stop our mitmweb on our ports (only ours — never another app, HOME or user)
+  local pids pid i other; pids=$(our_listeners)
+  if [ -z "$pids" ]; then
+    other=$(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u | tr '\n' ' ')
+    [ -n "$other" ] && info "ports $PORT/$WEB_PORT are held by another program or another $PRODUCT_NAME (pid $other) — not ours, left running" \
+                    || info "nothing to stop on :$PORT/:$WEB_PORT"
+    return 0
   fi
+  for pid in $pids; do kill "$pid" 2>/dev/null || true; done
+  # SIGTERM is asynchronous.  Do not let `stop && start` race the old
+  # listeners; give mitmweb time to flush, then bound shutdown with SIGKILL.
+  for i in $(seq 1 100); do [ -z "$(our_listeners)" ] && break; sleep 0.1; done
+  if [ -n "$(our_listeners)" ]; then
+    for pid in $(our_listeners); do kill -9 "$pid" 2>/dev/null || true; done
+    for i in $(seq 1 20); do [ -z "$(our_listeners)" ] && break; sleep 0.1; done
+  fi
+  [ -z "$(our_listeners)" ] || die "ports $PORT/$WEB_PORT are still in use after stopping mitmweb"
+  info "stopped mitmweb on :$PORT/:$WEB_PORT"
 }
 
 cmd_ui() {

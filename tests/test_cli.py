@@ -646,6 +646,23 @@ class StatusUiStop(CliBase):
         self.assertFalse(harness.port_open(port), "stop returned while the proxy port was still listening")
         self.assertFalse(harness.port_open(web), "stop returned while the UI port was still listening")
 
+    def test_stop_never_stops_another_homes_rivis(self):
+        # 2026-10-16: a test's `rivis stop` from a scratch HOME killed the user's live Rivis on the same ports
+        port, web = harness.free_port(), harness.free_port()
+        env = dict(self.env, RIVIS_PORT=str(port), RIVIS_WEB_PORT=str(web))
+        other = self.suite.new_home("cli-other")
+        other_env = dict(self.suite.cli_env(other), RIVIS_PORT=str(port), RIVIS_WEB_PORT=str(web))
+        try:
+            self.ok("start", "--background", "--no-open", "--no-ios", env=env, timeout=60)
+            r = self.suite.rivis("stop", home=other, env=other_env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("not ours", r.stdout + r.stderr)
+            self.assertTrue(harness.port_open(port), "a stop from another HOME stopped this HOME's proxy")
+            self.assertTrue(harness.port_open(web))
+        finally:
+            self.cli("stop", env=env)
+        self.assertFalse(harness.port_open(port), "its own stop must still work")
+
     def test_android_and_ios_without_devices(self):
         r = self.refused("android", "on")
         self.assertIn("adb not found", r.stderr)
