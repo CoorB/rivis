@@ -7,7 +7,7 @@ system proxy, one CA per workstation, removed again with `off`.
   .\<cli>.ps1 start [-Insecure] [-ProjectOnly] [-NoOpen] [-Project ID]
                                             mitmweb: proxy 127.0.0.1:8080, UI http://127.0.0.1:8083
   .\<cli>.ps1 stop | ui | status | cert
-  .\<cli>.ps1 browser [URL] [-Browser chrome|edge|chromium|brave] [-Fresh] [-List]
+  .\<cli>.ps1 browser [URL] [-Browser chrome|edge|chromium|brave] [-Fresh] [-List]   (-Current: macOS CLI only)
                                             web apps: a separate browser window with its own profile, pointed
                                             at the proxy and trusting only this CA. Your normal browser, the
                                             system proxy and the certificate store are not touched
@@ -64,6 +64,7 @@ param(
   [switch]$Yes,
   [switch]$ProxyOnly,
   [switch]$Fresh,
+  [switch]$Current,
   [switch]$List,
   [Alias("-request")][switch]$Request,
   [Alias("-response")][switch]$Response,
@@ -1178,6 +1179,7 @@ switch ($Command) {
   }
   "browser" {
     if ($List) { foreach ($id in $BrowserNames.Keys) { if (Find-Browser $id) { Write-Output "$id`t$($BrowserNames[$id])" } }; break }
+    if ($Current) { Die "browser: -Current is not available on Windows yet; copy the URL from the address bar instead" }
     $url = "about:blank"
     if ($Action) {
       $url = $Action
@@ -1203,15 +1205,30 @@ switch ($Command) {
       New-Item -ItemType Directory -Force -Path $browserProfile | Out-Null     # under the state root, private (Protect-StateRoot)
       if (-not $IsWindows -and $PSVersionTable.PSEdition -ne "Desktop") { & chmod 700 (Join-Path $StateRoot "browser") $browserProfile }
     }
-    # <-loopback> also captures web apps on localhost; the UI itself stays direct (it would record itself)
+    # Web apps on localhost go through Rivis only when this Rivis allows them (start --allow-private-hosts): by
+    # default it refuses private destinations, so the browser reaches localhost directly (same as the bash CLI).
+    # The UI itself always stays direct (it would record itself).
+    $bypass = "127.0.0.1:$WebPort;localhost:$WebPort"; $loopback = $false
+    try {
+      $wc = New-Object System.Net.WebClient; $wc.Proxy = $null
+      $token = (Get-Content -Raw -LiteralPath $TokenPath).Trim()
+      $allowed = [string](($wc.DownloadString("http://127.0.0.1:$WebPort/options?token=$token") | ConvertFrom-Json).proxy_private_hosts.value)
+      if ($allowed -and @("localhost","127.0.0.1" | Where-Object { $_ -notmatch "^(?:$allowed)$" }).Count -eq 0) {
+        $bypass = "<-loopback>;$bypass"; $loopback = $true
+      }
+    } catch { }
     $flags = @("--user-data-dir=$browserProfile", "--proxy-server=127.0.0.1:$Port",
-               "--proxy-bypass-list=<-loopback>;127.0.0.1:$WebPort;localhost:$WebPort",
+               "--proxy-bypass-list=$bypass",
                "--ignore-certificate-errors-spki-list=$spki", "--use-mock-keychain",
                "--no-first-run", "--no-default-browser-check", "--disable-sync", $url)
     Start-Process -FilePath $bin -ArgumentList (($flags | ForEach-Object { Quote-Arg $_ }) -join " ") | Out-Null
     Info "opened $id with its own $ProductName profile -> proxy 127.0.0.1:$Port"
     Info "profile $browserProfile$(if ($Fresh) { ' (temporary)' })"
     Info "your normal browser, the system proxy and the certificate store are not touched; close that window when done"
+    if (-not $loopback -and $url -match '^https?://(localhost|127\.0\.0\.1)([:/]|$)') {
+      Info "localhost opens directly, not through $ProductName (it blocks private addresses unless told otherwise). To capture it:"
+      Info "  start $ProductName with --allow-private-hosts '^(localhost|127\.0\.0\.1)$', then run this again"
+    }
   }
   "cert" {
     Ensure-Ca

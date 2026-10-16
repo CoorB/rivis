@@ -66,6 +66,7 @@ Mac with Apple Silicon. No admin password, nothing else to download.
 rivis start --background   # start (keeps running after you close Terminal)
 rivis ui                   # reopen the browser tab
 rivis browser URL          # web apps: open a separate Chrome/Edge window that goes through Rivis
+rivis browser --current    # the same, for the page open in your browser's front tab
 rivis status               # is it running?
 rivis stop                 # stop
 rivis --version            # which version you have

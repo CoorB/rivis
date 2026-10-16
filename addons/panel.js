@@ -845,6 +845,7 @@
     if (!dev || dev.pending) { m.innerHTML = '<p class="muted">Looking for simulators and emulators…</p>'; if (!dev) devRefresh(); return; }
     if (dev.error) { m.innerHTML = `<p class="muted">${esc(dev.error)}</p>`; return; }
     const job = dev.job, running = !!(job && job.running);
+    const bj = dev.browser_job;                                     // the last "Open a browser": its CLI output (or error)
     if (running || (job && devStarting && job.started * 1000 >= devStarting.at - 2000)) devStarting = null;  // the server has it now
     const busy = running || !!devStarting;
     const mine = (platform, id) => (running && job.platform === platform && (job.target === "all" || job.target === id))
@@ -891,12 +892,14 @@
       <div class="sub">For web apps: a separate browser window with its own profile, pointed at Rivis. Your normal browser, the Mac's proxy settings and the keychain are not touched.</div>
       ${(dev.browsers || []).length ? `<div class="btns"><input type="text" id="dburl" class="grow" value="${esc(devUrl)}" placeholder="Web app URL (optional), e.g. https://app.example.com" aria-label="Web app URL" spellcheck="false" autocomplete="off">
         ${dev.browsers.map((b) => `<button class="b p" data-dbrowser="${esc(b.id)}">Open ${esc(b.name)}</button>`).join("")}</div>
+        ${bj ? `<pre class="devlog" style="font-size:11.5px;white-space:pre-wrap;margin:6px 0 0"${bj.rc ? ' role="alert"' : ""}>${esc(bj.running ? "Opening…" : (bj.rc ? "Could not open: " : "") + bj.lines.join("\n"))}</pre>` : ""}
         <div class="sub">Same from a terminal: <code>rivis browser [URL]</code>.</div>`
         : `<div class="sub">No Chrome, Edge, Chromium or Brave found in Applications (Firefox is not supported yet).</div>`}`;
     const url = $("dburl");
     if (url) url.oninput = () => { devUrl = url.value; };
     m.querySelectorAll("[data-dbrowser]").forEach((b) => (b.onclick = () =>
-      run("browser_open", { browser: b.dataset.dbrowser, url: devUrl.trim() }, `${b.textContent.replace(/^Open /, "")} opened — its calls show up here`)));
+      run("browser_open", { browser: b.dataset.dbrowser, url: devUrl.trim() }, `Opening ${b.textContent.replace(/^Open /, "")}…`)
+        .then(() => setTimeout(devRefresh, 1500))));
     const start = (b, consentGiven) => {
       devStarting = { platform: b.dataset.dsetup, target: b.dataset.id, at: Date.now() }; devConsent = null; renderDev(m);
       return run("device_setup", { platform: b.dataset.dsetup, target: b.dataset.id, name: b.dataset.name, consent: consentGiven },

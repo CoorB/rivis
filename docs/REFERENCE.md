@@ -80,7 +80,7 @@ The profile's `hosts` regex drives the “<label> only” panel view, `record_ma
 ```bash
 rivis start [--project-only] [--insecure] [--all] [--no-ios] [--no-open]
 rivis stop | ui | status | cert
-rivis browser [URL] [--browser chrome|edge|chromium|brave] [--fresh] [--list]   # web apps, see below
+rivis browser [URL | --current] [--browser chrome|edge|chromium|brave] [--fresh] [--list]   # web apps, see below
 rivis ios on|off [--udid UDID | --all]     # --all: every booted simulator
 rivis android on|off [-s emulator-5554 | --all] [--manual] [--yes] [--strict] [--proxy-only]   # Play images: one restart, like Proxyman (--strict: back to normal at once, 2–4 min)
 rivis setup                                          # every booted simulator + running emulator
@@ -107,8 +107,16 @@ removes only CAs whose SHA-256 this workstation recorded, never another workstat
 Chromium or Brave window with its own profile in `~/.rivis/browser/<browser>` (logins stay between runs; `--fresh`
 uses a temporary profile). That window uses the proxy on `127.0.0.1` and trusts only this workstation's Rivis
 certificate, pinned by its public key (`--ignore-certificate-errors-spki-list`), so nothing is added to the keychain
-and the macOS system proxy is not changed. Web apps on `localhost` are captured too. Your normal browser and its
-profiles are not touched. Firefox is not supported yet.
+and the macOS system proxy is not changed. Your normal browser and its profiles are not touched. Firefox is not
+supported yet.
+
+- `--current` opens the page of your browser's front tab (Chrome, Edge, Brave, Chromium or Safari). It only reads
+  the tab's address. The first time, macOS asks whether your terminal may control that browser (System Settings →
+  Privacy & Security → Automation). You need to log in again in the Rivis window; the profile keeps the login.
+  Calls your normal tab already made are not captured.
+- Web apps on `localhost`: Rivis blocks private addresses by default, so the browser opens them directly (not
+  captured). To capture them, start Rivis with `--allow-private-hosts '^(localhost|127\.0\.0\.1)$'`;
+  `rivis browser` then sends them through Rivis too.
 
 `rivis.ps1` supports the same cross-platform commands, including `stop`, `breakpoint`, `mock`, and `setup`.
 Windows has no iOS Simulator, so `setup` says so and configures every running Android emulator (`android on -All`).

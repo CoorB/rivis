@@ -167,6 +167,7 @@ class ProxyPanel:
         self._sysproxy_stale_since = 0.0        # see _system_proxy_check
         self._sysproxy = devices.Snapshot(self._system_proxy_check, 5)       # off the event loop (review R1)
         self._devices = devices.Snapshot(self._devices_check, 2)
+        self._browser_jobs = devices.Jobs("a browser is still starting — wait a moment")
         self.project_only = False
         self.show_dns = False
         self.focused_host = None
@@ -1093,7 +1094,9 @@ class ProxyPanel:
         if job and job["ended"] and job["ended"] > self._devices.at:
             self._devices.invalidate()                     # a setup just finished: look again
         have, snap = self._devices.get()
-        return dict(snap if have else {"pending": True}, job=job)
+        # browsers: plain file checks, and the browser job's output: both live, never from the snapshot
+        return dict(snap if have else {"pending": True}, job=job, browsers=devices.browsers(),
+                    browser_job=self._browser_jobs.summary())
 
     def _devices_check(self):
         want = devices.ca_sha256(os.path.join(os.path.expanduser(ctx.options.confdir), "mitmproxy-ca-cert.pem"))
@@ -1107,7 +1110,6 @@ class ProxyPanel:
         adb = devices.adb_path()
         return {"ios": devices.ios_devices(want),
                 "android": devices.android_devices(adb, want, STATE_ROOT, self._proxy_port()),
-                "browsers": devices.browsers(),
                 "magisk": bool(version) and os.path.isdir(magisk)}
 
     # ── actions ───────────────────────────────────────────────────────────────
@@ -1129,10 +1131,11 @@ class ProxyPanel:
             return self.devices_state()
         if op == "device_job":
             return {"job": self._device_jobs.summary()}
-        if op == "browser_open":
+        if op == "browser_open":   # a background job: the CLI asks this proxy for its options (and must never block it)
             try:
-                return {"output": devices.open_browser(a.get("browser"), str(a.get("url") or ""), self._proxy_port(),
-                                                       ctx.options.web_port)}
+                argv = devices.browser_argv(a.get("browser"), str(a.get("url") or ""))
+                env = devices.browser_env(self._proxy_port(), ctx.options.web_port)
+                return {"id": self._browser_jobs.start(argv, a.get("browser"), env=env)}
             except (ValueError, RuntimeError) as e:
                 raise PanelError(str(e))
         if op == "device_setup":

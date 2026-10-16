@@ -171,7 +171,8 @@ class Snapshot:
 class Jobs:
     """One setup job at a time; its output is kept for the tab to show."""
 
-    def __init__(self):
+    def __init__(self, busy="a device setup is already running — wait for it to finish"):
+        self.busy = busy
         self.lock = threading.Lock()
         self.job = None
         self.seq = 0
@@ -185,21 +186,21 @@ class Jobs:
                     "platform": j.get("platform"), "target": j.get("target"),
                     "lines": list(j["lines"][-60:]), "started": j["started"], "ended": j["ended"]}
 
-    def start(self, argv, label, platform=None, target=None):
+    def start(self, argv, label, platform=None, target=None, env=None):
         with self.lock:
             if self.job and self.job["rc"] is None:
-                raise RuntimeError("a device setup is already running — wait for it to finish")
+                raise RuntimeError(self.busy)
             self.seq += 1
             job = {"id": self.seq, "label": label, "lines": [], "rc": None, "started": time.time(), "ended": None,
                    "platform": platform, "target": target}
             self.job = job
-        threading.Thread(target=self._run, args=(job, argv), daemon=True).start()
+        threading.Thread(target=self._run, args=(job, argv, env), daemon=True).start()
         return job["id"]
 
-    def _run(self, job, argv):
+    def _run(self, job, argv, env=None):
         try:
             p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                 text=True, bufsize=1, start_new_session=True)
+                                 text=True, bufsize=1, start_new_session=True, env=env)
         except OSError as e:
             job["lines"].append("could not start: %s" % e)
             job["rc"], job["ended"] = 127, time.time()
@@ -237,21 +238,21 @@ def setup_argv(platform, target, consent=False):
 # ── web browser (`<cli> browser`): a separate Chrome/Edge profile pointed at this proxy ──
 BROWSER_IDS = ("chrome", "edge", "chromium", "brave")
 BROWSER_URL_MAX = 2000
-_browsers = {"at": 0.0, "list": None}
+BROWSER_APPS = (("chrome", "Google Chrome"), ("edge", "Microsoft Edge"), ("chromium", "Chromium"), ("brave", "Brave Browser"))
 
 
-def browsers(ttl=60):
-    """Installed browsers, as the CLI finds them (`<cli> browser --list`, one source of truth); cached for ttl s."""
-    now = time.time()
-    if _browsers["list"] is None or now - _browsers["at"] > ttl:
-        rc, out = _run([CLI, "browser", "--list"])
-        found = []
-        for line in out.splitlines() if rc == 0 else []:
-            bid, _, name = line.partition("\t")
-            if bid in BROWSER_IDS and name:
+def browsers():
+    """Installed browsers, found exactly as the CLI's `browser --list` does (same order, same <PREFIX>_BROWSER_APPS
+    override). Only file checks: this runs on mitmproxy's event loop, so it must never start a process (review R1)."""
+    roots = os.environ.get(ENV_PREFIX + "_BROWSER_APPS") or "/Applications:" + os.path.expanduser("~/Applications")
+    found = []
+    for bid, name in BROWSER_APPS:
+        for root in roots.split(":"):
+            exe = os.path.join(root, name + ".app", "Contents", "MacOS", name)
+            if root and os.path.isfile(exe) and os.access(exe, os.X_OK):
                 found.append({"id": bid, "name": name})
-        _browsers.update(at=now, list=found)
-    return _browsers["list"]
+                break
+    return found
 
 
 def browser_argv(browser, url=""):
@@ -264,15 +265,6 @@ def browser_argv(browser, url=""):
     return [CLI, "browser", "--browser", browser] + (["--", url] if url else [])
 
 
-def open_browser(browser, url, proxy_port, web_port):
-    """Run the CLI for this proxy's ports. Own session: a Ctrl-C in mitmweb's terminal must not close the browser."""
-    env = dict(os.environ, **{ENV_PREFIX + "_PORT": str(proxy_port), ENV_PREFIX + "_WEB_PORT": str(web_port)})
-    try:
-        p = subprocess.run(browser_argv(browser, url), capture_output=True, text=True, timeout=30, env=env,
-                           stdin=subprocess.DEVNULL, start_new_session=True)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("the browser did not start within 30 s")
-    text = ANSI.sub("", (p.stdout + p.stderr).replace("\r", "")).strip()
-    if p.returncode != 0:
-        raise RuntimeError(text.splitlines()[-1] if text else "could not open the browser (exit %s)" % p.returncode)
-    return text
+def browser_env(proxy_port, web_port):
+    """The CLI must act on THIS proxy (its ports), whatever the environment mitmweb was started with."""
+    return dict(os.environ, **{ENV_PREFIX + "_PORT": str(proxy_port), ENV_PREFIX + "_WEB_PORT": str(web_port)})

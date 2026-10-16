@@ -20,10 +20,12 @@
 #                                 --ios-filter local-capture process filter (default CoreSimulator)
 #   <cli> projects list|use ID|show ID|new ID --label L --hosts REGEX
 #   <cli> ui | stop | status | cert
-#   <cli> browser [URL] [--browser chrome|edge|chromium|brave] [--fresh] [--list]
+#   <cli> browser [URL | --current] [--browser chrome|edge|chromium|brave] [--fresh] [--list]
 #                                 web apps: a separate browser window with its own profile, pointed at the
 #                                 proxy and trusting only this CA. Your normal browser, the system proxy
-#                                 and the keychain are not touched. --fresh: a temporary profile
+#                                 and the keychain are not touched. --current: open the page of your
+#                                 browser's front tab (Chrome, Edge, Brave, Chromium, Safari). --fresh: a
+#                                 temporary profile
 #   <cli> rules list|on NAME|off NAME|show NAME|rm NAME|edit|allow-file PATH|disallow-file PATH|trusted-files
 #   <cli> rules add NAME match=REGEX action=ACTION [key=value ...]
 #                                 Proxyman-style rules, hot-reloaded, kept across restarts:
@@ -512,14 +514,30 @@ browser_bin() {   # browser_bin ID — path of that browser's executable, or not
 }
 browser_list() { local entry; for entry in "chrome:Google Chrome" "edge:Microsoft Edge" "chromium:Chromium" "brave:Brave Browser"; do
   browser_bin "${entry%%:*}" >/dev/null && printf '%s\t%s\n' "${entry%%:*}" "${entry#*:}"; done; true; }
+current_tab() {   # prints "<app>\t<url>" of the front tab of the first running browser (AppleScript; reads only)
+  local app script out
+  for app in "Google Chrome" "Microsoft Edge" "Brave Browser" "Chromium" "Safari"; do
+    [ "$(osascript -e "application \"$app\" is running" 2>/dev/null)" = true ] || continue
+    if [ "$app" = Safari ]; then script="tell application \"Safari\" to get URL of front document"
+    else script="tell application \"$app\" to get URL of active tab of front window"; fi
+    if out=$(osascript -e "$script" 2>&1); then printf '%s\t%s\n' "$app" "$out"; return 0; fi
+    case "$out" in
+      *-1743*|*"Not authorized"*) die "browser: macOS did not let Terminal read $app's tab. Allow it in System Settings → Privacy & Security → Automation (your terminal app → $app), then run this again" ;;
+      *-1728*|*-1719*) die "browser: $app has no open window" ;;
+    esac
+    die "browser: could not read the current tab of $app: $out"
+  done
+  die "browser: --current needs Chrome, Edge, Brave, Chromium or Safari running with a page open"
+}
 cmd_browser() {
-  local id="" url="about:blank" fresh=0 list=0 bin profile spki pid
+  local id="" url="about:blank" fresh=0 list=0 current=0 bin profile spki pid
   while [ $# -gt 0 ]; do
     case "$1" in
       --browser) [ $# -ge 2 ] || die "browser: --browser needs chrome, edge, chromium or brave"; id="$2"; shift ;;
       --chrome|--edge|--chromium|--brave) id="${1#--}" ;;
       --fresh) fresh=1 ;;
       --list) list=1 ;;
+      --current) current=1 ;;
       -*) die "browser: unknown option $1" ;;
       *) [ "$url" = "about:blank" ] || die "browser: only one URL"
          url="$1"
@@ -530,6 +548,13 @@ cmd_browser() {
     shift
   done
   if [ "$list" = 1 ]; then browser_list; return 0; fi
+  if [ "$current" = 1 ]; then
+    [ "$url" = "about:blank" ] || die "browser: give a URL or --current, not both"
+    local tab from; tab=$(current_tab) || exit 1
+    from="${tab%%$'\t'*}"; url="${tab#*$'\t'}"
+    [[ "$url" =~ ^https?://[^[:space:]]+$ ]] || die "browser: the front tab of $from is not a web page ($url)"
+    info "the front tab of $from: $url"
+  fi
   if [ -n "$id" ]; then
     case "$id" in chrome|edge|chromium|brave) ;; *) die "browser: unknown browser '$id' (chrome, edge, chromium or brave)" ;; esac
     bin=$(browser_bin "$id") || die "browser: $id is not installed (looked in $(env_value BROWSER_APPS "/Applications:$HOME/Applications"))"
@@ -551,9 +576,17 @@ cmd_browser() {
     (umask 077; mkdir -p "$profile") || die "browser: could not create $profile"
     chmod 700 "$STATE_ROOT/browser" "$profile" 2>/dev/null || true
   fi
-  # <-loopback> also captures web apps on localhost; the Rivis UI itself stays direct (it would record itself).
+  # Web apps on localhost go through Rivis only when this Rivis allows them (start --allow-private-hosts): by default
+  # it refuses private destinations, so the browser reaches localhost directly, as usual (review R8). The Rivis UI
+  # itself always stays direct (it would record itself).
+  local bypass="127.0.0.1:$WEB_PORT;localhost:$WEB_PORT" loopback=0 tok allowed=""
+  tok=$(cat "$STATE_ROOT/web-token" 2>/dev/null) && allowed=$(curl -sf --noproxy '*' --max-time 5 \
+    "http://127.0.0.1:$WEB_PORT/options?token=$tok" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["proxy_private_hosts"]["value"])' 2>/dev/null)
+  if [ -n "$allowed" ] && /usr/bin/python3 -I -c 'import re,sys; sys.exit(0 if all(re.fullmatch(sys.argv[1], h) for h in ("localhost", "127.0.0.1")) else 1)' "$allowed" 2>/dev/null; then
+    bypass="<-loopback>;$bypass"; loopback=1
+  fi
   local flags=(--user-data-dir="$profile" --proxy-server="127.0.0.1:$PORT"
-    --proxy-bypass-list="<-loopback>;127.0.0.1:$WEB_PORT;localhost:$WEB_PORT"
+    --proxy-bypass-list="$bypass"
     --ignore-certificate-errors-spki-list="$spki" --use-mock-keychain
     --no-first-run --no-default-browser-check --disable-sync)
   nohup "$bin" "${flags[@]}" "$url" </dev/null >/dev/null 2>&1 &
@@ -561,6 +594,10 @@ cmd_browser() {
   info "opened ${bin##*/} with its own $PRODUCT_NAME profile → proxy 127.0.0.1:$PORT"
   info "profile $profile$( [ "$fresh" = 1 ] && echo " (temporary)" )"
   info "your normal browser, the system proxy and the keychain are not touched; close that window when done"
+  if [ "$loopback" = 0 ] && [[ "$url" =~ ^https?://(localhost|127\.0\.0\.1)([:/]|$) ]]; then
+    info "localhost opens directly, not through $PRODUCT_NAME (it blocks private addresses unless told otherwise). To capture it:"
+    info "  $CLI stop && $CLI start --allow-private-hosts '^(localhost|127\.0\.0\.1)\$'   then run this again"
+  fi
 }
 
 # ───────────────────────── rules / throttle ─────────────────────────

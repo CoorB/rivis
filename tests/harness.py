@@ -86,6 +86,18 @@ SHIMS = {
     "xcrun": '#!/bin/sh\necho "$@" >> "$SHIM_LOG/xcrun.log"\n'
              'if [ "$1 $2 $3 $4" = "simctl list devices booted" ] && [ -f "$SHIM_LOG/booted" ]; then cat "$SHIM_LOG/booted"; fi\n'
              'exit 0\n',
+    # AppleScript: never the real one (it would read or drive the tester's own browser). `application "X" is running`
+    # answers true for each app named in $SHIM_LOG/osascript-running; any other script prints $SHIM_LOG/osascript-out,
+    # or fails with the text of $SHIM_LOG/osascript-fail when that file exists
+    "osascript": '''#!/bin/sh
+printf '%s\\n' "$*" >> "$SHIM_LOG/osascript.log"
+case "$*" in
+  *" is running"*) app=$(printf '%s' "$*" | sed -n 's/.*application "\\([^"]*\\)" is running.*/\\1/p')
+    grep -qxF "$app" "$SHIM_LOG/osascript-running" 2>/dev/null && echo true || echo false; exit 0 ;;
+esac
+[ -f "$SHIM_LOG/osascript-fail" ] && { cat "$SHIM_LOG/osascript-fail" >&2; exit 1; }
+cat "$SHIM_LOG/osascript-out" 2>/dev/null; exit 0
+''',
     "networksetup": '''#!/bin/sh
 echo "$@" >> "$SHIM_LOG/networksetup.log"
 case "$1" in
