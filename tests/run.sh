@@ -32,6 +32,8 @@ done
 $PY -c 'import pytest' 2>/dev/null || { echo "run.sh: pytest is not importable by $PY (pip3 install --user pytest)" >&2; exit 2; }
 command -v mitmweb >/dev/null || { echo "run.sh: mitmweb not found on PATH" >&2; exit 2; }
 
+# this run's own temp-dir/process prefix (rivis-t-<run>-): a suite another session runs at the same time is not ours
+RIVIS_TEST_RUN="r$$$(date +%s)"; export RIVIS_TEST_RUN
 RES="$(mktemp -d "${TMPDIR:-/tmp}/rivis-results.XXXXXX")"     # deliberately not named rivis-t-*: it must outlive the leftover check
 trap 'rm -rf "$RES"' EXIT
 $PY "$HERE/hermetic.py" snapshot "$RES/before.snap" || exit 2

@@ -9,6 +9,7 @@ import http.client
 import http.cookiejar
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -34,6 +35,13 @@ PWSH = (os.environ.get("RIVIS_TEST_PWSH") or shutil.which("pwsh")
         or os.path.expanduser("~/Work/NEO/proxy-replacement/tools/pwsh/pwsh"))
 NODE = shutil.which("node")
 REAL_HOME = os.path.expanduser("~")
+
+
+def run_prefix():
+    """rivis-t-<run>- under tests/run.sh (RIVIS_TEST_RUN), so its leftover check sees only its own temp dirs and
+    processes: another session's suite running at the same time is not this run's leftover."""
+    run = os.environ.get("RIVIS_TEST_RUN", "")
+    return "rivis-t-%s-" % run if re.fullmatch(r"[A-Za-z0-9]{1,32}", run) else "rivis-t-"
 
 
 def free_port():
@@ -103,7 +111,7 @@ class Suite:
 
     def __init__(self):
         os.makedirs(ARTIFACTS, exist_ok=True)
-        self.root = os.path.realpath(tempfile.mkdtemp(prefix="rivis-t-"))
+        self.root = os.path.realpath(tempfile.mkdtemp(prefix=run_prefix()))
         self.shim = os.path.join(self.root, "shim")
         self.shimlog = os.path.join(self.root, "shimlog")
         for d in (self.shim, self.shimlog):

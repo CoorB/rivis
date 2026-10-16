@@ -49,5 +49,23 @@ class SuiteIntegrity(unittest.TestCase):
                 case.assertEqual("  a  ", "a")
 
 
+
+class LeftoverCheckIsPerRun(unittest.TestCase):
+    """2026-10-16: two sessions ran tests/run.sh at once and each run's leftover check failed on the other's temp
+    dirs and mitmweb processes. Under run.sh every temp root carries the run id; the check looks only at its own."""
+
+    def test_another_runs_temp_dir_is_not_a_leftover_but_this_runs_is(self):
+        import subprocess
+        import tempfile
+        code = ("import os, sys, tempfile; sys.path.insert(0, sys.argv[1]); import harness, hermetic; "
+                "mine = tempfile.mkdtemp(prefix=harness.run_prefix()); other = tempfile.mkdtemp(prefix='rivis-t-zz9other-'); "
+                "found = hermetic.tmp_leftovers(); os.rmdir(mine); os.rmdir(other); "
+                "print(harness.run_prefix(), any(f.endswith(os.path.basename(mine)) for f in found), "
+                "any(f.endswith(os.path.basename(other)) for f in found))")
+        out = subprocess.run([sys.executable, "-I", "-c", code, HERE], capture_output=True, text=True,
+                             env=dict(os.environ, RIVIS_TEST_RUN="zz1mine", TMPDIR=tempfile.gettempdir())).stdout.split()
+        self.assertEqual(out, ["rivis-t-zz1mine-", "True", "False"])
+
+
 if __name__ == "__main__":
     unittest.main()

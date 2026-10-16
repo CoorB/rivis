@@ -7,6 +7,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,8 @@ import tempfile
 HOME = os.path.expanduser("~")
 WATCH = [".rivis", ".mitmproxy", ".neo-mitm", ".zshrc", ".zprofile", ".bash_profile", ".bashrc", ".local/rivis", ".local/bin/rivis"]
 FORBIDDEN = (8080, 8083, 8090, 8093, 8094, 8095, 9090, 9091)
-PREFIX = "rivis-t-"
+_RUN = os.environ.get("RIVIS_TEST_RUN", "")
+PREFIX = "rivis-t-%s-" % _RUN if re.fullmatch(r"[A-Za-z0-9]{1,32}", _RUN) else "rivis-t-"   # same as harness.run_prefix()
 
 
 def tree_digest(path):
