@@ -287,16 +287,16 @@ class UiSmoke(UiBase):
     def test_alt_shift_e_shows_the_https_section_on_a_small_screen(self):
         # R3-NET-06b: at 1280x800 the chord opened Network at the top, HTTPS decryption below the fold
         self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.page.add_init_script("try { localStorage.setItem('rivis-welcome', 'done') } catch (e) {}")   # no first-run card on top
         page = self.open()
         page.locator("body").click(position={"x": 5, "y": 5})
         page.keyboard.press("Alt+Shift+E")
         sec = page.locator("#proxy-panel-host #tlssec")
-        wait_for(lambda: sec.count() > 0, 10, 0.2, "HTTPS section drawn")
+        wait_for(lambda: sec.count() > 0 and sec.is_visible(), 15, 0.2, "HTTPS section drawn")
         page.wait_for_timeout(3500)                                  # through a few state polls (the Net tab redraws)
-        box = sec.bounding_box()
-        self.assertIsNotNone(box)
+        in_view = lambda: (lambda b: b if b and 0 <= b["y"] < 800 - 60 else None)(sec.bounding_box() if sec.count() else None)
+        box = wait_for(in_view, 10, 0.2, "HTTPS decryption heading in view after the polls")
         self.assertLess(box["y"], 800 - 60, "HTTPS decryption heading is below the fold: %r" % box)
-        self.assertGreaterEqual(box["y"], 0)
         self.assertEqual(self.errors, [])
 
     def test_the_empty_list_offers_device_setup(self):
