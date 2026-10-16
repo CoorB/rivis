@@ -22,7 +22,7 @@ def _cli_name():
         return "rivis"
 
 
-CLI = os.path.join(os.path.dirname(HERE), _cli_name())   # the product's own CLI, also after rename.sh
+CLI = os.path.join(os.path.dirname(HERE), _cli_name())   # the product's own CLI
 UDID = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$")
 SERIAL = re.compile(r"^emulator-[0-9]{1,5}$")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")

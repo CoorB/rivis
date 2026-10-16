@@ -1,7 +1,6 @@
 # Homebrew formula template for IT's INTERNAL tap only. Replace every <PLACEHOLDER>. Never publish to a public tap.
-# Rename this file and the class to the product's cli name (see product.json).
-class Proxytool < Formula
-  desc "<PRODUCT DESCRIPTION>"
+class Rivis < Formula
+  desc "Project-aware mitmproxy toolkit for mobile QA (simulators and emulators)"
   homepage "<INTERNAL HOMEPAGE URL>"
   url "<MIRROR_BASE_URL>/<cli>/<cli>-<VERSION>.tar.gz"
   sha256 "<SHA256 PRINTED BY make-release.sh>"

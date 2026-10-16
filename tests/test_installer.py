@@ -507,23 +507,6 @@ class OfflineBundle(InstallerBase):
         self.assertNotIn("web filter", cp.stdout + cp.stderr)
 
 
-class Rename(unittest.TestCase):
-    def test_rename_moves_the_cli_and_keeps_installer_and_devices_on_the_new_name(self):
-        suite = Suite.get()
-        stage = os.path.join(suite.root, "rename-stage")
-        shutil.copytree(harness.REPO, stage, ignore=shutil.ignore_patterns("tests", ".git", "__pycache__"))
-        cp = subprocess.run(["/bin/bash", os.path.join(stage, "rename.sh"), "Acme Proxy"], capture_output=True, text=True,
-                            env=suite.env(suite.new_home("rename")))
-        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
-        self.assertTrue(os.path.isfile(os.path.join(stage, "acme-proxy")))
-        import json as _json
-        for rel in ("product.json", os.path.join("install", "product.json")):
-            self.assertEqual(_json.load(open(os.path.join(stage, rel)))["cli"], "acme-proxy", rel)
-        out = subprocess.run(["/usr/bin/python3", "-I", "-c", "import sys; sys.path.insert(0, %r); import devices; print(devices.CLI)"
-                              % os.path.join(stage, "addons")], capture_output=True, text=True).stdout.strip()
-        self.assertEqual(out, os.path.join(stage, "acme-proxy"))
-
-
 class WindowsInstallerSource(unittest.TestCase):
     def test_bundle_first_and_https_only_mirror_like_the_mac_installer(self):
         src = open(os.path.join(harness.REPO, "install", "install.ps1")).read()

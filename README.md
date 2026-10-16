@@ -1,8 +1,5 @@
 # Rivis — a project-aware mitmproxy toolkit
 
-The product name and command are defined once in [`product.json`](product.json) (Rivis / `rivis`).
-`rename.sh NEWNAME` changes them everywhere.
-
 `Rivis` wraps mitmproxy with simulator/emulator certificate handling, interception rules, traffic
 profiles, breakpoints, Map Local, collections, comparisons, and saved sessions. The browser panel is injected
 into mitmweb; the installed mitmproxy is never modified.
@@ -299,16 +296,6 @@ and a local upstream test server; it never touches `~/.rivis`, `~/.mitmproxy`, t
 counts plus a check that nothing was left behind. Known product bugs live in `tests/FOUND-BUGS.md`; their tests are
 marked `expectedFailure`, so fixing a bug turns its test into an "unexpected success" failure (delete the marker then).
 The browser tests need Playwright: `pip3 install --user playwright && python3 -m playwright install chromium`.
-
-## Rename the placeholder
-
-```bash
-./rename.sh "Chosen Name"
-```
-
-The script updates `product.json`, derives a lowercase CLI name and uppercase environment prefix, renames the
-two product CLI files, and prints the links to recreate. Add-ons, panel identity, paths, messages, environment
-variables, and wrappers read `product.json`, so nothing else needs editing.
 
 ## Troubleshooting with `rivis doctor`
 

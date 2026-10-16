@@ -23,7 +23,7 @@ mkdir "$STAGE/$CLI-$VERSION"
     --exclude '*/web-token' --exclude '*/current-project' --exclude '*/rules.json' \
     --exclude '*/sessions' --exclude '*/sessions/*' --exclude '*/collections' --exclude '*/collections/*' \
     --exclude '*/mocks' --exclude '*/mocks/*' \
-    README.md product.json rivis rivis.ps1 neo-mitm neo-mitm.ps1 rename.sh addons docs projects \
+    README.md product.json rivis rivis.ps1 neo-mitm neo-mitm.ps1 addons docs projects \
   ) | tar -xf - -C "$STAGE/$CLI-$VERSION"
 # The installer needs VERSION + mirror.conf next to it in a checkout; the release carries only the tool.
 echo "$VERSION" > "$STAGE/$CLI-$VERSION/VERSION"
