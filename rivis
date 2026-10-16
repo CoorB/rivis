@@ -554,6 +554,10 @@ cmd_browser() {
     from="${tab%%$'\t'*}"; url="${tab#*$'\t'}"
     [[ "$url" =~ ^https?://[^[:space:]]+$ ]] || die "browser: the front tab of $from is not a web page ($url)"
     info "the front tab of $from: $url"
+    if [ -z "$id" ]; then   # open it in the same browser it came from (Safari: the first one installed below)
+      case "$from" in "Google Chrome") id=chrome ;; "Microsoft Edge") id=edge ;; "Brave Browser") id=brave ;; Chromium) id=chromium ;; esac
+      [ -z "$id" ] || browser_bin "$id" >/dev/null || id=""
+    fi
   fi
   if [ -n "$id" ]; then
     case "$id" in chrome|edge|chromium|brave) ;; *) die "browser: unknown browser '$id' (chrome, edge, chromium or brave)" ;; esac

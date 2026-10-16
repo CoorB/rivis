@@ -122,10 +122,16 @@ class Browser(unittest.TestCase):
 
     def test_current_opens_the_page_of_the_front_tab(self):
         self.logging_app()
+        self.logging_app("Microsoft Edge")
         self.front_tab(["Microsoft Edge"], "https://app.example.test/orders?id=7")
         r = self.cli("--current")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(self.logged_argv()[-1], "https://app.example.test/orders?id=7")
+        argv = self.logged_argv()
+        self.assertEqual(argv[-1], "https://app.example.test/orders?id=7")
+        self.assertIn(os.path.join(".rivis", "browser", "edge"), argv[0])      # the browser the tab came from
+        os.remove(self.argv_log)
+        self.assertEqual(self.cli("--current", "--chrome").returncode, 0)       # unless one is named
+        self.assertIn(os.path.join(".rivis", "browser", "chrome"), self.logged_argv()[0])
         self.assertIn("front tab of Microsoft Edge", r.stdout)
         script = self.suite.shim_log("osascript.log")
         self.assertIn('tell application "Microsoft Edge" to get URL of active tab of front window', script)
