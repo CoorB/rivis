@@ -126,6 +126,14 @@ strip_rc_block() {  # strip_rc_block FILE — removes only our marked block
 
 if [ "$UNINSTALL" = 1 ]; then
   info "uninstall $NAME ($CLI) — plan:"
+  uninstall_cli=""
+  if [ -x "$LINK" ]; then uninstall_cli="$LINK"
+  elif [ -x "$ROOT/current/$CLI" ]; then uninstall_cli="$ROOT/current/$CLI"
+  fi
+  if [ -n "$uninstall_cli" ]; then
+    info "stopping any running $NAME instance before removing its launcher"
+    do_ "$uninstall_cli" stop || die "could not stop the running $NAME instance; nothing was removed"
+  fi
   [ -L "$LINK" ] || [ -f "$LINK" ] && do_ rm -f "$LINK"
   if [ -f "$RECEIPT" ] && grep -q '^mitmproxy=installed-by-us' "$RECEIPT"; then
     do_ rm -rf "$MITM_DIR"

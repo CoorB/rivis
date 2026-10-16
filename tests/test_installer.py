@@ -189,6 +189,23 @@ class RealInstall(InstallerBase):
         self.ok("--yes", "--skip-local-capture", "--no-rc")
         self.assertEqual(open(os.path.join(self.home, ".zshrc")).read(), "# mine\nexport A=1\n")
 
+    def test_uninstall_stops_a_running_background_proxy_before_removing_it(self):
+        self.ok("--yes", "--skip-local-capture")
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        port, web = harness.free_port(), harness.free_port()
+        env = self.suite.env(self.home, extra={"RIVIS_PORT": str(port), "RIVIS_WEB_PORT": str(web)})
+        try:
+            started = self.suite.run([launcher, "start", "--background", "--no-open", "--no-ios"],
+                                     home=self.home, env=env, timeout=60)
+            self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+            self.assertTrue(harness.port_open(port))
+            self.ok("--uninstall", "--yes", env=env)
+            self.assertFalse(harness.port_open(port), "uninstall left the proxy port listening")
+            self.assertFalse(harness.port_open(web), "uninstall left the UI port listening")
+        finally:
+            if harness.port_open(port) or harness.port_open(web):
+                self.suite.rivis("stop", home=self.home, env=env)
+
     def test_an_existing_ca_is_never_replaced(self):
         conf = os.path.join(self.home, ".mitmproxy")
         shutil.copytree(self.suite.ca_dir, conf)
