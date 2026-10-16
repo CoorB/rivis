@@ -47,7 +47,7 @@ Mac with Apple Silicon. No admin password, nothing else to download.
 2. Download the zip from the [latest release](https://github.com/CoorB/rivis/releases) into **Downloads**.
 3. Paste this into Terminal (the release page has the same line for its version):
    ```bash
-   cd ~/Downloads && { [ -d rivis-installer-0.9.2 ] || unzip -q rivis-installer-0.9.2.zip; } && ./rivis-installer-0.9.2/install.sh
+   cd ~/Downloads && { [ -d rivis-installer-0.9.3 ] || unzip -q rivis-installer-0.9.3.zip; } && ./rivis-installer-0.9.3/install.sh
    ```
    It works whether or not Safari already unzipped the file. For iOS, approve *Mitmproxy Redirector* when
    System Settings opens; the installer continues by itself as soon as you do (or press Enter to skip).

@@ -38,7 +38,7 @@
 #   <cli> mock NAME URL-REGEX              save the last matching response and Map-Local it
 #   <cli> setup                            ios on --all + android on --all: every booted simulator and
 #                                 running emulator, in one go (each one is skipped if already done)
-#   <cli> android on|off [-s SERIAL | --all] [--manual] [--yes]
+#   <cli> android on|off [-s SERIAL | --all] [--manual] [--yes] [--strict]
 #                                 CA + proxy on an emulator. Google APIs image (no Play Store): direct
 #                                 copy via adb root. Google Play image: drives the Settings screens itself,
 #                                 skips them when the emulator already trusts this CA (fingerprint check),
@@ -606,6 +606,24 @@ android_record() {   # android_record SERIAL — note "<avd>\t<CA sha256>" after
   [[ "$avd" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
   { grep -v "^$avd	" "$f" 2>/dev/null; printf '%s\t%s\n' "$avd" "$fp"; } > "$f.tmp" && mv "$f.tmp" "$f"
 }
+ui_list_mentions() {   # ui_list_mentions SERIAL TEXT — on this screen, or one scroll further down?
+  # Settings opened cold (right after a boot) renders its list late: only answer "absent" once the screen is drawn
+  # (the System/User tabs show) and two reads agree; then look one scroll further. Found = answer at once.
+  local s="$1" t="$2" i x prev="" swiped=0
+  for i in 1 2 3 4 5 6 7 8; do
+    "$ADB" -s "$s" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1
+    x=$("$ADB" -s "$s" shell cat /sdcard/proxy-ui.xml 2>/dev/null)
+    printf '%s' "$x" | grep -qF "\"$t" && return 0
+    if printf '%s' "$x" | grep -qE 'text="(User|USER)"' && [ "$x" = "$prev" ]; then
+      [ "$swiped" = 1 ] && return 1
+      local wh w h; wh=$("$ADB" -s "$s" shell wm size | tr -d '\r' | awk '/size/{print $NF}'); w=${wh%x*}; h=${wh#*x}
+      [ -n "$w" ] && [ -n "$h" ] && "$ADB" -s "$s" shell input swipe $((w/2)) $((h*7/10)) $((w/2)) $((h*3/10)) 300 >/dev/null 2>&1
+      swiped=1; prev=""; sleep 1; continue
+    fi
+    prev="$x"; sleep 1
+  done
+  return 1
+}
 ui_has_current_ca() {   # does the user store hold THIS CA? (an older "mitmproxy" entry does not count)
   local s="$1" fp n; fp=$(ca_fingerprint) || return 1
   # straight to Trusted credentials → User (under a second); the menu walk is the fallback
@@ -613,6 +631,9 @@ ui_has_current_ca() {   # does the user store hold THIS CA? (an older "mitmproxy
     open_credentials "$s" && ui_tap "$s" "Trusted credentials" && ui_tap "$s" "USER|User" || return 1
   fi
   sleep 1
+  # quick "not there at all": the user list is a few rows — one screen and one scroll tell. ui_tap would scroll up to 12
+  # times (~3 s each) before giving up, which made a fresh Play-emulator setup spend ~50 s here (2026-10-16).
+  ui_list_mentions "$s" "mitmproxy" || return 1
   for n in 1 2 3 4 5; do
     ui_tap "$s" "mitmproxy" "$n" || return 1          # no Nth entry: not found
     if ui_screen_has "$s" "$fp"; then ui_tap "$s" "OK"; return 0; fi
@@ -622,8 +643,13 @@ ui_has_current_ca() {   # does the user store hold THIS CA? (an older "mitmproxy
 }
 ui_remove_ca() {   # every user-store entry named mitmproxy
   local s="$1" n=0
-  open_credentials "$s" && ui_tap "$s" "Trusted credentials" && ui_tap "$s" "USER|User" || return 1
-  while [ $n -lt 5 ] && ui_tap "$s" "mitmproxy"; do
+  # straight to Trusted credentials → User, like ui_has_current_ca; the menu walk is the fallback
+  if ! "$ADB" -s "$s" shell am start -W -f 0x10008000 -a com.android.settings.TRUSTED_CREDENTIALS_USER 2>/dev/null | grep -q "Status: ok"; then
+    open_credentials "$s" && ui_tap "$s" "Trusted credentials" && ui_tap "$s" "USER|User" || return 1
+  fi
+  sleep 1
+  ui_list_mentions "$s" "mitmproxy" || { echo 0; return 0; }     # nothing to remove (and no 12-scroll search)
+  while [ $n -lt 5 ] && ui_list_mentions "$s" "mitmproxy" && ui_tap "$s" "mitmproxy"; do
     ui_tap "$s" "Uninstall|REMOVE|Remove" && ui_tap "$s" "OK" || return 1
     n=$((n+1))
   done
@@ -633,18 +659,19 @@ ui_remove_ca() {   # every user-store entry named mitmproxy
 
 cmd_android() {
   local action="${1:-}"; shift || true
-  local auto_ui=1 all=0 consent=""
+  local auto_ui=1 all=0 consent="" strict=""
   while [ $# -gt 0 ]; do case "$1" in
     -s) SERIAL="$2"; shift ;; --all) all=1 ;; --manual) auto_ui=0 ;; --yes) consent=--yes ;;
+    --strict) strict=--strict ;;                    # Play images: restart back to normal at once (two restarts)
     --auto-ui) ;;                                   # the default now; still accepted
     *) die "android: unknown option $1" ;; esac; shift; done
-  case "$action" in on|off) ;; *) die "usage: $CLI android on|off [-s SERIAL | --all] [--manual]" ;; esac
+  case "$action" in on|off) ;; *) die "usage: $CLI android on|off [-s SERIAL | --all] [--manual] [--strict]" ;; esac
   [ -x "$ADB" ] || die "adb not found"
   if [ "$all" = 1 ]; then
     [ -z "${SERIAL:-}" ] || die "android: pass -s or --all, not both"
     local e list; list=$("$ADB" devices | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
     [ -n "$list" ] || die "no running emulator (adb devices)"
-    for e in $list; do ( SERIAL="$e"; cmd_android "$action" $([ "$auto_ui" = 0 ] && echo --manual) $consent ) || info "WARNING: $e: android $action failed"; done
+    for e in $list; do ( SERIAL="$e"; cmd_android "$action" $([ "$auto_ui" = 0 ] && echo --manual) $consent $strict ) || info "WARNING: $e: android $action failed"; done
     return
   fi
   local s; s=$(pick_serial) || exit 1
@@ -672,7 +699,7 @@ cmd_android() {
           info "$s: already trusts this CA — nothing to install"; android_record "$s"
           "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
         elif [ "$auto_ui" = 1 ] && [ -d "$magisk_dir" ] \
-            && ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent; then
+            && ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent $strict; then
           android_record "$s"   # one-click Play-image path (Proxyman's Magisk approach); it reports its own result
         elif [ "$auto_ui" = 1 ] && info "$s: Google Play image — installing the CA through Settings (about a minute; hands off the emulator)" \
             && ui_install_ca "$s" && ui_has_current_ca "$s"; then
@@ -715,6 +742,11 @@ cmd_android() {
         if [ "$auto_ui" = 1 ] && n=$(ui_remove_ca "$s"); then info "$s: removed $n mitmproxy CA entr$( [ "$n" = 1 ] && echo y || echo ies ) via Settings"
         else info "$s: remove the CA by hand: Encryption & credentials → Trusted credentials → User → mitmproxy → Uninstall"; fi
         "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
+      fi
+      # still on the temporary setup boot of a Google Play emulator (`android on` without --strict)? back to normal now
+      if ps -ax -o args= 2>/dev/null | grep -v "grep " | grep -F -- "-port ${s#emulator-} " | grep -qF -- "-ramdisk $STATE_ROOT/android-ramdisk/"; then
+        ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "${h:-00000000}.0" "-" "$STATE_ROOT" --restore \
+          || info "$s: could not restart it normally — Cold Boot it from Android Studio's Device Manager"
       fi ;;
   esac
 }

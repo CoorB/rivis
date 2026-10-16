@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 # One-click CA install on a Google Play emulator (no `adb root`), the way Proxyman 6.14 does it, minus the root shell.
 #
-#   android_magisk.sh SERIAL CA_PEM CA_NAME MAGISK_DIR STATE_DIR [--yes]
+#   android_magisk.sh SERIAL CA_PEM CA_NAME MAGISK_DIR STATE_DIR [--yes] [--strict]
+#   android_magisk.sh SERIAL CA_PEM CA_NAME MAGISK_DIR STATE_DIR --restore     (back to the stock boot now)
 #
 #   1. Magisk's own scripts/host_patch.sh patches a COPY of the AVD's stock ramdisk.img, on the emulator itself.
 #   2. Rivis adds one oneshot boot service + the CA to that copy (addons/android/rivis_inject.sh).
 #   3. The AVD is cold-booted once with `-ramdisk <copy>` (-no-snapshot-load/-save): the service copies the CA into
 #      the user CA store as root and writes a status file. Nothing else gets root: not adb shell, not apps.
-#   4. The AVD is cold-booted again from its stock ramdisk. The CA stays (it lives in userdata); Magisk is gone.
+#   4. Default (like Proxyman): done — ONE restart, about a minute. The AVD keeps running on that temporary boot until
+#      it next starts normally (from Android Studio, or `<cli> android off`, which runs --restore); no snapshot of it
+#      is ever saved. --strict: cold-boot it again from the stock ramdisk right away (two restarts, 2–4 minutes).
+#      Either way the CA stays (it lives in userdata).
 # The SDK system image and the AVD config are never written. Patched ramdisks are cached per (stock image, Magisk,
 # Rivis files, CA) hash under STATE_DIR, so a second emulator from the same image skips step 1.
 # Magisk files come from MAGISK_DIR (installed by install.sh) and are verified against addons/android/magisk.pins.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
-SERIAL="$1" CA_PEM="$2" CA_NAME="$3" MAGISK_DIR="$4" STATE_DIR="$5" YES="${6:-}"
+SERIAL="$1" CA_PEM="$2" CA_NAME="$3" MAGISK_DIR="$4" STATE_DIR="$5"; shift 5
+YES=""; STRICT=0; RESTORE=0
+for a in "$@"; do case "$a" in --yes) YES=--yes ;; --strict) STRICT=1 ;; --restore) RESTORE=1 ;; *) echo "android: unknown option $a" >&2; exit 2 ;; esac; done
 ADB="${ADB:-adb}"
 PINS="$HERE/android/magisk.pins"
 product() { /usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2]) or sys.argv[3])' "$HERE/../product.json" "$1" "$2" 2>/dev/null || echo "$2"; }
@@ -48,6 +54,30 @@ STOCK="$SDK/${SYSDIR%/}/ramdisk.img"
 API=$(sh_ getprop ro.build.version.sdk)
 ABI=$(sh_ getprop ro.product.cpu.abi)
 
+# ---- boot helpers -------------------------------------------------------------------------------------------------
+CACHE="$STATE_DIR/android-ramdisk"; mkdir -p -m 700 "$CACHE"
+gone() {   # adb has lost it AND its process has exited (a new boot on the same port must not race the old one)
+  local i; for i in $(seq 1 60); do "$ADB" -s "$SERIAL" get-state >/dev/null 2>&1 || break; sleep 1; done
+  [ "$i" -lt 60 ] || return 1
+  for i in $(seq 1 30); do ps -ax -o args= 2>/dev/null | grep -v "grep " | grep -F -- "-avd $AVD " | grep -qF -- "-port $PORT" || return 0; sleep 1; done
+  return 0                                         # still exiting after 30 s: carry on, the emulator reports a busy port
+}
+booted() { local i; for i in $(seq 1 300); do [ "$(sh_ getprop sys.boot_completed)" = 1 ] && return 0; sleep 1; done; return 1; }
+start_avd() {   # start_avd LOG [extra emulator args]
+  local log="$1"; shift
+  ANDROID_AVD_HOME="$AVD_HOME" nohup "$EMULATOR" -avd "$AVD" -port "$PORT" -no-snapshot-load "$@" > "$log" 2>&1 < /dev/null &
+  disown $! 2>/dev/null || true
+}
+restore_stock() {
+  "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1; gone
+  start_avd "$CACHE/stock.log"
+  booted && info "'$AVD' restarted normally" || info "'$AVD' did not come back by itself — Cold Boot it from Android Studio's Device Manager"
+}
+if [ "$RESTORE" = 1 ]; then
+  info "restarting '$AVD' normally (leaving the temporary setup boot)…"
+  restore_stock; exit 0
+fi
+
 # ---- pinned Magisk files ------------------------------------------------------------------------------------------
 APK="$MAGISK_DIR/$(pin MAGISK_APK)"; HOST_PATCH="$MAGISK_DIR/host_patch.sh"
 [ -f "$APK" ] && [ -f "$HOST_PATCH" ] || die "Magisk $(pin MAGISK_VERSION) is not installed ($MAGISK_DIR). Re-run the installer, or use: $CLI_NAME android on --manual"
@@ -60,10 +90,13 @@ cat <<EOF
 ─── Google Play emulator: one-time certificate setup ───────────────────────────────────────────────
 '$AVD' (Android API $API, $ABI) refuses adb root, so $PRODUCT_NAME installs its certificate like Proxyman does:
   • Magisk $(pin MAGISK_VERSION) (official release, GPLv3, checksum verified) patches a temporary COPY of the ramdisk
-  • '$AVD' restarts twice: once with that copy, where a one-shot service copies the certificate
-    into the user store as root, then normally. About 2 minutes; the emulator window will close and reopen.
-  • Nothing else gets root (not adb shell, not apps). The SDK image and the AVD settings are not changed;
-    after the second restart Magisk is gone and only the certificate remains.
+$(if [ "$STRICT" = 1 ]; then echo "  • '$AVD' restarts twice: once with that copy, where a one-shot service copies the certificate
+    into the user store as root, then normally. 2–4 minutes; the emulator window closes and reopens.
+  • After the second restart Magisk is gone and only the certificate remains."
+else echo "  • '$AVD' restarts once, with that copy, where a one-shot service copies the certificate into the
+    user store as root. About a minute; the emulator window closes and reopens.
+  • It stays on that temporary boot until it next starts normally (or: $CLI_NAME android off -s $SERIAL)."; fi)
+  • Nothing else gets root (not adb shell, not apps). The SDK image and the AVD settings are not changed.
 Use a test AVD only: no personal Google account or data.
 EOF
 if [ "$YES" != --yes ]; then
@@ -76,7 +109,6 @@ fi
 ca_sha=$(sha "$CA_PEM")
 files_sha=$(cat "$HERE/android/rivis_ca.rc" "$HERE/android/rivis_ca.sh" "$HERE/android/rivis_inject.sh" | shasum -a 256 | awk '{print $1}')
 key=$(printf '%s %s %s %s' "$(sha "$STOCK")" "$(pin MAGISK_APK_SHA256)" "$files_sha" "$ca_sha" | shasum -a 256 | awk '{print $1}')
-CACHE="$STATE_DIR/android-ramdisk"; mkdir -p -m 700 "$CACHE"
 PATCHED="$CACHE/$key.img"
 if [ -s "$PATCHED" ] && [ "$(sha "$PATCHED")" = "$(cat "$PATCHED.sha256" 2>/dev/null)" ]; then
   info "patched ramdisk ready (cached)"
@@ -106,18 +138,6 @@ else
 fi
 
 # ---- 3. boot the copy once ----------------------------------------------------------------------------------------
-gone() { local i; for i in $(seq 1 60); do "$ADB" -s "$SERIAL" get-state >/dev/null 2>&1 || return 0; sleep 1; done; return 1; }
-booted() { local i; for i in $(seq 1 300); do [ "$(sh_ getprop sys.boot_completed)" = 1 ] && return 0; sleep 1; done; return 1; }
-start_avd() {   # start_avd LOG [extra emulator args]
-  local log="$1"; shift
-  ANDROID_AVD_HOME="$AVD_HOME" nohup "$EMULATOR" -avd "$AVD" -port "$PORT" -no-snapshot-load "$@" > "$log" 2>&1 < /dev/null &
-  disown $! 2>/dev/null || true
-}
-restore_stock() {
-  "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1; gone
-  start_avd "$CACHE/stock.log"
-  booted && info "'$AVD' restarted normally" || info "'$AVD' did not come back by itself — Cold Boot it from Android Studio's Device Manager"
-}
 info "restarting '$AVD' with the temporary ramdisk…"
 "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1 || die "the emulator did not accept the stop command"
 gone || die "the emulator did not stop within 60 seconds"
@@ -127,11 +147,15 @@ booted || { restore_stock; die "the emulator did not boot with the patched ramdi
 st=""; for i in $(seq 1 60); do st=$(sh_ cat /data/local/tmp/rivis-ca.status); [ -n "$st" ] && break; sleep 1; done
 sh_ rm -f /data/local/tmp/rivis-ca.status >/dev/null
 
-# ---- 4. back to stock ---------------------------------------------------------------------------------------------
-info "restarting '$AVD' normally…"
-restore_stock
+# ---- 4. done, or back to stock (--strict / on failure) ---------------------------------------------------------------
+if [ "$STRICT" = 1 ] || [ "$st" != "ok $CA_NAME" ]; then
+  info "restarting '$AVD' normally…"
+  restore_stock
+fi
 case "$st" in
-  "ok $CA_NAME") info "$SERIAL: CA installed in the user store (one-shot root service: $st)" ;;
+  "ok $CA_NAME")
+    info "$SERIAL: CA installed in the user store (one-shot root service: $st)"
+    [ "$STRICT" = 1 ] || info "'$AVD' runs on the temporary setup boot until its next normal start (now: $CLI_NAME android off -s $SERIAL)" ;;
   "") die "the one-shot service did not report back — CA not confirmed. Retry, or: $CLI_NAME android on --manual" ;;
   *) die "the one-shot service failed ($st) — CA not installed. Retry, or: $CLI_NAME android on --manual" ;;
 esac

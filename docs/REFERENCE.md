@@ -81,7 +81,7 @@ The profile's `hosts` regex drives the “<label> only” panel view, `record_ma
 rivis start [--project-only] [--insecure] [--all] [--no-ios] [--no-open]
 rivis stop | ui | status | cert
 rivis ios on|off [--udid UDID | --all]     # --all: every booted simulator
-rivis android on|off [-s emulator-5554 | --all] [--manual] [--yes]   # Play images: one-time Magisk step, like Proxyman
+rivis android on|off [-s emulator-5554 | --all] [--manual] [--yes] [--strict]   # Play images: one restart, like Proxyman (--strict: back to normal at once, 2–4 min)
 rivis setup                                          # every booted simulator + running emulator
 rivis rules list | on NAME | off NAME | show NAME | rm NAME | edit
 rivis rules add NAME match=REGEX action=ACTION [key=value ...]

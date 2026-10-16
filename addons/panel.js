@@ -849,7 +849,7 @@
       || (devStarting && devStarting.platform === platform && (devStarting.target === "all" || devStarting.target === id));
     const row = (platform, d) => {
       const settingUp = !d.ready && mine(platform, d.id);
-      const detail = settingUp ? (d.play && !d.ca_ok ? "Setting up… 2–4 min — the emulator restarts twice, hands off" : "Setting up…")
+      const detail = settingUp ? (d.play && !d.ca_ok ? "Setting up… about a minute — the emulator restarts once, hands off" : "Setting up…")
         : platform === "ios" ? (d.ready ? "Trusts the Rivis certificate" : "Certificate not trusted yet")
         : !d.ca_ok ? (d.play ? "Google Play image — certificate not installed yet" : "Certificate not installed yet")
         : !d.proxy_ok ? "Certificate OK — proxy not pointing at Rivis" : "Certificate and proxy set";
@@ -868,9 +868,10 @@
       <div class="card on" style="cursor:default;display:block">
         <b>One-time setup for ${esc(devConsent.name === "all" ? "these Google Play emulators" : devConsent.name)}</b>
         <div class="sub" style="margin:6px 0">${dev.magisk ? `Google Play images refuse adb root, so Rivis installs its certificate the way Proxyman does:
-          Magisk (official release, checksum verified) patches a temporary copy of the ramdisk; the emulator restarts twice —
-          once with that copy, where a one-shot service copies the certificate, then normally. About 2–4 minutes; the window
-          closes and reopens. Nothing else gets root, and the SDK image and AVD settings are not changed.`
+          Magisk (official release, checksum verified) patches a temporary copy of the ramdisk and the emulator restarts once
+          with it, where a one-shot service copies the certificate. About a minute; the window closes and reopens. It stays on
+          that temporary boot until its next normal start (or <code>rivis android off</code>). Nothing else gets root, and the
+          SDK image and AVD settings are not changed.`
           : `Google Play images refuse adb root. This copy of Rivis has no Magisk, so it will drive the emulator's Settings screens
           to install the certificate instead — about a minute; hands off the emulator while it runs.`}
           Use test emulators only (no personal Google account).</div>

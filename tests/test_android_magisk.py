@@ -31,7 +31,7 @@ def pin(key):
             return line.split("=", 1)[1].strip()
 
 
-class MagiskGuards(unittest.TestCase):
+class MagiskFixture(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="rivis-magisk-")
         self.addCleanup(shutil.rmtree, self.root, True)
@@ -68,6 +68,8 @@ class MagiskGuards(unittest.TestCase):
         return subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", self.magisk, self.state, *extra],
                               capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=60)
 
+
+class MagiskGuards(MagiskFixture):
     def touched_emulator(self):
         log = open(self.log).read() if os.path.exists(self.log) else ""
         return any(w in log for w in ("emu kill", "push", "emulator -avd"))
@@ -87,7 +89,8 @@ class MagiskGuards(unittest.TestCase):
         # order in the flow: verify the pinned files → ask → only then stop/patch/boot the emulator
         src = open(SCRIPT).read()
         self.assertLess(src.index("SHA-256 mismatch"), src.index("Continue? [y/N]"))
-        self.assertLess(src.index("Continue? [y/N]"), src.index("emu kill"))
+        # the first restart (not the helper that defines how to restart) comes after consent
+        self.assertLess(src.index("Continue? [y/N]"), src.index("info \"restarting '$AVD' with the temporary ramdisk"))
         self.assertIn("< /dev/tty", src)                     # adb would swallow a piped answer
 
     def test_a_non_play_avd_is_refused(self):
@@ -121,6 +124,92 @@ class MagiskGuards(unittest.TestCase):
         for forbidden in ("magisk --sqlite", "policies", "su ", "setprop"):
             self.assertNotIn(forbidden, sh)
         self.assertIn("/data/misc/user/0/cacerts-added", sh)
+
+
+FLOW_ADB = r"""#!/bin/sh
+echo "$@" >> "$FAKE_LOG"
+case "$*" in
+  *"emu avd name"*) printf 'Test_Play\r\nOK\r\n' ;;
+  *"emu kill"*) : > "$FAKE_DIR/killed" ;;
+  *"get-state"*) [ -f "$FAKE_DIR/killed" ] && exit 1; echo device ;;
+  *"getprop ro.build.version.sdk"*) echo 36 ;;
+  *"getprop ro.product.cpu.abi"*) echo arm64-v8a ;;
+  *"getprop sys.boot_completed"*) echo 1 ;;
+  *"cat /data/local/tmp/rivis-ca.status"*) echo "${FAKE_STATUS-ok c8750f0d.0}" ;;
+esac
+exit 0
+"""
+# the real pinned Magisk files (the installer puts them next to the tool; the pilot mirror keeps a copy)
+REAL_MAGISK = next((d for d in (os.environ.get("RIVIS_TEST_MAGISK_DIR", ""),
+                                os.path.expanduser("~/Work/NEO/proxy-replacement/pilot-mirror/magisk/30.7"))
+                    if d and os.path.isfile(os.path.join(d, "host_patch.sh"))), None)
+
+
+class MagiskRestarts(MagiskFixture):
+    """How many times the emulator is restarted (2026-10-16: Proxyman takes ~30 s with ONE restart; Rivis took 2–4 min
+    with two). A fake adb/emulator record every restart; the patched ramdisk is pre-cached, so no patching runs."""
+
+    def setUp(self):
+        super().setUp()
+        if not REAL_MAGISK:
+            self.skipTest("the pinned Magisk files are not on this machine (set RIVIS_TEST_MAGISK_DIR)")
+        open(self.adb, "w").write(FLOW_ADB)
+        emu = os.path.join(self.root, "sdk", "emulator", "emulator")
+        open(emu, "w").write('#!/bin/sh\necho emulator "$@" >> "$FAKE_LOG"\nrm -f "$FAKE_DIR/killed"\n')
+        for f in os.listdir(REAL_MAGISK):
+            shutil.copy(os.path.join(REAL_MAGISK, f), self.magisk)
+        sha = lambda b: hashlib.sha256(b).hexdigest()
+        here = os.path.join(harness.REPO, "addons", "android")
+        files = b"".join(open(os.path.join(here, f), "rb").read() for f in ("rivis_ca.rc", "rivis_ca.sh", "rivis_inject.sh"))
+        stock = open(os.path.join(self.root, "sdk", "system-images", "android-36", "google_apis_playstore", "arm64-v8a",
+                                  "ramdisk.img"), "rb").read()
+        key = sha(("%s %s %s %s" % (sha(stock), pin("MAGISK_APK_SHA256"), sha(files), sha(open(self.ca, "rb").read()))).encode())
+        cache = os.path.join(self.state, "android-ramdisk")
+        os.makedirs(cache, exist_ok=True)
+        patched = os.path.join(cache, key + ".img")
+        open(patched, "wb").write(b"patched ramdisk")
+        open(patched + ".sha256", "w").write(sha(b"patched ramdisk") + "\n")
+
+    def run_flow(self, *extra, status=None):
+        env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"), ANDROID_AVD_HOME=self.avd_home,
+                   FAKE_LOG=self.log, FAKE_DIR=self.root, HOME=self.root)
+        if status is not None:
+            env["FAKE_STATUS"] = status
+        r = subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", self.magisk, self.state, *extra],
+                           capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120)
+        import time; time.sleep(0.5)                                  # the emulator is started in the background
+        starts = [l for l in open(self.log).read().splitlines() if l.startswith("emulator ")]
+        return r, starts
+
+    def test_default_restarts_once_into_the_setup_boot_and_stops_there(self):
+        r, starts = self.run_flow("--yes")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(starts), 1, starts)
+        self.assertIn("-ramdisk", starts[0])
+        self.assertIn("-no-snapshot-save", starts[0])                 # the rooted boot is never saved as Quick Boot
+        self.assertIn("temporary setup boot", r.stdout)
+
+    def test_strict_goes_back_to_the_stock_boot_at_once(self):
+        r, starts = self.run_flow("--yes", "--strict")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(sorted("-ramdisk" in x for x in starts), [False, True], starts)   # one patched boot, one normal
+
+    def test_a_failed_setup_always_goes_back_to_the_stock_boot(self):
+        r, starts = self.run_flow("--yes", status="fail: no cert")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(sorted("-ramdisk" in x for x in starts), [False, True], starts)
+
+    def test_restore_restarts_normally_without_needing_magisk(self):
+        shutil.rmtree(self.magisk)
+        env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"), ANDROID_AVD_HOME=self.avd_home,
+                   FAKE_LOG=self.log, FAKE_DIR=self.root, HOME=self.root)
+        r = subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", "-", self.state, "--restore"],
+                           capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120)
+        import time; time.sleep(0.5)
+        starts = [l for l in open(self.log).read().splitlines() if l.startswith("emulator ")]
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(starts), 1, starts)
+        self.assertNotIn("-ramdisk", starts[0])
 
 
 if __name__ == "__main__":
