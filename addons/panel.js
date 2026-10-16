@@ -516,7 +516,7 @@
     const scriptErrors = Object.keys((state.script_status || {}).errors || {}).length;
     $("c-scripts").textContent = scriptErrors ? `! ${scriptErrors}` : (on(state.scripts || []) || "");
     $("c-scripts").classList.toggle("err", scriptErrors > 0);
-    const active = on(state.rules) || on(state.breakpoints) || state.throttle !== "off";
+    const active = on(state.rules) || on(state.breakpoints) || state.throttle !== "off" || Number(state.loss || 0) > 0;
     $("fabdot").style.display = active ? "inline-block" : "none";
     $("fab").classList.toggle("paused", state.paused.length > 0);
     const label = state.project.label || state.view_project;
@@ -778,13 +778,14 @@
     const icons = { off: "net", "3g-urban": "wifi", "lte-congested": "down", "high-latency-vpn": "lock", "packet-loss-8": "warn", manual: "sliders" };
     const desc = (p) => p.desc || `${p.latency_ms}ms ±${p.jitter_ms}ms latency · ↓${p.down_kbps}kbps / ↑${p.up_kbps}kbps · ${p.loss_pct}% packet loss`;
     const cur = state.throttle || "off";
+    const extraLoss = Number(state.loss || 0);
     const known = state.profiles.some((p) => p.id === cur);
     const mn = state.manual;
     m.innerHTML = `
       <h4>Traffic profiles</h4>
       <div class="row" style="border:0;padding:0 0 8px;flex-wrap:wrap"><label class="sub" for="tm" style="white-space:nowrap">Only slow URLs containing</label>
         <input type="text" id="tm" class="grow" value="${esc(state.throttle_match)}" placeholder="e.g. neo.sa — empty = every call" title="Text (or a pattern) matched against the URL, e.g. neo.sa. Empty slows down every call."></div>
-      <div class="sub" style="margin:-2px 0 10px">${cur === "off" ? "Pick a profile — it only slows calls whose URL contains the text above." : `<b>On</b> for ${state.throttle_match ? "URLs containing <code>" + esc(state.throttle_match) + "</code>" : "every call"}.`}</div>
+      <div class="sub" style="margin:-2px 0 10px">${cur === "off" && !extraLoss ? "Pick a profile — it only slows calls whose URL contains the text above." : `<b>On</b> for ${state.throttle_match ? "URLs containing <code>" + esc(state.throttle_match) + "</code>" : "every call"}.${extraLoss ? ` <b>Packet loss is active: ${esc(extraLoss)}%</b>.` : ""}`}</div>
       ${state.profiles.map((p) => `
         <div class="card ${p.id === cur ? "on" : ""}" data-prof="${p.id}"><div class="ic">${ico(icons[p.id] || "net")}</div>
           <div><div class="t">${esc(p.name)}</div><div class="sub">${esc(desc(p))}</div></div>${p.id === cur ? `<div class="ok">${ico("check")}</div>` : ""}</div>`).join("")}
@@ -814,7 +815,7 @@
       const manual = {}; root.querySelectorAll("[data-mk]").forEach((i) => (manual[i.dataset.mk] = Number(i.value || 0)));
       run("profile", { id: "manual", manual, match: $("tm").value }, "Network: manual profile");
     };
-    $("tm").onchange = () => run("profile", { id: cur, match: $("tm").value }, "Applies to: " + ($("tm").value || "all calls"));
+    $("tm").onchange = () => run("profile", { match: $("tm").value }, "Applies to: " + ($("tm").value || "all calls"));
     $("project-filter").onchange = () => run("view", { project: state.view_project, project_only: $("project-filter").checked, show_dns: false }, "Call list updated");
     $("dns").onchange = () => run("view", { project_only: false, show_dns: $("dns").checked }, "Call list updated");
     $("openset").onclick = () => openHelp("settings");
@@ -1940,6 +1941,10 @@
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
       if (!pausedOpen && waiting.length && !$("pause").classList.contains("open")) openPaused(waiting[0].id);
       if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) { pausedOpen = null; $("pause").classList.remove("open"); }
+      if ($("drawer").classList.contains("open") && tab === "net" && !editing) {
+        const field = root.activeElement;
+        if (!(field && field.closest && field.closest("#main") && /^(INPUT|SELECT|TEXTAREA)$/.test(field.tagName))) render();
+      }
       if ($("drawer").classList.contains("open") && tab === "coll" && !editing && !root.activeElement && s.collections.recording) render();
       if ($("drawer").classList.contains("open") && !editing && (tab === "bp" || tab === "rules" || tab === "map" || tab === "scripts") && !root.activeElement) render();
     } catch (e) {          // mitmweb restarting, stopped or frozen: say so after two misses, keep trying

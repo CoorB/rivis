@@ -310,6 +310,17 @@ class UiSmoke(UiBase):
         self.panel.ok("add", {"rule": {"name": "elsewhere", "action": "block", "match": "/x"}})
         wait_for(lambda: "elsewhere" in self.panel_text(), 8, 0.3, "open list refreshed")
 
+    def test_open_network_tab_tracks_cli_profile_and_packet_loss(self):
+        page = self.open()
+        page.locator("#fab").click()
+        page.locator("button[data-t=net]").click()
+        self.panel.ok("profile", {"id": "3g-urban", "match": "cli-set"})
+        wait_for(lambda: page.locator('[data-prof="3g-urban"]').get_attribute("class").find("on") >= 0,
+                 8, 0.3, "CLI profile shown in open Network tab")
+        self.reset_state(throttle="off", throttle_match="lossy", loss=20)
+        wait_for(lambda: "Packet loss is active: 20%" in self.panel_text(), 8, 0.3,
+                 "CLI packet loss shown in open Network tab")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

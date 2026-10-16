@@ -1284,7 +1284,7 @@ class ProxyPanel:
                 f.resume()
             ctx.master.view.update([f])
         elif op == "profile":
-            pid = a.get("id", "off")
+            pid = a.get("id", cfg.get("throttle", "off"))
             if pid not in {p["id"] for p in PROFILES}:
                 raise PanelError("unknown profile")
             cfg["throttle"] = pid

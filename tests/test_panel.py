@@ -486,6 +486,15 @@ class Ops(LiveCase):
         self.bad("tls_update", {"list": "other", "action": "add", "pattern": "x.test"}, "list must")
         self.bad("tls_update", {"list": "allow", "action": "replace", "pattern": "x.test"}, "action must")
 
+    def test_scope_only_profile_update_preserves_current_cli_profile(self):
+        self.panel.ok("profile", {"id": "3g-urban", "match": "old"})
+        cfg = self.inst.cfg()
+        cfg["throttle"] = "lte-congested"
+        self.inst.write_cfg(cfg)
+        self.panel.ok("profile", {"match": "new-scope"})
+        state = self.panel.state()
+        self.assertEqual((state["throttle"], state["throttle_match"]), ("lte-congested", "new-scope"))
+
     # -- viewers -------------------------------------------------------------------------------------
     def test_viewer_ops(self):
         self.fetch("/jwt/body")
