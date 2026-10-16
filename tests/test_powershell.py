@@ -56,6 +56,14 @@ class PowerShellSource(unittest.TestCase):
         self.assertIn('-Force', stop)
         self.assertIn('Ports-Free', stop)
 
+    def test_stop_only_targets_mitmweb_owned_by_this_state_root(self):
+        ownership = self.src[self.src.index('function Test-OurMitmweb'):self.src.index('function Ensure-Rules')]
+        stop = self.src[self.src.index('  "stop" {'):self.src.index('  "ui" {')]
+        self.assertIn('$process.ProcessName -eq "mitmweb"', ownership)
+        self.assertIn('proxy_auth_token_file=$TokenPath', ownership)
+        self.assertGreaterEqual(stop.count('Our-Listening-Pids'), 2)
+        self.assertNotIn('Listening-Pids @', stop.replace('Our-Listening-Pids @', ''))
+
 
 @unittest.skipUnless(HAVE_PWSH, NO_PWSH)
 class Parse(unittest.TestCase):

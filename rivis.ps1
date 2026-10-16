@@ -262,6 +262,23 @@ function Listening-Pids([int[]]$ports) {
   return @($pids | Where-Object { $_ } | Sort-Object -Unique)
 }
 
+function Test-OurMitmweb([int]$ProcessId) {
+  $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+  if (-not $process -or -not ($process.ProcessName -eq "mitmweb")) { return $false }
+  $commandLine = ""
+  if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+    $record = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    if ($record) { $commandLine = [string]$record.CommandLine }
+  } elseif (Get-Command ps -ErrorAction SilentlyContinue) {
+    $commandLine = [string](& ps -ww -o args= -p $ProcessId 2>$null)
+  }
+  return $commandLine.Contains("proxy_auth_token_file=$TokenPath")
+}
+
+function Our-Listening-Pids([int[]]$ports) {
+  return @(Listening-Pids $ports | Where-Object { Test-OurMitmweb ([int]$_) })
+}
+
 function Ensure-Rules {
   Migrate-Legacy
   foreach ($dir in @($StateRoot,$ProjectState,(Join-Path $ProjectState "mocks"),(Join-Path $ProjectState "collections"),(Join-Path $ProjectState "sessions"),(Join-Path $ProjectState "scripts"),(Join-Path $StateRoot "profiles"))) {
@@ -556,21 +573,15 @@ switch ($Command) {
   "stop" {
     $stopped = 0
     $stoppedPids = @()
-    foreach ($ownerPid in @(Listening-Pids @([int]$Port,[int]$WebPort))) {
-      $process = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
-      if ($process -and $process.ProcessName -eq "mitmweb") {
-        try { Stop-Process -Id $ownerPid -ErrorAction Stop; $stoppedPids += $ownerPid; $stopped++ }
-        catch { Die "could not stop mitmweb pid ${ownerPid}: $($_.Exception.Message)" }
-      }
+    foreach ($ownerPid in @(Our-Listening-Pids @([int]$Port,[int]$WebPort))) {
+      try { Stop-Process -Id $ownerPid -ErrorAction Stop; $stoppedPids += $ownerPid; $stopped++ }
+      catch { Die "could not stop mitmweb pid ${ownerPid}: $($_.Exception.Message)" }
     }
     if ($stopped) {
       try { Wait-Process -Id $stoppedPids -Timeout 10 -ErrorAction Stop }
       catch {
-        foreach ($ownerPid in @(Listening-Pids @([int]$Port,[int]$WebPort))) {
-          $process = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
-          if ($process -and $process.ProcessName -eq "mitmweb") {
-            Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
-          }
+        foreach ($ownerPid in @(Our-Listening-Pids @([int]$Port,[int]$WebPort))) {
+          Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
         }
       }
       for ($i = 0; $i -lt 20 -and -not (Ports-Free @([int]$Port,[int]$WebPort)); $i++) {
