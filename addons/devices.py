@@ -132,6 +132,41 @@ def android_devices(adb, want, state_root, proxy_port):
     return devices
 
 
+class Snapshot:
+    """The last result of a slow check (adb, xcrun, scutil, lsof), refreshed on a background thread.
+
+    Review R1: these ran on mitmproxy's event loop, so one slow `adb devices` (8 s timeout per command, several per
+    emulator) stalled every call through the proxy and the panel. get() never waits: it starts a refresh when the
+    value is older than max_age (one at a time) and returns (have_a_value, value) at once."""
+
+    def __init__(self, fn, max_age):
+        self.fn, self.max_age = fn, max_age
+        self.lock = threading.Lock()
+        self.value, self.at, self.have, self.busy = None, 0.0, False, False
+
+    def get(self):
+        with self.lock:
+            if not self.busy and time.time() - self.at >= self.max_age:
+                self.busy = True
+                threading.Thread(target=self._refresh, daemon=True).start()
+            return self.have, self.value
+
+    def invalidate(self):
+        with self.lock:
+            self.at = 0.0
+
+    def _refresh(self):
+        value, ok = None, False
+        try:
+            value, ok = self.fn(), True
+        except Exception:  # noqa: BLE001 - a failed check keeps the last good value; the next get() retries
+            pass
+        with self.lock:
+            if ok:
+                self.value, self.have = value, True
+            self.at, self.busy = time.time(), False
+
+
 class Jobs:
     """One setup job at a time; its output is kept for the tab to show."""
 

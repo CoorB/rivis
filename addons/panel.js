@@ -837,10 +837,10 @@
     if (tab === "dev" && !editing) renderDev($("main"));
   };
   const devLoop = () => { clearTimeout(devTimer); devLoop.fast = tab === "dev"; devTimer = setTimeout(async () => { await devRefresh(); devLoop(); },
-    tab === "dev" ? ((dev && dev.job && dev.job.running) ? 1500 : 4000) : 30000); };
+    tab === "dev" ? ((dev && dev.pending) ? 600 : (dev && dev.job && dev.job.running) ? 1500 : 4000) : 30000); };
   function renderDev(m) {
     if (!devLoop.fast) { devLoop.fast = true; devLoop(); }          // entering the tab: poll every few seconds
-    if (!dev) { m.innerHTML = '<p class="muted">Looking for simulators and emulators…</p>'; devRefresh(); return; }
+    if (!dev || dev.pending) { m.innerHTML = '<p class="muted">Looking for simulators and emulators…</p>'; if (!dev) devRefresh(); return; }
     if (dev.error) { m.innerHTML = `<p class="muted">${esc(dev.error)}</p>`; return; }
     const job = dev.job, running = !!(job && job.running);
     if (running || (job && devStarting && job.started * 1000 >= devStarting.at - 2000)) devStarting = null;  // the server has it now

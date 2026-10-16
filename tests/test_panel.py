@@ -258,7 +258,8 @@ class Ops(LiveCase):
                 self.assertIn("exp=1", text, fmt)
 
     def test_devices_tab_lists_and_runs_the_cli_as_one_background_job(self):
-        st = self.panel.ok("devices", {})
+        st = wait_for(lambda: (lambda d: None if d.get("pending") else d)(self.panel.ok("devices", {})), 20, 0.3,
+                      "the background device check")
         self.assertIn("ios", st)
         self.assertIsNone(st["android"])                                  # hermetic env: no adb
         self.bad("device_setup", {"platform": "ios", "target": "../x"}, "udid")
@@ -805,6 +806,48 @@ class MalformedInput(LiveCase):
             for value in (5, ["x"], {"a": 1}, True):
                 code, doc, _ = self.panel.post(op, {key: value, "request": True})
                 self.assertEqual(code, 400, "%s %s=%r -> %s" % (op, key, value, code))
+
+
+class SlowChecksNeverBlockTheProxy(LiveCase):
+    """Review R1: device status (adb, xcrun) and the Mac proxy check (scutil, lsof) ran on mitmproxy's event loop. With a
+    slow adb, an unrelated call through the proxy took 3.9 s instead of 0.02 s. Fakes on PATH: an adb whose `devices`
+    takes 3 s, and a scutil that takes 3 s."""
+    @classmethod
+    def make_instance(cls):
+        suite = Suite.get()
+        cls.fakedir = tempfile.mkdtemp(dir=suite.root, prefix="slow-")
+        for name, text in (("adb", '#!/bin/sh\n[ "$1" = devices ] && { /bin/sleep 3; printf "List of devices attached\\n"; }\nexit 0\n'),
+                           ("scutil", '#!/bin/sh\n/bin/sleep 3\nprintf "<dictionary> {\\n  HTTPEnable : 0\\n}\\n"\n')):
+            with open(os.path.join(cls.fakedir, name), "w") as fh:
+                fh.write(text)
+            os.chmod(os.path.join(cls.fakedir, name), 0o755)
+        path = ":".join([cls.fakedir, suite.shim, "/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin"])
+        return Instance(suite, cls.__name__.lower(), extra_env={"PATH": path, "ADB": os.path.join(cls.fakedir, "adb")})
+
+    def timed(self, fn, *a, **kw):
+        t = time.monotonic()
+        out = fn(*a, **kw)
+        return out, time.monotonic() - t
+
+    def test_a_slow_adb_never_delays_other_calls_or_the_panel(self):
+        st, took = self.timed(self.panel.ok, "devices", {})
+        self.assertLess(took, 1.0, "the devices request waited for adb")
+        self.assertTrue(st.get("pending"), st)                 # nothing known yet: the tab says "Looking for…"
+        r, took = self.timed(self.inst.fetch, self.up.url("/echo?during-adb=1"))
+        self.assertEqual(r.status, 200)
+        self.assertLess(took, 1.5, "a call through the proxy waited for adb")
+        st = wait_for(lambda: (lambda d: None if d.get("pending") else d)(self.panel.ok("devices", {})), 30, 0.3, "device check")
+        self.assertEqual(st["android"], [])
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS system proxy")
+    def test_a_slow_system_proxy_check_never_delays_other_calls_or_the_panel(self):
+        for _ in range(3):                                     # across a refresh (every 5 s), each one 3 s of scutil
+            _, took = self.timed(self.panel.state)
+            self.assertLess(took, 1.5, "the panel state waited for scutil")
+            r, took = self.timed(self.inst.fetch, self.up.url("/echo?during-scutil=1"))
+            self.assertEqual(r.status, 200)
+            self.assertLess(took, 1.5, "a call through the proxy waited for scutil")
+            time.sleep(2.5)
 
 
 if __name__ == "__main__":

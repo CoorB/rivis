@@ -164,7 +164,9 @@ def patch_mitmweb_js(source, warn=None):
 class ProxyPanel:
     def __init__(self):
         self._device_jobs = devices.Jobs()
-        self._sysproxy = (0.0, None, 0.0)       # (checked at, state, stale since) — see system_proxy_state
+        self._sysproxy_stale_since = 0.0        # see _system_proxy_check
+        self._sysproxy = devices.Snapshot(self._system_proxy_check, 5)       # off the event loop (review R1)
+        self._devices = devices.Snapshot(self._devices_check, 2)
         self.project_only = False
         self.show_dns = False
         self.focused_host = None
@@ -441,15 +443,19 @@ class ProxyPanel:
         return {"node": False, "node_message": "Scripting add-on is not loaded", "errors": {}}
 
     def system_proxy_state(self):
-        """The Mac's system proxy, as the iOS Simulator sees it (checked at most every 5 s).
+        """The Mac's system proxy, as the iOS Simulator sees it: the last background check (at most 5 s old)."""
+        if sys.platform != "darwin":
+            return None
+        return self._sysproxy.get()[1]
+
+    def _system_proxy_check(self):
+        """Runs on a background thread (scutil, lsof and possibly a 30 s net-reset must never block the proxy).
         A proxy app that quit (Proxyman, Charles…) can leave it on a dead loopback port: the Simulator and every Mac
         app lose the network. Still dead on the next check -> cleared with `<cli> net-reset --auto` (stale loopback
         entries only, never a live or a remote proxy). A LIVE other app is reported so the panel can name it."""
         import time
         now = time.time()
-        checked, cur, stale_since = self._sysproxy
-        if now - checked < 5 or sys.platform != "darwin":
-            return cur
+        stale_since = self._sysproxy_stale_since
         info = None
         try:
             txt = subprocess.run(["scutil", "--proxy"], capture_output=True, text=True, timeout=3).stdout
@@ -480,7 +486,7 @@ class ProxyPanel:
                 stale_since = now
         else:
             stale_since = 0.0
-        self._sysproxy = (now, info, stale_since)
+        self._sysproxy_stale_since = stale_since
         return info
 
     def retention_state(self):
@@ -1070,6 +1076,14 @@ class ProxyPanel:
         return ctx.options.listen_port or 8080
 
     def devices_state(self):
+        """The last background device check (never waits for adb/xcrun: review R1). pending = no answer yet."""
+        job = self._device_jobs.summary()
+        if job and job["ended"] and job["ended"] > self._devices.at:
+            self._devices.invalidate()                     # a setup just finished: look again
+        have, snap = self._devices.get()
+        return dict(snap if have else {"pending": True}, job=job)
+
+    def _devices_check(self):
         want = devices.ca_sha256(os.path.join(os.path.expanduser(ctx.options.confdir), "mitmproxy-ca-cert.pem"))
         pins = os.path.join(HERE, "android", "magisk.pins")
         version = ""
@@ -1081,7 +1095,7 @@ class ProxyPanel:
         adb = devices.adb_path()
         return {"ios": devices.ios_devices(want),
                 "android": devices.android_devices(adb, want, STATE_ROOT, self._proxy_port()),
-                "magisk": bool(version) and os.path.isdir(magisk), "job": self._device_jobs.summary()}
+                "magisk": bool(version) and os.path.isdir(magisk)}
 
     # ── actions ───────────────────────────────────────────────────────────────
     def act(self, op, a):

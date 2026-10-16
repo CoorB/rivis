@@ -95,6 +95,31 @@ class Commands(unittest.TestCase):
             with self.assertRaises(ValueError):
                 devices.setup_argv(platform, target)
 
+    def test_snapshot_never_waits_runs_one_refresh_at_a_time_and_keeps_the_last_good_value(self):
+        calls = []
+        def check():
+            calls.append(1)
+            time.sleep(0.3)
+            if len(calls) == 2:
+                raise OSError("adb went away")
+            return len(calls)
+        snap = devices.Snapshot(check, 0)
+        t = time.time()
+        self.assertEqual(snap.get(), (False, None))                       # nothing yet, and no waiting
+        self.assertEqual(snap.get(), (False, None))                       # the first refresh is still running
+        self.assertLess(time.time() - t, 0.1)
+        for _ in range(50):
+            if snap.get()[0]:
+                break
+            time.sleep(0.05)
+        self.assertEqual(snap.get()[1], 1)
+        for _ in range(50):                                               # the second (failing) refresh ends
+            if len(calls) >= 3:
+                break
+            time.sleep(0.05)
+        self.assertIn(snap.get()[1], (1, 3))                              # never None after a failed check
+        self.assertLessEqual(len(calls), 4)
+
     def test_one_job_at_a_time_and_output_is_kept(self):
         jobs = devices.Jobs()
         jobs.start(["/bin/sh", "-c", "echo one; sleep 1; echo two"], "test")
