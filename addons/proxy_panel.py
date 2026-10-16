@@ -336,6 +336,15 @@ class ProxyPanel:
             raise PanelError("bad mock name")
         return os.path.join(MOCK_DIR, name + ".json")
 
+    @staticmethod
+    def _servable_mock(r):
+        """A Map Local rule worth reopening: its file is one of this project's mocks and exists."""
+        f = r.get("file")
+        if not isinstance(f, str) or not f:
+            return False
+        real = os.path.realpath(os.path.expanduser(f))
+        return os.path.dirname(real) == os.path.realpath(MOCK_DIR) and os.path.isfile(real)
+
     # ── state for the drawer ──────────────────────────────────────────────────
     def _rules_outside(self, cfg):
         """Names of rules that read a file outside the project (allowed only because the user trusted it here)."""
@@ -1142,6 +1151,8 @@ class ProxyPanel:
                 except re.error:
                     matches = False
                 if r.get("action") == "map_local" and matches and r.get("method") in (None, "", f.request.method):
+                    if not self._servable_mock(r):   # an example/template rule whose file is missing or outside
+                        continue                     # the project would be switched on and serve nothing
                     r["enabled"] = True
                     self.save_cfg(cfg)
                     return {"name": r["name"], "existing": True}

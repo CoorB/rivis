@@ -305,6 +305,18 @@ class Ops(LiveCase):
         self.bad("maplocal_add", {"name": "manual", "host": "other.test", "path": "/x"}, "name exists")
         self.assertEqual(response.status, 218)
 
+    def test_mock_this_call_never_reopens_a_template_rule_without_a_mock_file(self):
+        # the NEO example rules carry 'productsummary-mock' → /Users/YOU/neo-mocks/…: reopening it would serve nothing
+        cfg = self.inst.cfg()
+        cfg["rules"].insert(0, {"name": "aaa-example", "enabled": False, "match": "/json/small", "action": "map_local",
+                                "file": "/Users/YOU/neo-mocks/small.json"})
+        self.inst.write_cfg(cfg)
+        self.fetch("/json/small?from=template")
+        made = self.panel.ok("mock", {"flow_id": self.flow_id("/json/small?from=template")})
+        self.assertNotEqual(made["name"], "aaa-example")
+        self.assertFalse(made.get("existing"), made)
+        self.assertFalse(next(r for r in self.rules() if r["name"] == "aaa-example")["enabled"])
+
     def test_maplocal_full_url_keeps_query_string(self):
         exact = self.up.url("/echo?x=1")
         self.panel.ok("maplocal_add", {"name": "query", "host": exact, "status": 219})

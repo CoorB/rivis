@@ -2209,7 +2209,9 @@
       group.setAttribute("aria-hidden", "true");
     }
   });
-  new MutationObserver(hideNativeExport).observe(document.body, { childList: true, subtree: true });
+  let exportCheck = 0;     // the call list mutates constantly under traffic: check at most once per frame
+  new MutationObserver(() => { if (!exportCheck) exportCheck = requestAnimationFrame(() => { exportCheck = 0; hideNativeExport(); }); })
+    .observe(document.body, { childList: true, subtree: true });
   hideNativeExport();
 
   // Scroll anchoring, like Proxyman: at the very top the newest calls come into view; once you scroll away, the rows
