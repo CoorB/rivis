@@ -1152,6 +1152,15 @@
   }
   const setAttr = (el, k, v) => { if (v === null) { if (el.hasAttribute(k)) el.removeAttribute(k); } else if (el.getAttribute(k) !== v) el.setAttribute(k, v); };
   function tagCells() {
+    tagRows();
+    const line = document.querySelector(".flow-detail section.response .first-line");   // status line colour in the details pane
+    if (line) { const m = line.textContent.match(/\b([1-5])\d\d\b/); setAttr(line, "data-s", m ? m[1] : null); }
+    paintURLs();
+    paintJSONBody();
+    footerLabels();
+  }
+  // Attributes only (never children), so it is cheap and does not re-trigger the row observer below.
+  function tagRows() {
     // host-only tunnel rows (not decrypted): attribute on the <tr> only (the path cell of a TCP flow reads "client ↔ server")
     document.querySelectorAll(".flow-table tbody tr").forEach((tr) => {
       const cell = tr.querySelector("td.col-path");
@@ -1183,11 +1192,6 @@
       }
       if (status) { const g = flow && (errors.has(flow.id) || String(flow.comment || "").split(" | ").includes("graphql:error")); setAttr(status, "data-gql-error", g ? "1" : "0"); setAttr(status, "title", g ? "GraphQL: the response body contains errors" : null); }
     });
-    const line = document.querySelector(".flow-detail section.response .first-line");   // status line colour in the details pane
-    if (line) { const m = line.textContent.match(/\b([1-5])\d\d\b/); setAttr(line, "data-s", m ? m[1] : null); }
-    paintURLs();
-    paintJSONBody();
-    footerLabels();
   }
   // mitmweb's status-bar badges are developer jargon ("regular@8094", "ssl_insecure"). Relabel through attributes + CSS; the React text stays.
   // mitmweb calls a request/response pair a "flow"; this tool says "call" everywhere
@@ -1305,8 +1309,14 @@
     if (w) { setAttr(DOC, "data-narrow", w < 520 ? "1" : null); setAttr(DOC, "data-wide", w > 640 ? "1" : null); setAttr(DOC, "data-midlist", w < 760 ? "1" : null); }
   };
   window.addEventListener("resize", () => { sizeBuckets(); placeBars(); });
-  new MutationObserver(() => { clearTimeout(tagCells._t); tagCells._t = setTimeout(() => { tagCells(); sizeBuckets(); placeBars(); }, 60); })
-    .observe(document.body, { childList: true, subtree: true, characterData: true });
+  // Rows the virtual list builds while scrolling must never paint unstyled (raw https:// URLs, no badges): style them
+  // right here, before the browser paints. This used to be a 60 ms debounce, which never fired while rows kept changing
+  // (scrolling, live traffic), so rows stayed raw until the next poll. The heavier rest runs at most once per frame.
+  let restQueued = 0;
+  new MutationObserver(() => {
+    tagRows();
+    if (!restQueued) restQueued = requestAnimationFrame(() => { restQueued = 0; tagCells(); sizeBuckets(); placeBars(); });
+  }).observe(document.body, { childList: true, subtree: true, characterData: true });
 
 
   // ───────────── Search bar: always visible, drives mitmweb's own list filter ─────────────

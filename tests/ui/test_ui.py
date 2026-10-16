@@ -148,6 +148,29 @@ class UiSmoke(UiBase):
             self.assertEqual(page.locator("text=mitmproxy has crashed").count(), 0)
         self.assertEqual(self.errors, [])
 
+    def test_rows_scrolled_into_view_are_styled_before_they_paint(self):
+        """Screen recording, 2026-10-16: rows the virtual list builds while scrolling showed raw (https:// URLs, no badges)
+        until the next poll, because the restyle was a 60 ms debounce that kept resetting while rows changed."""
+        self.many_flows(300)
+        page = self.open()
+        wait_for(lambda: page.locator(".flow-table tbody tr td.col-path").count() > 20, 15, 0.2, "rows rendered")
+        page.wait_for_timeout(1500)                                   # everything initially on screen is styled
+        worst = page.evaluate("""async () => {
+            const ft = document.querySelector('.flow-table'), frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+            let worst = 0;
+            for (let i = 0; i < 12; i++) {
+              ft.scrollTop += 640;
+              await frame(); await frame();                         // ~33 ms: well inside the old 60 ms debounce
+              const raw = [...ft.querySelectorAll('tbody tr')].filter((tr) => {
+                const p = tr.querySelector('td.col-path'), s = tr.querySelector('td.col-status');
+                return p && (!p.style.getPropertyValue('--hl') || (s && !s.hasAttribute('data-code')));
+              }).length;
+              worst = Math.max(worst, raw);
+            }
+            return worst; }""")
+        self.assertEqual(worst, 0, "%d rows were on screen unstyled right after a scroll" % worst)
+        self.assertEqual(self.errors, [])
+
     def test_scrolling_past_the_last_row_does_not_crash_the_list(self):
         """mitmweb compares the unclamped scrollTop with the clamped viewportTop it stored, so a scroll position past
         the last rendered row looped setState until React gave up (#185, "mitmproxy has crashed"). A list pane shorter
