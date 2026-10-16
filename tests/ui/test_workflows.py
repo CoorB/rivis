@@ -139,16 +139,16 @@ class Workflows(UiBase):
 
     def test_paused_get_offers_no_format_json_and_continue_says_unchanged(self):
         # L3: "Format JSON" was offered for "No body"; L1: an untouched Continue was labelled "edited"
-        self.fetch("/text?wfl=1")
+        self.fetch("/text?wfnobody=1")
         self.open()
-        self.breakpoint_from_call("wfl=1")
-        t, box = self.in_background("/text?wfl=1")
+        self.breakpoint_from_call("wfnobody=1")
+        t, box = self.in_background("/text?wfnobody=1")
         self.sheet()
         self.assertEqual(self.P("#pfmt").count(), 0, "Format JSON shown for a call with no body")
         self.P("#pcont").click()
         t.join(20)
         self.assertEqual(box["r"].status, 200)
-        comment = wait_for(lambda: self.inst.flow_for("/text?wfl=1").get("comment"), 10, 0.2, "comment")
+        comment = wait_for(lambda: self.inst.flow_for("/text?wfnobody=1").get("comment"), 10, 0.2, "comment")
         self.assertIn("continued unchanged", comment)
         self.assertEqual(self.errors, [])
 
