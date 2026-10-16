@@ -257,6 +257,11 @@ def har(doc):
         post = req.get("postData")
         if post and post.get("text"):
             post["text"] = text(post["text"], post.get("mimeType", ""))
+        if post and post.get("params"):              # form fields, as mitmproxy's HAR writer lists them
+            post["params"] = [{**p, "value": REDACTED if secret_key(p.get("name")) else p.get("value")}
+                              for p in post["params"] if isinstance(p, dict)]
+        if resp.get("redirectURL"):
+            resp["redirectURL"] = url(resp["redirectURL"])
         content = resp.get("content") or {}
         if content.get("text"):
             if content.get("encoding") == "base64":

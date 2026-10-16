@@ -1600,25 +1600,16 @@ class ProxyPanel:
                 if os.path.exists(pth):
                     os.remove(pth)
         elif op == "sess_har":
+            # Review R4: this went through the reduced collection format: no request headers or body, no port, zero
+            # timings, and calls without a response were dropped. A session is a capture of evidence, so it is
+            # exported from the complete saved flows by mitmproxy's own HAR writer (request headers and body, real
+            # port and timings, failed calls with their error), then redacted like every HAR unless secrets are asked for.
             from mitmproxy import io as mio
+            from mitmproxy.addons.savehar import SaveHar
             fpath, _ = self.sess_paths(a["name"])
             with open(fpath, "rb") as fh:
-                flows = [f for f in mio.FlowReader(fh).stream() if isinstance(f, http.HTTPFlow) and f.response]
-            entries = []
-            for f in flows:
-                raw = f.response.get_content(strict=False) or b""
-                try:
-                    body = {"text": raw.decode("utf-8")}
-                except UnicodeDecodeError:
-                    import base64
-                    body = {"b64": base64.b64encode(raw).decode()}
-                entries.append({"method": f.request.method, "scheme": f.request.scheme, "host": f.request.pretty_host,
-                                "path": f.request.path.split("?")[0],
-                                "query": f.request.path.split("?", 1)[1] if "?" in f.request.path else "",
-                                "status": f.response.status_code,
-                                "headers": [[k, v] for k, v in f.response.headers.items(multi=True)],
-                                "recorded_at": f.request.timestamp_start, **body})
-            return self._har_reply(self.to_har({"entries": entries}), a)
+                flows = [f for f in mio.FlowReader(fh).stream() if isinstance(f, http.HTTPFlow)]
+            return self._har_reply(SaveHar().make_har(flows), a)
         # ── collections ──
         elif op == "coll_record":
             name = (a.get("name") or "").strip()

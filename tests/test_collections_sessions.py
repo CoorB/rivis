@@ -9,6 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import LiveCase, Instance, wait_for
+import harness
 import upstream
 
 
@@ -309,6 +310,42 @@ class Sessions(LiveCase):
         raw = self.panel.ok("sess_har", {"name": "sec", "include_secrets": True})
         self.assertFalse(raw["redacted"])
         self.assertIn(upstream.JWT_FRESH, json.dumps(raw["har"]))
+
+    def test_har_export_keeps_the_evidence(self):
+        """Review R4: the session HAR had no request headers or body, no port, zero timings, and no failed calls."""
+        self.fetch("/echo?r4=post", method="POST", data='{"token":"s3cr3t","note":"kept"}',
+                   headers=[("Content-Type", "application/json"), ("Authorization", "Bearer " + upstream.JWT_FRESH),
+                            ("Cookie", "session=abc123"), ("X-Dup", "one"), ("X-Dup", "two")])
+        self.fetch("/echo?r4=form", method="POST", data="user=qa&password=hunter2",
+                   headers=[("Content-Type", "application/x-www-form-urlencoded")])
+        self.fetch("/json/gzip")
+        gone = "http://127.0.0.1:%d/r4-gone" % harness.free_port()
+        self.inst.fetch(gone)
+        self.panel.ok("sess_save", {"name": "r4"})
+        raw = self.panel.ok("sess_har", {"name": "r4", "include_secrets": True})["har"]["log"]["entries"]
+        post = next(e for e in raw if "r4=post" in e["request"]["url"])
+        port = self.up.url("/").rsplit(":", 1)[1].split("/")[0]
+        self.assertIn(":%s/echo?r4=post" % port, post["request"]["url"])                    # the real port
+        self.assertEqual(post["request"]["method"], "POST")
+        self.assertEqual(json.loads(post["request"]["postData"]["text"]), {"token": "s3cr3t", "note": "kept"})
+        self.assertEqual([h["value"] for h in post["request"]["headers"] if h["name"].lower() == "x-dup"], ["one", "two"])
+        self.assertGreater(post["time"], 0)
+        gz = next(e for e in raw if e["request"]["url"].endswith("/json/gzip"))
+        self.assertIsInstance(json.loads(gz["response"]["content"]["text"]), dict)          # decoded, not gzip bytes
+        failed = [e for e in raw if e["request"]["url"] == gone]
+        self.assertEqual(len(failed), 1, "a call that never got an answer was dropped")
+        self.assertTrue(failed[0]["response"].get("_error") or failed[0]["response"]["status"] in (0, 502), failed[0])
+        # redacted by default: the new request fields too
+        doc = self.panel.ok("sess_har", {"name": "r4"})
+        self.assertTrue(doc["redacted"])
+        dumped = json.dumps(doc["har"])
+        for secret in (upstream.JWT_FRESH, "s3cr3t", "abc123", "hunter2"):
+            self.assertNotIn(secret, dumped)
+        post = next(e for e in doc["har"]["log"]["entries"] if "r4=post" in e["request"]["url"])
+        self.assertEqual(json.loads(post["request"]["postData"]["text"])["note"], "kept")       # only secrets go
+        form = next(e for e in doc["har"]["log"]["entries"] if "r4=form" in e["request"]["url"])
+        params = {p["name"]: p["value"] for p in form["request"]["postData"]["params"]}   # the writer lists form fields
+        self.assertEqual((params["user"], params["password"]), ("qa", "<redacted>"))
 
     def test_a_planted_session_meta_file_cannot_inject_markup(self):
         """F-15: /proxy/api/state returns only typed fields of sessions/*.meta.json."""
