@@ -288,3 +288,43 @@ class SummarizeState(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NightQaDoctorFalseAlarms(unittest.TestCase):
+    """Night QA 2026-10-16: doctor exited 1 on healthy first runs for reasons that were not true."""
+
+    def test_proxyman_is_matched_on_the_executable_not_any_command_line(self):
+        ps = ("/bin/zsh\n/usr/bin/grep\n/Library/PrivilegedHelperTools/com.proxyman.NSProxy.HelperTool\n"
+              "/Users/me/Downloads/notes-about-Proxyman/editor\n")
+        self.assertEqual(doctor.running_proxy_apps(ps), [])
+        self.assertEqual(doctor.running_proxy_apps(ps + "/Applications/Proxyman.app/Contents/MacOS/Proxyman\n"), ["Proxyman"])
+        self.assertEqual(doctor.running_proxy_apps("/Applications/FRTMProxy.app/Contents/MacOS/FRTMProxy\n"), ["FRTMProxy"])
+
+    def test_node_is_looked_for_where_the_script_host_looks(self):
+        src = open(os.path.join(os.path.dirname(doctor.__file__), "proxy_scripts.py")).read()
+        start = src.index("NODE_CANDIDATES = (")
+        block = src[start:src.index(")\n", start) + 2]
+        scope = {"os": os}
+        exec(block, scope)
+        self.assertEqual(tuple(scope["NODE_CANDIDATES"]), doctor.NODE_CANDIDATES)
+        with mock.patch.object(doctor, "which", return_value=None), \
+                mock.patch.object(doctor.os.path, "isfile", side_effect=lambda p: p == "/usr/local/bin/node"), \
+                mock.patch.object(doctor.os, "access", return_value=True):
+            self.assertEqual(doctor.find_node(), "/usr/local/bin/node")
+
+    def test_an_unreachable_first_address_does_not_hide_a_working_second_one(self):
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        self.addCleanup(srv.close)
+        dead = socket.socket()
+        dead.bind(("127.0.0.1", 0))
+        dead_port = dead.getsockname()[1]
+        dead.close()                                      # nothing listens there: refused
+        answers = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", dead_port)),
+                   (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", srv.getsockname()[1]))]
+        with mock.patch.object(doctor.socket, "getaddrinfo", return_value=answers), \
+                mock.patch.object(doctor.ssl, "create_default_context", side_effect=doctor.ssl.SSLError("stop here")):
+            cat = doctor._probe_host("dual.example", 443)
+        self.assertNotEqual(cat, doctor.classify_network_failure("tcp", "ConnectionRefusedError", "refused"))

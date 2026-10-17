@@ -269,7 +269,7 @@ def check_mitmproxy_node(rep):
             else:
                 rep.add(sec, WARN, "mitmproxy version unknown", "at %s; --version did not report a version" % mitm)
 
-    node = os.environ.get("%s_NODE" % PRODUCT["env_prefix"]) or which("node")
+    node = find_node()
     if not node:
         rep.add(sec, INFO, "Node.js not installed",
                 "JavaScript scripts are disabled (Python scripts still work)",
@@ -515,20 +515,44 @@ def check_system_proxy(rep):
                 "`%s net-reset` if the simulator has no capture" % PRODUCT["cli"])
 
 
+PROXY_APPS = {"proxyman": "Proxyman", "frtmproxy": "FRTMProxy"}
+
+
+def running_proxy_apps(ps_comm):
+    """Names of other proxy apps among `ps -o comm=` lines (full executable paths): matched on the file name."""
+    return [PROXY_APPS[os.path.basename(line.strip()).lower()] for line in ps_comm.splitlines()
+            if os.path.basename(line.strip()).lower() in PROXY_APPS]
+
+
+# the same places addons/proxy_scripts.py find_node() looks, so doctor never says "disabled" while scripts run
+NODE_CANDIDATES = (
+    "/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node",
+    os.path.expanduser("~/.nvm/versions/node/current/bin/node"),
+    r"C:\Program Files\nodejs\node.exe", r"C:\Program Files (x86)\nodejs\node.exe",
+)
+
+
+def find_node():
+    import glob
+    override = os.environ.get("%s_NODE" % PRODUCT["env_prefix"])
+    candidates = ([override] if override else []) + [which("node")] + list(NODE_CANDIDATES)
+    candidates += sorted(glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/node")), reverse=True)
+    if os.environ.get("NVM_HOME"):
+        candidates.append(os.path.join(os.environ["NVM_HOME"], "node.exe"))
+    for path in candidates:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+
 def check_other_tools(rep):
     if not MAC:
         return
     sec = "Other proxy apps"
-    rc, out, _ = run(["pgrep", "-l", "-f", "Proxyman|FRTMProxy"])
-    found = []
-    if rc == 0:
-        for line in out.splitlines():
-            low = line.lower()
-            if "proxyman" in low:
-                found.append("Proxyman")
-            elif "frtm" in low:
-                found.append("FRTMProxy")
-    found = sorted(set(found))
+    # by executable name: `pgrep -f` also matched any command line that merely mentions Proxyman (a grep, an editor,
+    # Proxyman's leftover helper), so doctor warned on Macs where Proxyman was not running (night QA lane B, F2)
+    rc, out, _ = run(["ps", "-A", "-o", "comm="])
+    found = sorted(set(running_proxy_apps(out))) if rc == 0 else []
     if not found:
         rep.add(sec, OK, "no Proxyman / FRTMProxy running")
     else:
@@ -837,18 +861,23 @@ def _probe_host(host, port=443):
         return classify_network_failure("dns", type(e).__name__, str(e))
     except OSError as e:
         return classify_network_failure("dns", type(e).__name__, str(e))
-    # TCP
-    family, _, _, _, sockaddr = addrs[0]
-    try:
-        sock = socket.socket(family, socket.SOCK_STREAM)
-        sock.settimeout(NET_TIMEOUT)
-        sock.connect(sockaddr)
-    except (socket.timeout, ConnectionRefusedError, OSError) as e:
+    # TCP: every resolved address in turn (an unreachable IPv6 answer first must not hide a working IPv4 one)
+    sock, err, seen = None, None, set()
+    for family, _, _, _, sockaddr in addrs:
+        if sockaddr[:2] in seen:
+            continue
+        seen.add(sockaddr[:2])
+        s = socket.socket(family, socket.SOCK_STREAM)
+        s.settimeout(NET_TIMEOUT)
         try:
-            sock.close()
-        except Exception:
-            pass
-        return classify_network_failure("tcp", type(e).__name__, str(e))
+            s.connect(sockaddr)
+            sock = s
+            break
+        except (socket.timeout, ConnectionRefusedError, OSError) as e:
+            err = e
+            s.close()
+    if sock is None:
+        return classify_network_failure("tcp", type(err).__name__, str(err))
     # TLS (no credentials ever sent — handshake only)
     try:
         ctx = ssl.create_default_context()
