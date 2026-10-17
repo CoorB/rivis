@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
@@ -47,6 +48,24 @@ class TrustedByThisMac(unittest.TestCase):
                 body = fh.read()
                 self.assertIn(ex.read().strip(), body)
             self.assertEqual(oct(os.stat(out).st_mode & 0o777), "0o600")
+
+
+class RootStoreAsMacOSTrustsIt(unittest.TestCase):
+    """Night QA lane C2: every certificate in SystemRootCertificates was trusted, including Apple's code-signing-only
+    root, which macOS does not trust for SSL. Roots now follow the system trust settings and admin/user 'Never Trust'."""
+
+    def test_roots_follow_system_settings_and_explicit_distrust(self):
+        pems = {h: "-----BEGIN CERTIFICATE-----\n%s\n-----END CERTIFICATE-----" % h for h in ("AA", "BB", "CC", "DD")}
+        listing = "".join("SHA-1 hash: %s\n%s\n" % (h, p) for h, p in pems.items())
+        ssl_deny = [{"kSecTrustSettingsPolicyName": "sslServer", "kSecTrustSettingsResult": 3}]
+        code_only = [{"kSecTrustSettingsPolicyName": "CodeSigning", "kSecTrustSettingsResult": 3}]
+        domains = {"-s": {"AA": [], "BB": [], "CC": []},          # DD: not listed (like the code-signing root)
+                   "-d": {"BB": ssl_deny}, "": {"CC": code_only}}
+        fake = mock.Mock(return_value=mock.Mock(stdout=listing, returncode=0))
+        with mock.patch.object(system_trust, "_security", fake), \
+                mock.patch.object(system_trust, "_trust_settings", side_effect=lambda flag, wd: domains[flag]):
+            got = system_trust.system_roots("/nonexistent")
+        self.assertEqual(got, [pems["AA"], pems["CC"]])
 
 
 class CorporateRootTrusted(unittest.TestCase):

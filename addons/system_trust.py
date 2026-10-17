@@ -3,7 +3,8 @@
 mitmproxy checks servers against its own bundled root list (certifi), not the macOS keychain. On a network that
 inspects TLS (a corporate root pushed by MDM or installed by IT), every HTTPS call through Rivis then failed with
 "certificate verify failed", while Safari, curl and Proxyman worked. This builds the list the Mac itself uses:
-  - the macOS root store (SystemRootCertificates.keychain), and
+  - the macOS root store (SystemRootCertificates.keychain) as the system trust settings allow it for SSL, minus roots an
+    admin or the user set to "Never Trust", and
   - every certificate in the System and user keychains that macOS trusts for SSL (`security verify-cert -p ssl`,
     local only), i.e. exactly what IT, MDM or the user marked as trusted — nothing the Mac does not trust.
 Extra PEM files given on the command line are added as they are (an explicit choice by the person starting Rivis).
@@ -57,11 +58,61 @@ def added_anchors(workdir, keychains=None):
     return kept
 
 
-def build(out, extras=()):
-    roots = PEM.findall(_security("find-certificate", "-a", "-p", SYSTEM_ROOTS).stdout)
-    if len(roots) < 20:                       # not macOS, or the root store could not be read: keep mitmproxy's list
+SSL_POLICIES = {"sslServer", "basicX509", None}
+TRUST_ROOT, TRUST_AS_ROOT, DENY = 1, 2, 3
+
+
+def _trust_settings(domain_flag, workdir):
+    """{SHA-1: [settings]} for one trust-settings domain ("-s" system, "-d" admin, "" user), or None if unreadable."""
+    path = os.path.join(workdir, "ts%s.plist" % domain_flag.strip("-"))
+    args = ["trust-settings-export"] + ([domain_flag] if domain_flag else []) + [path]
+    if _security(*args).returncode != 0:
         return None
+    try:
+        import plistlib
+        with open(path, "rb") as fh:
+            return {k.upper(): (v.get("trustSettings") or []) for k, v in plistlib.load(fh).get("trustList", {}).items()}
+    except (OSError, ValueError):
+        return None
+
+
+def _ssl_verdict(settings):
+    """True / False for SSL from one domain's settings of a certificate (an empty list means 'trust for everything')."""
+    if not settings:
+        return True
+    ssl = [t for t in settings if t.get("kSecTrustSettingsPolicyName") in SSL_POLICIES]
+    if any(t.get("kSecTrustSettingsResult", TRUST_ROOT) == DENY for t in ssl):
+        return False
+    return any(t.get("kSecTrustSettingsResult", TRUST_ROOT) in (TRUST_ROOT, TRUST_AS_ROOT) for t in ssl)
+
+
+def _ssl_denied(settings):
+    """An admin or user 'Never Trust' for SSL (settings for other policies, e.g. code signing, do not count)."""
+    return any(t.get("kSecTrustSettingsPolicyName") in SSL_POLICIES and t.get("kSecTrustSettingsResult", TRUST_ROOT) == DENY
+               for t in settings or [])
+
+
+def system_roots(workdir):
+    """Apple's root store as macOS trusts it for SSL: roots the system trust settings list (not, e.g., Apple's
+    code-signing-only root), minus any root an admin or the user set to 'Never Trust' for SSL."""
+    hashed = HASHED.findall(_security("find-certificate", "-a", "-Z", "-p", SYSTEM_ROOTS).stdout)
+    system = _trust_settings("-s", workdir)
+    overrides = [d for d in (_trust_settings("-d", workdir), _trust_settings("", workdir)) if d]
+    roots = []
+    for sha1, pem in hashed:
+        if system is not None and (sha1 not in system or not _ssl_verdict(system[sha1])):
+            continue
+        if any(sha1 in d and _ssl_denied(d[sha1]) for d in overrides):
+            continue
+        roots.append(pem)
+    return roots
+
+
+def build(out, extras=()):
     with tempfile.TemporaryDirectory() as workdir:
+        roots = system_roots(workdir)
+        if len(roots) < 20:                   # not macOS, or the root store could not be read: keep mitmproxy's list
+            return None
         added = added_anchors(workdir)
     for extra in extras:
         with open(extra) as fh:
