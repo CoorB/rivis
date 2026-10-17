@@ -49,12 +49,10 @@ class Status(unittest.TestCase):
             {"udid": UDID, "name": "iPhone 17", "state": "Booted"},
             {"udid": OTHER, "name": "iPad", "state": "Booted"},
             {"udid": "../evil", "name": "x", "state": "Booted"}]}}
-        real = devices._run
-        with mock.patch.object(devices, "_run", side_effect=lambda argv, timeout=None:
-                               real(argv) if argv[0] == "/usr/bin/sqlite3" else (0, json.dumps(listing))):
+        with mock.patch.object(devices, "_simctl", return_value=(0, json.dumps(listing), "")):
             got = devices.ios_devices(self.want)
         self.assertEqual([(d["name"], d["ready"], d["os"]) for d in got], [("iPad", False, "iOS 26.0"), ("iPhone 17", True, "iOS 26.0")])
-        with mock.patch.object(devices, "_run", return_value=(None, "")):
+        with mock.patch.object(devices, "_simctl", return_value=("missing", "", "")):
             self.assertIsNone(devices.ios_devices(self.want))          # no Xcode tools
 
     def test_android_ready_needs_the_recorded_ca_and_the_proxy(self):
@@ -150,3 +148,49 @@ class Commands(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class SimctlProblems(unittest.TestCase):
+    """Night QA lane A: every `xcrun simctl` failure was shown as 'Xcode command-line tools are not installed', even
+    with Xcode installed (license not accepted, Command Line Tools selected, a hung CoreSimulator)."""
+
+    def status(self, rc=0, err="", exc=None):
+        import subprocess as sp
+        def fake(*a, **k):
+            if exc:
+                raise exc
+            return sp.CompletedProcess(a[0], rc, '{"devices": {}}' if rc == 0 else "", err)
+        with mock.patch.object(devices.subprocess, "run", side_effect=fake):
+            return devices.ios_status("")
+
+    def test_each_failure_says_what_to_do(self):
+        import subprocess as sp
+        self.assertIn("license", self.status(69, "You have not agreed to the Xcode license agreements.")[1])
+        self.assertIn("xcode-select -s", self.status(72, 'xcrun: error: unable to find utility "simctl", not a developer tool or in PATH')[1])
+        self.assertIn("Install Xcode", self.status(exc=FileNotFoundError("xcrun"))[1])
+        self.assertIn("did not answer", self.status(exc=sp.TimeoutExpired("xcrun", 8))[1])
+        self.assertIn("CoreSimulatorService connection", self.status(1, "An error was encountered processing the command"
+                                                                     " (CoreSimulatorService connection interrupted)")[1])
+        self.assertEqual(self.status(0), ([], None))
+
+
+class AdbPathIsAbsolute(unittest.TestCase):
+    def test_a_relative_platform_tools_adb_in_the_working_directory_is_never_run(self):
+        # Night QA A8: with no SDK variable set, adb_path() returned "platform-tools/adb" relative to the directory
+        # Rivis was started in (often ~/Downloads) and the Devices tab executed it.
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "platform-tools"))
+            planted = os.path.join(d, "platform-tools", "adb")
+            with open(planted, "w") as fh:
+                fh.write("#!/bin/sh\nexit 0\n")
+            os.chmod(planted, 0o755)
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                env = {k: v for k, v in os.environ.items() if k not in ("ADB", "ANDROID_SDK_ROOT", "ANDROID_HOME")}
+                with mock.patch.dict(os.environ, env, clear=True):
+                    found = devices.adb_path()
+            finally:
+                os.chdir(cwd)
+            self.assertNotEqual(found, "platform-tools/adb")
+            self.assertTrue(found is None or os.path.isabs(found), found)

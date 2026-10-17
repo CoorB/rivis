@@ -277,6 +277,19 @@ class PinKeepsTheName(LiveCase):
         self.assertEqual(req.get("pretty_host"), "c.rebind.rivis-test", req)
 
 
+class SecondStart(LiveCase):
+    """Night QA lane B F4: the installer offers to start Rivis, then the quickstart says `rivis start --background`;
+    the second start failed with 'port already taken: mitmweb … run: rivis stop'. It now says it is running, exit 0."""
+
+    def test_a_second_start_reports_the_running_instance_and_leaves_it_alone(self):
+        pids_before = group_pids(self.inst.proc.pid)
+        cp = self.suite.rivis("start", "--background", "--no-open", "--no-ios", home=self.inst.home, env=dict(self.inst.env))
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertIn("already running", cp.stdout)
+        self.assertEqual(group_pids(self.inst.proc.pid), pids_before)
+        self.assertEqual(self.fetch("/json/small?ss=1").status, 200)
+
+
 class FreshCa(LiveCase):
     """The CA the CLI generates itself on first start (no pre-seeded copy)."""
     INSTANCE_KW = {"fresh_ca": True}

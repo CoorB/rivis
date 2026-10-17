@@ -581,6 +581,25 @@ exit 0
                             "a manual net-reset still reports the failure")
 
 
+class AdbDiscovery(CliBase):
+    """Night QA A7: Devices found adb under ANDROID_SDK_ROOT, but its Set up ran `rivis android on`, whose CLI only
+    looked on PATH and in ~/Library/Android/sdk — 'adb not found'. The CLI now looks where the panel looks."""
+
+    def test_cli_uses_adb_from_android_sdk_root(self):
+        sdk = os.path.join(self.home, "custom-sdk")
+        os.makedirs(os.path.join(sdk, "platform-tools"))
+        log = os.path.join(self.home, "adb.log")
+        adb = os.path.join(sdk, "platform-tools", "adb")
+        with open(adb, "w") as fh:
+            fh.write('#!/bin/sh\necho "$@" >> "%s"\necho "List of devices attached"\n' % log)
+        os.chmod(adb, 0o755)
+        env = dict(self.env, ANDROID_SDK_ROOT=sdk, PATH="/usr/bin:/bin:/usr/sbin:/sbin:" + self.suite.root + "/shim")
+        env.pop("ADB", None)
+        r = self.cli("android", "on", "--all", env=env)
+        self.assertNotIn("adb not found", r.stdout + r.stderr)
+        self.assertTrue(os.path.exists(log), r.stdout + r.stderr)
+
+
 class NoCommandLineTools(CliBase):
     """Night review A2: on a Mac without Apple's Command Line Tools, /usr/bin/python3 only pops an install dialog, and
     every rivis command failed with shell errors. Both the CLI and the installer now say what to do, up front."""
@@ -608,6 +627,17 @@ class NoCommandLineTools(CliBase):
         self.assertIn("xcode-select --install", cp.stderr)
         self.assertEqual(sorted(os.listdir(self.home)), before)
 
+    def test_uninstall_is_never_blocked_and_developer_dir_is_honoured(self):
+        # night QA lane C3: uninstall must work after the tools are gone; DEVELOPER_DIR is what xcrun uses first
+        env = self.no_clt_env()
+        cp = self.suite.run(["/bin/bash", os.path.join(harness.REPO, "install", "install.sh"), "--uninstall", "--dry-run"],
+                            home=self.home, env=env, timeout=60)
+        self.assertNotIn("xcode-select --install", cp.stderr)
+        dev = os.path.join(self.home, "dev")
+        os.makedirs(os.path.join(dev, "usr", "bin"))
+        os.symlink("/usr/bin/python3", os.path.join(dev, "usr", "bin", "python3"))
+        self.ok("--version", env=dict(env, DEVELOPER_DIR=dev))
+
     def test_with_the_tools_present_nothing_changes(self):
         self.ok("--version")
 
@@ -622,6 +652,27 @@ class StartArgv(CliBase):
         lines = [l for l in self.suite.shim_log("mitm-argv.log").splitlines() if l.startswith("mitmweb ")]
         self.assertEqual(len(lines), 1, "rivis start did not run mitmweb once: %s %s" % (r.stdout, r.stderr))
         return lines[0], r
+
+    def test_without_an_approved_redirector_start_leaves_ios_capture_off_and_says_how(self):
+        # Night QA A15: an Android-only tester skips the Redirector in the installer, then `rivis start` asked for
+        # local capture anyway (macOS prompts / errors). Unknown states (no listing) keep the old behaviour.
+        sysext = os.path.join(self.suite.shimlog, "sysext")
+        try:
+            for listing, local in (("0 extension(s)\n", False),
+                                   ("*\t\tS8XHQB96PW\torg.mitmproxy.macos-redirector (12.2.3/12.2.3)\t"
+                                    "org.mitmproxy.macos-redirector\t[activated waiting for user]\n", False),
+                                   ("", True)):
+                with open(sysext, "w") as fh:
+                    fh.write(listing)
+                line, r = self.start_argv()
+                self.assertEqual("local:" in line, local, (listing, line))
+                if not local:
+                    self.assertIn("iOS Simulator capture is off", r.stdout)
+        finally:
+            os.remove(sysext)
+        line, r = self.start_argv()                           # approved (the shim's default): capture as before
+        self.assertIn("--mode local:CoreSimulator", line)
+        self.assertNotIn("capture is off", r.stdout)
 
     def test_binds_loopback_only_and_uses_private_ca_dir(self):
         line, r = self.start_argv("--no-ios")
@@ -685,6 +736,9 @@ class StartArgv(CliBase):
             r = self.suite.rivis("start", "--no-open", "--no-ios", home=self.home, env=env)
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("already taken", r.stderr)
+            # night QA: the hint was "a previous rivis? run: rivis stop", which cannot stop another program
+            self.assertNotIn("%s stop" % "rivis", r.stderr)
+            self.assertIn("RIVIS_PORT=", r.stderr)
         finally:
             s.close()
 

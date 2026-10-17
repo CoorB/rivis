@@ -98,6 +98,14 @@ esac
 [ -f "$SHIM_LOG/osascript-fail" ] && { cat "$SHIM_LOG/osascript-fail" >&2; exit 1; }
 cat "$SHIM_LOG/osascript-out" 2>/dev/null; exit 0
 ''',
+    # the Mitmproxy Redirector is approved unless a test writes its own listing to $SHIM_LOG/sysext
+    "systemextensionsctl": '''#!/bin/sh
+if [ -f "$SHIM_LOG/sysext" ]; then cat "$SHIM_LOG/sysext"; exit 0; fi
+echo "1 extension(s)"
+echo "--- com.apple.system_extension.network_extension"
+echo "enabled	active	teamID	bundleID (version)	name	[state]"
+echo "*	*	S8XHQB96PW	org.mitmproxy.macos-redirector (12.2.3/12.2.3)	org.mitmproxy.macos-redirector	[activated enabled]"
+''',
     "networksetup": '''#!/bin/sh
 echo "$@" >> "$SHIM_LOG/networksetup.log"
 case "$1" in

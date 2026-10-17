@@ -53,10 +53,12 @@ def ca_sha256(pem_path):
 
 
 def adb_path():
-    for cand in (os.environ.get("ADB"), os.path.join(os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME") or "",
-                                                   "platform-tools", "adb"),
-                 os.path.expanduser("~/Library/Android/sdk/platform-tools/adb"), "/usr/local/bin/adb", "/opt/homebrew/bin/adb"):
-        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+    # absolute paths only: with no SDK variable set, os.path.join("", "platform-tools", "adb") was a RELATIVE path, run
+    # from whatever directory Rivis was started in (night QA A8)
+    sdks = [os.environ.get(v) for v in ("ANDROID_SDK_ROOT", "ANDROID_HOME")]
+    for cand in [os.environ.get("ADB")] + [os.path.join(d, "platform-tools", "adb") for d in sdks if d] + \
+                [os.path.expanduser("~/Library/Android/sdk/platform-tools/adb"), "/usr/local/bin/adb", "/opt/homebrew/bin/adb"]:
+        if cand and os.path.isabs(cand) and os.path.isfile(cand) and os.access(cand, os.X_OK):
             return cand
     return None
 
@@ -76,10 +78,46 @@ def _sim_trusted(udid, want):
     return False
 
 
-def ios_devices(want):
-    rc, out = _run(["xcrun", "simctl", "list", "devices", "booted", "-j"])
+def simctl_problem(rc, err):
+    """What a tester can do when `xcrun simctl` fails — not every failure means 'Xcode is not installed'."""
+    low = (err or "").lower()
+    if rc == "missing":
+        return "Xcode is not installed (no xcrun). Install Xcode from the App Store to use iOS Simulators."
+    if rc == "timeout":
+        return "xcrun simctl did not answer within %d s. Try again; if it persists, quit Simulator.app and Xcode." % QUICK
+    if "license" in low:
+        return "Xcode's license has not been accepted yet: open Xcode once and accept it, then reopen this tab."
+    if "unable to find utility" in low or "commandlinetools" in low or "not a developer tool" in low:
+        return ("The Mac uses the Command Line Tools, which have no simulators. Select Xcode: Xcode → Settings → "
+                "Locations → Command Line Tools, or run: sudo xcode-select -s /Applications/Xcode.app")
+    line = next((l.strip() for l in (err or "").splitlines() if l.strip()), "")
+    return "xcrun simctl failed%s." % ((": " + line[:200]) if line else " (exit %s)" % rc)
+
+
+def _simctl(argv):
+    """(rc, stdout, stderr); rc is "missing" when xcrun cannot run and "timeout" when it hangs."""
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=QUICK, stdin=subprocess.DEVNULL)
+        return p.returncode, p.stdout, p.stderr
+    except OSError:
+        return "missing", "", ""
+    except subprocess.TimeoutExpired:
+        return "timeout", "", ""
+
+
+def ios_status(want):
+    """(booted simulators, None) or (None, what to do)."""
+    rc, out, err = _simctl(["xcrun", "simctl", "list", "devices", "booted", "-j"])
     if rc != 0:
-        return None                                   # no Xcode tools: the tab says so
+        return None, simctl_problem(rc, err)
+    return _booted(want, out), None
+
+
+def ios_devices(want):
+    return ios_status(want)[0]
+
+
+def _booted(want, out):
     try:
         runtimes = json.loads(out).get("devices", {})
     except ValueError:

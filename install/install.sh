@@ -85,8 +85,9 @@ take_tool_tarball() {
 
 # Rivis's helpers run on macOS's own Python 3 (/usr/bin/python3), which comes with Apple's Command Line Tools or
 # Xcode. Without them every call pops an install dialog and fails with shell errors (night review A2): say it once.
-if [ "$(uname -s)" = Darwin ] && [ -z "${SKIP_CLT_CHECK:-}" ]; then
-  _clt=$(xcode-select -p 2>/dev/null) || _clt=""
+if [ "$(uname -s)" = Darwin ] && [ -z "${SKIP_CLT_CHECK:-}" ] && [ "${UNINSTALL:-0}" != 1 ]; then
+  # the developer directory /usr/bin/python3 uses: $DEVELOPER_DIR first, then xcode-select's (as xcrun resolves it)
+  _clt="${DEVELOPER_DIR:-}"; [ -n "$_clt" ] || _clt=$(xcode-select -p 2>/dev/null) || _clt=""
   if [ -z "$_clt" ] || [ ! -x "$_clt/usr/bin/python3" ]; then
     echo "install.sh: needs Apple's Command Line Tools first (free, one time, a few minutes; no Xcode needed)." >&2
     echo "  Run:  xcode-select --install     then, when it has finished, run this again." >&2

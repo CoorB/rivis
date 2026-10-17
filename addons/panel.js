@@ -891,7 +891,7 @@
     m.innerHTML = `
       <div class="sub" style="margin-bottom:8px">Rivis sets up each simulator or emulator once: its certificate, and for Android the proxy. Like Proxyman's Certificate menu — one click per device.</div>
       ${consent}${log}
-      ${section("ios", "iOS Simulators", dev.ios, "Xcode command-line tools are not installed (xcrun simctl).")}
+      ${section("ios", "iOS Simulators", dev.ios, esc(dev.ios_error || "Xcode command-line tools are not installed (xcrun simctl)."))}
       ${section("android", "Android emulators", dev.android, "adb was not found. Install Android Studio (SDK platform-tools) to use emulators.")}
       <div class="sub" style="margin-top:10px">Same from a terminal: <code>rivis setup</code>. Physical phones need a separate approval.</div>
       <h4>Web browser</h4>

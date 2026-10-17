@@ -70,7 +70,8 @@ umask 077
 # Rivis's helpers run on macOS's own Python 3 (/usr/bin/python3), which comes with Apple's Command Line Tools or
 # Xcode. Without them every call pops an install dialog and fails with shell errors (night review A2): say it once.
 if [ "$(uname -s)" = Darwin ] && [ -z "${SKIP_CLT_CHECK:-}" ]; then
-  _clt=$(xcode-select -p 2>/dev/null) || _clt=""
+  # the developer directory /usr/bin/python3 uses: $DEVELOPER_DIR first, then xcode-select's (as xcrun resolves it)
+  _clt="${DEVELOPER_DIR:-}"; [ -n "$_clt" ] || _clt=$(xcode-select -p 2>/dev/null) || _clt=""
   if [ -z "$_clt" ] || [ ! -x "$_clt/usr/bin/python3" ]; then
     echo "$(basename "$0"): needs Apple's Command Line Tools first (free, one time, a few minutes; no Xcode needed)." >&2
     echo "  Run:  xcode-select --install     then, when it has finished, run this again." >&2
@@ -162,7 +163,16 @@ MAX_FLOWS="$(env_value MAX_FLOWS 5000)"
   { echo "$CLI: ${ENV_PREFIX}_MAX_FLOWS must be an integer from 1 to 1000000" >&2; exit 1; }
 CONFDIR="$(env_value CONFDIR "$HOME/.mitmproxy")"
 CA_PEM="$CONFDIR/mitmproxy-ca-cert.pem"
-ADB="${ADB:-$(command -v adb || echo "$HOME/Library/Android/sdk/platform-tools/adb")}"
+# adb: the same places the panel's Devices tab looks (addons/devices.py adb_path), so a custom SDK location works in both
+find_adb() {
+  local c
+  for c in "${ANDROID_SDK_ROOT:+$ANDROID_SDK_ROOT/platform-tools/adb}" "${ANDROID_HOME:+$ANDROID_HOME/platform-tools/adb}" \
+           "$HOME/Library/Android/sdk/platform-tools/adb" /usr/local/bin/adb /opt/homebrew/bin/adb; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return; }
+  done
+  command -v adb || printf '%s' "$HOME/Library/Android/sdk/platform-tools/adb"
+}
+ADB="${ADB:-$(find_adb)}"
 RULES="$(env_value RULES "$PROJECT_STATE/rules.json")"
 WEB_PASSWORD="$(env_value WEB_PASSWORD "")"
 ADDON="$SCRIPT_DIR/addons/proxy_rules.py"
@@ -396,10 +406,27 @@ cmd_start() {
     --project-only|--neo-only) project_only=1 ;; --no-open) open_ui=0 ;; --all) show_all=1 ;;
     *) die "start: unknown option $1" ;; esac; shift; done
   [ "$ios" = 1 ] && check_capture_filter "$filter"
+  # Android-only testers skip the Redirector in the installer; capturing the Simulator without it only brings up macOS
+  # prompts. Start without it and say how to turn it on. (An unreadable extension list changes nothing.)
+  if [ "$ios" = 1 ] && [ "$(uname)" = Darwin ]; then
+    local ext; ext=$(systemextensionsctl list 2>/dev/null) || ext=""
+    if [ -n "$ext" ] && ! printf '%s\n' "$ext" | grep 'org.mitmproxy.macos-redirector' | grep -q 'activated enabled'; then
+      ios=0
+      info "iOS Simulator capture is off: the Mitmproxy Redirector is not approved on this Mac (Android emulators, web apps and the proxy work)."
+      info "  to capture the Simulator: approve it (re-run the installer, or System Settings → General → Login Items & Extensions → Network Extensions), then $CLI stop && $CLI start"
+    fi
+  fi
   command -v mitmweb >/dev/null || die "mitmweb not found (brew install --cask mitmproxy)"
   ensure_ca; ensure_rules
-  local o; o=$(port_owner "$PORT"); [ -n "$o" ] && die "port $PORT already taken: $o  (a previous $CLI? run: $CLI stop)"
-  o=$(port_owner "$WEB_PORT"); [ -n "$o" ] && die "UI port $WEB_PORT already taken: $o"
+  # Already running (the installer offers to start it, then the quickstart says `start` again): say so, exit 0.
+  if [ -n "$(our_listeners)" ]; then
+    info "$PRODUCT_NAME is already running (proxy 127.0.0.1:$PORT, UI http://127.0.0.1:$WEB_PORT/)."
+    info "  open the UI: $CLI ui    ·    to start it with other options: $CLI stop, then $CLI start …"
+    return 0
+  fi
+  local o free_hint="quit it, or start on free ports: ${ENV_PREFIX}_PORT=18080 ${ENV_PREFIX}_WEB_PORT=18083 $CLI start"
+  o=$(port_owner "$PORT"); [ -n "$o" ] && die "port $PORT already taken by another program: $o — $free_hint"
+  o=$(port_owner "$WEB_PORT"); [ -n "$o" ] && die "UI port $WEB_PORT already taken by another program: $o — $free_hint"
   # how this instance was started, so an in-app update can restart it the same way (addons/update_install.sh)
   { printf 'START_PORT=%q\nSTART_WEB_PORT=%q\nSTART_ARGS=(' "$PORT" "$WEB_PORT"
     printf '%q ' --project "$PROJECT" start --background --no-open "${fwd[@]}"; printf ')\n'; } > "$STATE_ROOT/last-start.tmp" \

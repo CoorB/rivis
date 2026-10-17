@@ -1182,7 +1182,8 @@ class ProxyPanel:
             pass
         magisk = os.environ.get("RIVIS_MAGISK_DIR") or os.path.join(os.path.dirname(os.path.dirname(HERE)), "magisk-" + version)
         adb = devices.adb_path()
-        return {"ios": devices.ios_devices(want),
+        ios, ios_error = devices.ios_status(want)
+        return {"ios": ios, "ios_error": ios_error,
                 "android": devices.android_devices(adb, want, STATE_ROOT, self._proxy_port()),
                 "magisk": bool(version) and os.path.isdir(magisk)}
 
