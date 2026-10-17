@@ -522,7 +522,7 @@ class LeftoverSystemProxy(CliBase):
     Mac app lost the network until `rivis net-reset` (a tester's Mac, 2026-10-16). Fake networksetup: Wi-Fi web+https
     proxy on PORT; every change is logged, nothing real is touched."""
 
-    def fake(self, host, port):
+    def fake(self, host, port, deny=False):
         d = os.path.join(self.home, "fakenet")
         os.makedirs(d, exist_ok=True)
         log = os.path.join(d, "set.log")
@@ -532,10 +532,10 @@ case "$1" in
   -listallnetworkservices) printf 'An asterisk (*) denotes that a network service is disabled.\\nWi-Fi\\n' ;;
   -getwebproxy|-getsecurewebproxy) printf 'Enabled: Yes\\nServer: %s\\nPort: %s\\nAuthenticated Proxy Enabled: 0\\n' ;;
   -getsocksfirewallproxy) printf 'Enabled: No\\nServer: \\nPort: 0\\n' ;;
-  -set*) echo "$*" >> "%s" ;;
+  -set*) echo "$*" >> "%s"; %s ;;
 esac
 exit 0
-""" % (host, port, log))
+""" % (host, port, log, 'echo "You must be administrator to make this change." >&2; exit 1' if deny else ":"))
         os.chmod(os.path.join(d, "networksetup"), 0o755)
         return dict(self.env, PATH=d + ":" + self.env["PATH"]), log
 
@@ -564,6 +564,52 @@ exit 0
         env["SHIM_DRYRUN"] = "1"
         r = self.suite.rivis("start", "--no-open", "--no-ios", home=self.home, env=env)
         self.assertIn("-setsecurewebproxystate Wi-Fi off", self.changes(log), r.stdout + r.stderr)
+
+
+    def test_start_still_starts_when_this_account_may_not_change_network_settings(self):
+        # Night QA A4: a standard (non-admin) account behind a Proxyman leftover — `start` died on the
+        # refused networksetup call, so Rivis never started at all. Now it says how to clear it and starts.
+        env, log = self.fake("127.0.0.1", harness.free_port(), deny=True)
+        env["SHIM_DRYRUN"] = "1"
+        open(os.path.join(self.suite.shimlog, "mitm-argv.log"), "w").close()
+        r = self.suite.rivis("start", "--no-open", "--no-ios", home=self.home, env=env)
+        out = r.stdout + r.stderr
+        self.assertIn("System Settings", out)
+        with open(os.path.join(self.suite.shimlog, "mitm-argv.log")) as fh:
+            self.assertIn("mitmweb", fh.read(), out)
+        self.assertNotEqual(self.suite.rivis("net-reset", home=self.home, env=env).returncode, 0,
+                            "a manual net-reset still reports the failure")
+
+
+class NoCommandLineTools(CliBase):
+    """Night review A2: on a Mac without Apple's Command Line Tools, /usr/bin/python3 only pops an install dialog, and
+    every rivis command failed with shell errors. Both the CLI and the installer now say what to do, up front."""
+
+    def no_clt_env(self):
+        d = os.path.join(self.home, "noclt")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "xcode-select"), "w") as fh:
+            fh.write('#!/bin/sh\necho "xcode-select: error: unable to get active developer directory" >&2\nexit 2\n')
+        os.chmod(os.path.join(d, "xcode-select"), 0o755)
+        return dict(self.env, PATH=d + ":" + self.env["PATH"])
+
+    def test_cli_says_how_to_install_them(self):
+        r = self.cli("--version", env=self.no_clt_env())
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("xcode-select --install", r.stderr)
+        self.assertNotIn("command not found", r.stderr)
+
+    def test_installer_says_how_to_install_them_before_touching_anything(self):
+        env = self.no_clt_env()
+        before = sorted(os.listdir(self.home))
+        cp = self.suite.run(["/bin/bash", os.path.join(harness.REPO, "install", "install.sh"), "--yes"],
+                            home=self.home, env=env, timeout=60)
+        self.assertEqual(cp.returncode, 1, cp.stdout + cp.stderr)
+        self.assertIn("xcode-select --install", cp.stderr)
+        self.assertEqual(sorted(os.listdir(self.home)), before)
+
+    def test_with_the_tools_present_nothing_changes(self):
+        self.ok("--version")
 
 
 class StartArgv(CliBase):

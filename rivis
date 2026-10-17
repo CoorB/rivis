@@ -67,6 +67,17 @@
 set -uo pipefail
 umask 077
 
+# Rivis's helpers run on macOS's own Python 3 (/usr/bin/python3), which comes with Apple's Command Line Tools or
+# Xcode. Without them every call pops an install dialog and fails with shell errors (night review A2): say it once.
+if [ "$(uname -s)" = Darwin ] && [ -z "${SKIP_CLT_CHECK:-}" ]; then
+  _clt=$(xcode-select -p 2>/dev/null) || _clt=""
+  if [ -z "$_clt" ] || [ ! -x "$_clt/usr/bin/python3" ]; then
+    echo "$(basename "$0"): needs Apple's Command Line Tools first (free, one time, a few minutes; no Xcode needed)." >&2
+    echo "  Run:  xcode-select --install     then, when it has finished, run this again." >&2
+    exit 1
+  fi
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd -P)"   # works through a ~/bin symlink
 PRODUCT_JSON="$SCRIPT_DIR/product.json"
 
@@ -1017,7 +1028,7 @@ cmd_ios() {
 # proxy app quits. Only stale local-loopback entries are safe to clear.
 cmd_net_reset() {   # [--dry-run | --auto]  --auto: silent unless it clears something (used by start and the installer)
   local dry=0 auto=0; [ "${1:-}" = "--dry-run" ] && dry=1; [ "${1:-}" = "--auto" ] && auto=1
-  local changed=0 enabled=0 stale_seen=""
+  local changed=0 enabled=0 stale_seen="" failed=0
   while IFS= read -r svc; do
     case "$svc" in ""|"An asterisk"*|\**) continue ;; esac
     local kind getter setter details on host port label
@@ -1037,7 +1048,14 @@ cmd_net_reset() {   # [--dry-run | --auto]  --auto: silent unless it clears some
           && [ -n "$port" ] && [ -z "$(port_owner "$port")" ]; then
         changed=1
         [ "$auto" = 1 ] || echo "  $svc: $label=$host:$port — $([ "$dry" = 1 ] && echo 'would clear' || echo 'clearing')"
-        [ "$dry" = 1 ] || networksetup "$setter" "$svc" off || die "could not clear $label proxy on $svc"
+        if [ "$dry" = 0 ] && ! networksetup "$setter" "$svc" off; then
+          # a standard account may not change network settings: say how, and let `start` go on (Android, web apps
+          # and Compose work; only the iOS Simulator follows the Mac's proxy until it is cleared)
+          echo "$CLI: could not clear the leftover $label proxy $host:$port on $svc (this account may not change network settings)." >&2
+          echo "  Clear it in System Settings → Network → $svc → Details → Proxies (turn off the proxies set to $host:$port), or ask IT." >&2
+          [ "$auto" = 1 ] || failed=1
+          continue
+        fi
         [ "$auto" = 1 ] && stale_seen="$host:$port"
       else
         [ "$auto" = 1 ] || echo "  $svc: $label=$host:$port — left alone (not a local leftover)"
@@ -1045,12 +1063,13 @@ cmd_net_reset() {   # [--dry-run | --auto]  --auto: silent unless it clears some
     done
   done < <(networksetup -listallnetworkservices)
   if [ "$auto" = 1 ]; then
-    [ "$changed" = 1 ] && info "fixed: another proxy app (Proxyman, Charles…) had left your Mac's proxy set to $stale_seen with nothing listening — cleared, so Mac apps and the Simulator reach the network again"
+    [ -n "$stale_seen" ] && info "fixed: another proxy app (Proxyman, Charles…) had left your Mac's proxy set to $stale_seen with nothing listening — cleared, so Mac apps and the Simulator reach the network again"
     return 0
   fi
   if [ "$enabled" = 0 ]; then info "no system proxy set on any service — network is clean"
   elif [ "$changed" = 0 ]; then info "no stale local proxy found — enabled proxies were left alone"
   elif [ "$dry" = 1 ]; then info "dry run: only the stale local proxies above would be cleared"
+  elif [ "$failed" = 1 ]; then return 1
   else info "stale local proxies cleared; all other proxies left alone"; fi
 }
 

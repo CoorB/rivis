@@ -83,6 +83,17 @@ take_tool_tarball() {
 [ "$(uname -s)" = Darwin ] || die "this installer is for macOS; on Windows use install.ps1"
 [ "$(id -u)" -ne 0 ] || die "do not run as root — everything installs in your home directory"
 
+# Rivis's helpers run on macOS's own Python 3 (/usr/bin/python3), which comes with Apple's Command Line Tools or
+# Xcode. Without them every call pops an install dialog and fails with shell errors (night review A2): say it once.
+if [ "$(uname -s)" = Darwin ] && [ -z "${SKIP_CLT_CHECK:-}" ]; then
+  _clt=$(xcode-select -p 2>/dev/null) || _clt=""
+  if [ -z "$_clt" ] || [ ! -x "$_clt/usr/bin/python3" ]; then
+    echo "install.sh: needs Apple's Command Line Tools first (free, one time, a few minutes; no Xcode needed)." >&2
+    echo "  Run:  xcode-select --install     then, when it has finished, run this again." >&2
+    exit 1
+  fi
+fi
+
 # ---- identity (never hardcode the product name) ----------------------------------------------------------------
 product_json=""
 for c in "$HERE/product.json" "$SRC_ROOT/product.json" "$HOME"/.local/*/current/product.json; do [ -f "$c" ] && { product_json="$c"; break; }; done
