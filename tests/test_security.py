@@ -194,9 +194,8 @@ class ProjectServersOnPrivateAddresses(LiveCase):
 class FreshInstallServersOnPrivateAddresses(LiveCase):
     """2026-10-16, the pilot's first install: the tester's Mac resolved the app's servers to private VPN addresses and
     every call got 403. 0.9.5 only let the ACTIVE project's declared hosts through, but a fresh install runs the
-    `default` project, which declares none. Only a plain-HTTP request on the proxy port can be aimed at a private
-    address by a web page (F-01, origin-form / DNS rebinding); HTTPS tunnels, simulator capture and the panel's own
-    Repeat cannot, so they reach private addresses on any project."""
+    `default` project, which declares none. Apps' HTTPS calls, simulator capture and the panel's own Repeat still
+    reach private addresses; web pages' HTTPS calls are checked when --insecure removes upstream certificate checks."""
     INSTANCE_KW = {"start_args": ("--insecure",), "allow_private": False}
 
     def setUp(self):
@@ -237,8 +236,90 @@ class FreshInstallServersOnPrivateAddresses(LiveCase):
         r = self.inst.fetch(url + "1", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"})
         self.assertEqual(r.status, 403)
         self.assertEqual(self.up.hits_for("/json/small?cs=1"), [])
-        self.assertEqual(self.inst.fetch(url + "2", headers={"Sec-Fetch-Site": "same-origin"}).status, 200)
+        self.assertEqual(self.inst.fetch(url + "2", headers={"Sec-Fetch-Site": "same-origin"}).status, 403)
         self.assertEqual(self.inst.fetch(url + "3", headers={"Sec-Fetch-Site": "none"}).status, 200)   # typed URL
+
+
+class InsecurePageRequestsOnPrivateAddresses(LiveCase):
+    """With --insecure, an HTTPS page can read a private response after its own name rebinds to that address."""
+    INSTANCE_KW = {"start_args": ("--insecure",), "allow_private": False}
+
+    def setUp(self):
+        self.up.reset_hits()
+
+    def test_same_origin_https_page_request_is_refused(self):
+        path = "/json/small?ins=1"
+        r = self.inst.fetch("https://localhost:%d%s" % (self.up.https_port, path),
+                            headers={"Sec-Fetch-Site": "same-origin"})
+        self.assertEqual(r.status, 403)
+        self.assertEqual(self.up.hits_for(path), [])
+
+    def test_same_site_https_page_request_is_refused(self):
+        path = "/json/small?ins=2"
+        r = self.inst.fetch("https://localhost:%d%s" % (self.up.https_port, path),
+                            headers={"Sec-Fetch-Site": "same-site"})
+        self.assertEqual(r.status, 403)
+        self.assertEqual(self.up.hits_for(path), [])
+
+    def test_typed_https_url_still_reaches_upstream(self):
+        path = "/json/small?ins=3"
+        r = self.inst.fetch("https://localhost:%d%s" % (self.up.https_port, path),
+                            headers={"Sec-Fetch-Site": "none"})
+        self.assertEqual(r.status, 200)
+        self.assertTrue(self.up.hits_for(path))
+
+    def test_app_https_call_without_fetch_site_still_reaches_upstream(self):
+        path = "/json/small?ins=4"
+        r = self.inst.fetch("https://localhost:%d%s" % (self.up.https_port, path))
+        self.assertEqual(r.status, 200)
+        self.assertTrue(self.up.hits_for(path))
+
+    def test_repeat_of_an_app_https_call_still_reaches_upstream(self):
+        path = "/json/small?ins=5"
+        self.inst.fetch("https://localhost:%d%s" % (self.up.https_port, path))
+        fid = self.inst.flow_for(path)["id"]
+        before = len(self.up.hits_for(path))
+        self.panel.ok("retry", {"flow_id": fid, "edits": {}})
+        harness.wait_for(lambda: len(self.up.hits_for(path)) > before, 10, 0.2, "repeat reached upstream")
+
+
+class DnsRebindingInsecureHttps(LiveCase):
+    """An HTTPS page request must connect to the checked address without losing the hostname needed for SNI."""
+    INSTANCE_KW = {"start_args": ("--insecure",), "allow_private": False,
+                   "extra_env": {"SHIM_PRE_ADDON": os.path.join(harness.REPO, "tests", "fakes", "dns_flip.py")}}
+
+    def setUp(self):
+        self.up.reset_hits()
+
+    def test_a_name_that_flips_to_loopback_after_the_check_never_reaches_it(self):
+        path = "/json/small?rbs=1"
+        r = self.inst.fetch("https://b.rebind.rivis-test:%d%s" % (self.up.https_port, path),
+                            headers={"Sec-Fetch-Site": "same-origin"}, timeout=4)
+        # the pinned public test address never answers, so curl times out and its status is the tunnel's own
+        # "200 Connection established": what matters is that nothing reached the rebound address
+        self.assertEqual(self.up.hits_for(path), [], "the rebound address was reached")
+        self.assertNotIn(b"{", r.body or b"")
+
+
+class SecurePageRequestsOnPrivateAddresses(LiveCase):
+    """A trusted upstream certificate keeps the old same-origin HTTPS behavior without --insecure."""
+    INSTANCE_KW = {"start_args": (), "allow_private": False}
+
+    @classmethod
+    def make_instance(cls):
+        inst = super().make_instance()
+        inst.extra_env["RIVIS_EXTRA_TRUST"] = cls.up.cert
+        return inst
+
+    def setUp(self):
+        self.up.reset_hits()
+
+    def test_same_origin_https_page_request_reaches_trusted_upstream(self):
+        path = "/json/small?secure=1"
+        r = self.inst.fetch("https://localhost:%d%s" % (self.up.https_port, path),
+                            headers={"Sec-Fetch-Site": "same-origin"})
+        self.assertEqual(r.status, 200)
+        self.assertTrue(self.up.hits_for(path))
 
 
 class DnsRebindingPlainHttp(LiveCase):

@@ -123,10 +123,11 @@ marked as trusted in Keychain Access (as Safari and Proxyman do), so networks th
 `RIVIS_EXTRA_TRUST=/path/root.pem` (several joined with `:`) adds a root the keychain lacks;
 `RIVIS_SYSTEM_TRUST=0` uses mitmproxy's own list only; `--insecure` turns the check off.
 
-Servers on private addresses (VPN, internal DNS): HTTPS calls, simulator capture and Repeat/Compose reach them on
-any project. Only plain-HTTP proxy requests to a private address are refused (403), because a web page could aim
-the proxy port at one (DNS rebinding). For a plain-HTTP test server, add its domain to the project's `hosts`, or
-start Rivis with `--allow-private-hosts 'REGEX'`.
+Servers on private addresses (VPN, internal DNS): app HTTPS calls, simulator capture and Repeat/Compose reach them on
+any project. Plain-HTTP proxy requests to a private address are refused (403), because a web page could aim the proxy
+port at one (DNS rebinding). With `--insecure`, web pages' own requests to private addresses are blocked too unless
+the host is in the project or matches `--allow-private-hosts`. For a local test server, add its domain to the project's
+`hosts`, or start Rivis with `--allow-private-hosts 'REGEX'`.
 
 `rivis.ps1` supports the same cross-platform commands, including `stop`, `breakpoint`, `mock`, and `setup`.
 Windows has no iOS Simulator, so `setup` says so and configures every running Android emulator (`android on -All`).

@@ -234,6 +234,7 @@ class ProxyRules:
         self.private_hosts_re = None
         self.project_hosts_re = None
         self._address_cache = {}
+        self._https_pins = {}
 
     def load(self, loader):
         loader.add_option("proxy_rules_file", str, DEFAULT_FILE, "project rules file (JSON, hot-reloaded)")
@@ -409,15 +410,16 @@ class ProxyRules:
         """Keep the loopback listener from becoming a relay into local/VPN networks.
 
         The threat (F-01) is a web page aiming the proxy port at a private address: an origin-form request, or DNS
-        rebinding, sent straight to 127.0.0.1:PORT. A page can only send plain HTTP there. Mitmproxy 12.2.3
-        normalizes absolute-form to origin-form before addon hooks, so for plain HTTP on the proxy port the boundary
-        is enforced on the resolved destination. HTTPS tunnels (CONNECT, then TLS with this CA), simulator capture
-        and the panel's own Repeat/Compose cannot come from a page, so they may reach private addresses: on a VPN the
-        app's servers often resolve to them (2026-10-16 pilot, first install on the default project).
+        rebinding, sent straight to 127.0.0.1:PORT. Mitmproxy 12.2.3 normalizes absolute-form to origin-form before
+        addon hooks, so for plain HTTP on the proxy port the boundary is enforced on the resolved destination. A page
+        can also fetch through an HTTPS tunnel that trusts this CA; with --insecure, a rebound server's certificate is
+        not checked, so all page-started requests need the same boundary. Simulator capture and the panel's own
+        Repeat/Compose may reach private addresses: on a VPN the app's servers often resolve to them.
         """
         host = flow.request.host
         plain = self._page_reachable(flow)
-        if not host or self._trusted_name(host) or not (plain or self._cross_site_page(flow)):
+        insecure_page = getattr(ctx.options, "ssl_insecure", False) and self._insecure_page(flow)
+        if not host or self._trusted_name(host) or not (plain or self._cross_site_page(flow) or insecure_page):
             return
         addresses = await self._resolve(host, flow.request.port)
         if addresses is None:
@@ -438,14 +440,41 @@ class ProxyRules:
                          "use --allow-private-hosts for an intentional local test service")
             flow.response = http.Response.make(
                 403, ("Private upstream destinations are blocked by Rivis for plain-HTTP proxy requests and for"
-                      " cross-site requests from web pages (%s -> %s).\n"
+                      " web-page requests through the proxy (%s -> %s).\n"
                       "Apps' HTTPS calls are not affected. If this is your app's server, add its domain to your project, or"
                       " start Rivis with --allow-private-hosts 'REGEX' (for example '%s').\n"
                       % (host, ", ".join(sorted(unsafe)), re.escape(host))).encode(),
                 {"Content-Type": "text/plain"})
             return
         if plain:
-            self._pin(flow, addresses)        # (HTTPS needs no pin: a rebound name fails the certificate check)
+            self._pin(flow, addresses)
+        elif insecure_page and flow.request.scheme == "https":
+            # Pin HTTPS at connect time: changing request.host to the IP drops the hostname needed for upstream SNI.
+            now = time.monotonic()
+            self._https_pins = {key: value for key, value in self._https_pins.items() if now - value[0] < 60}
+            key = (flow.client_conn.id, host.lower(), flow.request.port)
+            self._https_pins[key] = (now, addresses)
+
+    def server_connect(self, data):
+        name, port = data.server.address
+        try:
+            ipaddress.ip_address(name.strip("[]"))
+            return
+        except ValueError:
+            pass
+        key = (data.client.id, name.lower(), port)
+        entry = self._https_pins.get(key)
+        if not entry:
+            return
+        if time.monotonic() - entry[0] >= 60:
+            del self._https_pins[key]
+            return
+        data.server.address = (sorted(entry[1], key=lambda a: (":" in a, a))[0], port)
+        if not data.server.sni:
+            data.server.sni = name
+
+    def client_disconnected(self, client):
+        self._https_pins = {key: value for key, value in self._https_pins.items() if key[0] != client.id}
 
     @staticmethod
     def _pin(flow, addresses):
@@ -471,6 +500,14 @@ class ProxyRules:
         if flow.is_replay or getattr(getattr(flow.client_conn, "proxy_mode", None), "type_name", "regular") == "local":
             return False          # Simulator capture: an app's web view (3DS, sign-in pages) reaches VPN hosts directly anyway
         return flow.request.headers.get("sec-fetch-site", "").strip().lower() == "cross-site"
+
+    @staticmethod
+    def _insecure_page(flow):
+        """With upstream certificate checks off, a page's own HTTPS calls can also rebind to a private address.
+        A typed URL has "none" and apps omit the header; neither is a page-started fetch."""
+        if flow.is_replay or getattr(getattr(flow.client_conn, "proxy_mode", None), "type_name", "regular") == "local":
+            return False
+        return flow.request.headers.get("sec-fetch-site", "").strip().lower() in ("same-origin", "same-site", "cross-site")
 
     @staticmethod
     def _page_reachable(flow):
