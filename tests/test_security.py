@@ -231,6 +231,22 @@ class FreshInstallServersOnPrivateAddresses(LiveCase):
         self.assertEqual(self.up.hits_for("/secret"), [])
 
 
+class DnsRebindingPlainHttp(LiveCase):
+    """Night QA A3: the guard looked the name up once to judge it and mitmproxy looked it up again to
+    connect, so DNS that flips between the two (rebinding) reached a private address with plain HTTP. The checked
+    address is now the one connected to."""
+    INSTANCE_KW = {"start_args": ("--insecure",), "allow_private": False,
+                   "extra_env": {"SHIM_PRE_ADDON": os.path.join(harness.REPO, "tests", "fakes", "dns_flip.py")}}
+
+    def setUp(self):
+        self.up.reset_hits()
+
+    def test_a_name_that_flips_to_loopback_after_the_check_never_reaches_it(self):
+        r = self.inst.fetch("http://a.rebind.rivis-test:%d/json/small?rb=1" % self.up.http_port, timeout=4)
+        self.assertNotEqual(r.status, 200)
+        self.assertEqual(self.up.hits_for("/json/small"), [], "the rebound address was reached")
+
+
 class FreshCa(LiveCase):
     """The CA the CLI generates itself on first start (no pre-seeded copy)."""
     INSTANCE_KW = {"fresh_ca": True}

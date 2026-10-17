@@ -106,7 +106,9 @@ case "$1" in
 esac
 exec /usr/sbin/networksetup "$@"
 ''',
-    "mitmweb": "#!/bin/sh\nprintf '%%s\\n' \"mitmweb $*\" >> \"$SHIM_LOG/mitm-argv.log\"\n[ -n \"${SHIM_DRYRUN:-}\" ] && exit 0\nexec %s \"$@\"\n" % REAL_MITMWEB,
+    # SHIM_PRE_ADDON: a test-only add-on loaded first (e.g. a DNS stand-in); never set outside a test
+    "mitmweb": "#!/bin/sh\nprintf '%%s\\n' \"mitmweb $*\" >> \"$SHIM_LOG/mitm-argv.log\"\n[ -n \"${SHIM_DRYRUN:-}\" ] && exit 0\n"
+               "[ -n \"${SHIM_PRE_ADDON:-}\" ] && exec %s -s \"$SHIM_PRE_ADDON\" \"$@\"\nexec %s \"$@\"\n" % (REAL_MITMWEB, REAL_MITMWEB),
     "mitmdump": "#!/bin/sh\nprintf '%%s\\n' \"mitmdump $*\" >> \"$SHIM_LOG/mitm-argv.log\"\n[ -n \"${SHIM_DRYRUN:-}\" ] && exit 0\nexec %s \"$@\"\n" % REAL_MITMDUMP,
 }
 

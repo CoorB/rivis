@@ -435,6 +435,21 @@ class ProxyRules:
                       " start Rivis with --allow-private-hosts 'REGEX' (for example '%s').\n"
                       % (host, ", ".join(sorted(unsafe)), re.escape(host))).encode(),
                 {"Content-Type": "text/plain"})
+            return
+        self._pin(flow, addresses)
+
+    @staticmethod
+    def _pin(flow, addresses):
+        """Connect to the address that was checked. Otherwise mitmproxy looks the name up again to connect, and DNS
+        that changes in between (rebinding) reaches a private address after all. The Host header keeps the name."""
+        try:
+            ipaddress.ip_address(flow.request.host.strip("[]"))
+            return                                            # already an address
+        except ValueError:
+            pass
+        host_header = flow.request.host_header
+        flow.request.host = sorted(addresses, key=lambda a: (":" in a, a))[0]
+        flow.request.host_header = host_header
 
     @staticmethod
     def _page_reachable(flow):
