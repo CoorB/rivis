@@ -366,7 +366,10 @@ if [ "$NO_RC" = 0 ] && ! echo ":$PATH:" | grep -qF ":$BIN_DIR:"; then add_rc; fi
 MITMDUMP="$MITM_BIN_DIR/mitmdump"
 CA_PEM="$CONFDIR/mitmproxy-ca-cert.pem"
 free_port() { /usr/bin/python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
-if [ -f "$CA_PEM" ]; then
+if [ -f "$CA_PEM" ] && ! openssl x509 -in "$CA_PEM" -noout 2>/dev/null; then
+  warn "the certificate in $CONFDIR is damaged — left as it is. Keep it aside, then run the installer again:"
+  warn "  mv '$CONFDIR' '$CONFDIR.damaged-$(date +%Y%m%d)'"
+elif [ -f "$CA_PEM" ]; then
   info "CA already present in $CONFDIR — not modified"
 else
   info "generating the per-workstation CA in $CONFDIR"

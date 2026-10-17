@@ -581,6 +581,22 @@ exit 0
                             "a manual net-reset still reports the failure")
 
 
+class DamagedCa(CliBase):
+    """Night QA A13: a malformed ~/.mitmproxy/mitmproxy-ca-cert.pem passed silently and mitmproxy replaced the CA at
+    start, so every device set up with the old one stopped trusting Rivis without a word."""
+
+    def test_start_stops_and_keeps_the_damaged_files(self):
+        pem = os.path.join(self.env["RIVIS_CONFDIR"], "mitmproxy-ca-cert.pem")
+        with open(pem, "w") as fh:
+            fh.write("not a certificate\n")
+        r = self.cli("start", "--no-open", "--no-ios", env=dict(self.env, SHIM_DRYRUN="1"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("damaged", r.stderr)
+        self.assertIn("mv ", r.stderr)
+        with open(pem) as fh:
+            self.assertEqual(fh.read(), "not a certificate\n")
+
+
 class AdbDiscovery(CliBase):
     """Night QA A7: Devices found adb under ANDROID_SDK_ROOT, but its Set up ran `rivis android on`, whose CLI only
     looked on PATH and in ~/Library/Android/sdk — 'adb not found'. The CLI now looks where the panel looks."""

@@ -202,7 +202,13 @@ atomic_private_text() {
 }
 
 ensure_ca() {
-  [ -f "$CA_PEM" ] && return
+  if [ -f "$CA_PEM" ]; then
+    # a damaged CA would be silently replaced by mitmproxy, and every device set up with the old one stops trusting
+    # Rivis: stop and say so, keeping the old files until the tester decides (night QA A13)
+    openssl x509 -in "$CA_PEM" -noout 2>/dev/null && return
+    die "the certificate in $CONFDIR is damaged (not a readable certificate). Keep it aside and let $PRODUCT_NAME make a new one:
+  mv '$CONFDIR' '$CONFDIR.damaged-$(date +%Y%m%d)'   then: $CLI start   (and Set up each simulator/emulator again)"
+  fi
   info "no CA yet in $CONFDIR — generating one (first mitmproxy run does this)"
   command -v mitmdump >/dev/null || die "mitmproxy not installed (install the pinned build from the internal mirror)"
   mitmdump --listen-host 127.0.0.1 --listen-port 0 --set confdir="$CONFDIR" >/dev/null 2>&1 & local p=$!
