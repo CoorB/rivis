@@ -230,6 +230,16 @@ class FreshInstallServersOnPrivateAddresses(LiveCase):
         self.assertEqual(status, 403)
         self.assertEqual(self.up.hits_for("/secret"), [])
 
+    def test_a_page_in_the_rivis_browser_cannot_reach_a_private_https_address_cross_site(self):
+        # night QA lane C1: a public page open in `rivis browser` (which trusts the Rivis CA) fetched a private HTTPS
+        # address through the tunnel. Browsers mark such requests Sec-Fetch-Site: cross-site; apps never send it.
+        url = "https://localhost:%d/json/small?cs=" % self.up.https_port
+        r = self.inst.fetch(url + "1", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"})
+        self.assertEqual(r.status, 403)
+        self.assertEqual(self.up.hits_for("/json/small?cs=1"), [])
+        self.assertEqual(self.inst.fetch(url + "2", headers={"Sec-Fetch-Site": "same-origin"}).status, 200)
+        self.assertEqual(self.inst.fetch(url + "3", headers={"Sec-Fetch-Site": "none"}).status, 200)   # typed URL
+
 
 class DnsRebindingPlainHttp(LiveCase):
     """Night QA A3: the guard looked the name up once to judge it and mitmproxy looked it up again to
@@ -245,6 +255,26 @@ class DnsRebindingPlainHttp(LiveCase):
         r = self.inst.fetch("http://a.rebind.rivis-test:%d/json/small?rb=1" % self.up.http_port, timeout=4)
         self.assertNotEqual(r.status, 200)
         self.assertEqual(self.up.hits_for("/json/small"), [], "the rebound address was reached")
+
+
+class PinKeepsTheName(LiveCase):
+    """Night QA lane C4: an HTTP/1.0 absolute-form request with no Host header showed (and Copy URL gave) the pinned
+    IP instead of the name the app asked for."""
+    INSTANCE_KW = {"start_args": ("--insecure",), "allow_private": False,
+                   "extra_env": {"SHIM_PRE_ADDON": os.path.join(harness.REPO, "tests", "fakes", "dns_flip.py")}}
+
+    def test_http10_without_host_keeps_the_name(self):
+        s = socket.create_connection(("127.0.0.1", self.inst.proxy_port), timeout=3)
+        try:
+            s.sendall(b"GET http://c.rebind.rivis-test:%d/echo?nohost=1 HTTP/1.0\r\n\r\n" % self.up.http_port)
+            try:
+                s.recv(100)
+            except OSError:
+                pass
+        finally:
+            s.close()
+        req = self.inst.flow_for("nohost=1")["request"]
+        self.assertEqual(req.get("pretty_host"), "c.rebind.rivis-test", req)
 
 
 class FreshCa(LiveCase):

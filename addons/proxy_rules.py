@@ -414,7 +414,8 @@ class ProxyRules:
         app's servers often resolve to them (2026-10-16 pilot, first install on the default project).
         """
         host = flow.request.host
-        if not host or self._trusted_name(host) or not self._page_reachable(flow):
+        plain = self._page_reachable(flow)
+        if not host or self._trusted_name(host) or not (plain or self._cross_site_page(flow)):
             return
         addresses = self._resolve(host, flow.request.port)
         if addresses is None:
@@ -430,13 +431,15 @@ class ProxyRules:
             ctx.log.warn(f"proxy_rules: refused private upstream {host} -> {', '.join(sorted(unsafe))}; "
                          "use --allow-private-hosts for an intentional local test service")
             flow.response = http.Response.make(
-                403, ("Private upstream destinations are blocked by Rivis for plain-HTTP proxy requests (%s -> %s).\n"
-                      "HTTPS calls are not affected. If this is your app's server, add its domain to your project, or"
+                403, ("Private upstream destinations are blocked by Rivis for plain-HTTP proxy requests and for"
+                      " cross-site requests from web pages (%s -> %s).\n"
+                      "Apps' HTTPS calls are not affected. If this is your app's server, add its domain to your project, or"
                       " start Rivis with --allow-private-hosts 'REGEX' (for example '%s').\n"
                       % (host, ", ".join(sorted(unsafe)), re.escape(host))).encode(),
                 {"Content-Type": "text/plain"})
             return
-        self._pin(flow, addresses)
+        if plain:
+            self._pin(flow, addresses)        # (HTTPS needs no pin: a rebound name fails the certificate check)
 
     @staticmethod
     def _pin(flow, addresses):
@@ -447,9 +450,19 @@ class ProxyRules:
             return                                            # already an address
         except ValueError:
             pass
-        host_header = flow.request.host_header
+        host_header, name, port = flow.request.host_header, flow.request.host, flow.request.port
+        if host_header is None:                               # HTTP/1.0 without Host: keep the name the app asked for
+            default = {"http": 80, "https": 443}.get(flow.request.scheme)
+            host_header = name if port == default else "%s:%d" % (name, port)
         flow.request.host = sorted(addresses, key=lambda a: (":" in a, a))[0]
         flow.request.host_header = host_header
+
+    @staticmethod
+    def _cross_site_page(flow):
+        """A browser request started by a page of another site (e.g. in `rivis browser`, which trusts the Rivis CA).
+        Through a proxy the browser cannot apply its own private-network protection, so Rivis does. Apps never send
+        Sec-Fetch-Site; a typed URL is "none", a web app's own calls are "same-origin"/"same-site"."""
+        return not flow.is_replay and flow.request.headers.get("sec-fetch-site", "").strip().lower() == "cross-site"
 
     @staticmethod
     def _page_reachable(flow):
