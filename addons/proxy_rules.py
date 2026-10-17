@@ -59,6 +59,8 @@ importlib.reload(proxy_common)
 from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PROFILE_VALUES, STATE_ROOT, breakpoints, project_profile,
                           migrate_rules, rule_file_path, tls_config, tls_options, user_regex)
 
+DNS_TIMEOUT = 10        # seconds for the private-address guard's own lookup
+
 # Traffic profiles: latency ms, jitter ms, down kbps, up kbps, loss %, extra response delay ms.
 # The first four named ones are FRTMProxy's built-ins, same numbers, so teams see the same thing.
 PROFILES = PROFILE_VALUES
@@ -403,7 +405,7 @@ class ProxyRules:
     def _throttled(self, flow):
         return self.throttle and (self.throttle_re is None or self.throttle_re.search(flow.request.pretty_url))
 
-    def requestheaders(self, flow: http.HTTPFlow):
+    async def requestheaders(self, flow: http.HTTPFlow):
         """Keep the loopback listener from becoming a relay into local/VPN networks.
 
         The threat (F-01) is a web page aiming the proxy port at a private address: an origin-form request, or DNS
@@ -417,15 +419,19 @@ class ProxyRules:
         plain = self._page_reachable(flow)
         if not host or self._trusted_name(host) or not (plain or self._cross_site_page(flow)):
             return
-        addresses = self._resolve(host, flow.request.port)
+        addresses = await self._resolve(host, flow.request.port)
         if addresses is None:
-            return  # mitmproxy reports the normal DNS error; no destination was reached
+            # answer it here: letting mitmproxy look the name up again would reopen the rebinding window (a name that
+            # fails once, then resolves to a private address)
+            flow.response = http.Response.make(502, ("Rivis could not resolve %s.\n" % host).encode(),
+                                               {"Content-Type": "text/plain"})
+            return
         unsafe = []
         for address in addresses:
             ip = ipaddress.ip_address(address)
             if not ip.is_global:
                 unsafe.append(address)
-        if unsafe and self._named_project_server(flow, host):
+        if unsafe and await self._named_project_server(flow, host):
             return
         if unsafe:
             ctx.log.warn(f"proxy_rules: refused private upstream {host} -> {', '.join(sorted(unsafe))}; "
@@ -487,19 +493,22 @@ class ProxyRules:
             return True                                   # explicit --allow-private-hosts (may name an IP on purpose)
         return not literal and bool(self.project_hosts_re and self.project_hosts_re.fullmatch(name.rstrip(".")))
 
-    def _resolve(self, host, port):
+    async def _resolve(self, host, port):
+        """Addresses for host, without blocking the proxy: a slow resolver must not stall every other call (A6)."""
         now = time.monotonic()
         cached = self._address_cache.get(host)
         if cached and now - cached[0] < 60:
             return cached[1]
         try:
-            addresses = {row[4][0] for row in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)}
-        except OSError:
+            rows = await asyncio.wait_for(asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM),
+                                          DNS_TIMEOUT)
+        except (OSError, asyncio.TimeoutError):
             return None
+        addresses = {row[4][0] for row in rows}
         self._address_cache[host] = (now, addresses)
         return addresses
 
-    def _named_project_server(self, flow, ip):
+    async def _named_project_server(self, flow, ip):
         """Simulator capture records the server's IP as the destination; its name is in the Host header / TLS SNI.
         Allowed only when that name is trusted AND really resolves to the address the app connected to — so no call
         to some other internal machine can borrow a project name."""
@@ -510,7 +519,7 @@ class ProxyRules:
         names = {flow.request.pretty_host, getattr(flow.client_conn, "sni", None)} - {None, "", ip}
         for name in names:
             if self._trusted_name(name):
-                resolved = self._resolve(name, flow.request.port)
+                resolved = await self._resolve(name, flow.request.port)
                 if resolved and ip.strip("[]") in resolved:
                     return True
         return False

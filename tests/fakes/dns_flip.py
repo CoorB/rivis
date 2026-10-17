@@ -10,6 +10,15 @@ _seen = {}
 
 def _flip(host, port, *args, **kwargs):
     name = host.decode() if isinstance(host, bytes) else (host or "")
+    if name.endswith(".slow.rivis-test"):              # a resolver that takes 3 s
+        import time
+        time.sleep(3)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.1.1.1", int(port or 0)))]
+    if name.endswith(".nx.rivis-test"):                # fails the first time, then answers loopback
+        _seen[name] = _seen.get(name, 0) + 1
+        if _seen[name] == 1:
+            raise socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", int(port or 0)))]
     if not name.endswith(".rebind.rivis-test"):
         return _orig(host, port, *args, **kwargs)
     _seen[name] = _seen.get(name, 0) + 1

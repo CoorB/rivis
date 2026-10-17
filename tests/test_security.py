@@ -257,6 +257,34 @@ class DnsRebindingPlainHttp(LiveCase):
         self.assertEqual(self.up.hits_for("/json/small"), [], "the rebound address was reached")
 
 
+class GuardLookups(LiveCase):
+    """Night QA lane A6: the guard's DNS lookup blocked mitmproxy's event loop, so one slow name stalled every other
+    call. And a lookup that failed let the request through unpinned, for mitmproxy to resolve again."""
+    INSTANCE_KW = {"start_args": ("--insecure",), "allow_private": False,
+                   "extra_env": {"SHIM_PRE_ADDON": os.path.join(harness.REPO, "tests", "fakes", "dns_flip.py")}}
+
+    def setUp(self):
+        self.up.reset_hits()
+
+    def test_a_slow_lookup_does_not_stall_other_calls(self):
+        import threading
+        import time as _time
+        t = threading.Thread(target=lambda: self.inst.fetch("http://a.slow.rivis-test:%d/x?slow=1" % self.up.http_port,
+                                                            timeout=6), daemon=True)
+        t.start()
+        _time.sleep(0.5)                                  # the slow lookup is now in progress
+        start = _time.monotonic()
+        r = self.inst.fetch(self.up.url("/json/small?fast=1", tls=True))
+        self.assertEqual(r.status, 200)
+        self.assertLess(_time.monotonic() - start, 2.0, "an unrelated HTTPS call waited for another call's DNS lookup")
+        t.join(8)
+
+    def test_a_failed_lookup_is_answered_not_retried_by_mitmproxy(self):
+        r = self.inst.fetch("http://b.nx.rivis-test:%d/json/small?nx=1" % self.up.http_port, timeout=5)
+        self.assertNotEqual(r.status, 200)
+        self.assertEqual(self.up.hits_for("/json/small?nx=1"), [])
+
+
 class PinKeepsTheName(LiveCase):
     """Night QA lane C4: an HTTP/1.0 absolute-form request with no Host header showed (and Copy URL gave) the pinned
     IP instead of the name the app asked for."""
