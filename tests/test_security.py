@@ -305,6 +305,25 @@ class PinKeepsTheName(LiveCase):
         self.assertEqual(req.get("pretty_host"), "c.rebind.rivis-test", req)
 
 
+class GuardDecisions(unittest.TestCase):
+    """Which requests the private-address guard checks, asked of the guard itself inside mitmproxy. Simulator (local)
+    capture is never checked: an app's web view (3DS, sign-in pages) sends Sec-Fetch-Site: cross-site, and on a VPN
+    its hosts are private — checking it there would bring back the pilot's 403 and protect nothing."""
+
+    def test_only_page_reachable_requests_are_checked(self):
+        suite = harness.Suite.get()
+        out = os.path.join(suite.root, "guard-probe-%d.json" % os.getpid())
+        conf = os.path.join(suite.root, "guard-probe-conf")
+        env = dict(os.environ, GUARD_PROBE_OUT=out, GUARD_PROBE_ADDONS=os.path.join(harness.REPO, "addons"))
+        subprocess.run([harness.REAL_MITMDUMP, "--listen-host", "127.0.0.1", "-p", "0", "--set", "confdir=" + conf, "-q",
+                        "-s", os.path.join(harness.REPO, "tests", "fakes", "guard_probe.py")],
+                       env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+        with open(out) as fh:
+            got = json.load(fh)
+        self.assertEqual(got, {"regular_cross_site": True, "local_cross_site": False, "regular_same_origin": False,
+                               "replay_cross_site": False, "local_plain": False, "regular_plain": True})
+
+
 class SecondStart(LiveCase):
     """Night QA lane B F4: the installer offers to start Rivis, then the quickstart says `rivis start --background`;
     the second start failed with 'port already taken: mitmweb … run: rivis stop'. It now says it is running, exit 0."""

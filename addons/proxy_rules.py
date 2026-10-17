@@ -468,7 +468,9 @@ class ProxyRules:
         """A browser request started by a page of another site (e.g. in `rivis browser`, which trusts the Rivis CA).
         Through a proxy the browser cannot apply its own private-network protection, so Rivis does. Apps never send
         Sec-Fetch-Site; a typed URL is "none", a web app's own calls are "same-origin"/"same-site"."""
-        return not flow.is_replay and flow.request.headers.get("sec-fetch-site", "").strip().lower() == "cross-site"
+        if flow.is_replay or getattr(getattr(flow.client_conn, "proxy_mode", None), "type_name", "regular") == "local":
+            return False          # Simulator capture: an app's web view (3DS, sign-in pages) reaches VPN hosts directly anyway
+        return flow.request.headers.get("sec-fetch-site", "").strip().lower() == "cross-site"
 
     @staticmethod
     def _page_reachable(flow):
