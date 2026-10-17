@@ -881,6 +881,9 @@ def _probe_host(host, port=443):
     # TLS (no credentials ever sent — handshake only)
     try:
         ctx = ssl.create_default_context()
+        trust = os.path.join(STATE_ROOT, "upstream-trust.pem")   # what Rivis itself trusts upstream (rivis start)
+        if os.path.isfile(trust):
+            ctx.load_verify_locations(cafile=trust)
         with ctx.wrap_socket(sock, server_hostname=host) as tls:
             tls.getpeercert()
         return "ok"

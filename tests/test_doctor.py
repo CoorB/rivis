@@ -328,3 +328,24 @@ class NightQaDoctorFalseAlarms(unittest.TestCase):
                 mock.patch.object(doctor.ssl, "create_default_context", side_effect=doctor.ssl.SSLError("stop here")):
             cat = doctor._probe_host("dual.example", 443)
         self.assertNotEqual(cat, doctor.classify_network_failure("tcp", "ConnectionRefusedError", "refused"))
+
+
+class DoctorTrustsWhatRivisTrusts(unittest.TestCase):
+    def test_tls_probe_uses_the_upstream_trust_bundle(self):
+        # night QA review: on a network that inspects HTTPS, Rivis trusts the corporate root (upstream-trust.pem) but
+        # doctor's probe used Python's default roots and reported a TLS failure while Rivis worked
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        self.addCleanup(srv.close)
+        answers = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", srv.getsockname()[1]))]
+        with tempfile.TemporaryDirectory() as root:
+            open(os.path.join(root, "upstream-trust.pem"), "w").close()
+            ctx = mock.Mock()
+            ctx.wrap_socket.side_effect = doctor.ssl.SSLError("stop here")
+            with mock.patch.object(doctor, "STATE_ROOT", root), \
+                    mock.patch.object(doctor.socket, "getaddrinfo", return_value=answers), \
+                    mock.patch.object(doctor.ssl, "create_default_context", return_value=ctx):
+                doctor._probe_host("corp.example", 443)
+            ctx.load_verify_locations.assert_called_once_with(cafile=os.path.join(root, "upstream-trust.pem"))
