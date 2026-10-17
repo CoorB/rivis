@@ -98,6 +98,27 @@ class LogsAndReports(unittest.TestCase):
             self.assertIn("[REDACTED]", data)
 
 
+    def test_header_secrets_are_redacted_in_every_shape(self):
+        # Night QA lane B: "Authorization: Bearer <opaque>" kept the token (the word Bearer was masked instead), and
+        # Cookie / Set-Cookie were not redacted at all — in the bug-report zip testers are asked to attach.
+        lines = [
+            "Authorization: Bearer opaque-tok-AAA111",
+            "authorization: Basic dXNlcjpwYXNzLUJCQjIyMg==",
+            "Proxy-Authorization: Bearer opaque-tok-CCC333",
+            "Cookie: sid=cookie-DDD444; theme=dark",
+            "Set-Cookie: sid=cookie-EEE555; Path=/; HttpOnly",
+            "X-Api-Key: key-FFF666",
+            '{"Authorization": "Bearer opaque-tok-GGG777", "Cookie": "sid=cookie-HHH888"}',
+            "{'authorization': 'Bearer opaque-tok-III999', 'set-cookie': 'sid=cookie-JJJ000'}",
+            "headers=[('Authorization', 'Bearer opaque-tok-KKK111'), ('Cookie', 'sid=cookie-LLL222')]",
+        ]
+        out = bug_report.redact("\n".join(lines), None)
+        for marker in ("AAA111", "dXNlcjpwYXNzLUJCQjIyMg", "CCC333", "DDD444", "EEE555", "FFF666", "GGG777", "HHH888",
+                       "III999", "JJJ000", "KKK111", "LLL222"):
+            self.assertNotIn(marker, out, out)
+        self.assertIn("Authorization", out)               # the header names stay, so the log still reads
+
+
 class LiveLog(LiveCase):
     def test_running_proxy_creates_a_private_product_log(self):
         path = self.inst.path("..", "..", "logs", "rivis.log")

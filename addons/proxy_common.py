@@ -97,9 +97,21 @@ _JWT = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Z
 _SECRET = re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?|(?:access_|refresh_)?token|password|secret|api[_-]?key)(\s*[=:]\s*|\s+)([^\s,;&]+)")
 
 
+_SECRET_NAMES = (r"(?:proxy-)?authorization|cookie|set-cookie|x-api-key|x-auth-token|api[_-]?key|client[_-]?secret"
+                 r"|(?:access_|refresh_|id_)?token|password|passwd|secret")
+# a header line: everything after the colon is the secret ("Bearer abc", "sid=1; theme=x"), not only the first word
+_HEADER_LINE = re.compile(r"(?im)\b((?:proxy-)?authorization|cookie|set-cookie|x-api-key|x-auth-token)(\s*:\s*)(?![\"'\[])([^\r\n]+)")
+# quoted key and value: JSON {"Cookie": "…"}, a Python dict {'cookie': '…'} or header tuples ('Cookie', '…')
+_QUOTED = re.compile(r"(?i)([\"'](?:%s)[\"']\s*[:,]\s*[\"'])(.*?)([\"'])" % _SECRET_NAMES)
+_SCHEME = re.compile(r"(?i)\b(bearer|basic|digest)\s+(?!\[REDACTED)([A-Za-z0-9._~+/=-]{6,})")
+
+
 def redact_diagnostic(value):
     """Conservative text redaction for product logs and support bundles."""
     text = str(value)
+    text = _HEADER_LINE.sub(lambda m: m.group(1) + m.group(2) + "[REDACTED]", text)
+    text = _QUOTED.sub(lambda m: m.group(1) + "[REDACTED]" + m.group(3), text)
+    text = _SCHEME.sub(lambda m: m.group(1) + " [REDACTED]", text)
     text = _JWT.sub("[REDACTED-JWT]", text)
     return _SECRET.sub(lambda m: m.group(1) + m.group(2) + "[REDACTED]", text)
 
