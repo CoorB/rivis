@@ -191,6 +191,46 @@ class ProjectServersOnPrivateAddresses(LiveCase):
         self.assertEqual(self.up.hits_for("/secret"), [])
 
 
+class FreshInstallServersOnPrivateAddresses(LiveCase):
+    """2026-10-16, the pilot's first install: the tester's Mac resolved the app's servers to private VPN addresses and
+    every call got 403. 0.9.5 only let the ACTIVE project's declared hosts through, but a fresh install runs the
+    `default` project, which declares none. Only a plain-HTTP request on the proxy port can be aimed at a private
+    address by a web page (F-01, origin-form / DNS rebinding); HTTPS tunnels, simulator capture and the panel's own
+    Repeat cannot, so they reach private addresses on any project."""
+    INSTANCE_KW = {"start_args": ("--insecure",), "allow_private": False}
+
+    def setUp(self):
+        self.up.reset_hits()
+
+    def test_https_to_a_name_on_a_private_address_works_on_the_default_project(self):
+        r = self.inst.fetch("https://localhost:%d/json/small?fi=1" % self.up.https_port)
+        self.assertEqual(r.status, 200)
+        self.assertTrue(self.up.hits_for("/json/small"))
+
+    def test_https_to_a_private_ip_works_like_simulator_capture(self):
+        r = self.inst.fetch(self.up.url("/json/small?fi=2", tls=True))
+        self.assertEqual(r.status, 200)
+
+    def test_repeat_of_a_private_https_call_works(self):
+        self.inst.fetch(self.up.url("/json/small?fi=3", tls=True))
+        fid = self.inst.flow_for("/json/small?fi=3")["id"]
+        before = len(self.up.hits_for("/json/small?fi=3"))
+        self.panel.ok("retry", {"flow_id": fid, "edits": {}})
+        harness.wait_for(lambda: len(self.up.hits_for("/json/small?fi=3")) > before, 10, 0.2, "repeat reached upstream")
+
+    def test_plain_http_to_a_private_address_is_still_refused_with_the_fix_in_the_message(self):
+        r = self.inst.fetch("http://localhost:%d/json/small?fi=4" % self.up.http_port)
+        self.assertEqual(r.status, 403)
+        self.assertEqual(self.up.hits_for("/json/small"), [])
+        self.assertIn(b"--allow-private-hosts", r.body)
+
+    def test_origin_form_relay_is_still_refused(self):
+        status, _, _ = raw_http(self.inst.proxy_port, "GET", "/secret",
+                                {"Host": "127.0.0.1:%d" % self.up.http_port, "Connection": "close"})
+        self.assertEqual(status, 403)
+        self.assertEqual(self.up.hits_for("/secret"), [])
+
+
 class FreshCa(LiveCase):
     """The CA the CLI generates itself on first start (no pre-seeded copy)."""
     INSTANCE_KW = {"fresh_ca": True}

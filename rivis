@@ -18,6 +18,8 @@
 #                                 --all        also show DNS/UDP rows (hidden by default)
 #                                 --no-ios     regular proxy only (Android emulator)
 #                                 --ios-filter local-capture process filter (default CoreSimulator)
+#                                 --allow-private-hosts REGEX  also let plain-HTTP calls reach these hosts on private
+#                                              addresses (HTTPS, simulator capture and Repeat always may)
 #   <cli> projects list|use ID|show ID|new ID --label L --hosts REGEX
 #   <cli> ui | stop | status | cert
 #   <cli> browser [URL | --current] [--browser chrome|edge|chromium|brave] [--fresh] [--list]

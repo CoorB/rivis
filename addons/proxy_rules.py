@@ -406,13 +406,15 @@ class ProxyRules:
     def requestheaders(self, flow: http.HTTPFlow):
         """Keep the loopback listener from becoming a relay into local/VPN networks.
 
-        Mitmproxy 12.2.3 normalizes absolute-form to origin-form before addon hooks, so
-        the original request-target form cannot be distinguished here.  Enforcing the
-        security boundary on the resolved destination closes both the origin-form and
-        DNS-rebinding variants. Private test services require an explicit allow-list.
+        The threat (F-01) is a web page aiming the proxy port at a private address: an origin-form request, or DNS
+        rebinding, sent straight to 127.0.0.1:PORT. A page can only send plain HTTP there. Mitmproxy 12.2.3
+        normalizes absolute-form to origin-form before addon hooks, so for plain HTTP on the proxy port the boundary
+        is enforced on the resolved destination. HTTPS tunnels (CONNECT, then TLS with this CA), simulator capture
+        and the panel's own Repeat/Compose cannot come from a page, so they may reach private addresses: on a VPN the
+        app's servers often resolve to them (2026-10-16 pilot, first install on the default project).
         """
         host = flow.request.host
-        if not host or self._trusted_name(host):
+        if not host or self._trusted_name(host) or not self._page_reachable(flow):
             return
         addresses = self._resolve(host, flow.request.port)
         if addresses is None:
@@ -427,8 +429,22 @@ class ProxyRules:
         if unsafe:
             ctx.log.warn(f"proxy_rules: refused private upstream {host} -> {', '.join(sorted(unsafe))}; "
                          "use --allow-private-hosts for an intentional local test service")
-            flow.response = http.Response.make(403, b"Private upstream destinations are blocked by Rivis.\n",
-                                               {"Content-Type": "text/plain"})
+            flow.response = http.Response.make(
+                403, ("Private upstream destinations are blocked by Rivis for plain-HTTP proxy requests (%s -> %s).\n"
+                      "HTTPS calls are not affected. If this is your app's server, add its domain to your project, or"
+                      " start Rivis with --allow-private-hosts 'REGEX' (for example '%s').\n"
+                      % (host, ", ".join(sorted(unsafe)), re.escape(host))).encode(),
+                {"Content-Type": "text/plain"})
+
+    @staticmethod
+    def _page_reachable(flow):
+        """Could a web page have produced this request? Only a plain-HTTP request on the regular proxy listener."""
+        if flow.is_replay:                                    # Repeat / Compose from the signed-in panel
+            return False
+        if flow.client_conn.tls_established:                  # CONNECT + TLS with the Rivis CA: never a page's fetch
+            return False
+        mode = getattr(flow.client_conn, "proxy_mode", None)
+        return getattr(mode, "type_name", "regular") == "regular"   # local (simulator) capture is not a listener
 
     def _trusted_name(self, name):
         """A hostname (never an IP literal) the user or the project allows on private addresses."""

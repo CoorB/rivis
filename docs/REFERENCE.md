@@ -118,6 +118,11 @@ supported yet.
   captured). To capture them, start Rivis with `--allow-private-hosts '^(localhost|127\.0\.0\.1)$'`;
   `rivis browser` then sends them through Rivis too.
 
+Servers on private addresses (VPN, internal DNS): HTTPS calls, simulator capture and Repeat/Compose reach them on
+any project. Only plain-HTTP proxy requests to a private address are refused (403), because a web page could aim
+the proxy port at one (DNS rebinding). For a plain-HTTP test server, add its domain to the project's `hosts`, or
+start Rivis with `--allow-private-hosts 'REGEX'`.
+
 `rivis.ps1` supports the same cross-platform commands, including `stop`, `breakpoint`, `mock`, and `setup`.
 Windows has no iOS Simulator, so `setup` says so and configures every running Android emulator (`android on -All`).
 Options that are `key=value` in bash work the same way in PowerShell (`.\rivis.ps1 throttle lte-congested
