@@ -118,6 +118,11 @@ supported yet.
   captured). To capture them, start Rivis with `--allow-private-hosts '^(localhost|127\.0\.0\.1)$'`;
   `rivis browser` then sends them through Rivis too.
 
+Server certificates are checked against what this Mac trusts: Apple's root store plus any root your IT, MDM or you
+marked as trusted in Keychain Access (as Safari and Proxyman do), so networks that inspect HTTPS keep working.
+`RIVIS_EXTRA_TRUST=/path/root.pem` (several joined with `:`) adds a root the keychain lacks;
+`RIVIS_SYSTEM_TRUST=0` uses mitmproxy's own list only; `--insecure` turns the check off.
+
 Servers on private addresses (VPN, internal DNS): HTTPS calls, simulator capture and Repeat/Compose reach them on
 any project. Only plain-HTTP proxy requests to a private address are refused (403), because a web page could aim
 the proxy port at one (DNS rebinding). For a plain-HTTP test server, add its domain to the project's `hosts`, or

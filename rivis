@@ -428,6 +428,19 @@ cmd_start() {
   # system proxy (forbidden) and leaves every Mac app — Teams, browser, VPN — untouched.
   [ "$ios" = 1 ] && args+=(--mode "local:$filter")
   [ "$insecure" = 1 ] && args+=(--set ssl_insecure=true)
+  # Upstream HTTPS is checked against what this Mac trusts (root store + roots IT/MDM or the user trusted), like Safari
+  # and Proxyman. mitmproxy alone knows only its bundled list, so on a TLS-inspecting network every call failed.
+  # RIVIS_EXTRA_TRUST=PEM[:PEM…] adds roots the keychain lacks; RIVIS_SYSTEM_TRUST=0 keeps mitmproxy's own list.
+  if [ "$insecure" = 0 ] && [ "$(env_value SYSTEM_TRUST 1)" != 0 ]; then
+    local trust_pem="$STATE_ROOT/upstream-trust.pem" extra_trust=() trust_counts _x
+    local IFS_SAVE="$IFS"; IFS=:; for _x in $(env_value EXTRA_TRUST ""); do [ -f "$_x" ] && extra_trust+=("$_x"); done; IFS="$IFS_SAVE"
+    if trust_counts=$(/usr/bin/python3 -I "$SCRIPT_DIR/addons/system_trust.py" "$trust_pem" ${extra_trust[@]+"${extra_trust[@]}"} 2>/dev/null); then
+      args+=(--set "ssl_verify_upstream_trusted_ca=$trust_pem")
+      [ "${trust_counts#* }" != 0 ] && info "upstream HTTPS: this Mac's trust store (${trust_counts#* } added root(s) from your organisation or keychain)"
+    else
+      info "upstream HTTPS: mitmproxy's own root list (this Mac's trust store could not be read)"
+    fi
+  fi
   # Simulator capture also grabs DNS/UDP — dozens of lookup rows that bury the API calls.
   # Default view = HTTP(S) requests only, like Proxyman. --all shows the raw stream.
   local view="~http"
