@@ -41,7 +41,8 @@ Your Mac's system proxy is never changed, and nothing is reachable from outside 
 
 ## Install
 
-Mac with Apple Silicon. No admin password, nothing else to download.
+Mac with Apple Silicon. No admin password, nothing else to download. Apple's Command Line Tools must be installed
+(they are if you have Xcode; otherwise the installer tells you to run `xcode-select --install` once).
 
 1. Quit Proxyman, Charles or any other proxy app (while it runs it takes the simulator's traffic). If it leaves your
    Mac's proxy setting behind, Rivis clears it for you.
@@ -52,11 +53,8 @@ Mac with Apple Silicon. No admin password, nothing else to download.
    ```
    It works whether or not Safari already unzipped the file. For iOS, approve *Mitmproxy Redirector* when
    System Settings opens; the installer continues by itself as soon as you do (or press Enter to skip).
-4. Open a new Terminal window, then:
-   ```bash
-   rivis start --background
-   ```
-   Rivis opens in your browser. Go to **Tools → Devices** and click **Set up** for your simulator or emulator.
+4. At the end, press Enter to start Rivis; it opens in your browser. Go to **Tools → Devices** and click **Set up**
+   for your simulator or emulator. (Later, from a new Terminal window: `rivis start --background`.)
 
 ---
 
@@ -87,7 +85,12 @@ Everything else is in the browser panel. The full command list is in [docs/REFER
 ## Something not working?
 
 1. Run `rivis doctor`. It checks everything and tells you what to fix.
-2. Still stuck? Run `rivis bug-report` and attach the zip it creates (it contains no calls, tokens or keys),
+2. A call answers **403 Private upstream destinations are blocked**: that server is on a private (VPN) address and the
+   call is plain HTTP or comes from a web page. Add the app's domain to your project (`rivis projects use <app>`), or
+   start with `--allow-private-hosts 'REGEX'`. Apps' HTTPS calls are never blocked.
+3. HTTPS calls fail with **certificate verify failed** on your company network: Rivis trusts what your Mac trusts, so
+   ask IT for their root certificate and install it in Keychain Access (or start with `RIVIS_EXTRA_TRUST=/path/root.pem`).
+4. Still stuck? Run `rivis bug-report` and attach the zip it creates (it contains no calls, tokens or keys),
    together with the output of `rivis --version`.
 
 ---

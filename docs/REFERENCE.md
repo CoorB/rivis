@@ -381,7 +381,8 @@ mitmproxy version) otherwise.
 | iOS shows DNS but no API calls | Quit another tool that owns the system proxy. |
 | Emulator has no network | Run `rivis android off`, or start the proxy on the configured port. |
 | Client rejects the CA | Install it with `ios on`/`android on` and use a build that trusts the workstation CA. |
-| Upstream certificate cannot validate | Confirm the project policy, then start with `--insecure`. |
+| Upstream certificate cannot validate | Your network inspects HTTPS with a root this Mac does not trust: install IT's root in Keychain Access, or `RIVIS_EXTRA_TRUST=/path/root.pem rivis start`. Only if the server's own certificate is invalid (e.g. a dev environment) and the project policy allows it, start with `--insecure`. |
+| 403 *Private upstream destinations are blocked* | The server is on a private address and the call is plain HTTP or from a web page: add its domain to the project's `hosts`, or start with `--allow-private-hosts 'REGEX'`. |
 | A port is occupied | Stop the previous mitmweb instance or choose another `<PREFIX>_PORT`/`_WEB_PORT`. |
 
 The panel relies on mitmweb internals and must be retested after mitmproxy upgrades. Never use
