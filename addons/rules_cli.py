@@ -23,8 +23,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
 from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PROFILE_VALUES, PRODUCT, SAFE_NAME, atomic_json, breakpoints, confined_path,
-                           forbidden_file, migrate_rules, remote_url_problem, set_trusted_file, throttle_shorthand,
-                           trusted_files, user_regex)
+                           forbidden_file, migrate_rules, project_profile, remote_url_problem, set_trusted_file,
+                           throttle_shorthand, trusted_files, user_regex)
 from proxy_rule_validation import compile_rule, explain_rules, map_remote_warning, rule_fingerprint
 
 ACTIONS = ACTION_REQUIREMENTS
@@ -333,6 +333,15 @@ def rules_cmd(path, args):
         r = find(cfg, name)
         cfg["rules"].remove(r)
         save(path, cfg)
+        mock = owned_mock_file(path, r, cfg)
+        if mock:
+            try:
+                os.remove(mock)
+            except OSError as e:
+                print("removed %s (its mock file %s could not be deleted: %s)" % (name, mock, e.strerror))
+                return
+            print("removed %s and its mock file %s" % (name, mock))
+            return
         print("removed " + name)
     elif cmd in ("add", "mock-set"):
         if not SAFE_NAME.fullmatch(name) or name.startswith("."):      # F-17: same rule as the panel
@@ -384,6 +393,37 @@ def rules_cmd(path, args):
         die("unknown rules command '%s'" % cmd)
 
 
+def default_throttle_match(path):
+    """The project's own throttle scope (project.json throttle_match) for a rules file at projects/<id>/rules.json;
+    "" (all calls) when the file is not a project's or the profile cannot be read."""
+    folder = os.path.dirname(os.path.abspath(os.path.expanduser(path)))
+    if os.path.basename(os.path.dirname(folder)) != "projects":
+        return ""
+    try:
+        scope = project_profile(os.path.basename(folder)).get("throttle_match", "")
+        scope = scope.strip() if isinstance(scope, str) else ""
+        user_regex(scope)
+    except (OSError, ValueError, re.error):
+        return ""
+    return "" if scope == "." else scope
+
+
+def owned_mock_file(path, removed, cfg):
+    """The file a removed Map Local rule served from the project's mocks/ folder, when no remaining rule uses it.
+    Files elsewhere are the user's own and are never deleted."""
+    if removed.get("action") != "map_local" or not isinstance(removed.get("file"), str) or not removed["file"]:
+        return None
+    mocks = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(path)), "mocks"))
+    real = os.path.realpath(os.path.expanduser(removed["file"]))
+    if os.path.dirname(real) != mocks or not os.path.isfile(real):
+        return None
+    for other in cfg.get("rules", []):
+        if isinstance(other, dict) and isinstance(other.get("file"), str) and \
+                os.path.realpath(os.path.expanduser(other["file"])) == real:
+            return None
+    return real
+
+
 def throttle_cmd(path, args):
     cfg = load(path)
     if not args:
@@ -398,7 +438,7 @@ def throttle_cmd(path, args):
         die("throttle: " + " | ".join(PRESETS) + " | <ms>ms[/<kbps>kbps]")
     cfg["throttle"] = spec
     cfg["loss"] = 0              # R3A-03: loss= belongs to one command; a later profile uses its own loss
-    cfg["throttle_match"] = ""  # a later profile applies to all calls unless scoped again
+    cfg["throttle_match"] = default_throttle_match(path)  # a later profile goes back to the project's own scope
     for kv in args[1:]:
         k, _, v = kv.partition("=")
         if k == "match":
@@ -472,17 +512,19 @@ def breakpoint_cmd(path, args):
         print("breakpoints off" + (" (" + args[1] + ")" if len(args) > 1 else " (all)") +
               " — calls already paused stay paused until you Continue them in the UI")
         return
-    rx, req, resp, method, i = args[0], True, True, None, 1
+    rx, req, resp, method, i = args[0], False, False, None, 1
     while i < len(args):
-        if args[i] == "--request":
-            resp = False
+        if args[i] == "--request":        # the flags name the phases to pause on; both (or neither) = both
+            req = True
         elif args[i] == "--response":
-            req = False
+            resp = True
         elif args[i] == "--method" and i + 1 < len(args):
             method = args[i + 1].upper(); i += 1
         else:
             die("breakpoint options: --request | --response | --method M")
         i += 1
+    if not req and not resp:
+        req = resp = True
     try:
         user_regex(rx)
     except re.error as e:

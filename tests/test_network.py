@@ -187,6 +187,20 @@ class Breakpoints(LiveCase):
             self.panel.ok("paused_skip", {"id": got["id"]})
             self.assertEqual(call.result().status, 200)
 
+    def test_pilot_a_cli_breakpoint_catches_the_very_next_call_in_both_phases(self):
+        """Pilot feedback #1 + #4: `rivis breakpoint X --request --response` stored neither phase, and a CLI
+        breakpoint took 1-3 s to arm. No sleep between the CLI returning and the call."""
+        self.fetch("/json/small")                                      # the proxy has just checked the rules file
+        r = self.suite.rivis("breakpoint", "/echo", "--request", "--response", home=self.inst.home, env=self.inst.env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        call = self.bg("/echo?cli=both")
+        p = self.paused()[0]
+        self.assertEqual(p["phase"], "request")
+        self.panel.ok("paused_continue", {"id": p["id"]})
+        p2 = wait_for(lambda: [x for x in self.panel.state()["paused"] if x["phase"] == "response"], 10, 0.1, "response pause")[0]
+        self.panel.ok("paused_skip", {"id": p2["id"]})
+        self.assertEqual(call.result().status, 200)
+
     def test_request_pause_continue_with_edits(self):
         self.reset_state(breakpoints=[bp()])
         call = self.bg("/echo?q=1", method="POST", data="orig")

@@ -543,6 +543,7 @@ class ProxyPanel:
             "system_proxy": self.system_proxy_state(),
             "flow_count": len(self.all_flows()),
             "stream_large_bodies": str(ctx.options.stream_large_bodies),
+            "ssl_insecure": bool(getattr(ctx.options, "ssl_insecure", False)),
             "focus_host": self.focused_host,
             "project_only": self.project_only,
             "show_dns": self.show_dns,
@@ -1559,9 +1560,11 @@ class ProxyPanel:
         elif op == "delete":
             r = self.find(cfg, a["name"])
             cfg["rules"].remove(r)
-            if r.get("draft") and r.get("action") == "map_local":   # a never-saved draft: its mock file goes too
+            if r.get("action") == "map_local":   # its mock file in mocks/ goes too, unless another rule still serves it
                 path = os.path.realpath(os.path.expanduser(r.get("file") or ""))
-                if os.path.dirname(path) == os.path.realpath(MOCK_DIR) and os.path.isfile(path):
+                shared = any(isinstance(o, dict) and isinstance(o.get("file"), str) and
+                             os.path.realpath(os.path.expanduser(o["file"])) == path for o in cfg["rules"])
+                if not shared and os.path.dirname(path) == os.path.realpath(MOCK_DIR) and os.path.isfile(path):
                     os.remove(path)
             self.save_cfg(cfg)
         elif op == "add":

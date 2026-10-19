@@ -294,6 +294,42 @@ class NetworkFailure(unittest.TestCase):
                          "WRONG_VERSION_NUMBER"), "tls_refused")
 
 
+class PilotExpiredCertificate(unittest.TestCase):
+    """Pilot feedback #3: an expired upstream certificate read as "TLS handshake failed — check the host/VPN", and
+    doctor ignored that the running proxy was started with --insecure."""
+
+    def test_expired_is_its_own_category(self):
+        self.assertEqual(classify_network_failure("tls", "SSLCertVerificationError", "certificate has expired"),
+                         "cert_expired")
+
+    def run_network(self, state, category="cert_expired"):
+        rep = Report()
+        if state is not None:
+            rep.running_state = state
+        with mock.patch("doctor.project_profile", return_value={"doctor_hosts": ["edge.example"]}), \
+             mock.patch("doctor.os.path.isfile", return_value=False), \
+             mock.patch("doctor._probe_host", return_value=category), \
+             mock.patch("doctor._peer_cert_not_after", return_value=1714608000):    # 2024-05-02
+            check_network(rep, "neo", False)
+        return [(level, title, detail, fix) for sec, level, title, detail, fix in rep.items if sec == "Network"]
+
+    def test_expired_names_the_date_and_warns_when_verifying(self):
+        [(level, title, _detail, fix)] = self.run_network(None)
+        self.assertEqual(level, "warn")
+        self.assertIn("expired on 2024-05-0", title)
+        self.assertNotIn("VPN", fix)
+
+    def test_insecure_running_proxy_makes_certificate_problems_informational(self):
+        for category in ("cert_expired", "cert_san_mismatch", "cert_untrusted"):
+            [(level, _title, detail, _fix)] = self.run_network({"ssl_insecure": True}, category)
+            self.assertEqual(level, "info", category)
+            self.assertIn("--insecure", detail)
+
+    def test_insecure_does_not_hide_a_dropped_tunnel(self):
+        [(level, _title, _detail, _fix)] = self.run_network({"ssl_insecure": True}, "tls_reset")
+        self.assertEqual(level, "error")
+
+
 class SummarizeState(unittest.TestCase):
     def base(self, **kw):
         state = {"active_project": "neo", "rules": [], "skipped_rules": [],

@@ -136,6 +136,8 @@ def classify_network_failure(stage, exc_type, message):
     if "hostname mismatch" in msg or "ip address mismatch" in msg or \
        "doesn't match" in msg or "san" in msg:
         return "cert_san_mismatch"
+    if "has expired" in msg or "certificate expired" in msg:
+        return "cert_expired"
     if "certificate verify failed" in msg or "self-signed" in msg or \
        "self signed" in msg or "unable to get local issuer" in msg:
         return "cert_untrusted"
@@ -159,6 +161,7 @@ NET_EXPLAIN = {
     "tls_refused": (WARN, "TLS handshake refused (protocol/cipher)", "the gateway is TLS 1.2 static-RSA only; a forced TLS1.3/ECDHE client fails here"),
     "tls_timeout": (ERR, "TLS handshake timed out", "check the VPN / network path"),
     "cert_san_mismatch": (WARN, "server cert does not cover this host (SAN mismatch)", "expected for a shared gateway cert; not a client problem"),
+    "cert_expired": (WARN, "server certificate has expired", "apps with strict TLS fail here; through Rivis only with `start --insecure`"),
     "cert_untrusted": (INFO, "server cert not trusted by the system store", "normal for a test gateway; this check does not use the workstation CA"),
     "tls_fail": (WARN, "TLS handshake failed", "check the host/VPN"),
 }
@@ -346,7 +349,10 @@ def _parse_asn1_time(tag, value):
 
 
 def _cert_dates(path):
-    der = _read_cert_der(path)
+    return _der_cert_dates(_read_cert_der(path))
+
+
+def _der_cert_dates(der):
     tag, cert, end = _der_tlv(der, 0)
     if tag != 0x30 or end != len(der):
         raise ValueError("certificate is not one DER sequence")
@@ -858,6 +864,7 @@ def check_running(rep, web_port, rules_path=""):
         rep.add(sec, WARN, "running, but could not read its state", str(e))
         return
     lines, flags = summarize_state(state)
+    rep.running_state = state
     for lvl, title, detail in lines:
         rep.add(sec, lvl, title, detail)
     for f in flags:
@@ -867,6 +874,23 @@ def check_running(rep, web_port, rules_path=""):
         rep.add(sec, WARN, "traffic is being changed: " + f,
                 "if the app looks broken, this may be why",
                 fix)
+
+
+CERT_CATEGORIES = ("cert_expired", "cert_san_mismatch", "cert_untrusted")
+
+
+def _peer_cert_not_after(host, port=443):
+    """Expiry of the certificate the host serves (unverified handshake, no credentials sent); None if unreadable."""
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with socket.create_connection((host, port), timeout=NET_TIMEOUT) as raw:
+            with ctx.wrap_socket(raw, server_hostname=host) as tls:
+                der = tls.getpeercert(binary_form=True)
+        return _der_cert_dates(der)[1] if der else None
+    except (OSError, ValueError, ssl.SSLError):
+        return None
 
 
 def check_network(rep, project, no_net, allow_profile_network=False):
@@ -889,10 +913,21 @@ def check_network(rep, project, no_net, allow_profile_network=False):
                 "%d doctor_hosts not probed without explicit consent" % len(hosts),
                 "rerun with --allow-profile-network after reviewing %s" % override)
         return
+    # this probe verifies the certificate itself; a running Rivis started with --insecure does not, so a certificate
+    # problem here does not affect traffic through it
+    insecure = bool((getattr(rep, "running_state", None) or {}).get("ssl_insecure"))
     for host in hosts:
         cat = _probe_host(str(host))
         lvl, msg, fix = NET_EXPLAIN.get(cat, (WARN, cat, ""))
-        rep.add(sec, lvl, "%s: %s" % (host, msg), "", fix)
+        detail = ""
+        if cat == "cert_expired":
+            not_after = _peer_cert_not_after(str(host))
+            if not_after:
+                msg = "server certificate expired on %s" % time.strftime("%Y-%m-%d", time.localtime(not_after))
+        if insecure and cat in CERT_CATEGORIES:
+            lvl, fix = INFO, ""
+            detail = "the running %s skips upstream verification (--insecure), so its traffic is not affected" % PRODUCT["name"]
+        rep.add(sec, lvl, "%s: %s" % (host, msg), detail, fix)
 
 
 def _probe_host(host, port=443):

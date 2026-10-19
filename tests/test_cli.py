@@ -347,6 +347,28 @@ class Rules(CliBase):
         self.assertEqual(self.cfg()["rules"], [])
         self.assertIn("(none)", self.ok("rules", "list").stdout)
 
+    def test_pilot_rm_deletes_the_rules_own_mock_file_only(self):
+        # pilot feedback #5: `rules rm` of a mock left mocks/NAME.json behind; a file the user pointed at stays
+        self.ok("rules", "list")
+        mocks = os.path.join(self.state, "projects", "default", "mocks")
+        os.makedirs(mocks, exist_ok=True)
+        own, shared, user = (os.path.join(mocks, "own.json"), os.path.join(mocks, "shared.json"),
+                             os.path.join(self.home, "mine.json"))
+        for f in (own, shared, user):
+            open(f, "w").write("{}")
+        self.ok("rules", "add", "own", "match=/own", "action=map_local", "file=" + own)
+        self.ok("rules", "add", "sh1", "match=/sh1", "action=map_local", "file=" + shared)
+        self.ok("rules", "add", "sh2", "match=/sh2", "action=map_local", "file=" + shared)
+        self.ok("rules", "add", "user", "match=/user", "action=map_local", "file=" + user)
+        self.assertIn("its mock file", self.ok("rules", "rm", "own").stdout)
+        self.assertFalse(os.path.exists(own))
+        self.ok("rules", "rm", "sh1")
+        self.assertTrue(os.path.exists(shared))              # sh2 still serves it
+        self.ok("rules", "rm", "sh2")
+        self.assertFalse(os.path.exists(shared))
+        self.assertNotIn("mock file", self.ok("rules", "rm", "user").stdout)
+        self.assertTrue(os.path.exists(user))
+
     def test_every_action_can_be_added(self):
         mock_file = os.path.join(self.home, "m.json")
         open(mock_file, "w").write("{}")
@@ -488,6 +510,15 @@ class Throttle(CliBase):
         self.assertIn("match: (all)", self.ok("throttle", "off").stdout)
         self.assertEqual(self.cfg()["throttle_match"], "")
 
+    def test_pilot_off_returns_to_the_project_default_scope(self):
+        # pilot feedback #2: after `throttle off` a bare profile must throttle the project's hosts again, not the
+        # last match= (0.9.6) and not every call (0.9.7)
+        self.ok("--project", "neo", "throttle", "manual", "match=qa-th-slow", "latency_ms=300")
+        self.assertEqual(self.cfg("neo")["throttle_match"], "qa-th-slow")
+        self.assertIn(r"match: neo\.sa", self.ok("--project", "neo", "throttle", "off").stdout)
+        self.ok("--project", "neo", "throttle", "3g-urban")
+        self.assertEqual(self.cfg("neo")["throttle_match"], r"neo\.sa")
+
     def test_every_profile(self):
         for p in self.PROFILES:
             self.ok("throttle", p)
@@ -584,6 +615,14 @@ class Breakpoints(CliBase):
         self.ok("breakpoint", "off")
         self.assertEqual(self.cfg()["breakpoints"], [])
         self.assertIn("none", self.ok("breakpoint").stdout)
+
+    def test_pilot_both_phase_flags_pause_both_phases(self):
+        # pilot feedback #1: `--request --response` printed ON but stored request:false, response:false
+        self.ok("breakpoint", "/both", "--request", "--response")
+        self.ok("breakpoint", "/both-rev", "--response", "--request")
+        for b in self.cfg()["breakpoints"]:
+            self.assertTrue(b["request"] and b["response"], b)
+        self.assertIn("(request+response)", self.ok("breakpoint").stdout)
 
     def test_same_regex_gets_distinct_names(self):
         self.ok("breakpoint", "/dup")
