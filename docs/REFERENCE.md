@@ -272,6 +272,9 @@ configuration active, and a bad individual rule is skipped and shown in the pane
 - **Save session** keeps the call types shown by the list (HTTP calls, plus tunnel rows when TLS mode shows them,
   and other network rows when **Show network calls** is on).
   The **Only calls visible with the current filter** checkbox also narrows the save to the current filter.
+- **Sessions → HAR** exports a saved session with secrets redacted. It is built in the background, so live calls
+  and the panel keep working while it runs. A single request or response body over 4 MiB is left out of the HAR
+  (`text` empty, `size` kept, and a `comment` saying so); the saved session still holds it.
 - **Right-click a call** for Map Local, Breakpoint, Repeat, Edit & Repeat, Compare as A, Copy as cURL / URL, Show
   only this host, decrypt / stop decrypting the host, and Delete.
 - **Compare two calls**: right-click the first → **Compare: set as A**, select the second, open **Compare**

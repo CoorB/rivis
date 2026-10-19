@@ -90,6 +90,11 @@ MAX_PANEL_REQUEST_BYTES = 64 * 1024 * 1024
 MAX_PANEL_TEXT_BYTES = 32 * 1024 * 1024
 MAX_PANEL_VALUES = 1000000
 MAX_PANEL_DEPTH = 16
+# F-03: a session HAR leaves out any single body larger than this (with a comment saying so). Redacting a 60 MB body
+# took a minute of pure-Python regex that holds the interpreter lock, so even off the event loop it froze live traffic.
+HAR_BODY_LIMIT = 4 * 1024 * 1024
+# panel ops whose work (disk read, HAR build, redaction) runs on a worker thread so live traffic and the panel keep flowing
+OFF_LOOP_OPS = ("sess_har",)
 
 
 def wildcard_regex(host, path, literal_query=False):
@@ -1985,20 +1990,7 @@ class ProxyPanel:
                 if os.path.exists(pth):
                     os.remove(pth)
         elif op == "sess_har":
-            # Review R4: this went through the reduced collection format: no request headers or body, no port, zero
-            # timings, and calls without a response were dropped. A session is a capture of evidence, so it is
-            # exported from the complete saved flows by mitmproxy's own HAR writer (request headers and body, real
-            # port and timings, failed calls with their error), then redacted like every HAR unless secrets are asked for.
-            from mitmproxy.addons.savehar import SaveHar
-            flows = [f for f in self.read_session(a["name"]) if isinstance(f, http.HTTPFlow)]
-            har = SaveHar().make_har(flows)
-            entries = har.get("log", {}).get("entries", [])
-            if len(entries) == len(flows):    # HAR allows custom fields with a leading "_": which device / app sent it
-                for e, f in zip(entries, flows):
-                    src = f.metadata.get("rivis_source")
-                    if isinstance(src, dict):
-                        e["_rivisSource"] = {k: src.get(k, "") for k in ("kind", "device", "app", "id")}
-            return self._har_reply(har, a)
+            return self.sess_har(a)
         # ── collections ──
         elif op == "coll_record":
             name = (a.get("name") or "").strip()
@@ -2136,6 +2128,40 @@ class ProxyPanel:
     def _write_coll(self, doc):
         os.makedirs(COLL_DIR, exist_ok=True)
         atomic_json(self.coll_file(doc["name"]), migrate_collection(doc))
+
+    def sess_har(self, a):
+        """A saved session as a HAR. Runs on a worker thread when asked from the panel (F-03): it only reads the
+        session file and touches no shared state."""
+        # Review R4: this went through the reduced collection format: no request headers or body, no port, zero
+        # timings, and calls without a response were dropped. A session is a capture of evidence, so it is
+        # exported from the complete saved flows by mitmproxy's own HAR writer (request headers and body, real
+        # port and timings, failed calls with their error), then redacted like every HAR unless secrets are asked for.
+        from mitmproxy.addons.savehar import SaveHar
+        flows = [f for f in self.read_session(a["name"]) if isinstance(f, http.HTTPFlow)]
+        har = SaveHar().make_har(flows)
+        self._cap_har_bodies(har)
+        entries = har.get("log", {}).get("entries", [])
+        if len(entries) == len(flows):    # HAR allows custom fields with a leading "_": which device / app sent it
+            for e, f in zip(entries, flows):
+                src = f.metadata.get("rivis_source")
+                if isinstance(src, dict):
+                    e["_rivisSource"] = {k: src.get(k, "") for k in ("kind", "device", "app", "id")}
+        return self._har_reply(har, a)
+
+    @staticmethod
+    def _cap_har_bodies(har, limit=HAR_BODY_LIMIT):
+        """F-03: drop request/response bodies over `limit` bytes from a HAR (in place), leaving the size and a
+        comment, so building and redacting a session with big downloads stays short. Smaller bodies are unchanged."""
+        for e in (har.get("log") or {}).get("entries") or []:
+            for part, key in ((e.get("request") or {}, "postData"), (e.get("response") or {}, "content")):
+                body = part.get(key)
+                text = body.get("text") if isinstance(body, dict) else None
+                if text and (len(text) * 3 // 4 if body.get("encoding") == "base64" else len(text)) > limit:
+                    body["text"] = ""
+                    body.pop("encoding", None)
+                    body["comment"] = ("Body left out: larger than the %d MiB HAR export limit (%s bytes). The saved "
+                                       "session still holds it." % (limit // (1024 * 1024), body.get("size", "?")))
+        return har
 
     @staticmethod
     def _har_reply(har, a):
@@ -2511,11 +2537,18 @@ class ProxyPanel:
                         raise tornado.web.HTTPError(403, refused)
                 return super().prepare()
 
-            def post(self, op):
+            async def post(self, op):
                 self.set_header("Content-Type", "application/json")
                 try:
                     a = json.loads(self.request.body or b"{}")
-                    out = impl(self).act(op, a) or {}
+                    if op in OFF_LOOP_OPS:   # F-03: slow reads/exports must not stall the proxy's event loop
+                        import asyncio
+                        if not isinstance(a, dict):
+                            raise PanelError("request body must be a JSON object")
+                        impl(self)._check_input(a)
+                        out = await asyncio.get_running_loop().run_in_executor(None, getattr(impl(self), op), a) or {}
+                    else:
+                        out = impl(self).act(op, a) or {}
                     out["state"] = impl(self).state()
                     self.write(json.dumps(out))
                 except (PanelError, AttributeError, KeyError, TypeError, ValueError, OSError, re.error) as e:
