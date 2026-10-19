@@ -37,7 +37,9 @@ PORT="${BASH_REMATCH[1]}"
 
 # ---- which AVD, which image ---------------------------------------------------------------------------------------
 AVD=$("$ADB" -s "$SERIAL" emu avd name 2>/dev/null | tr -d '\r' | awk 'NF && $0 != "OK" {print; exit}')
-[[ "$AVD" =~ ^[A-Za-z0-9._-]+$ ]] || die "$SERIAL: could not read the AVD name"
+# `adb emu avd name` needs the emulator console's auth token (~/.emulator_console_auth_token): a missing/unreadable token
+# (another HOME, a sandbox) is the usual cause — say so, since the caller then falls back to the slow Settings route
+[[ "$AVD" =~ ^[A-Za-z0-9._-]+$ ]] || die "$SERIAL: could not read the AVD name (the emulator console needs ~/.emulator_console_auth_token — run Rivis as the user who started the emulator); one-click setup skipped"
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 [ -n "$SDK" ] || { a=$(command -v "$ADB"); SDK="$(cd "$(dirname "$a")/.." && pwd -P)"; }
 EMULATOR="$SDK/emulator/emulator"
