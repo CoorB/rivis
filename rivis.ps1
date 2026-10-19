@@ -754,9 +754,15 @@ switch ($Command) {
       if ($subcommand -eq "show") {
         Write-Host ($rule | ConvertTo-Json -Depth 20)
       } elseif ($subcommand -eq "rm") {
-        $cfg.rules = @($cfg.rules | Where-Object { $_ -ne $rule })
-        Save-RulesConfig $cfg
-        Write-Host "removed $ruleName"
+        $python = Get-PythonCommand
+        $previousProject = [Environment]::GetEnvironmentVariable("RIVIS_ACTIVE_PROJECT")
+        try {
+          $env:RIVIS_ACTIVE_PROJECT = $Project
+          & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath rules rm $ruleName
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        } finally {
+          [Environment]::SetEnvironmentVariable("RIVIS_ACTIVE_PROJECT", $previousProject)
+        }
       } else {
         $rule | Add-Member -NotePropertyName enabled -NotePropertyValue ($subcommand -eq "on") -Force
         Save-RulesConfig $cfg
@@ -822,7 +828,9 @@ switch ($Command) {
       Die ("throttle: " + ($ThrottlePresets -join " | ") + " | <ms>ms[/<kbps>kbps]")
     }
     $cfg | Add-Member -NotePropertyName throttle -NotePropertyValue $spec -Force
-    if ($spec -eq "off") { $cfg | Add-Member -NotePropertyName loss -NotePropertyValue 0 -Force }   # clean network unless loss= follows
+    $cfg | Add-Member -NotePropertyName loss -NotePropertyValue 0 -Force
+    $scope = if ($ProjectConfig.throttle_match -and $ProjectConfig.throttle_match.Trim() -ne ".") { $ProjectConfig.throttle_match.Trim() } else { "" }
+    $cfg | Add-Member -NotePropertyName throttle_match -NotePropertyValue $scope -Force
     foreach ($kv in $extras) {
       $key, $val = $kv -split '=', 2
       if ($kv -notmatch '=') { Die "throttle: expected key=value, got '$kv'" }

@@ -52,7 +52,7 @@ import proxy_common
 importlib.reload(proxy_common)
 from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRODUCT, SAFE_NAME, STATE_ROOT, atomic_json,
                           atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
-                          confined_path, migrate_collection, migrate_rules, project_profile,
+                          confined_path, migrate_collection, migrate_rules, owned_mock_file, project_profile,
                           project_profiles, project_state, tls_config, tls_covering, tls_update,
                           throttle_shorthand, user_regex)
 from proxy_codegen import TARGETS, generate
@@ -1560,13 +1560,10 @@ class ProxyPanel:
         elif op == "delete":
             r = self.find(cfg, a["name"])
             cfg["rules"].remove(r)
-            if r.get("action") == "map_local":   # its mock file in mocks/ goes too, unless another rule still serves it
-                path = os.path.realpath(os.path.expanduser(r.get("file") or ""))
-                shared = any(isinstance(o, dict) and isinstance(o.get("file"), str) and
-                             os.path.realpath(os.path.expanduser(o["file"])) == path for o in cfg["rules"])
-                if not shared and os.path.dirname(path) == os.path.realpath(MOCK_DIR) and os.path.isfile(path):
-                    os.remove(path)
+            mock = owned_mock_file(r, cfg["rules"], MOCK_DIR)
             self.save_cfg(cfg)
+            if mock:
+                os.remove(mock)
         elif op == "add":
             r = dict(a["rule"])
             if "file" in r or "body_file" in r:

@@ -252,6 +252,31 @@ class Ops(LiveCase):
         self.assertNotIn("draft", rule)
         self.assertFalse(self.panel.ok("mockfile_get", {"name": name})["draft"])
 
+    def test_delete_keeps_mock_when_body_file_still_reads_it(self):
+        path = os.path.join(self.inst.path("mocks"), "shared.json")
+        with open(path, "w") as fh:
+            fh.write("{}")
+        self.reset_state(rules=[self.rule("owner", "map_local", "/a", file=path),
+                                self.rule("reader", "respond", "/b", body_file=path)])
+        self.panel.ok("delete", {"name": "owner"})
+        self.assertTrue(os.path.isfile(path))
+        self.assertEqual([r["name"] for r in self.rules()], ["reader"])
+
+    def test_delete_does_not_remove_mock_when_rules_save_fails(self):
+        path = os.path.join(self.inst.path("mocks"), "owned.json")
+        with open(path, "w") as fh:
+            fh.write("{}")
+        self.reset_state(rules=[self.rule("owned", "map_local", "/a", file=path)])
+        rules_dir = os.path.dirname(self.inst.rules_path)
+        original = os.stat(rules_dir).st_mode & 0o777
+        try:
+            os.chmod(rules_dir, 0o500)
+            code, _doc, _raw = self.panel.post("delete", {"name": "owned"})
+            self.assertNotEqual(code, 200)
+            self.assertTrue(os.path.isfile(path))
+        finally:
+            os.chmod(rules_dir, original)
+
     def test_draft_toggle_on_clears_draft_but_plain_mock_starts_on(self):
         # B-03: an explicit toggle commits the draft; the old API call keeps its immediate-on contract.
         self.fetch("/json/small?draft-toggle=1")

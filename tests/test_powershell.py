@@ -272,6 +272,35 @@ class Commands(unittest.TestCase):
         self.bad("rules", "rm", "ghost")
         self.assertIn("r1", self.bash("rules", "list"))            # (file modes are NTFS ACLs on Windows; not asserted here)
 
+    def test_rules_rm_deletes_only_unshared_project_mock(self):
+        self.ok("rules", "list")
+        mocks = os.path.join(self.state, "projects", "default", "mocks")
+        own = os.path.join(mocks, "own.json")
+        shared = os.path.join(mocks, "shared.json")
+        for path in (own, shared):
+            open(path, "w").write("{}")
+        self.bash("rules", "add", "own", "match=/own", "action=map_local", "file=" + own)
+        self.bash("rules", "add", "shared", "match=/shared", "action=map_local", "file=" + shared)
+        cfg = self.cfg()
+        cfg["rules"].append({"name": "reader", "action": "respond", "match": "/read", "body_file": shared})
+        with open(self.rules_file(), "w") as fh:
+            json.dump(cfg, fh)
+        self.ok("rules", "rm", "own")
+        self.assertFalse(os.path.exists(own))
+        self.ok("rules", "rm", "shared")
+        self.assertTrue(os.path.exists(shared))
+
+    def test_throttle_restores_active_project_scope_with_rules_override(self):
+        self.env["RIVIS_RULES"] = os.path.join(self.home, "override", "rules.json")
+        os.makedirs(os.path.dirname(self.env["RIVIS_RULES"]))
+        self.ok("rules", "list", "-Project", "neo")
+        self.ok("throttle", "lte", "match=/old", "-Project", "neo")
+        self.ok("throttle", "off", "-Project", "neo")
+        with open(self.env["RIVIS_RULES"]) as fh:
+            cfg = json.load(fh)
+        self.assertEqual(cfg["throttle_match"], "neo\\.sa")
+        self.assertEqual(cfg["loss"], 0)
+
     def test_rules_test_explains_like_the_bash_cli(self):
         self.bash("rules", "add", "post-500", "match=/api/pay", "action=status", "status=500", "method=POST")
         out = self.ok("rules", "test", "https://api.example.test/api/pay", "POST")
@@ -298,6 +327,11 @@ class Commands(unittest.TestCase):
         self.ok("throttle", "lte", "match=/api", "loss=5")
         c = self.cfg()
         self.assertEqual((c["throttle_match"], c["loss"]), ("/api", 5))
+        self.ok("throttle", "off")
+        self.assertEqual(self.cfg()["throttle_match"], "")
+        self.ok("throttle", "lte", "match=/stale")
+        self.ok("throttle", "slow")
+        self.assertEqual(self.cfg()["throttle_match"], "")
         self.ok("throttle", "manual", "latency_ms=200", "jitter_ms=10", "down_kbps=900", "up_kbps=300", "loss_pct=1", "response_delay_ms=50")
         self.assertEqual(self.cfg()["manual"]["latency_ms"], 200)
         self.assertIn("throttle: manual", self.ok("throttle"))

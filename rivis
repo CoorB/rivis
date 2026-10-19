@@ -881,7 +881,7 @@ cmd_mock() {
   info "turn off: $CLI rules off $1"
 }
 
-cmd_rules()    { ensure_rules; warn_running_project; RIVIS_RULE_CONFDIR="$CONFDIR" /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" rules "$@"; } # R5A-02: same file guard as proxy load
+cmd_rules()    { ensure_rules; warn_running_project; RIVIS_ACTIVE_PROJECT="$PROJECT" RIVIS_RULE_CONFDIR="$CONFDIR" /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" rules "$@"; } # R5A-02: same file guard as proxy load
 cmd_scripts()  {
   ensure_rules
   # R1A-03: last_errors is runtime state, so list asks this instance's authenticated panel while it is available.
@@ -897,7 +897,7 @@ cmd_scripts()  {
   fi
   /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" --script-dir "$PROJECT_STATE/scripts" "$@"
 }
-cmd_throttle() { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" throttle "$@"; }
+cmd_throttle() { ensure_rules; RIVIS_ACTIVE_PROJECT="$PROJECT" /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" throttle "$@"; }
 cmd_nocache() { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" nocache "$@"; }
 cmd_tls() {
   ensure_rules

@@ -369,6 +369,36 @@ class Rules(CliBase):
         self.assertNotIn("mock file", self.ok("rules", "rm", "user").stdout)
         self.assertTrue(os.path.exists(user))
 
+    def test_mock_file_shared_by_body_file_survives_cli_delete(self):
+        self.ok("rules", "list")
+        mocks = os.path.join(self.state, "projects", "default", "mocks")
+        os.makedirs(mocks, exist_ok=True)
+        path = os.path.join(mocks, "shared.json")
+        open(path, "w").write("{}")
+        self.ok("rules", "add", "owner", "match=/a", "action=map_local", "file=" + path)
+        cfg = self.cfg()
+        cfg["rules"].append({"name": "reader", "action": "respond", "match": "/b", "body_file": path})
+        with open(self.rules_file(), "w") as fh:
+            json.dump(cfg, fh)
+        self.ok("rules", "rm", "owner")
+        self.assertTrue(os.path.isfile(path))
+
+    def test_rules_override_keeps_project_scope_and_mock_folder(self):
+        self.env["RIVIS_RULES"] = os.path.join(self.home, "override", "rules.json")
+        os.makedirs(os.path.dirname(self.env["RIVIS_RULES"]))
+        self.ok("rules", "list", "--project", "neo")
+        self.ok("throttle", "lte", "match=/old", "--project", "neo")
+        self.ok("throttle", "off", "--project", "neo")
+        cfg = json.load(open(self.env["RIVIS_RULES"]))
+        self.assertEqual(cfg["throttle_match"], json.load(open(os.path.join(harness.REPO, "projects", "neo", "project.json")))["throttle_match"])
+        mocks = os.path.join(self.state, "projects", "neo", "mocks")
+        os.makedirs(mocks, exist_ok=True)
+        path = os.path.join(mocks, "owned.json")
+        open(path, "w").write("{}")
+        self.ok("rules", "add", "owned", "match=/a", "action=map_local", "file=" + path, "--project", "neo")
+        self.ok("rules", "rm", "owned", "--project", "neo")
+        self.assertFalse(os.path.exists(path))
+
     def test_every_action_can_be_added(self):
         mock_file = os.path.join(self.home, "m.json")
         open(mock_file, "w").write("{}")

@@ -23,7 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
 from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PROFILE_VALUES, PRODUCT, SAFE_NAME, atomic_json, breakpoints, confined_path,
-                           forbidden_file, migrate_rules, project_profile, remote_url_problem, set_trusted_file,
+                           forbidden_file, migrate_rules, owned_mock_file, project_profile, project_state, remote_url_problem, set_trusted_file,
                            throttle_shorthand, trusted_files, user_regex)
 from proxy_rule_validation import compile_rule, explain_rules, map_remote_warning, rule_fingerprint
 
@@ -333,7 +333,7 @@ def rules_cmd(path, args):
         r = find(cfg, name)
         cfg["rules"].remove(r)
         save(path, cfg)
-        mock = owned_mock_file(path, r, cfg)
+        mock = owned_mock_file(r, cfg.get("rules", []), os.path.join(project_state(active_project(path)), "mocks"))
         if mock:
             try:
                 os.remove(mock)
@@ -393,35 +393,23 @@ def rules_cmd(path, args):
         die("unknown rules command '%s'" % cmd)
 
 
-def default_throttle_match(path):
-    """The project's own throttle scope (project.json throttle_match) for a rules file at projects/<id>/rules.json;
-    "" (all calls) when the file is not a project's or the profile cannot be read."""
+def active_project(path):
+    explicit = os.environ.get("RIVIS_ACTIVE_PROJECT")
+    if explicit:
+        return explicit
     folder = os.path.dirname(os.path.abspath(os.path.expanduser(path)))
-    if os.path.basename(os.path.dirname(folder)) != "projects":
-        return ""
+    return os.path.basename(folder) if os.path.basename(os.path.dirname(folder)) == "projects" else "default"
+
+
+def default_throttle_match(path):
+    """The active project's own throttle scope, including when rules.json is overridden."""
     try:
-        scope = project_profile(os.path.basename(folder)).get("throttle_match", "")
+        scope = project_profile(active_project(path)).get("throttle_match", "")
         scope = scope.strip() if isinstance(scope, str) else ""
         user_regex(scope)
     except (OSError, ValueError, re.error):
         return ""
     return "" if scope == "." else scope
-
-
-def owned_mock_file(path, removed, cfg):
-    """The file a removed Map Local rule served from the project's mocks/ folder, when no remaining rule uses it.
-    Files elsewhere are the user's own and are never deleted."""
-    if removed.get("action") != "map_local" or not isinstance(removed.get("file"), str) or not removed["file"]:
-        return None
-    mocks = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(path)), "mocks"))
-    real = os.path.realpath(os.path.expanduser(removed["file"]))
-    if os.path.dirname(real) != mocks or not os.path.isfile(real):
-        return None
-    for other in cfg.get("rules", []):
-        if isinstance(other, dict) and isinstance(other.get("file"), str) and \
-                os.path.realpath(os.path.expanduser(other["file"])) == real:
-            return None
-    return real
 
 
 def throttle_cmd(path, args):

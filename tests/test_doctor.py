@@ -314,10 +314,23 @@ class PilotExpiredCertificate(unittest.TestCase):
         return [(level, title, detail, fix) for sec, level, title, detail, fix in rep.items if sec == "Network"]
 
     def test_expired_names_the_date_and_warns_when_verifying(self):
-        [(level, title, _detail, fix)] = self.run_network(None)
+        with mock.patch("doctor.time.localtime", return_value=doctor.time.gmtime(1714608000 + 86400)):
+            [(level, title, _detail, fix)] = self.run_network(None)
         self.assertEqual(level, "warn")
-        self.assertIn("expired on 2024-05-0", title)
+        self.assertEqual(title, "edge.example: server certificate expired on 2024-05-02")
         self.assertNotIn("VPN", fix)
+
+    def test_insecure_only_downgrades_decrypted_hosts(self):
+        for tls in ({"mode": "allow", "allow": ["other.example"]},
+                    {"mode": "ignore", "ignore": ["edge.example"]},
+                    {"mode": "allow", "allow": []}):
+            [(level, _title, detail, _fix)] = self.run_network({"ssl_insecure": True, "tls": tls})
+            self.assertEqual((level, detail), ("warn", ""), tls)
+        for tls in ({"mode": "allow", "allow": ["*.example"]},
+                    {"mode": "ignore", "ignore": ["other.example"]}):
+            [(level, _title, detail, _fix)] = self.run_network({"ssl_insecure": True, "tls": tls})
+            self.assertEqual(level, "info", tls)
+            self.assertIn("--insecure", detail)
 
     def test_insecure_running_proxy_makes_certificate_problems_informational(self):
         for category in ("cert_expired", "cert_san_mismatch", "cert_untrusted"):

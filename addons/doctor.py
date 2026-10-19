@@ -43,7 +43,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
 from proxy_common import (  # noqa: E402
-    PRODUCT, STATE_ROOT, project_profile, project_state, tls_config,
+    PRODUCT, STATE_ROOT, project_profile, project_state, tls_config, tls_covering,
 )
 
 REPO_ROOT = os.path.dirname(HERE)
@@ -915,7 +915,9 @@ def check_network(rep, project, no_net, allow_profile_network=False):
         return
     # this probe verifies the certificate itself; a running Rivis started with --insecure does not, so a certificate
     # problem here does not affect traffic through it
-    insecure = bool((getattr(rep, "running_state", None) or {}).get("ssl_insecure"))
+    state = getattr(rep, "running_state", None) or {}
+    insecure = bool(state.get("ssl_insecure"))
+    tls = tls_config({"tls": state.get("tls") or {}})
     for host in hosts:
         cat = _probe_host(str(host))
         lvl, msg, fix = NET_EXPLAIN.get(cat, (WARN, cat, ""))
@@ -923,8 +925,10 @@ def check_network(rep, project, no_net, allow_profile_network=False):
         if cat == "cert_expired":
             not_after = _peer_cert_not_after(str(host))
             if not_after:
-                msg = "server certificate expired on %s" % time.strftime("%Y-%m-%d", time.localtime(not_after))
-        if insecure and cat in CERT_CATEGORIES:
+                msg = "server certificate expired on %s" % time.strftime("%Y-%m-%d", time.gmtime(not_after))
+        decrypted = tls["mode"] == "all" or (tls["mode"] == "allow" and bool(tls_covering(tls, host, "allow"))) or \
+            (tls["mode"] == "ignore" and not tls_covering(tls, host, "ignore"))
+        if insecure and decrypted and cat in CERT_CATEGORIES:
             lvl, fix = INFO, ""
             detail = "the running %s skips upstream verification (--insecure), so its traffic is not affected" % PRODUCT["name"]
         rep.add(sec, lvl, "%s: %s" % (host, msg), detail, fix)

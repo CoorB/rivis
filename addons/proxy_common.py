@@ -218,6 +218,26 @@ def project_state(project_id):
     return os.path.join(STATE_ROOT, "projects", project_id)
 
 
+def owned_mock_file(removed, remaining_rules, mocks_dir):
+    """Return a removed Map Local rule's private mock only when no remaining rule reads it."""
+    if not isinstance(removed, dict) or removed.get("action") != "map_local" or not isinstance(removed.get("file"), str):
+        return None
+    value = removed["file"]
+    if not value:
+        return None
+    real = os.path.realpath(os.path.expanduser(value))
+    if os.path.dirname(real) != os.path.realpath(mocks_dir) or not os.path.isfile(real):
+        return None
+    for rule in remaining_rules:
+        if not isinstance(rule, dict):
+            continue
+        for key in ("file", "body_file"):
+            ref = rule.get(key)
+            if isinstance(ref, str) and ref and os.path.realpath(os.path.expanduser(ref)) == real:
+                return None
+    return real
+
+
 def confined_path(base, path, what="path"):
     """Real path of `path`, refused unless it stays inside the `base` directory.
 
