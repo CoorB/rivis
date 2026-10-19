@@ -9,6 +9,7 @@ import socket
 import re
 import stat
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1131,6 +1132,25 @@ class StatusUiStop(CliBase):
         finally:
             self.cli("stop", env=env)
         self.assertFalse(harness.port_open(port), "stop returned while the proxy port was still listening")
+
+    def test_start_background_without_other_options_on_macos_bash(self):
+        # issue #2: `start --background` (the installer's "Start now?" answer) left no options to save, and bash 3.2
+        # under set -u died on the empty array: "fwd[@]: unbound variable". No --no-open / --no-ios here on purpose.
+        port, web = harness.free_port(), harness.free_port()
+        shimlog = tempfile.mkdtemp(dir=self.home)
+        with open(os.path.join(shimlog, "sysext"), "w") as fh:
+            fh.write("0 extension(s)\n")   # Redirector not approved: Simulator capture stays off, no real capture
+        env = dict(self.env, RIVIS_PORT=str(port), RIVIS_WEB_PORT=str(web), SHIM_LOG=shimlog)
+        try:
+            r = self.ok("start", "--background", env=env, timeout=60)
+            self.assertNotIn("unbound variable", r.stdout + r.stderr)
+            self.assertIn("running in the background", r.stdout)
+            self.assertTrue(harness.port_open(web), "UI port should listen after start returned")
+            with open(os.path.join(self.state, "last-start-%d" % web)) as fh:
+                saved = fh.read()
+            self.assertRegex(saved, r"START_ARGS=\(--project \S+ start --background --no-open \)")
+        finally:
+            self.cli("stop", env=env)
         self.assertFalse(harness.port_open(web), "stop returned while the UI port was still listening")
 
     def test_stop_never_stops_another_homes_rivis(self):

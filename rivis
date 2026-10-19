@@ -453,7 +453,7 @@ cmd_start() {
   o=$(port_owner "$WEB_PORT"); [ -n "$o" ] && die "UI port $WEB_PORT already taken by another program: $o — $free_hint"
   # how this instance was started, so an in-app update can restart it the same way (addons/update_install.sh)
   { printf 'START_PORT=%q\nSTART_WEB_PORT=%q\nSTART_PROJECT_SOURCE=%q\nSTART_PROJECT_EXPLICIT=%q\nSTART_ARGS=(' "$PORT" "$WEB_PORT" "${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}" "$start_explicit"
-    printf '%q ' --project "$PROJECT" start --background --no-open "${fwd[@]}"; printf ')\n'; } > "$START_FILE.tmp" \
+    printf '%q ' --project "$PROJECT" start --background --no-open ${fwd[@]+"${fwd[@]}"}; printf ')\n'; } > "$START_FILE.tmp" \
     && chmod 600 "$START_FILE.tmp" && mv -f "$START_FILE.tmp" "$START_FILE"
   if [ "$bg" = 1 ]; then   # same start, detached from this terminal; output goes to a private log
     mkdir -p "$STATE_ROOT/logs"; local log="$STATE_ROOT/logs/mitmweb.log"
