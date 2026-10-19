@@ -419,6 +419,8 @@ check_capture_filter() {
 
 cmd_start() {
   local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0 private_hosts="" bg=0 fwd=()
+  local start_explicit="${RIVIS_START_PROJECT_EXPLICIT:-0}"
+  [ -n "${RIVIS_START_PROJECT_EXPLICIT+x}" ] || { [ "$PROJECT_SOURCE" != argument ] || [ -n "${RIVIS_START_PROJECT_SOURCE:-}" ] || start_explicit=1; }
   local a; for a in "$@"; do [ "$a" = --background ] || fwd+=("$a"); done
   while [ $# -gt 0 ]; do case "$1" in
     --background) bg=1 ;;
@@ -450,13 +452,13 @@ cmd_start() {
   o=$(port_owner "$PORT"); [ -n "$o" ] && die "port $PORT already taken by another program: $o — $free_hint"
   o=$(port_owner "$WEB_PORT"); [ -n "$o" ] && die "UI port $WEB_PORT already taken by another program: $o — $free_hint"
   # how this instance was started, so an in-app update can restart it the same way (addons/update_install.sh)
-  { printf 'START_PORT=%q\nSTART_WEB_PORT=%q\nSTART_PROJECT_SOURCE=%q\nSTART_ARGS=(' "$PORT" "$WEB_PORT" "${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}"
+  { printf 'START_PORT=%q\nSTART_WEB_PORT=%q\nSTART_PROJECT_SOURCE=%q\nSTART_PROJECT_EXPLICIT=%q\nSTART_ARGS=(' "$PORT" "$WEB_PORT" "${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}" "$start_explicit"
     printf '%q ' --project "$PROJECT" start --background --no-open "${fwd[@]}"; printf ')\n'; } > "$START_FILE.tmp" \
     && chmod 600 "$START_FILE.tmp" && mv -f "$START_FILE.tmp" "$START_FILE"
   if [ "$bg" = 1 ]; then   # same start, detached from this terminal; output goes to a private log
     mkdir -p "$STATE_ROOT/logs"; local log="$STATE_ROOT/logs/mitmweb.log"
     # R2A-14: line-buffered, so script log() lines show in the log while the proxy runs, not only after stop
-    RIVIS_START_PROJECT_SOURCE="${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}" PYTHONUNBUFFERED=1 nohup "$0" --project "$PROJECT" start ${fwd[@]+"${fwd[@]}"} < /dev/null > "$log" 2>&1 &
+    RIVIS_START_PROJECT_SOURCE="${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}" RIVIS_START_PROJECT_EXPLICIT="$start_explicit" PYTHONUNBUFFERED=1 nohup "$0" --project "$PROJECT" start ${fwd[@]+"${fwd[@]}"} < /dev/null > "$log" 2>&1 &
     local child=$! i; disown "$child" 2>/dev/null || true
     for i in $(seq 1 60); do [ -n "$(port_owner "$WEB_PORT")" ] && break; kill -0 "$child" 2>/dev/null || break; sleep 0.5; done
     [ -n "$(port_owner "$WEB_PORT")" ] || { tail -5 "$log" >&2; die "did not start — full log: $log"; }
@@ -689,7 +691,7 @@ print("\n".join(sorted(vs, key=key)))')
   [ "$target" != "$cur" ] || die "$PRODUCT_NAME $cur is already the current version"
   [ -x "$root/tool-$target/$CLI" ] || die "$PRODUCT_NAME $target is not installed (installed: $(printf '%s' "$list" | tr '\n' ' '))"
   local was_running=""; [ -n "$(our_listeners)" ] && was_running=1
-  START_PORT=""; START_WEB_PORT=""; START_ARGS=()
+  START_PORT=""; START_WEB_PORT=""; START_PROJECT_SOURCE=""; START_PROJECT_EXPLICIT=0; START_ARGS=()
   if [ -n "$was_running" ]; then
     [ -f "$START_FILE" ] && . "$START_FILE"
     [ ${#START_ARGS[@]} -gt 0 ] || START_ARGS=(start --background --no-open)
@@ -700,7 +702,8 @@ print("\n".join(sorted(vs, key=key)))')
   grep -q '^cmd_rollback()' "$root/tool-$target/$CLI" 2>/dev/null \
     || info "$PRODUCT_NAME $target has no rollback command; to come back to $cur later run: $root/tool-$cur/$CLI rollback $cur"
   if [ -z "$was_running" ]; then info "it was not running — start it with: $CLI start"; return 0; fi
-  "$root/current/$CLI" "${START_ARGS[@]}" || die "could not start $target — run: $CLI start (or $CLI rollback $cur to undo)"
+  RIVIS_START_PROJECT_SOURCE="${START_PROJECT_SOURCE:-legacy}" RIVIS_START_PROJECT_EXPLICIT="$START_PROJECT_EXPLICIT" \
+    "$root/current/$CLI" "${START_ARGS[@]}" || die "could not start $target — run: $CLI start (or $CLI rollback $cur to undo)"
   local i; for i in $(seq 1 20); do "$root/current/$CLI" health >/dev/null 2>&1 && break; sleep 0.5; done
   if "$root/current/$CLI" health >/dev/null 2>&1; then info "$PRODUCT_NAME $target is running and healthy"
   else
@@ -711,20 +714,20 @@ print("\n".join(sorted(vs, key=key)))')
 }
 
 cmd_restart() { # R4A-01: replay saved project and flags after an upgrade, for this web port only.
-  START_PORT=""; START_WEB_PORT=""; START_PROJECT_SOURCE=""; START_ARGS=()
+  START_PORT=""; START_WEB_PORT=""; START_PROJECT_SOURCE=""; START_PROJECT_EXPLICIT=0; START_ARGS=()
   [ -f "$START_FILE" ] || die "no saved start for :$WEB_PORT — run $CLI start with the desired options"
   . "$START_FILE"
   [ "$START_PORT" = "$PORT" ] && [ "$START_WEB_PORT" = "$WEB_PORT" ] && [ ${#START_ARGS[@]} -gt 0 ] \
     || die "saved start does not match :$PORT/:$WEB_PORT — run $CLI start with the desired options"
   # A normal start follows `projects use`; an explicit --project start keeps its chosen project.
   case "$START_PROJECT_SOURCE" in
-    default|current-project|legacy)
-      [ "${START_ARGS[0]:-}" = --project ] && START_ARGS[1]="$PROJECT" ;;
+    default|current-project|legacy|argument)
+      if [ "$START_PROJECT_EXPLICIT" != 1 ] && [ "${START_ARGS[0]:-}" = --project ]; then START_ARGS[1]="$PROJECT"; fi ;;
   esac
   cmd_stop || return
   [ -z "$(port_owner "$PORT")$(port_owner "$WEB_PORT")" ] \
     || die "ports $PORT/$WEB_PORT are held by another program — stop it or choose other ports; nothing was restarted"
-  RIVIS_START_PROJECT_SOURCE="$START_PROJECT_SOURCE" "$0" "${START_ARGS[@]}"
+  RIVIS_START_PROJECT_SOURCE="$START_PROJECT_SOURCE" RIVIS_START_PROJECT_EXPLICIT="$START_PROJECT_EXPLICIT" "$0" "${START_ARGS[@]}"
 }
 
 cmd_ui() {

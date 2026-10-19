@@ -1374,6 +1374,12 @@
     document.querySelectorAll("footer .label").forEach((el) => {
       const t = el.textContent.trim(); let m;
       if (/^Intercept:/.test(t)) { setAttr(el, "data-rv", "Breakpoints on — matching calls pause"); setAttr(el, "title", t); setAttr(el, "data-rv-tone", "warn"); return; }
+      if (/^stream:/i.test(t)) {
+        const size = String(state && state.stream_large_bodies || "").trim().match(/^(\d+(?:\.\d+)?)\s*([kmgt]?)(?:b)?$/i);
+        const readable = size ? `${size[1]} ${size[2] ? size[2].toUpperCase() + "B" : "bytes"}` : "configured size";
+        setAttr(el, "data-rv", `Stream bodies above ${readable}`);
+        return;
+      }
       if ((m = t.match(/^(\d+) of (\d+) flows? selected$/))) {
         const kept = state && state.retention && state.retention.limit && state.retention.trimmed ? ` · ${state.retention.trimmed} older calls trimmed (keeps up to ${state.retention.limit}; trims oldest in batches)` : "";   // R4A-02: low-water batches may leave fewer than the cap
         setAttr(el, "data-rv", (m[1] === "0" ? `${m[2]} call${m[2] === "1" ? "" : "s"}` : `${m[1]} selected · ${m[2]} calls`) + kept); return;
@@ -2105,8 +2111,11 @@
     $("save").onclick = async () => {
       if (saving) return;
       clearTimeout(editorCheckT);
-      if (!jsonCheck(ta, $("jsonok")) && !confirm("This is not valid JSON. Save anyway?")) return;
       const headers = readHeaders("hd"), content = ta.value, status = $("st").value;
+      // F-02: warn about invalid JSON only for a JSON mock — an HTML / XML / text mock is saved as it is
+      const ctype = ((headers.find((h) => String(h[0]).toLowerCase() === "content-type") || [])[1] || "").toLowerCase();
+      const isJson = ctype ? /json/.test(ctype) : /\.json$/i.test(e.file || "");
+      if (isJson && !jsonCheck(ta, $("jsonok")) && !confirm("This is not valid JSON. Save anyway?")) return;
       // R6B-09: an unchanged body is not sent again (the server keeps the file's bytes), and Save does not redraw
       // the editor: re-sending and re-rendering 20 MB blocked the page for ~8 s per Save
       const body = { name: e.name, status, headers };

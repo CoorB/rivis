@@ -536,6 +536,7 @@ class ProxyPanel:
             "version": self.product_version(),
             "system_proxy": self.system_proxy_state(),
             "flow_count": len(self.all_flows()),
+            "stream_large_bodies": str(ctx.options.stream_large_bodies),
             "focus_host": self.focused_host,
             "project_only": self.project_only,
             "show_dns": self.show_dns,

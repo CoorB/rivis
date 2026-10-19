@@ -237,6 +237,20 @@ class Workflows(UiBase):
         self.page.wait_for_timeout(1200)
         self.assertEqual(self.fetch("/json/small?wfg=1").json(), {"v": 2})
 
+    def test_map_local_of_a_non_json_call_saves_without_a_json_warning(self):
+        # F-02: Save asked "This is not valid JSON. Save anyway?" for an HTML / text mock; cancelling it (or a browser
+        # that auto-dismisses dialogs) left the mock unsaved and the real page served
+        self.fetch("/text?f02=1")
+        self.open()
+        self.select("f02=1")
+        self.tab("call")
+        self.P("#mock").click()
+        self.P("#body").wait_for(timeout=10000)
+        self.P("#body").fill("<h1>mocked page</h1>")
+        self.P("#save").click()
+        self.page.wait_for_timeout(1200)
+        self.assertEqual(self.fetch("/text?f02=1").text, "<h1>mocked page</h1>")
+
     def test_map_local_back_discards_the_draft_and_next_call_is_live(self):
         # B-03: the visible Back path is the cancel path, including removal of the draft file.
         path = "/json/small?wf-draft-back=1"

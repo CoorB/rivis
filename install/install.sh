@@ -534,7 +534,7 @@ while IFS=$'\t' read -r pid port web tool; do
     warn "STILL RUNNING pid $pid on :$port/:$web from $tool — run $CLI restart with ${PREFIX_VAR}_PORT=$port ${PREFIX_VAR}_WEB_PORT=$web"
     continue
   fi
-  START_PORT=""; START_WEB_PORT=""; START_ARGS=()
+  START_PORT=""; START_WEB_PORT=""; START_PROJECT_SOURCE=""; START_PROJECT_EXPLICIT=0; START_ARGS=()
   . "$start_file"
   if [ "$START_PORT" != "$port" ] || [ "$START_WEB_PORT" != "$web" ] || [ ${#START_ARGS[@]} -eq 0 ]; then
     warn "STILL RUNNING pid $pid on :$port/:$web from $tool — run $CLI restart with ${PREFIX_VAR}_PORT=$port ${PREFIX_VAR}_WEB_PORT=$web"
@@ -545,7 +545,9 @@ while IFS=$'\t' read -r pid port web tool; do
     continue
   fi
   rm -f "$STATE_DIR/web-token$([ "$web" = 8083 ] || printf -- '-%s' "$web")" "$STATE_DIR/web-bootstrap$([ "$web" = 8083 ] || printf -- '-%s' "$web")"
-  if env "${PREFIX_VAR}_PORT=$port" "${PREFIX_VAR}_WEB_PORT=$web" "$LINK" "${START_ARGS[@]}"; then
+  if env "${PREFIX_VAR}_PORT=$port" "${PREFIX_VAR}_WEB_PORT=$web" \
+    "RIVIS_START_PROJECT_SOURCE=${START_PROJECT_SOURCE:-legacy}" "RIVIS_START_PROJECT_EXPLICIT=$START_PROJECT_EXPLICIT" \
+    "$LINK" "${START_ARGS[@]}"; then
     info "restarted :$port/:$web on $NAME $TOOL_VERSION"
     # never claim an upgrade worked on "it started": check it answers, on the new version
     healthy=0

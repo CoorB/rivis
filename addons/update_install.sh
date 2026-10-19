@@ -33,7 +33,7 @@ say "installed: $("$LINK" --version 2>/dev/null)"
 if [ "$running" = 0 ]; then say "it was not running — start it with: $CLI start --background"; exit 0; fi
 # R4A-01: the installer restarts running instances itself; a second stop/start would only add another outage
 if grep -q "restarted :" "$OUT" 2>/dev/null; then say "restarted on the new version"; exit 0; fi
-START_PORT=""; START_WEB_PORT=""; START_ARGS=()
+START_PORT=""; START_WEB_PORT=""; START_PROJECT_SOURCE=""; START_PROJECT_EXPLICIT=0; START_ARGS=()
 # shellcheck disable=SC1091 — written by `<cli> start` with printf %q into the owner-only state dir
 # R4A-05: each web port saves its own start; this proxy's port arrives in the environment it was started with
 P=$(product env_prefix RIVIS); WV="${P}_WEB_PORT"; WPORT="${!WV:-8083}"; SF="$STATE/last-start"; [ "$WPORT" = 8083 ] || SF="$STATE/last-start-$WPORT"
@@ -44,7 +44,8 @@ P=$(product env_prefix RIVIS); envs=()
 [ -n "$START_PORT" ] && envs+=("${P}_PORT=$START_PORT")
 [ -n "$START_WEB_PORT" ] && envs+=("${P}_WEB_PORT=$START_WEB_PORT")
 env ${envs[@]+"${envs[@]}"} "$LINK" stop
-if env ${envs[@]+"${envs[@]}"} "$LINK" "${START_ARGS[@]}"; then
+if env ${envs[@]+"${envs[@]}"} "RIVIS_START_PROJECT_SOURCE=${START_PROJECT_SOURCE:-legacy}" \
+  "RIVIS_START_PROJECT_EXPLICIT=$START_PROJECT_EXPLICIT" "$LINK" "${START_ARGS[@]}"; then
   for _ in $(seq 1 20); do env ${envs[@]+"${envs[@]}"} "$LINK" health >/dev/null 2>&1 && break; sleep 0.5; done
   if env ${envs[@]+"${envs[@]}"} "$LINK" health; then say "restarted on the new version"
   else say "the new version is not healthy — go back with: $CLI rollback"; exit 1; fi

@@ -23,6 +23,14 @@ class ViewLabelsUi(UiBase):
         code, raw = self.panel._do(req, 30)
         self.assertEqual(code, 200, raw[:200])
 
+    def test_stream_threshold_status_label_uses_configured_size(self):
+        page = self.open()
+        label = page.locator("footer .label").filter(has_text="stream:").first
+        label.wait_for(timeout=10000)
+        wait_for(lambda: label.get_attribute("data-rv") == "Stream bodies above 64 MB", 8, 0.2,
+                 "readable stream threshold in status bar")
+        self.assertEqual(self.errors, [])
+
     def test_all_traffic_puts_the_project_label_back(self):
         # R9-02: after Show → NEO only → All traffic the header, status bar and empty state kept saying "NEO"
         self.addCleanup(lambda: self.panel.ok("view", {"project_only": False, "show_dns": True}))

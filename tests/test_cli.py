@@ -985,6 +985,26 @@ class StartArgv(CliBase):
 
 
 class StatusUiStop(CliBase):
+    def test_restart_follows_selected_project_after_096_upgrade(self):
+        self.ok("projects", "new", "qa_alpha", "--label", "Alpha", "--hosts", "alpha.test")
+        try:
+            self.ok("start", "--background", "--no-open", "--no-ios", timeout=60)
+            start_file = os.path.join(self.state, "last-start-" + self.env["RIVIS_WEB_PORT"])
+            # 0.9.6 had no source marker. Its installer replayed the saved
+            # --project, so the new launcher mistook that replay for a user choice.
+            with open(start_file) as fh:
+                saved = fh.read()
+            with open(start_file, "w") as fh:
+                fh.write(saved.replace("START_PROJECT_SOURCE=current-project\n", "START_PROJECT_SOURCE=argument\n")
+                              .replace("START_PROJECT_SOURCE=default\n", "START_PROJECT_SOURCE=argument\n"))
+            self.ok("projects", "use", "qa_alpha")
+            self.ok("restart", timeout=60)
+            out = self.ok("status").stdout
+            self.assertIn("project: qa_alpha (Alpha)", out)
+            self.assertNotIn("selected project:", out)
+        finally:
+            self.cli("stop")
+
     def test_r904_restart_loads_project_selected_with_projects_use(self):
         self.ok("projects", "new", "qa_alpha", "--label", "Alpha", "--hosts", "alpha.test")
         try:
