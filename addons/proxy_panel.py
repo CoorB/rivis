@@ -526,6 +526,7 @@ class ProxyPanel:
             "throttle": cfg.get("throttle", "off"),
             "throttle_match": cfg.get("throttle_match", ""),
             "loss": cfg.get("loss", 0),
+            "no_cache": bool(cfg.get("no_cache")),
             "manual": {k: (cfg.get("manual") or {}).get(k, 0) for k in MANUAL_KEYS},
             "profiles": PROFILES,
             "breakpoints": bps,
@@ -1751,6 +1752,9 @@ class ProxyPanel:
                 f.comment = (f.comment + " | " if f.comment else "") + tag
                 f.resume()
             ctx.master.view.update([f])
+        elif op == "nocache":            # Proxyman "No Caching": a project switch, hot-reloaded by proxy_rules
+            cfg["no_cache"] = bool(a.get("on"))
+            self.save_cfg(cfg)
         elif op == "profile":
             pid = a.get("id", cfg.get("throttle", "off"))
             if pid not in {p["id"] for p in PROFILES}:

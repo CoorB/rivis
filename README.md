@@ -17,6 +17,7 @@ Built on [mitmproxy](https://mitmproxy.org) (unchanged). Runs only on your Mac, 
 | Serve your own response instead of the server's | **Map Local this call**, then edit the mock |
 | Force an error, a delay or a dropped call | One click on a call: status `503`, delay, block |
 | Test on a slow or flaky network | **Network** tab: 3G, congested LTE, VPN latency, packet loss |
+| Always get fresh content (never a cached copy or an empty 304) | **Network** tab → **No caching**, or `rivis nocache on` |
 | Send a call again, or edit and resend it | **Repeat** (`⌘↵`) / **Edit & Repeat** (`⌥⇧↵`), or build one in **Compose** |
 | Compare two calls | Right-click the first → **Compare: set as A**, select the second, then in **Compare** click **Compare A with B** |
 | Keep or share evidence | Save a **session**, or export a **HAR** (secrets are masked) |

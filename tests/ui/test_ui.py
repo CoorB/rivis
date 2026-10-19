@@ -578,6 +578,26 @@ class UiSmoke(UiBase):
         wait_for(lambda: "Packet loss is active: 20%" in self.panel_text(), 8, 0.3,
                  "CLI packet loss shown in open Network tab")
 
+    def test_network_tab_no_caching_toggle_by_keyboard(self):
+        page = self.open()
+        page.locator("#fab").click()
+        page.locator("button[data-t=net]").click()
+        box = page.locator("#proxy-panel-host").locator("#nocache")
+        wait_for(lambda: box.count() == 1, 8, 0.2, "No caching switch shown")
+        self.assertFalse(box.is_checked())
+        self.assertIn("No caching", self.panel_text())
+        box.focus()
+        page.keyboard.press("Space")
+        wait_for(lambda: self.panel.state()["no_cache"] is True, 8, 0.2, "No caching saved on")
+        self.assertIs(self.inst.cfg().get("no_cache"), True)
+        wait_for(lambda: page.locator("#proxy-panel-host").locator("#nocache").is_checked(), 8, 0.2, "switch shows on")
+        page.locator("#proxy-panel-host").locator("#nocache").focus()
+        page.keyboard.press("Space")
+        wait_for(lambda: self.panel.state()["no_cache"] is False, 8, 0.2, "No caching saved off")
+        self.reset_state(no_cache=True)                     # set from the CLI: the open tab follows
+        wait_for(lambda: page.locator("#proxy-panel-host").locator("#nocache").is_checked(), 8, 0.3, "CLI change shown")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

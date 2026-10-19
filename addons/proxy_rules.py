@@ -11,6 +11,7 @@ File: the active project's rules.json (option `proxy_rules_file`):
   "throttle": "off",            # off | lte | 3g | edge | slow | "<latency_ms>ms[/<kbps>kbps]"
   "throttle_match": ".",  # regex on URL; only matching calls are throttled ("" = all)
   "loss": 0,                     # % of matching calls dropped (connection killed)
+  "no_cache": false,             # No Caching: strip conditional request headers, force no-store responses
   "rules": [
     {"name": "...", "enabled": true, "match": "<regex on full URL>", "method": "GET",
      "action": "<one of below>", ...action fields}
@@ -162,6 +163,32 @@ def _tag_rule(flow, rule, suffix="", modified=True):
         flow.metadata["proxy_modified"] = True
     kind = "mock" if rule.get("action") in ("respond", "map_local") else "rule"
     _tag(flow, f"{kind}:{rule['name']}{suffix}")
+
+
+_CONDITIONAL_HEADERS = ("If-None-Match", "If-Modified-Since", "If-Match", "If-Unmodified-Since", "If-Range")
+
+
+def _no_cache_request(flow):
+    """No Caching, request side: the server cannot answer 304 to a request that carries no validators."""
+    for name in _CONDITIONAL_HEADERS:
+        flow.request.headers.pop(name, None)
+    flow.request.headers["Cache-Control"] = "no-cache"
+    flow.request.headers["Pragma"] = "no-cache"
+    flow.metadata["proxy_no_cache"] = True
+    _tag(flow, "no-cache")
+
+
+def _no_cache_response(flow):
+    """No Caching, response side: the app must not store this answer nor revalidate it later."""
+    h = flow.response.headers
+    h["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    h["Pragma"] = "no-cache"
+    h["Expires"] = "0"
+    h.pop("ETag", None)
+    h.pop("Last-Modified", None)
+    if not flow.metadata.get("proxy_no_cache"):
+        flow.metadata["proxy_no_cache"] = True
+        _tag(flow, "no-cache")
 
 
 def _confdir():
@@ -316,6 +343,7 @@ class ProxyRules:
         self.throttle = None        # (latency, jitter, down, up, loss, delay) or None
         self.throttle_re = None
         self.loss = 0
+        self.no_cache = False       # No Caching (Proxyman tool): every decrypted call fetches fresh content
         self.skipped_rules = []
         self.failed_rules = {}      # R2A-02: rules whose file could not be read at request time {name: error}
         self.last_good_cfg = {"rules": []}
@@ -383,6 +411,7 @@ class ProxyRules:
             self._set_breakpoints(None)
             self._set_tls({})
             self.rules, self.throttle, self.loss, self.mtime = [], None, 0, None
+            self.no_cache = False
             self.skipped_rules = []
             self.failed_rules.clear()      # R3A-01: no removed rule may remain in doctor/panel state
             return
@@ -424,6 +453,7 @@ class ProxyRules:
             self.rules, self.throttle = rules, throttle
             self.failed_rules = {n: e for n, e in self.failed_rules.items() if n in {r["name"] for r in rules}}  # R3A-01
             self.throttle_re, self.loss = throttle_re, loss
+            self.no_cache = bool(cfg.get("no_cache"))
             self.tls = tls
             self.skipped_rules = skipped
             self._sync_hits(cfg.get("rules", []))
@@ -431,7 +461,8 @@ class ProxyRules:
             self.mtime = mtime
             names = ", ".join(r.get("name", "?") for r in rules) or "none"
             ctx.log.info(f"proxy_rules: loaded {self.path} — active rules: {names}; "
-                         f"throttle: {cfg.get('throttle', 'off')}; loss: {self.loss}%; TLS: {tls['mode']}")
+                         f"throttle: {cfg.get('throttle', 'off')}; loss: {self.loss}%; TLS: {tls['mode']}"
+                         + ("; no caching: on" if self.no_cache else ""))
         except Exception as e:   # keep the previous good rules on a bad edit
             ctx.log.warn(f"proxy_rules: cannot load {self.path}: {e} — keeping previous rules")
             self.mtime = mtime
@@ -818,6 +849,8 @@ class ProxyRules:
             else:
                 self._record(r, changed=False, reason=f"matched, but replace={r['replace']!r} changed nothing in the URL "
                                                        f"(replace is the URL pattern, with is the replacement)")
+        if self.no_cache and not answers_locally:
+            _no_cache_request(flow)
         for r in self._matching(flow, {"set_header"}):
             if r.get("side", "request") == "request":
                 if r.get("value") is None:
@@ -888,6 +921,8 @@ class ProxyRules:
 
     # ── response side ────────────────────────────────────────────
     def responseheaders(self, flow: http.HTTPFlow):
+        if self.no_cache and not flow.metadata.get("proxy_local"):
+            _no_cache_response(flow)       # here, not in response: streamed bodies send their headers right after
         if (flow.response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower() == "text/event-stream":
             # R4B-01: the body may never finish, so buffering it would hide every event from the client.
             flow.response.stream = True

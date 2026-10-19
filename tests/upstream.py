@@ -110,6 +110,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, doc)
         if p == "/json/small":
             return self._send(200, SMALL_JSON)
+        if p == "/etag":
+            # a cacheable resource: answers 304 when the client revalidates with the current validator
+            validators = [("ETag", '"v1"'), ("Last-Modified", "Mon, 01 Jan 2024 00:00:00 GMT"),
+                          ("Cache-Control", "max-age=3600")]
+            if self.headers.get("If-None-Match") == '"v1"':
+                return self._send(304, b"", ctype=None, headers=validators)
+            return self._send(200, {"fresh": True}, headers=validators)
         if p == "/json/gzip":
             raw = json.dumps({"gz": True, "items": list(range(50)), "name": "zipped"}).encode()
             return self._send(200, gzip.compress(raw), headers=[("Content-Encoding", "gzip")])

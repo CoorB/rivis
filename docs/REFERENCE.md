@@ -110,6 +110,7 @@ rivis rules add NAME match=REGEX action=ACTION [key=value ...]
 rivis scripts list | new NAME --lang py|js [--match REGEX] | on NAME | off NAME | edit NAME | rm NAME
 rivis throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]
               [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
+rivis nocache on|off|status                          # No Caching: always fresh content, never an empty 304
 rivis tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
 rivis compose list | send NAME [--var name=value] [--no-wait]
 rivis breakpoint [REGEX [--request|--response] [--method M] | off [NAME]]   # no arguments: list; paused calls: Continue in the UI
@@ -354,6 +355,20 @@ HTTP/2 pseudo-headers, hop-by-hop headers and `Content-Length` are dropped; repe
 password, PIN, OTP or token (plus anything shaped like a JWT) become `<redacted>`. Untick it only when
 the snippet will not leave your machine; the note under the menu says so. Snippets get pasted into tickets and
 chats, and tokens must not be.
+
+### Network: No caching
+
+Tools → **Network → Caching → No caching** (or `rivis nocache on|off|status`, `.\rivis.ps1 nocache …`) is
+Proxyman's *No Caching* tool, a per-project switch stored as `"no_cache": true` in the project's `rules.json`
+and hot-reloaded like the throttle. Off by default. While it is on, every decrypted call:
+
+- request: `If-None-Match`, `If-Modified-Since`, `If-Match`, `If-Unmodified-Since` and `If-Range` are removed and
+  `Cache-Control: no-cache` + `Pragma: no-cache` are added, so the server cannot answer an empty `304`;
+- response: `Cache-Control: no-store, no-cache, must-revalidate`, `Pragma: no-cache` and `Expires: 0` are set and
+  `ETag` / `Last-Modified` are removed, so the app does not keep or revalidate it.
+
+Affected calls carry `no-cache` in their comment. Calls answered locally (Map Local, `respond` rules) are left
+exactly as the mock defines them. `rivis status` prints `No caching: on` while it is on.
 
 ### HTTPS decryption (TLS list)
 

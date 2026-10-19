@@ -90,6 +90,60 @@ class Profiles(LiveCase):
             self.assertIn("error", doc)
 
 
+class NoCaching(LiveCase):
+    """Proxyman's No Caching: validators stripped from requests, no-store on responses, Map Local left alone."""
+    CONDITIONAL = {"If-None-Match": '"v1"', "If-Modified-Since": "Mon, 01 Jan 2024 00:00:00 GMT", "If-Match": '"v1"',
+                   "If-Unmodified-Since": "Mon, 01 Jan 2024 00:00:00 GMT", "If-Range": '"v1"'}
+
+    def sent_headers(self):
+        hits = self.up.hits_for("/etag")
+        self.assertEqual(len(hits), 1)
+        return {k.lower(): v for k, v in hits[0]["headers"]}
+
+    def test_on_strips_validators_and_forces_fresh_response(self):
+        self.reset_state(no_cache=True)
+        r = self.fetch("/etag", headers=self.CONDITIONAL)
+        self.assertEqual(r.status, 200)                         # never an empty 304
+        sent = self.sent_headers()
+        for name in self.CONDITIONAL:
+            self.assertNotIn(name.lower(), sent)
+        self.assertEqual((sent.get("cache-control"), sent.get("pragma")), ("no-cache", "no-cache"))
+        self.assertEqual(r.header("Cache-Control"), "no-store, no-cache, must-revalidate")
+        self.assertEqual((r.header("Pragma"), r.header("Expires")), ("no-cache", "0"))
+        self.assertIsNone(r.header("ETag"))
+        self.assertIsNone(r.header("Last-Modified"))
+        self.assertIn("no-cache", self.comment("/etag"))
+        self.assertTrue(self.panel.state()["no_cache"])
+
+    def test_off_leaves_the_call_unchanged(self):
+        r = self.fetch("/etag", headers=self.CONDITIONAL)
+        self.assertEqual(r.status, 304)
+        self.assertEqual(self.sent_headers().get("if-none-match"), '"v1"')
+        self.assertEqual(r.header("ETag"), '"v1"')
+        self.assertNotIn("no-cache", self.comment("/etag") or "")
+        self.assertFalse(self.panel.state()["no_cache"])
+
+    def test_map_local_answer_is_untouched(self):
+        path = self.inst.path("nc.json")
+        open(path, "w").write('{"local":true}')
+        self.reset_state(no_cache=True, rules=[self.rule("nc-map", "map_local", "/etag", file=path,
+                                                         headers={"ETag": '"local"', "Cache-Control": "max-age=60"})])
+        r = self.fetch("/etag", headers=self.CONDITIONAL)
+        self.assertEqual((r.status, r.body), (200, b'{"local":true}'))
+        self.assertEqual((r.header("ETag"), r.header("Cache-Control")), ('"local"', "max-age=60"))
+        self.assertIsNone(r.header("Expires"))
+        self.assertEqual(self.up.hits_for("/etag"), [])
+        self.assertNotIn("no-cache", self.comment("/etag") or "")
+
+    def test_panel_toggle_switches_it_on_and_off(self):
+        self.panel.ok("nocache", {"on": True})
+        self.assertTrue(self.inst.cfg().get("no_cache"))
+        wait_for(lambda: self.fetch("/etag", headers=self.CONDITIONAL).status == 200, 12, 0.3, "no caching applied")
+        self.panel.ok("nocache", {"on": False})
+        self.assertFalse(self.inst.cfg().get("no_cache"))
+        wait_for(lambda: self.fetch("/etag", headers=self.CONDITIONAL).status == 304, 12, 0.3, "no caching removed")
+
+
 def bp(name="b", match="/echo", request=True, response=False, method=None, enabled=True):
     d = {"name": name, "match": match, "request": request, "response": response, "enabled": enabled}
     if method:

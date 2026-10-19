@@ -36,6 +36,8 @@
 #   <cli> scripts list|new NAME --lang py|js [--match REGEX]|on NAME|off NAME|edit NAME|rm NAME
 #   <cli> throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]
 #                 [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
+#   <cli> nocache on|off|status            No Caching: strip If-None-Match/If-Modified-Since… from requests and
+#                                 force no-store on responses, so the app never gets a 304 (Map Local untouched)
 #   <cli> tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
 #                                 which hosts are decrypted (Proxyman "SSL Proxying list"); wildcards like
 #                                 *.example.test. Hot-reloaded for NEW connections — no restart.
@@ -896,6 +898,7 @@ cmd_scripts()  {
   /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" --script-dir "$PROJECT_STATE/scripts" "$@"
 }
 cmd_throttle() { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" throttle "$@"; }
+cmd_nocache() { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" nocache "$@"; }
 cmd_tls() {
   ensure_rules
   [ $# -gt 0 ] || set -- list
@@ -1326,6 +1329,7 @@ cmd_status() {
   /usr/bin/python3 -I -c 'import json,sys; sys.path.insert(0,sys.argv[1]); from proxy_common import tls_config
 t=tls_config(json.load(open(sys.argv[2]))); n=len(t[t["mode"]]) if t["mode"]!="all" else 0
 print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n==1 else "s")) if t["mode"]!="all" else " (every host)"))' "$SCRIPT_DIR/addons" "$RULES" 2>/dev/null || echo "TLS decryption: unreadable rules file"
+  /usr/bin/python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); isinstance(c, dict) and c.get("no_cache") and print("No caching: on")' "$RULES" 2>/dev/null || true
   [ "$PROJECT_ANDROID" = "[]" ] || echo "project Android packages: $PROJECT_ANDROID"
   [ "$PROJECT_IOS" = "[]" ] || echo "project iOS bundle IDs: $PROJECT_IOS"
   echo "macOS system https proxy: $sp$( [ "$sp" != off ] && [ -z "$(port_owner "${sp##*:}")" ] && echo "   ← NOTHING LISTENS THERE: Mac apps have no network. Run: $CLI net-reset")"
@@ -1413,6 +1417,7 @@ case "${1:-}" in
   rules)     shift; cmd_rules "$@" ;;
   scripts)   shift; cmd_scripts "$@" ;;
   throttle)  shift; cmd_throttle "$@" ;;
+  nocache)   shift; cmd_nocache "$@" ;;
   tls)       shift; cmd_tls "$@" ;;
   compose)   shift; cmd_compose "$@" ;;
   breakpoint) shift; cmd_breakpoint "$@" ;;

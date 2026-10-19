@@ -18,6 +18,8 @@ system proxy, one CA per workstation, removed again with `off`.
   .\<cli>.ps1 throttle [off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]]
                          [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
                          (-Match REGEX / -Loss PCT work too)
+  .\<cli>.ps1 nocache on|off|status         No Caching: strip If-None-Match/If-Modified-Since... from requests and
+                                            force no-store on responses (Map Local answers untouched)
   .\<cli>.ps1 tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
                                             which hosts are decrypted (wildcards like *.example.test);
                                             hot-reloaded for NEW connections, no restart
@@ -401,6 +403,10 @@ function Show-Throttle($cfg) {
   $filter = if ($cfg.throttle_match) { $cfg.throttle_match } else { "(all)" }
   $lossValue = if ($null -ne $cfg.loss) { $cfg.loss } else { 0 }
   Write-Host "throttle: $spec  match: $filter  loss: $lossValue%"
+}
+
+function Show-NoCache($cfg) {
+  Write-Host ("No caching: " + $(if ($cfg.no_cache -eq $true) { "on" } else { "off" }))
 }
 
 $ThrottlePresets = @("off","3g-urban","lte-congested","high-latency-vpn","packet-loss-8","manual","lte","3g","edge","slow")
@@ -836,6 +842,17 @@ switch ($Command) {
     Save-RulesConfig $cfg
     Show-Throttle $cfg
   }
+  "nocache" {
+    Ensure-Rules
+    $cfg = Read-RulesConfig
+    $sub = if ($Action) { $Action.ToLowerInvariant() } else { "status" }
+    if ($Name -or $sub -notin @("on","off","status")) { Die "nocache: on | off | status" }
+    if ($sub -ne "status") {
+      $cfg | Add-Member -NotePropertyName no_cache -NotePropertyValue ($sub -eq "on") -Force
+      Save-RulesConfig $cfg
+    }
+    Show-NoCache $cfg
+  }
   "tls" {
     Ensure-Rules
     $cfg = Read-RulesConfig
@@ -1163,8 +1180,10 @@ switch ($Command) {
   "status" {
     Ensure-Rules
     Write-Host "project: $Project ($($ProjectConfig.label))"
-    $statusTls = Get-Tls (Read-RulesConfig)
+    $statusCfg = Read-RulesConfig
+    $statusTls = Get-Tls $statusCfg
     Write-Host ("TLS decryption: {0}{1}" -f $statusTls.mode, $(if ($statusTls.mode -eq "all") { " (every host)" } else { " ($(@($statusTls[$statusTls.mode]).Count) host pattern(s))" }))
+    if ($statusCfg.no_cache -eq $true) { Write-Host "No caching: on" }
     if (@($ProjectConfig.android_packages).Count) { Write-Host "project Android packages: $(@($ProjectConfig.android_packages) -join ', ')" }
     if (@($ProjectConfig.ios_bundle_ids).Count) { Write-Host "project iOS bundle IDs: $(@($ProjectConfig.ios_bundle_ids) -join ', ')" }
     $o = Port-Owner $Port;    Write-Host "proxy :$Port     $(if ($o) { $o } else { 'not listening' })"

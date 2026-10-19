@@ -438,6 +438,25 @@ class Rules(CliBase):
         self.assertEqual(left, [])
 
 
+class NoCache(CliBase):
+    def test_on_off_status(self):
+        self.assertEqual(self.ok("nocache").stdout.strip().splitlines()[-1], "No caching: off")   # first run also creates rules.json
+        self.assertNotIn("No caching", self.stopped_status().stdout)
+        self.assertEqual(self.ok("nocache", "on").stdout.strip(), "No caching: on")
+        self.assertIs(self.cfg()["no_cache"], True)
+        self.assertEqual(self.ok("nocache", "status").stdout.strip(), "No caching: on")
+        self.assertIn("No caching: on", self.stopped_status().stdout)
+        self.assertEqual(self.ok("nocache", "off").stdout.strip(), "No caching: off")
+        self.assertIs(self.cfg()["no_cache"], False)
+        self.assertNotIn("No caching", self.stopped_status().stdout)
+        self.refused("nocache", "maybe", msg="on | off | status")
+        self.refused("nocache", "on", "extra", msg="on | off | status")
+
+    def test_help_lists_nocache(self):
+        self.assertIn("nocache on|off|status", self.ok("--help").stdout)
+        self.assertIn("nocache", self.ok("nocache", "--help").stdout)
+
+
 class Throttle(CliBase):
     def test_r5a04_manual_values_are_reported(self):
         # R5A-04: both the setter and readback must show the active manual settings.

@@ -618,7 +618,7 @@
     const scriptErrors = Object.keys((state.script_status || {}).errors || {}).length;
     $("c-scripts").textContent = scriptErrors ? `! ${scriptErrors}` : (on(state.scripts || []) || "");
     $("c-scripts").classList.toggle("err", scriptErrors > 0);
-    const active = on(state.rules) || on(state.breakpoints) || state.throttle !== "off" || Number(state.loss || 0) > 0;
+    const active = on(state.rules) || on(state.breakpoints) || state.throttle !== "off" || Number(state.loss || 0) > 0 || !!state.no_cache;
     $("fabdot").style.display = active ? "inline-block" : "none";
     $("fab").classList.toggle("paused", state.paused.length > 0);
     const label = state.project.label || state.view_project;
@@ -929,6 +929,8 @@
         </div>
         <div class="btns"><button class="b p" id="mapply">Apply manual profile</button></div>
       </div>
+      <h4>Caching</h4>
+      <div class="row">${sw('id="nocache" aria-describedby="nocache-d"', state.no_cache)}<div class="n"><label for="nocache">No caching</label> <div class="sub" id="nocache-d">Strips If-None-Match / If-Modified-Since from requests and marks responses no-store, so the app always gets fresh content (never an empty 304). Map Local answers are left as they are</div></div></div>
       ${tlsSectionHTML()}
       <h4>What the list shows</h4>
       <div class="row">${sw('id="project-filter"', state.project_only)}<div class="n">Only ${esc(state.project.label)} calls <div class="sub">Hides other apps' traffic. Also in the “Show” menu above</div></div></div>
@@ -944,6 +946,7 @@
       run("profile", { id: "manual", manual, match: $("tm").value }, "Network: manual profile");
     };
     $("tm").onchange = () => run("profile", { match: $("tm").value }, "Applies to: " + ($("tm").value || "all calls"));
+    $("nocache").onchange = () => run("nocache", { on: $("nocache").checked }, "No caching " + ($("nocache").checked ? "on" : "off"));
     $("project-filter").onchange = () => run("view", { project: state.view_project, project_only: $("project-filter").checked, show_dns: false }, "Call list updated");
     $("dns").onchange = () => run("view", { project_only: false, show_dns: $("dns").checked }, "Call list updated");
     $("openset").onclick = () => openHelp("settings");

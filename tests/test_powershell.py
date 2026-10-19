@@ -280,6 +280,17 @@ class Commands(unittest.TestCase):
         self.assertIn("only for POST", out)
         self.bad("rules", "test", msg="usage: rules test URL")
 
+    def test_nocache_parity_with_the_bash_cli(self):
+        self.assertIn("No caching: off", self.ok("nocache"))
+        self.assertIn("No caching: on", self.ok("nocache", "on"))
+        self.assertIs(self.cfg()["no_cache"], True)
+        self.assertIn("No caching: on", self.ok("nocache", "status"))
+        self.assertIn("No caching: off", self.ok("nocache", "off"))
+        self.assertIs(self.cfg()["no_cache"], False)
+        self.bad("nocache", "maybe", msg="on | off | status")
+        self.bad("nocache", "on", "extra", msg="on | off | status")
+        self.assertIn("nocache on|off|status", self.ok("help"))
+
     def test_throttle_profiles_options_and_validation(self):
         for profile in ("off", "3g-urban", "lte-congested", "high-latency-vpn", "packet-loss-8", "lte", "3g", "edge", "slow", "150ms", "300ms/500kbps"):
             self.ok("throttle", profile)

@@ -6,6 +6,7 @@
   rules_cli.py FILE rules add NAME match=REGEX action=ACTION [key=value ...]
   rules_cli.py FILE rules edit
   rules_cli.py FILE throttle off|lte|3g|edge|slow|<ms>ms[/<kbps>kbps] [match=REGEX] [loss=PCT]
+  rules_cli.py FILE nocache on|off|status       strip conditional request headers, force fresh responses
 
 Values are parsed as JSON when they can be (status=500 → 500, set={"a":1} → object),
 otherwise kept as text. The running proxy picks every change up within a second.
@@ -417,6 +418,23 @@ def throttle_cmd(path, args):
     print(throttle_description(cfg))
 
 
+def nocache_description(cfg):
+    return "No caching: %s" % ("on" if cfg.get("no_cache") else "off")
+
+
+def nocache_cmd(path, args):
+    cfg = load(path)
+    cmd = (args[0].lower() if args else "status")
+    if cmd in ("on", "off"):
+        if len(args) > 1:
+            die("nocache: on | off | status")
+        cfg["no_cache"] = cmd == "on"
+        save(path, cfg)
+    elif cmd != "status" or len(args) > 1:
+        die("nocache: on | off | status")
+    print(nocache_description(cfg))
+
+
 def throttle_description(cfg):
     # R5A-04: include the manual fields that actually shape traffic, including profile loss.
     spec = cfg.get("throttle", "off")
@@ -514,6 +532,8 @@ if __name__ == "__main__":
         rules_cmd(path, rest)
     elif what == "throttle":
         throttle_cmd(path, rest)
+    elif what == "nocache":
+        nocache_cmd(path, rest)
     elif what == "breakpoint":
         breakpoint_cmd(path, rest)
     elif what == "mock-pick":
