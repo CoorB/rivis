@@ -1110,11 +1110,20 @@ cmd_android() {
         ca_history_add
         "$ADB" -s "$s" push "$CONFDIR/mitmproxy-ca-cert.cer" /sdcard/Download/proxy-ca.crt >/dev/null 2>&1 \
           || die "could not push the CA to the emulator — proxy NOT enabled"
-        local magisk_dir="${RIVIS_MAGISK_DIR:-$SCRIPT_DIR/../magisk-$(sed -n 's/^MAGISK_VERSION=//p' "$SCRIPT_DIR/addons/android/magisk.pins")}"
+        # one-click Play-image path needs the pinned Magisk: an installed copy has it next to the tool; a source checkout
+        # keeps it in the pilot mirror. Never fall back to the slow Settings route without saying why.
+        local magisk_ver magisk_dir="" d; magisk_ver=$(sed -n 's/^MAGISK_VERSION=//p' "$SCRIPT_DIR/addons/android/magisk.pins")
+        if [ -n "${RIVIS_MAGISK_DIR:-}" ]; then [ -d "$RIVIS_MAGISK_DIR" ] && magisk_dir="$RIVIS_MAGISK_DIR"   # explicit: only that
+        else
+          for d in "$SCRIPT_DIR/../magisk-$magisk_ver" "$SCRIPT_DIR/../pilot-mirror/magisk/$magisk_ver"; do
+            [ -d "$d" ] && { magisk_dir="$d"; break; }
+          done
+        fi
+        [ "$auto_ui" = 1 ] && [ -z "$magisk_dir" ] && info "$s: one-click setup unavailable — Magisk $magisk_ver not found next to $PRODUCT_NAME (install from the release zip, or set ${ENV_PREFIX}_MAGISK_DIR); using the slower Settings route"
         if [ "$auto_ui" = 1 ] && ui_has_current_ca "$s"; then
           info "$s: already trusts this CA — nothing to install"; android_record "$s"; ca_ok=1
           "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
-        elif [ "$auto_ui" = 1 ] && [ -d "$magisk_dir" ] \
+        elif [ "$auto_ui" = 1 ] && [ -n "$magisk_dir" ] \
             && ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent $strict; then
           android_record "$s"; ca_ok=1   # one-click Play-image path (Proxyman's Magisk approach); it verifies and reports
         elif [ "$auto_ui" = 1 ] && info "$s: Google Play image — installing the CA through Settings (about a minute; hands off the emulator)" \

@@ -1518,6 +1518,13 @@ class AndroidCaRemoval(CliBase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.proxy(), "10.0.2.2:" + self.env["RIVIS_PORT"])
 
+    def test_play_image_without_magisk_says_why_the_slow_route_is_used(self):
+        # 2026-10-19: a source-checkout Rivis had no Magisk next to it and silently took the ~4-minute Settings route
+        env = dict(self.env, RIVIS_MAGISK_DIR=os.path.join(self.home, "no-such-magisk"))
+        r = self.cli("android", "on", env=env)
+        self.assertIn("one-click setup unavailable", r.stdout + r.stderr)
+        self.assertIn("RIVIS_MAGISK_DIR", r.stdout + r.stderr)
+
     def test_play_image_uninstalls_only_this_workstations_entry_in_settings(self):
         user = os.path.join(self.emu, "user")
         os.makedirs(user)
