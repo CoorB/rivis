@@ -112,6 +112,35 @@ class SourceChooser(UiBase):
         wait_for(lambda: self.panel.state()["source"] == CURL, 8, 0.2, "right-click chose the app")
         self.assertEqual(self.errors, [])
 
+    def test_a_running_device_that_is_not_set_up_is_hinted_in_the_source_menu(self):
+        """A just-started emulator that is not set up sent no calls, so the Source menu had nothing for it. It now shows
+        a "not set up" line (from the Devices result the panel already has) that opens Tools -> Devices. A device that
+        has calls, or one that is ready, gets no hint. No real device: the panel's devices call is answered here."""
+        import json as _json
+        fake = {"ios": [{"id": "SIM-1", "name": "This Mac", "os": "iOS 18", "ready": False}],
+                "android": [{"id": "emulator-5554", "name": "Rivis_Test_Play", "os": "Android 15", "ready": False,
+                             "ca_ok": False, "proxy_ok": False, "play": True}], "magisk": False, "job": None}
+        self.page.route("**/proxy/api/devices", lambda r: r.fulfill(status=200, content_type="application/json", body=_json.dumps(fake)))
+        self.raw_get("/text?from=python")
+        page = self.open()
+        wait_for(lambda: any(CURL == k["key"] for k in self.panel.state()["sources"]["list"]), 10, 0.2, "curl source")
+        page.locator("#fab").click()
+        sel = self.P("#source")
+        hints = lambda: sel.evaluate("s => [...s.options].filter(o => o.value === '__devices').map(o => o.textContent)")
+        self.assertEqual(hints(), [], "no Devices result yet: the menu must not start a device check of its own")
+        page.locator("button[data-t=dev]").click()
+        wait_for(lambda: "Rivis_Test_Play" in self.panel_text(), 15, 0.2, "fake emulator listed")
+        wait_for(lambda: hints(), 10, 0.2, "not-set-up hint in the Source menu")
+        self.assertEqual(hints(), ["Rivis_Test_Play — not set up (Tools → Devices)"], "a device with calls is not hinted")
+        page.locator("button[data-t=call]").click()
+        sel.select_option("__devices")
+        wait_for(lambda: "Rivis_Test_Play" in self.panel_text() and "Set up" in self.panel_text(), 10, 0.2, "Devices tab opened")
+        self.assertEqual(self.panel.state()["source"] or "", "", "the hint must not change the source filter")
+        self.assertEqual(sel.evaluate("s => s.value"), "")
+        fake["android"][0].update(ready=True, ca_ok=True, proxy_ok=True)
+        wait_for(lambda: hints() == [], 15, 0.2, "hint gone once the emulator is ready")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

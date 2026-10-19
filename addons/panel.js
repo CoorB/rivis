@@ -255,6 +255,7 @@
     input.grow { flex: 1; min-width: 0; }
     #project { max-width: 120px; min-height: 26px; font-size: 12px; }
     #source { max-width: 112px; min-height: 26px; font-size: 12px; }
+    #source option.unset { color: var(--rv-text-3); font-style: italic; }
     textarea { width: 100%; min-height: 260px; height: calc(100vh - 420px); font-family: var(--rv-mono); font-size: 12px; line-height: 1.55; border: 1px solid var(--rv-control); border-radius: var(--rv-r-md);
                padding: 10px; resize: vertical; background: var(--rv-surface-2); color: var(--rv-text); tab-size: 2; }
     textarea[readonly] { opacity: .75; }
@@ -649,6 +650,13 @@
         rows.filter((r) => r.app).map((r) => opt(r.key, `${r.app} (${r.count})`)).join("") + `</optgroup>`;
     }
     if (!found) html += `<option value="${esc(cur)}" selected>${esc(sourceName(cur))} (no calls)</option>`;
+    // running emulators / booted simulators that are not set up and sent nothing yet: a pointer to Tools → Devices.
+    // Uses only the Devices result already fetched (tab or badge poll); never starts a device check of its own.
+    if (dev && !dev.error && !dev.pending) {
+      const seen = new Set(sourceRows().map((r) => String(r.device || "").toLowerCase()));
+      const unset = [...(dev.ios || []), ...(dev.android || [])].filter((d) => !d.ready && !seen.has(String(d.name || "").toLowerCase()) && !seen.has(String(d.id || "").toLowerCase()));
+      if (unset.length) html += `<optgroup label="Not set up">` + unset.map((d) => `<option value="__devices" class="unset">${esc(d.name)} — not set up (Tools → Devices)</option>`).join("") + `</optgroup>`;
+    }
     if (sel.innerHTML !== html) sel.innerHTML = html;
     sel.title = cur ? "Showing only " + sourceName(cur) : "Every device and app";
   }
@@ -963,6 +971,7 @@
     const c = $("c-dev"); if (c) { c.textContent = notReady ? `! ${notReady}` : ""; c.classList.toggle("err", notReady > 0); }
     const typing = root.activeElement && root.activeElement.id === "dburl";   // a poll must not wipe the URL being typed
     if (tab === "dev" && !editing && !typing) renderDev($("main"));
+    if (state) sourceOptions();
   };
   const devLoop = () => { clearTimeout(devTimer); devLoop.fast = tab === "dev"; devTimer = setTimeout(async () => { await devRefresh(); devLoop(); },
     tab === "dev" ? ((dev && dev.pending) ? 600 : (dev && dev.job && dev.job.running) ? 1500 : 4000) : 30000); };
@@ -2341,7 +2350,9 @@
     run("view", { project: v, project_only: true, show_dns: false }, `Showing only ${label} calls.${hint}`);
   };
   const setSource = (v) => run("source", { source: v || null }, v ? "Showing only " + sourceName(v) : "Showing every source");
-  $("source").onchange = () => { const v = $("source").value; $("source").blur(); setSource(v); };
+  $("source").onchange = () => { const v = $("source").value; $("source").blur();
+    if (v === "__devices") { $("source").value = (state && state.source) || ""; openDrawer("dev"); return; }   // the "not set up" hint
+    setSource(v); };
   root.querySelectorAll("nav button").forEach((b) => (b.onclick = () => { clearTimeout(editorCheckT); tab = b.dataset.t; editing = null; render(); })); // R6-05
   // R6-03: remember typing across a redraw or tab switch; Esc must not silently drop a Tools draft.
   $("drawer").addEventListener("input", (e) => { if (e.target.matches("input:not([type=checkbox]), textarea")) drawerTypingDirty = true; });
