@@ -199,7 +199,18 @@ class ProxyCollections:
         cands = self.index.get(k)
         if cands:
             bh = body_hash(r.get_content(strict=False))
-            same = [c for c in cands if c[1].get("req_body") == bh] or cands
+            # R2A-04: match on the body; entries with no recorded body hash (older HAR imports) match any body.
+            # R3A-04: an unrecorded body must go live in lenient mode, not receive another user's recorded response.
+            same = [c for c in cands if c[1].get("req_body") == bh] or [c for c in cands if not c[1].get("req_body")]
+            if not same:
+                if self.cfg.get("strict"):
+                    flow.response = http.Response.make(404, json.dumps({
+                        "error": "request body not in the replayed collection (strict mode)",
+                        "recorded_bodies": len({c[1].get("req_body") for c in cands})}), {"Content-Type": "application/json"})
+                    flow.metadata["proxy_local"] = True
+                    flow.comment = (flow.comment + " | " if flow.comment else "") + "collection: strict body miss"
+                    return
+                return
             ck = k + (bh,)
             i = self.cursor.get(ck, 0)
             name, e = same[min(i, len(same) - 1)]

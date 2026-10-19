@@ -626,7 +626,16 @@ def check_ios(rep, confdir):
                     "`%s ios on`" % PRODUCT["cli"])
 
 
-def check_android(rep, adb):
+def _android_ca_recorded(adb, serial, confdir):
+    """True when `android on` recorded a verified install of THIS CA on this AVD (the Devices tab's own check)."""
+    import devices
+    ca = os.path.join(confdir or "", "mitmproxy-ca-cert.pem")
+    want = devices.ca_sha256(ca) if confdir and os.path.isfile(ca) else ""
+    avd = devices.avd_name(adb, serial, runner=lambda argv: run(argv)[:2]) if want else ""
+    return bool(avd) and devices._android_records(STATE_ROOT).get(avd) == want
+
+
+def check_android(rep, adb, port=None, confdir=None):
     sec = "Android emulator"
     adb = adb or which("adb") or os.path.expanduser("~/Library/Android/sdk/platform-tools/adb")
     if not (adb and os.path.exists(adb)):
@@ -656,7 +665,25 @@ def check_android(rep, adb):
         if prox in ("", "null", ":0"):
             rep.add(sec, INFO, "%s: no http_proxy set" % s, "run `%s android on`" % PRODUCT["cli"])
         else:
-            rep.add(sec, OK, "%s: http_proxy=%s" % (s, prox), "")
+            # a proxy on the Mac (10.0.2.2 = the Mac from the emulator) with nothing listening = no network at all on
+            # the emulator: doctor called that healthy (overnight QA r1 B-02)
+            host, _, pport = prox.rpartition(":")
+            if host in ("10.0.2.2", "127.0.0.1", "localhost") and pport.isdigit():
+                owners = port_owner(int(pport))
+                if not owners:
+                    rep.add(sec, ERR, "%s: http_proxy=%s but nothing listens on :%s" % (s, prox, pport),
+                            "the emulator has no network until a proxy runs there",
+                            "`%s start`%s, or `%s android off`" % (
+                                PRODUCT["cli"], "" if port is None or int(pport) == int(port) else
+                                " on that port (%s_PORT=%s)" % (PRODUCT["env_prefix"], pport), PRODUCT["cli"]))
+                elif port is not None and int(pport) != int(port):
+                    rep.add(sec, WARN, "%s: http_proxy=%s is not this %s (:%s)" % (s, prox, PRODUCT["name"], port),
+                            "owned by %s (pid %s)" % (owners[0]["command"], owners[0]["pid"]),
+                            "`%s android on` points it at this %s" % (PRODUCT["cli"], PRODUCT["name"]))
+                else:
+                    rep.add(sec, OK, "%s: http_proxy=%s" % (s, prox), "")
+            else:
+                rep.add(sec, OK, "%s: http_proxy=%s" % (s, prox), "")
         # image type
         rc, pkg, _ = run([adb, "-s", s, "shell", "pm", "list", "packages", "com.android.vending"])
         is_play = bool(rc == 0 and "com.android.vending" in (pkg or ""))
@@ -669,6 +696,10 @@ def check_android(rep, adb):
                 rep.add(sec, OK, "%s: %d user-store CA(s) present" % (s, n), "")
             else:
                 rep.add(sec, WARN, "%s: no user-store CA" % s, "", "`%s android on`" % PRODUCT["cli"])
+        elif _android_ca_recorded(adb, s, confdir):
+            # R5B-02: a Play image has no root to read the store, but `android on` verified and recorded this CA
+            rep.add(sec, OK, "%s: CA installed by `%s android on` (fingerprint matches)" % (s, PRODUCT["cli"]), "")
+            continue
         else:
             img = "Google Play image" if is_play else "image"
             rep.add(sec, INFO, "%s: %s (no adb root)" % (s, img),
@@ -676,7 +707,7 @@ def check_android(rep, adb):
                     "check Settings \u2192 Security \u2192 Trusted credentials \u2192 User, or `%s android on`" % PRODUCT["cli"])
         if is_play:
             rep.add(sec, INFO, "%s: Google Play image" % s,
-                    "CA install is a manual Settings step; a Google APIs AVD makes it automatic")
+                    "`%s android on` installs the CA with one emulator restart (about 30–40 s)" % PRODUCT["cli"])
 
 
 def _mask(tok):
@@ -693,9 +724,15 @@ def summarize_state(state):
     lines, flags = [], []
     project = state.get("active_project") or state.get("project", {}).get("id") or "?"
     rules = state.get("rules") or []
-    enabled = [r for r in rules if r.get("enabled", True)]
+    enabled = [r for r in rules if isinstance(r, dict) and r.get("enabled", True)]  # R3A-07
     lines.append((OK, "running: project %s" % project,
                   "%d rule(s), %d enabled" % (len(rules), len(enabled))))
+    bad = [i for i, r in enumerate(rules, 1) if not isinstance(r, dict)]
+    if bad:
+        lines.append((WARN, "%d rules.json entry(s) are not objects (skipped)" % len(bad),
+                      ", ".join("rules.json entry %d is not an object (skipped)" % i for i in bad)))  # R3A-07
+    if state.get("rules_error"):    # R2A-08: the proxy keeps the last good rules, so the user's next edits seem to "not work"
+        lines.append((WARN, "rules.json is unreadable — the proxy runs the last good copy", str(state["rules_error"])))
     skipped = state.get("skipped_rules") or []
     if skipped:
         names = ", ".join(str(s.get("name", s)) if isinstance(s, dict) else str(s) for s in skipped)
@@ -703,7 +740,7 @@ def summarize_state(state):
     script_status = state.get("script_status") or {}
     errs = script_status.get("errors") or {}
     if errs:
-        lines.append((WARN, "%d script error(s)" % len(errs), ", ".join(sorted(errs))))
+        lines.append((WARN, "%d script error(s)" % len(errs), ", ".join("%s: %s" % (n, (e.get("message") if isinstance(e, dict) else e)) for n, e in sorted(errs.items()))))  # R3A-06
     # traffic-altering, often-forgotten state
     throttle = state.get("throttle", "off")
     if throttle and throttle != "off":
@@ -713,15 +750,19 @@ def summarize_state(state):
         flags.append("packet loss %s%%" % loss)
     blocking = [r.get("name", "?") for r in enabled if r.get("action") in ("block", "respond", "map_local", "status", "json_patch", "map_remote")]
     if blocking:
-        flags.append("%d rule(s) rewrite/replace traffic: %s" % (len(blocking), ", ".join(blocking)))
+        # R4A-03: a large hot-reloaded rules file should not bury the health report in one warning.
+        sample = ", ".join(str(n) for n in blocking[:5])
+        flags.append("%d rule(s) rewrite/replace traffic: %s%s" % (len(blocking), sample,
+                     " +%d more (%s rules list)" % (len(blocking) - 5, PRODUCT["cli"]) if len(blocking) > 5 else ""))
     bps = [b for b in (state.get("breakpoints") or []) if b.get("enabled", True)]
     if bps:
         flags.append("%d breakpoint(s) armed — matching calls will pause" % len(bps))
     coll = state.get("collections") or {}
     if coll.get("strict"):
         flags.append("strict replay ON — unrecorded calls get 404")
-    if coll.get("replay"):
-        flags.append("replaying collection(s): %s" % ", ".join(coll["replay"]))
+    replay = [x.get("name", "?") for x in coll.get("items", []) if isinstance(x, dict) and x.get("replay")]
+    if replay:
+        flags.append("replaying collection(s): %s" % ", ".join(replay))  # R3A-05: state exposes items, not replay list
     tls = state.get("tls") or {}
     if tls.get("mode") and tls["mode"] != "all":
         flags.append("TLS decryption mode=%s (some hosts not decrypted)" % tls["mode"])
@@ -785,7 +826,7 @@ def check_running(rep, web_port, rules_path=""):
                 detail + "; the saved UI token was not sent",
                 "stop the other listener or choose another %s_WEB_PORT" % PRODUCT["env_prefix"])
         return
-    tokfile = os.path.join(STATE_ROOT, "web-token")
+    tokfile = os.path.join(STATE_ROOT, "web-token" if web_port == 8083 else "web-token-%d" % web_port)  # R4A-05
     if not os.path.isfile(tokfile):
         rep.add(sec, WARN, "something listens on :%d but no %s token found" % (web_port, PRODUCT["name"]),
                 "%s absent — likely a different/older instance" % tokfile,
@@ -820,10 +861,12 @@ def check_running(rep, web_port, rules_path=""):
     for lvl, title, detail in lines:
         rep.add(sec, lvl, title, detail)
     for f in flags:
+        fix = ("turn off Replay / Strict replay in Tools → Collections" if "replay" in f.lower() else
+               "clear it: `%s throttle off`, `%s rules off NAME`, `%s breakpoint off`" %
+               (PRODUCT["cli"], PRODUCT["cli"], PRODUCT["cli"]))  # R3A-05
         rep.add(sec, WARN, "traffic is being changed: " + f,
                 "if the app looks broken, this may be why",
-                "clear it: `%s throttle off`, `%s rules off NAME`, `%s breakpoint off`" %
-                (PRODUCT["cli"], PRODUCT["cli"], PRODUCT["cli"]))
+                fix)
 
 
 def check_network(rep, project, no_net, allow_profile_network=False):
@@ -1098,7 +1141,7 @@ def main(argv):
     check_system_proxy(rep)
     check_other_tools(rep)
     check_ios(rep, args.confdir)
-    check_android(rep, args.adb)
+    check_android(rep, args.adb, args.port, args.confdir)
     check_running(rep, args.web_port, args.rules)
     check_network(rep, args.project, args.no_net, args.allow_profile_network)
     check_disk(rep, args.project)

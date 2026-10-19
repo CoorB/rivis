@@ -2,6 +2,7 @@
 idempotent and reversible, hash pins are enforced, releases carry no state/secrets."""
 import hashlib
 import os
+import shlex
 import shutil
 import signal
 import stat
@@ -156,6 +157,47 @@ class DryRun(InstallerBase):
 
 
 class RealInstall(InstallerBase):
+    def test_interrupt_during_ca_generation_stops_helper(self):
+        shim_dir = os.path.join(self.home, "ca-shim")
+        os.makedirs(shim_dir)
+        helper = os.path.join(shim_dir, "mitmdump")
+        pid_file = os.path.join(self.home, "ca-helper.pid")
+        with open(helper, "w") as fh:
+            fh.write('#!/bin/sh\n'
+                     'if [ "$1" = --version ]; then echo "Mitmproxy: 12.2.3"; exit 0; fi\n'
+                     'echo $$ > "$CA_HELPER_PID"\n'
+                     'exec /bin/sleep 60\n')
+        os.chmod(helper, 0o755)
+        env = self.suite.env(self.home, extra={"CA_HELPER_PID": pid_file})
+        env["PATH"] = shim_dir + ":" + env["PATH"]
+        process = subprocess.Popen(["/bin/bash", INSTALL, "--yes", "--no-rc", "--skip-local-capture",
+                                    "--trust-mitmdump", helper], env=env, cwd=self.suite.root,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True)
+        helper_pid = None
+        try:
+            harness.wait_for(lambda: os.path.isfile(pid_file), timeout=15, desc="CA helper to start")
+            helper_pid = int(open(pid_file).read())
+            os.kill(process.pid, signal.SIGTERM)
+            process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 130)
+            def helper_stopped():
+                try:
+                    os.kill(helper_pid, 0)
+                except ProcessLookupError:
+                    return True
+                return False
+            harness.wait_for(helper_stopped, timeout=3, desc="CA helper to stop after interrupt")
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate(timeout=5)
+            if helper_pid is not None:
+                try:
+                    os.kill(helper_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
     def test_install_is_idempotent_private_and_reversible(self):
         self.ok("--yes", "--skip-local-capture")
         launcher = os.path.join(self.home, ".local", "bin", "rivis")
@@ -207,6 +249,188 @@ class RealInstall(InstallerBase):
         finally:
             if harness.port_open(port) or harness.port_open(web):
                 self.suite.rivis("stop", home=self.home, env=env)
+
+    def test_uninstall_stops_every_project_using_this_install(self):
+        # R4A-04: deleting tool-* while project B still runs strips its live rules and panel.
+        self.ok("--yes", "--skip-local-capture")
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        pairs = [(harness.free_port(), harness.free_port()) for _ in range(2)]
+        envs = [self.suite.env(self.home, extra={"RIVIS_PORT": str(p), "RIVIS_WEB_PORT": str(w)}) for p, w in pairs]
+        try:
+            for env in envs:
+                started = self.suite.run([launcher, "start", "--background", "--no-open", "--no-ios"], home=self.home, env=env, timeout=60)
+                self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+            self.assertTrue(all(harness.port_open(p) and harness.port_open(w) for p, w in pairs))
+            out = self.ok("--uninstall", "--yes", env=envs[0]).stdout
+            self.assertEqual(out.count("stopped pid"), 2, out)
+            self.assertTrue(all(not harness.port_open(p) and not harness.port_open(w) for p, w in pairs))
+        finally:
+            for env in envs:
+                self.suite.rivis("stop", home=self.home, env=env)
+
+    def test_uninstall_prints_separate_ca_cleanup_command(self):
+        # R4A-06: saved state and the CA live in different directories.
+        out = self.ok("--uninstall", "--dry-run").stdout
+        self.assertIn('rm -rf "%s"' % os.path.join(self.home, ".rivis"), out)
+        self.assertIn('To remove the CA and private key too:  rm -rf "%s"' % os.path.join(self.home, ".mitmproxy"), out)
+
+    def test_upgrade_restarts_the_old_tool_directory_on_saved_ports(self):
+        # R4A-01: a new launcher version must not leave an old tool's add-ons serving traffic.
+        self.ok("--yes", "--skip-local-capture")
+        root = os.path.join(self.home, ".local", "rivis")
+        current = os.path.join(root, "current")
+        new_tool = os.path.realpath(current)
+        old_tool = os.path.join(root, "tool-0.9.4")
+        shutil.copytree(new_tool, old_tool)
+        with open(os.path.join(old_tool, "VERSION"), "w") as fh: fh.write("0.9.4\n")
+        os.unlink(current); os.symlink(old_tool, current)
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        port, web = harness.free_port(), harness.free_port()
+        env = self.suite.env(self.home, extra={"RIVIS_PORT": str(port), "RIVIS_WEB_PORT": str(web)})
+        try:
+            started = self.suite.run([launcher, "start", "--background", "--no-open", "--no-ios"], home=self.home, env=env, timeout=60)
+            self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+            self.assertIn("0.9.4", self.suite.run([os.path.join(new_tool, "rivis"), "status"], home=self.home, env=env).stderr)
+            self.assertIn("0.9.4", self.suite.run([os.path.join(new_tool, "rivis"), "start", "--no-open", "--no-ios"], home=self.home, env=env).stderr)
+            out = self.ok("--yes", "--skip-local-capture", env=env).stdout
+            self.assertIn("restarted :%d/:%d" % (port, web), out)
+            self.assertTrue(harness.port_open(port) and harness.port_open(web))
+            status = self.suite.run([launcher, "status"], home=self.home, env=env)
+            self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+            self.assertNotIn("running pid", status.stderr)
+        finally:
+            self.suite.rivis("stop", home=self.home, env=env, bin=launcher)
+
+    def test_upgrade_restart_is_health_checked(self):
+        # an upgrade must not report success on "it started": the proxy and panel must answer, on the new version
+        self.ok("--yes", "--skip-local-capture")
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        port, web = harness.free_port(), harness.free_port()
+        env = self.suite.env(self.home, extra={"RIVIS_PORT": str(port), "RIVIS_WEB_PORT": str(web)})
+        try:
+            self.assertEqual(self.suite.run([launcher, "health"], home=self.home, env=env).returncode, 3)
+            started = self.suite.run([launcher, "start", "--background", "--no-open", "--no-ios"], home=self.home, env=env, timeout=60)
+            self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+            out = self.ok("--yes", "--skip-local-capture", env=env).stdout
+            self.assertIn("health check :%d/:%d ok" % (port, web), out)
+            health = self.suite.run([launcher, "health"], home=self.home, env=env)
+            self.assertEqual(health.returncode, 0, health.stdout + health.stderr)
+            self.assertIn("healthy", health.stdout)
+        finally:
+            self.suite.rivis("stop", home=self.home, env=env, bin=launcher)
+
+    def test_rollback_goes_back_one_version_restarts_with_the_same_options_and_can_be_undone(self):
+        self.ok("--yes", "--skip-local-capture")
+        root = os.path.join(self.home, ".local", "rivis")
+        current = os.path.join(root, "current")
+        new_tool = os.path.realpath(current)
+        new_version = open(os.path.join(new_tool, "VERSION")).read().strip()
+        old_tool = os.path.join(root, "tool-0.9.4")
+        shutil.copytree(new_tool, old_tool)
+        with open(os.path.join(old_tool, "VERSION"), "w") as fh: fh.write("0.9.4\n")
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        port, web = harness.free_port(), harness.free_port()
+        env = self.suite.env(self.home, extra={"RIVIS_PORT": str(port), "RIVIS_WEB_PORT": str(web)})
+        try:
+            listed = self.suite.run([launcher, "rollback", "--list"], home=self.home, env=env)
+            self.assertEqual(listed.stdout.split(), ["0.9.4", new_version, "←", "current"])
+            started = self.suite.run([launcher, "start", "--background", "--no-open", "--no-ios", "--project", "default"],
+                                     home=self.home, env=env, timeout=60)
+            self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+            back = self.suite.run([launcher, "rollback"], home=self.home, env=env, timeout=90)
+            self.assertEqual(back.returncode, 0, back.stdout + back.stderr)
+            self.assertEqual(os.path.realpath(current), os.path.realpath(old_tool))
+            self.assertIn("0.9.4 is running and healthy", back.stdout + back.stderr)
+            self.assertTrue(harness.port_open(port) and harness.port_open(web))
+            again = self.suite.run([launcher, "rollback", new_version], home=self.home, env=env, timeout=90)
+            self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+            self.assertEqual(os.path.realpath(current), os.path.realpath(new_tool))
+            self.assertEqual(self.suite.run([launcher, "health"], home=self.home, env=env).returncode, 0)
+        finally:
+            self.suite.rivis("stop", home=self.home, env=env, bin=launcher)
+
+    def test_rollback_to_a_version_without_rollback_shows_and_allows_the_way_forward(self):
+        # R8 (cover lane): 0.9.6 has no rollback command, so after going back to it "rivis rollback 0.9.7" did not exist
+        self.ok("--yes", "--skip-local-capture")
+        root = os.path.join(self.home, ".local", "rivis")
+        new_tool = os.path.realpath(os.path.join(root, "current"))
+        new_version = open(os.path.join(new_tool, "VERSION")).read().strip()
+        old_tool = os.path.join(root, "tool-0.9.4")
+        shutil.copytree(new_tool, old_tool)
+        with open(os.path.join(old_tool, "VERSION"), "w") as fh: fh.write("0.9.4\n")
+        cli = os.path.join(old_tool, "rivis")
+        with open(cli) as fh: text = fh.read()
+        with open(cli, "w") as fh: fh.write(text.replace("cmd_rollback()", "cmd_rollback_absent()"))   # like 0.9.6
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        env = self.suite.env(self.home)
+        back = self.suite.run([launcher, "rollback"], home=self.home, env=env, timeout=90)
+        self.assertEqual(back.returncode, 0, back.stdout + back.stderr)
+        hint = "%s/rivis rollback %s" % (new_tool, new_version)
+        self.assertIn(hint, back.stdout + back.stderr)
+        fwd = self.suite.run([os.path.join(new_tool, "rivis"), "rollback", new_version], home=self.home, env=env, timeout=90)
+        self.assertEqual(fwd.returncode, 0, fwd.stdout + fwd.stderr)
+        self.assertEqual(os.path.realpath(os.path.join(root, "current")), new_tool)
+
+    def test_rollback_with_nothing_older_installed_explains(self):
+        self.ok("--yes", "--skip-local-capture")
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        r = self.suite.run([launcher, "rollback"], home=self.home, env=self.suite.env(self.home))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no earlier version is installed", r.stdout + r.stderr)
+        r = self.suite.run([launcher, "rollback", "0.0.1"], home=self.home, env=self.suite.env(self.home))
+        self.assertIn("is not installed", r.stdout + r.stderr)
+
+    def test_reinstall_same_version_while_running_restarts_it(self):
+        # R4A-01: replacing the live tool dir would unload its add-ons; stop it, swap, start it again on its ports.
+        self.ok("--yes", "--skip-local-capture")
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        port, web = harness.free_port(), harness.free_port()
+        env = self.suite.env(self.home, extra={"RIVIS_PORT": str(port), "RIVIS_WEB_PORT": str(web)})
+        try:
+            started = self.suite.run([launcher, "start", "--background", "--no-open", "--no-ios"], home=self.home, env=env, timeout=60)
+            self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+            out = self.ok("--yes", "--skip-local-capture", env=env).stdout
+            self.assertIn("restarted :%d/:%d" % (port, web), out)
+            status = self.suite.run([launcher, "status"], home=self.home, env=env)
+            self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
+        finally:
+            self.suite.rivis("stop", home=self.home, env=env, bin=launcher)
+
+    def test_reinstall_restarts_an_instance_whose_start_is_only_in_the_shared_file(self):
+        # R7A upgrade: published 0.9.6 saved every port's start in last-start; the per-port lookup refused the upgrade
+        self.ok("--yes", "--skip-local-capture")
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        port, web = harness.free_port(), harness.free_port()
+        env = self.suite.env(self.home, extra={"RIVIS_PORT": str(port), "RIVIS_WEB_PORT": str(web)})
+        state = os.path.join(self.home, ".rivis")
+        try:
+            started = self.suite.run([launcher, "start", "--background", "--no-open", "--no-ios"], home=self.home, env=env, timeout=60)
+            self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+            os.replace(os.path.join(state, "last-start-%d" % web), os.path.join(state, "last-start"))   # the 0.9.6 layout
+            out = self.ok("--yes", "--skip-local-capture", env=env).stdout
+            self.assertIn("restarted :%d/:%d" % (port, web), out)
+        finally:
+            self.suite.rivis("stop", home=self.home, env=env, bin=launcher)
+
+    def test_uninstall_clears_only_this_ports_emulator_proxy(self):
+        # B-01: removing the launcher must not strand a running emulator behind this now-dead proxy.
+        emu = os.path.join(self.home, "emu")
+        os.makedirs(emu)
+        adb = os.path.join(harness.REPO, "tests", "fakes", "emulator_adb.py")
+        port, web = harness.free_port(), harness.free_port()
+        env = self.suite.env(self.home, extra={"ADB": adb, "FAKE_EMU": emu, "RIVIS_PORT": str(port),
+                                               "RIVIS_WEB_PORT": str(web)})
+        proxy = os.path.join(emu, "proxy")
+        with open(proxy, "w") as fh: fh.write("10.0.2.2:%s" % port)
+        dry = self.ok("--uninstall", "--dry-run", env=env).stdout
+        self.assertIn("would clear", dry)
+        self.assertNotIn("cleared, so", dry)
+        self.assertEqual(open(proxy).read(), "10.0.2.2:%s" % port)
+        self.ok("--uninstall", "--yes", env=env)
+        self.assertEqual(open(proxy).read(), ":0")
+        with open(proxy, "w") as fh: fh.write("10.0.2.2:%s" % (port + 1))
+        self.ok("--uninstall", "--yes", env=env)
+        self.assertEqual(open(proxy).read(), "10.0.2.2:%s" % (port + 1))
 
     def test_an_existing_ca_is_never_replaced(self):
         conf = os.path.join(self.home, ".mitmproxy")
@@ -367,6 +591,32 @@ class Cosmetics(InstallerBase):
         """FOUND-BUGS B10: `awk '{print $NF}'` of '[activated enabled]' prints 'enabled]'."""
         out = self.ok("--yes", "--skip-local-capture").stdout
         self.assertNotRegex(out, r"redirector\s+\S*\]")
+
+    def _with_fake_redirector(self, listing):
+        """A stand-in `systemextensionsctl` first on PATH that lists the Redirector as given ('' = not installed)."""
+        fake = os.path.join(self.home, "fake-sysext")
+        os.makedirs(fake, exist_ok=True)
+        with open(os.path.join(fake, "systemextensionsctl"), "w") as fh:
+            fh.write("#!/bin/sh\nprintf '%s\\n' " + shlex.quote(listing) + "\n")
+        os.chmod(os.path.join(fake, "systemextensionsctl"), 0o755)
+        env = self.suite.env(self.home)
+        env["PATH"] = fake + ":" + env["PATH"]
+        return env
+
+    def test_self_check_agrees_with_itself_when_local_capture_is_skipped(self):
+        """R8D-10: an approved Redirector was reported as 'approved' and then as 'needs the Redirector approved
+        (see above)'; and the next steps must say `start --background` like the README and QUICKSTART."""
+        env = self._with_fake_redirector("*\t*\tTEAM\torg.mitmproxy.macos-redirector (1.0/1)\tRedirector\t[activated enabled]")
+        out = self.ok("--yes", "--skip-local-capture", env=env).stdout
+        self.assertRegex(out, r"redirector\s+approved")
+        self.assertNotIn("needs the Mitmproxy Redirector approved", out)
+        self.assertNotIn("see above", out)
+        self.assertIn("rivis start --background", out)
+        env = self._with_fake_redirector("")
+        out = self.ok("--yes", "--skip-local-capture", env=env).stdout
+        self.assertRegex(out, r"redirector\s+not installed")
+        self.assertIn("needs the Mitmproxy Redirector approved", out)
+        self.assertNotIn("see above", out)
 
 
 class OfflineBundle(InstallerBase):

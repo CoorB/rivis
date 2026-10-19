@@ -56,7 +56,12 @@ conf() {  # conf KEY — value from mirror.conf (plain KEY=VALUE, never sourced)
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/rivis-inst.XXXXXX") || die "cannot create a private temporary directory"
 LP=""                                            # the temporary local-capture helper, if one is running
-cleanup() { rm -rf "$TMP"; [ -n "$LP" ] && kill "$LP" 2>/dev/null; LP=""; }
+CAP=""                                           # the temporary CA-generation helper, if one is running
+cleanup() {
+  [ -z "$CAP" ] || { kill "$CAP" 2>/dev/null; wait "$CAP" 2>/dev/null; CAP=""; }
+  [ -z "$LP" ] || { kill "$LP" 2>/dev/null; wait "$LP" 2>/dev/null; LP=""; }
+  rm -rf "$TMP"
+}
 trap cleanup EXIT
 trap 'cleanup; exit 130' HUP INT TERM            # Ctrl-C must not leave the helper running
 sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
@@ -123,6 +128,54 @@ echo "$PREFIX_VAR" | grep -Eq '^[A-Z][A-Z0-9_]{0,30}$' || die "product.json has 
 conf_var="${PREFIX_VAR}_CONFDIR"; _c="${!conf_var:-}"; [ -n "$_c" ] && CONFDIR="$_c"
 STATE_DIR=$(plutil -extract state_dir raw -o - "$product_json" 2>/dev/null); STATE_DIR="${STATE_DIR/#\~/$HOME}"
 [ -z "${tmp_pj:-}" ] || rm -rf "$tmp_pj"
+# R4A-04/R4A-01: identify processes by BOTH an add-on inside this installation and this HOME's auth file.
+# A matching port alone can belong to another program or another tester's installation.
+running_instances() {
+  ps -axo pid=,command= -ww 2>/dev/null | /usr/bin/python3 -I -c '
+import re, sys
+root, state = sys.argv[1:]
+for line in sys.stdin:
+    m = re.match(r"\s*(\d+)\s+(.*)", line)
+    if not m or not re.search(r"(?:^|/)mitmweb(?:\s|$)", m[2]): continue
+    args = m[2]
+    dirs = re.findall(r"(?:^|\s)-s\s+(" + re.escape(root) + r"/tool-[^\s/]+/addons/[^\s]+)", args)
+    auth = re.search(r"proxy_auth_token_file=(" + re.escape(state) + r"/web-token(?:-[0-9]+)?)(?:\s|$)", args)
+    proxy = re.search(r"(?:^|\s)regular@([0-9]+)(?:\s|$)", args)
+    web = re.search(r"(?:^|\s)web_port=([0-9]+)(?:\s|$)", args)
+    if dirs and auth and proxy and web:
+        print("\t".join((m[1], proxy[1], web[1], dirs[0].split("/addons/")[0])))
+' "$ROOT" "$STATE_DIR"
+}
+stop_instance() { # PID PORT WEB TOOL — recheck identity before signalling; fail closed before deletion.
+  local pid="$1" port="$2" web="$3" tool="$4" i now
+  now=$(running_instances | awk -F '\t' -v p="$pid" -v a="$port" -v b="$web" -v t="$tool" '$1==p && $2==a && $3==b && $4==t')
+  [ -n "$now" ] || return 0
+  kill "$pid" 2>/dev/null || return 1
+  for i in $(seq 1 100); do
+    now=$(running_instances | awk -F '\t' -v p="$pid" '$1==p'); [ -z "$now" ] && return 0
+    sleep 0.1
+  done
+  # R4A-04: do not remove add-ons while a stubborn matching mitmweb still serves traffic.
+  now=$(running_instances | awk -F '\t' -v p="$pid" -v a="$port" -v b="$web" -v t="$tool" '$1==p && $2==a && $3==b && $4==t')
+  [ -n "$now" ] || return 0
+  kill -9 "$pid" 2>/dev/null || return 1
+  for i in $(seq 1 20); do
+    now=$(running_instances | awk -F '\t' -v p="$pid" '$1==p'); [ -z "$now" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+start_file_for() { # WEB — that port's saved start; releases up to 0.9.6 kept every port's start in the shared file
+  local f="$STATE_DIR/last-start-$1"
+  [ "$1" = 8083 ] && f="$STATE_DIR/last-start"
+  # R7A-upgrade: a 0.9.6 instance on another UI port has only last-start; use it when it names this very UI port
+  if [ ! -f "$f" ] && grep -qx "START_WEB_PORT=$1" "$STATE_DIR/last-start" 2>/dev/null; then f="$STATE_DIR/last-start"; fi
+  printf '%s' "$f"
+}
+start_ok() { # PORT WEB — the saved start can restart exactly this instance (checked before we stop anything)
+  local f; f=$(start_file_for "$2"); [ -f "$f" ] || return 1
+  ( START_PORT=""; START_WEB_PORT=""; START_ARGS=(); . "$f"; [ "$START_PORT" = "$1" ] && [ "$START_WEB_PORT" = "$2" ] && [ ${#START_ARGS[@]} -gt 0 ] )
+}
 # offline bundle: the release archive next to this script stands in for the mirror (verified like any other source)
 if [ -z "$TOOL_TARBALL" ] && [ "$UNINSTALL" = 0 ] && [ -f "$HERE/$CLI-$TOOL_VERSION.tar.gz" ]; then
   TOOL_TARBALL="$HERE/$CLI-$TOOL_VERSION.tar.gz"; take_tool_tarball
@@ -139,16 +192,47 @@ strip_rc_block() {  # strip_rc_block FILE — removes only our marked block
   rm -f "$t"
 }
 
+# Running Android emulators whose proxy points at this Rivis: with Rivis gone they had no network at all, and the
+# advice to run `android off` came after the command was removed (overnight QA r1 B-01). Their proxy is cleared here.
+release_emulators() {
+  local adb="" c port s cur
+  for c in "${ADB:-}" "${ANDROID_SDK_ROOT:+$ANDROID_SDK_ROOT/platform-tools/adb}" "${ANDROID_HOME:+$ANDROID_HOME/platform-tools/adb}" \
+           "$HOME/Library/Android/sdk/platform-tools/adb" /usr/local/bin/adb /opt/homebrew/bin/adb; do
+    [ -n "$c" ] && [ -x "$c" ] && { adb="$c"; break; }
+  done
+  [ -n "$adb" ] || return 0
+  port=$(printenv "${PREFIX_VAR}_PORT" 2>/dev/null) || port=""
+  [ -n "$port" ] || port=$(sed -n 's/^START_PORT=//p' "$STATE_DIR/last-start" 2>/dev/null | head -1)
+  [ -n "$port" ] || port=8080
+  for s in $("$adb" devices 2>/dev/null | awk '/^emulator-[0-9]+\tdevice$/{print $1}'); do
+    cur=$("$adb" -s "$s" shell settings get global http_proxy 2>/dev/null | tr -d '\r')
+    case "$cur" in
+      "10.0.2.2:$port"|"127.0.0.1:$port"|"localhost:$port")
+        if do_ "$adb" -s "$s" shell settings put global http_proxy :0; then
+          if [ "$DRY" = 1 ]; then info "$s: would clear its proxy $cur (B-01)"
+          else
+            info "$s: its proxy $cur pointed at this $NAME — cleared, so the emulator has network again"
+            echo "  (the $NAME certificate stays on it: Settings → Security → Encryption & credentials → User credentials)"
+          fi
+        fi ;;
+    esac
+  done
+}
+
 if [ "$UNINSTALL" = 1 ]; then
   info "uninstall $NAME ($CLI) — plan:"
-  uninstall_cli=""
-  if [ -x "$LINK" ]; then uninstall_cli="$LINK"
-  elif [ -x "$ROOT/current/$CLI" ]; then uninstall_cli="$ROOT/current/$CLI"
-  fi
-  if [ -n "$uninstall_cli" ]; then
-    info "stopping any running $NAME instance before removing its launcher"
-    do_ "$uninstall_cli" stop || die "could not stop the running $NAME instance; nothing was removed"
-  fi
+  release_emulators
+  info "stopping every running $NAME instance from $ROOT before removing its add-ons"
+  while IFS=$'\t' read -r pid port web tool; do
+    [ -n "$pid" ] || continue
+    if [ "$DRY" = 1 ]; then info "[dry-run] would stop pid $pid on :$port/:$web ($tool)"
+    else
+      stop_instance "$pid" "$port" "$web" "$tool" || die "could not stop pid $pid on :$port/:$web ($tool); no add-ons were removed"
+      rm -f "$STATE_DIR/web-token$([ "$web" = 8083 ] || printf -- '-%s' "$web")" "$STATE_DIR/web-bootstrap$([ "$web" = 8083 ] || printf -- '-%s' "$web")"
+      info "stopped pid $pid on :$port/:$web"
+    fi
+  done < <(running_instances)
+  [ "$DRY" = 1 ] || { remaining=$(running_instances); [ -z "$remaining" ] || die "still running: $remaining; no add-ons were removed"; }
   [ -L "$LINK" ] || [ -f "$LINK" ] && do_ rm -f "$LINK"
   if [ -f "$RECEIPT" ] && grep -q '^mitmproxy=installed-by-us' "$RECEIPT"; then
     do_ rm -rf "$MITM_DIR"
@@ -161,7 +245,10 @@ if [ "$UNINSTALL" = 1 ]; then
   for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.config/fish/config.fish"; do strip_rc_block "$rc"; done
   echo
   info "kept (your data): state dir $STATE_DIR and the CA in $CONFDIR"
-  echo "  To remove them too:  rm -rf \"$STATE_DIR\"   and   remove the CA from test devices first ($CLI ios off / $CLI android off)"
+  echo "  To remove saved state too:  rm -rf \"$STATE_DIR\""
+  echo "  To remove the CA and private key too:  rm -rf \"$CONFDIR\"" # R4A-06: CA is outside state.
+  echo "  Devices keep the $NAME certificate until you remove it: next time run $CLI ios off / $CLI android off BEFORE"
+  echo "  uninstalling, or remove it on the device (Android: Settings → Encryption & credentials → User credentials)."
   echo "  The macOS 'Mitmproxy Redirector' app and its network extension were NOT touched. To remove:"
   echo "    System Settings → General → Login Items & Extensions → Network Extensions → remove it, then delete /Applications/Mitmproxy Redirector.app"
   exit 0
@@ -293,7 +380,18 @@ else
 fi
 [ -f "$TMP/tool-x/$CLI" ] || die "tool payload has no '$CLI' entry point"
 chmod +x "$TMP/tool-x/$CLI" 2>/dev/null
+# R4A-01: replacing the very directory a live proxy watches would unload its add-ons. An upgrade to a new
+# directory is safe to stage first; an in-place reinstall must wait for an explicit restart.
+upgrade_instances=$(running_instances)
+while IFS=$'\t' read -r pid port web tool; do
+  [ -n "$pid" ] || continue
+  [ "$tool" != "$TOOL_DIR" ] && continue
+  # same version reinstalled over itself: stop it now (restarted below from its saved start), never yank live add-ons
+  start_ok "$port" "$web" || die "still running pid $pid on :$port/:$web from $tool — run $CLI stop, then install again"
+  stop_instance "$pid" "$port" "$web" "$tool" || die "could not stop pid $pid on :$port/:$web; nothing was replaced"
+done <<< "$upgrade_instances"
 rm -rf "$TOOL_DIR"; mv "$TMP/tool-x" "$TOOL_DIR"
+printf '%s\n' "$TOOL_VERSION" > "$TOOL_DIR/VERSION" # R4A-01: the active launcher needs the installed version for mismatch warnings.
 ln -sfn "$TOOL_DIR" "$ROOT/current"
 info "installed tool $TOOL_VERSION → $TOOL_DIR"
 
@@ -373,9 +471,9 @@ elif [ -f "$CA_PEM" ]; then
   info "CA already present in $CONFDIR — not modified"
 else
   info "generating the per-workstation CA in $CONFDIR"
-  "$MITMDUMP" --listen-host 127.0.0.1 --listen-port "$(free_port)" --set confdir="$CONFDIR" >/dev/null 2>&1 & cap=$!
+  "$MITMDUMP" --listen-host 127.0.0.1 --listen-port "$(free_port)" --set confdir="$CONFDIR" >/dev/null 2>&1 & CAP=$!
   for _ in $(seq 1 30); do [ -f "$CA_PEM" ] && break; sleep 0.5; done
-  kill "$cap" 2>/dev/null; wait "$cap" 2>/dev/null
+  kill "$CAP" 2>/dev/null; wait "$CAP" 2>/dev/null; CAP=""
   [ -f "$CA_PEM" ] || die "CA was not generated in $CONFDIR"
   info "CA generated"
 fi
@@ -428,10 +526,49 @@ echo "  tool          $NAME $TOOL_VERSION  ($ROOT/current)"
 echo "  mitmproxy     $("$MITMDUMP" --version 2>/dev/null | awk '/^Mitmproxy:/{print $2; exit}')  ($MITM_BIN_DIR)"
 echo "  CA sha256     $(openssl x509 -in "$CA_PEM" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)"
 echo "  redirector    $(if ext_approved; then echo approved; elif ext_listed; then echo 'waiting for approval'; else echo 'not installed'; fi)"
-[ "$EXT_OK" = 1 ] || echo "  NOTE: iOS Simulator capture needs the Redirector approved (see above). Android and plain proxy work without it."
+# R4A-01: use each port's saved start command, so an upgrade preserves project, ports and flags.
+while IFS=$'\t' read -r pid port web tool; do
+  [ -n "$pid" ] || continue
+  start_file=$(start_file_for "$web")
+  if [ ! -f "$start_file" ]; then
+    warn "STILL RUNNING pid $pid on :$port/:$web from $tool — run $CLI restart with ${PREFIX_VAR}_PORT=$port ${PREFIX_VAR}_WEB_PORT=$web"
+    continue
+  fi
+  START_PORT=""; START_WEB_PORT=""; START_ARGS=()
+  . "$start_file"
+  if [ "$START_PORT" != "$port" ] || [ "$START_WEB_PORT" != "$web" ] || [ ${#START_ARGS[@]} -eq 0 ]; then
+    warn "STILL RUNNING pid $pid on :$port/:$web from $tool — run $CLI restart with ${PREFIX_VAR}_PORT=$port ${PREFIX_VAR}_WEB_PORT=$web"
+    continue
+  fi
+  if ! stop_instance "$pid" "$port" "$web" "$tool"; then
+    warn "STILL RUNNING pid $pid on :$port/:$web from $tool — run $CLI restart with ${PREFIX_VAR}_PORT=$port ${PREFIX_VAR}_WEB_PORT=$web"
+    continue
+  fi
+  rm -f "$STATE_DIR/web-token$([ "$web" = 8083 ] || printf -- '-%s' "$web")" "$STATE_DIR/web-bootstrap$([ "$web" = 8083 ] || printf -- '-%s' "$web")"
+  if env "${PREFIX_VAR}_PORT=$port" "${PREFIX_VAR}_WEB_PORT=$web" "$LINK" "${START_ARGS[@]}"; then
+    info "restarted :$port/:$web on $NAME $TOOL_VERSION"
+    # never claim an upgrade worked on "it started": check it answers, on the new version
+    healthy=0
+    for _ in $(seq 1 20); do
+      env "${PREFIX_VAR}_PORT=$port" "${PREFIX_VAR}_WEB_PORT=$web" "$LINK" health >/dev/null 2>&1 && { healthy=1; break; }
+      sleep 0.5
+    done
+    if [ "$healthy" = 1 ]; then info "health check :$port/:$web ok"
+    else
+      warn "health check FAILED on :$port/:$web after the upgrade:"
+      env "${PREFIX_VAR}_PORT=$port" "${PREFIX_VAR}_WEB_PORT=$web" "$LINK" health 2>&1 | sed 's/^/    /'
+      warn "go back to the previous version with: ${PREFIX_VAR}_PORT=$port ${PREFIX_VAR}_WEB_PORT=$web $CLI rollback"
+    fi
+  else
+    warn "could not restart :$port/:$web — run ${PREFIX_VAR}_PORT=$port ${PREFIX_VAR}_WEB_PORT=$web $CLI restart"
+  fi
+done <<< "$upgrade_instances"
+# R8D-10: decide from the live state (as the "redirector" line above does), not from this run's prompt: with
+# --skip-local-capture an already-approved Redirector must not be reported as missing.
+ext_approved || echo "  NOTE: iOS Simulator capture needs the Mitmproxy Redirector approved — re-run ./install.sh without --skip-local-capture. Android and plain proxy work without it."
 echo
 info "next steps"
-echo "  $CLI start          # opens the UI (open a new terminal first if PATH was just updated)"
+echo "  $CLI start --background   # opens the UI and keeps running (open a new terminal first if PATH was just updated)"
 echo "  then Tools → Devices: one click per simulator / emulator   (or: $CLI setup)"
 # A proxy app that quit (Proxyman, Charles…) can leave the Mac's proxy on its dead loopback port, so the Simulator and
 # every Mac app lose the network. Clear exactly those leftovers now, even if the user does not start Rivis yet.

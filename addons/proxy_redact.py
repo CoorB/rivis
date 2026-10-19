@@ -5,7 +5,7 @@ credentials (security finding F-08). Redaction is on unless the caller explicitl
 
 What becomes ``<redacted>``:
 - header values whose name is a credential (Authorization, Cookie, Set-Cookie, API keys, CSRF/session/auth tokens);
-- query parameters and JSON/form fields whose key looks like a secret (password, otp, pin, token, secret, …);
+- query parameters and JSON/form fields whose key looks like a secret (password, otp, pin, token, secret, FIDO proofs, …);
 - anything shaped like a JWT, wherever it appears in a text body.
 Structure (keys, status codes, non-secret values) is kept, so a redacted HAR still imports and replays.
 """
@@ -24,16 +24,18 @@ SECRET_HEADERS = frozenset((
     "x-csrf-token", "x-xsrf-token", "x-session-id", "x-session-token", "x-amz-security-token",
 ))
 _SECRET_HEADER_PART = re.compile(r"token|secret|session|api[-_]?key|auth", re.I)
-_SECRET_HEADER_FIELD = re.compile(r"(^|[-_])(otp|pin|pass(word|code)?|pwd|cvv|cvc|csrf|xsrf|mfa)([-_]|$)", re.I)
+_SECRET_HEADER_FIELD = re.compile(r"(^|[-_])(otp|pin|pass(word|code)?|pwd|pw|cvv|cvc|csrf|xsrf|mfa)([-_]|$)", re.I)
+# R1A-02: include bare/delimited pw, without matching ordinary words like "pwned" or "upward".
 # field names: whole-word-ish match so "pinned"/"opinion"/"spine" are not caught but "pin", "user_pin", "newPin" are
 _SECRET_KEY = re.compile(
-    r"(^|[_\-.])(pass(word|wd|code)?|pwd|otp|pin|cvv|cvc|secret|token|session(id)?|cookie|authorization|"
+    r"(^|[_\-.])(pass(word|wd|code)?|pwd|pw|otp|pin|cvv|cvc|secret|token|session(id)?|cookie|authorization|"
     r"api[_\-]?key|private[_\-]?key|client[_\-]?secret|credentials?)($|[_\-.])"
-    r"|(password|passcode|otp|pin|secret|token|apikey|apiKey|sessionid|sessionId)$"
+    r"|(password|passcode|pwd|pw|otp|pin|secret|token|apikey|apiKey|sessionid|sessionId)$"
     r"|^(access|refresh|id|auth|bearer)[_\-]?token", re.I)
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
 _EXTRA_SECRET_KEY = re.compile(
     r"^(password|passcode|otp|pin|cvv|cvc|secret)(_|\d|$)|^(auth_?code|code_verifier|mfa_?code)$", re.I)
+_LOGIN_PROOF_KEY = re.compile(r"^(uaf_?response|assertion|signature|client_?data_?json|authenticator_?data)$", re.I)
 _BEARER = re.compile(r"\b(Bearer)[ \t]+(?!<redacted>)[A-Za-z0-9._~+/=-]{6,}", re.I)
 # Opening tags and multipart field headers are found with linear patterns; the value is then located with str.find,
 # only for secret-named fields and within a bounded window. A backreferenced (.*?)</key> pattern scanned to the end of
@@ -59,7 +61,8 @@ def secret_key(key):
     if not isinstance(key, str):
         return False
     normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key).replace("-", "_").replace(".", "_")
-    return bool(_SECRET_KEY.search(key) or _EXTRA_SECRET_KEY.search(normalized))
+    return bool(_SECRET_KEY.search(key) or _EXTRA_SECRET_KEY.search(normalized)
+                or _LOGIN_PROOF_KEY.search(normalized))
 
 
 def _value(obj, depth=0):

@@ -2,7 +2,7 @@
 import json
 import os
 import re
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from proxy_common import SAFE_NAME, atomic_json, confined_path
 
@@ -32,6 +32,29 @@ def substitute(text, variables):
     return VAR_RE.sub(repl, str(text))
 
 
+def normalize_url(raw):
+    """Turn a browser-style URL into an ASCII URL that mitmproxy can put on the wire."""
+    if not isinstance(raw, str) or any(ord(c) < 32 or ord(c) == 127 for c in raw):
+        raise ValueError("URL must be a single-line absolute http:// or https:// URL")
+    try:
+        parsed = urlsplit(raw)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError("URL must be an absolute http:// or https:// URL")
+        host = parsed.hostname.encode("idna").decode("ascii")
+        port = parsed.port
+    except (UnicodeError, ValueError) as exc:
+        raise ValueError("URL has an invalid host or port: %s" % exc) from None
+    # R7A-01: a typed Arabic path/query and international host reached req.url unencoded; mitmproxy raised an ASCII
+    # codec error. Preserve existing % escapes and URL delimiters while UTF-8-escaping only characters needing it.
+    authority = (parsed.netloc.rpartition("@")[0] + "@") if "@" in parsed.netloc else ""
+    authority += ("[" + host + "]") if ":" in host else host
+    if port is not None:
+        authority += ":%d" % port
+    path = quote(parsed.path or "/", safe="/%:@!$&'()*+,;=-._~")
+    query = quote(parsed.query, safe="/%:@!$&'()*+,;=?-._~")
+    return urlunsplit((parsed.scheme, authority, path, query, ""))
+
+
 def normalize_request(spec, variables=None):
     """Validate a saved/draft request and return method/url/header pairs/body bytes."""
     if not isinstance(spec, dict):
@@ -40,10 +63,8 @@ def normalize_request(spec, variables=None):
     method = substitute(spec.get("method") or "GET", variables).upper()
     if not METHOD_RE.fullmatch(method):
         raise ValueError("invalid HTTP method")
-    raw_url = substitute(spec.get("url") or "", variables)
+    raw_url = normalize_url(substitute(spec.get("url") or "", variables))
     parsed = urlsplit(raw_url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError("URL must be an absolute http:// or https:// URL")
     query_source = spec.get("query")
     if query_source is None:
         query = parse_qsl(parsed.query, keep_blank_values=True)
@@ -85,7 +106,9 @@ def normalize_request(spec, variables=None):
             value = json.loads(text)
         except ValueError as exc:
             raise ValueError("JSON body is invalid: %s" % exc)
-        body = (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        # R2A-06: validate only — what was typed is what is sent (10.00, 1E3, duplicate keys, signed bodies survive);
+        # pretty-printing happens only on the editor's explicit Pretty-print button
+        body = text.encode("utf-8")
         if not any(k.lower() == "content-type" for k, _ in headers):
             headers.append(("Content-Type", "application/json"))
     elif mode == "form":

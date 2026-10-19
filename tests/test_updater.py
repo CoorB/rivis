@@ -272,6 +272,7 @@ class InstallStep(unittest.TestCase):
 
     def run_it(self, z):
         env = self.suite.env(self.home)
+        env.pop("RIVIS_WEB_PORT", None)     # R4A-05: as started on the default UI port, whose start is saved in last-start
         return subprocess.run(["/bin/bash", os.path.join(harness.REPO, "addons", "update_install.sh"), z],
                               capture_output=True, text=True, env=env, timeout=60)
 
@@ -286,6 +287,44 @@ class InstallStep(unittest.TestCase):
         self.assertEqual(steps[0], "install --yes --skip-local-capture")
         self.assertEqual(steps[1], "cli stop port=18080 web=18083")
         self.assertEqual(steps[2], "cli --project neo start --background --no-open --insecure port=18080 web=18083")
+
+    def test_no_second_restart_when_the_installer_already_restarted_it(self):
+        # R4A-01: install.sh restarts running instances itself; the updater must not stop/start them again
+        open(os.path.join(self.home, "running"), "w").close()
+        z = os.path.join(self.home, "rivis-installer-9.9.9.zip")
+        with zipfile.ZipFile(z, "w") as zf:
+            zf.writestr("rivis-installer-9.9.9/install.sh", '#!/bin/bash\necho "install $*" >> "%s"\n'
+                        'echo "  restarted :18080/:18083 on Rivis 9.9.9"\nexit 0\n' % self.log)
+        r = self.run_it(z)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("cli stop") or " start " in c], self.calls())
+
+    def test_restarts_a_second_instance_from_its_own_ports_start(self):
+        # R4A-05: an update from the panel on another UI port restarts THAT instance, not the default one's settings
+        open(os.path.join(self.home, "running"), "w").close()
+        with open(os.path.join(self.home, ".rivis", "last-start-28083"), "w") as fh:
+            fh.write("START_PORT=28080\nSTART_WEB_PORT=28083\nSTART_ARGS=(--project b start --background --no-open )\n")
+        env = dict(self.suite.env(self.home), RIVIS_WEB_PORT="28083")
+        r = subprocess.run(["/bin/bash", os.path.join(harness.REPO, "addons", "update_install.sh"), self.make_zip()],
+                           capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("cli --project b start --background --no-open port=28080 web=28083", self.calls())
+
+    def test_restart_path_removes_its_temp_dir_and_nothing_else(self):
+        # review 0.9.7 #5: the web port reused $W, so the EXIT trap ran `rm -rf 8083` and leaked the unzipped installer
+        open(os.path.join(self.home, "running"), "w").close()
+        tmp = os.path.join(self.home, "tmp")
+        os.makedirs(tmp)
+        os.makedirs(os.path.join(self.home, "8083"))
+        env = self.suite.env(self.home)
+        env.pop("RIVIS_WEB_PORT", None)
+        env["TMPDIR"] = tmp
+        r = subprocess.run(["/bin/bash", os.path.join(harness.REPO, "addons", "update_install.sh"), self.make_zip()],
+                           capture_output=True, text=True, env=env, cwd=self.home, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("cli --project neo start --background --no-open --insecure port=18080 web=18083", self.calls())
+        self.assertEqual(os.listdir(tmp), [], "the update's temp dir was left behind")
+        self.assertTrue(os.path.isdir(os.path.join(self.home, "8083")), "the EXIT trap removed ./8083")
 
     def test_a_failed_install_leaves_the_running_version_alone(self):
         open(os.path.join(self.home, "running"), "w").close()
@@ -305,7 +344,8 @@ class Cli(UpdaterBase):
         home = self.suite.new_home("updstart")
         env = dict(self.suite.cli_env(home), SHIM_DRYRUN="1")
         self.suite.rivis("--project", "neo", "start", "--background", "--no-open", "--no-ios", home=home, env=env)
-        f = os.path.join(home, ".rivis", "last-start")
+        web = env["RIVIS_WEB_PORT"]                     # R4A-05: each web port saves its own start
+        f = os.path.join(home, ".rivis", "last-start" if web == "8083" else "last-start-" + web)
         self.assertTrue(os.path.isfile(f))
         self.assertEqual(stat.S_IMODE(os.stat(f).st_mode), 0o600)
         text = open(f).read()

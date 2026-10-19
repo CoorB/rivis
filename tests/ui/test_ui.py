@@ -79,6 +79,25 @@ class UiBase(LiveCase):
 
 
 @unittest.skipIf(PW_REASON, PW_REASON or "")
+class ProjectShowToast(UiBase):
+    PROJECT = "neo"
+
+    def test_show_active_project_does_not_suggest_starting_it_again(self):
+        page = self.open()
+        page.locator("#fab").click()
+        project = page.locator("#proxy-panel-host").locator("#project")
+        panel = page.locator("#proxy-panel-host")
+        wait_for(lambda: panel.locator("#main").text_content().strip() != "", 8, 0.2, "Tools content loaded")
+        project.select_option("neo")
+        toast_el = page.locator("#proxy-panel-host").locator("#toast")
+        wait_for(lambda: "Showing only NEO calls" in toast_el.text_content(), 8, 0.2, "NEO-only toast")
+        toast = toast_el.text_content()
+        self.assertIn("Showing only NEO calls", toast)
+        self.assertNotIn("Its rules load when you start", toast)
+        self.assertEqual(self.errors, [])
+
+
+@unittest.skipIf(PW_REASON, PW_REASON or "")
 class UiSmoke(UiBase):
 
     def test_page_loads_with_flows_and_the_panel_button(self):
@@ -108,6 +127,31 @@ class UiSmoke(UiBase):
         expected = "127.0.0.1:%d" % self.up.https_port
         wait_for(lambda: self.panel.state()["tls"]["allow"] == [expected], 10, 0.2,
                  "context action added host with port")
+        self.assertEqual(self.errors, [])
+
+    def test_plain_host_search_keeps_matching_not_decrypted_tunnel(self):
+        self.reset_state(tls={"mode": "allow", "allow": []})
+        self.panel.state()
+        self.assertEqual(self.fetch("/echo", tls=True, cacert=self.up.cert).status, 200)
+        page = self.open()
+        tunnel = page.locator('.flow-table tbody tr[data-tunnel="1"]:has(td)')
+        tunnel.first.wait_for(timeout=10000)
+        page.locator("#proxy-panel-host #sq").fill("127.0.0.1")
+        page.wait_for_timeout(1000)  # search debounce and mitmweb's filtered-list refresh
+        tunnel.first.wait_for(timeout=10000)
+        self.assertEqual(self.errors, [])
+
+    def test_composed_https_has_no_plain_http_edge(self):
+        self.open()
+        url = self.up.url("/json/small?composed-tls-edge=1", tls=True)
+        self.panel.ok("compose_send", {"spec": {"method": "GET", "url": url}})
+        row = self.page.locator(".flow-table tbody tr").filter(has=self.page.locator("td.col-path", has_text="composed-tls-edge=1"))
+        row.first.wait_for(timeout=10000)
+        wait_for(lambda: row.first.locator("td.col-status").text_content().strip() == "200", 10, 0.2,
+                 "composed HTTPS response")
+        edge = row.first.locator("td.col-tls")
+        self.assertEqual(edge.evaluate("e => getComputedStyle(e).backgroundColor"), "rgba(0, 0, 0, 0)",
+                         row.first.evaluate("e => e.outerHTML"))
         self.assertEqual(self.errors, [])
 
     def test_first_run_welcome_shows_once_and_closes_on_escape(self):
@@ -250,8 +294,12 @@ class UiSmoke(UiBase):
         self.panel.ok("focus_host", {"host": "no-match.example"})
         box = page.locator("#proxy-panel-host #emptylist.open")
         box.wait_for(timeout=10000)
-        self.assertIn("No matching calls", box.text_content())
+        # the list can empty a moment before the panel's state names the host limit (R9-03 wording); it settles
+        wait_for(lambda: "No matching calls" in box.text_content(), 5, 0.1, "the host-limit wording")
         self.assertNotIn("Nothing captured yet", box.text_content())
+        stock = page.locator('.main-view > div[style*="padding: 1em 2em"]')
+        if stock.count():
+            self.assertFalse(stock.is_visible(), "mitmweb's first-run message must not contradict the filtered-empty message")
         self.assertEqual(self.errors, [])
 
     def test_the_list_opens_newest_first_and_the_user_can_still_re_sort(self):
@@ -500,14 +548,24 @@ class UiSmoke(UiBase):
         wait_for(lambda: "ui-rule" in self.panel_text(), 10, 0.3, "rule shown after re-opening the tab")
         self.assertEqual(self.errors, [])
 
-    @unittest.expectedFailure
+    def test_r7a02_reversed_map_remote_warning_is_visible(self):
+        page = self.open()
+        self.panel.ok("add", {"rule": {"name": "backwards", "action": "map_remote", "match": "/remote",
+                                        "replace": "https://destination.test/echo", "with": "/remote"}})
+        page.locator("#fab").click()
+        page.locator("button[data-t=rules]").click()
+        wait_for(lambda: "may never rewrite a URL" in self.panel_text(), 10, 0.2,
+                 "Map Remote warning shown in Rules tab")
+        self.assertEqual(self.errors, [])
+
     def test_open_rules_tab_refreshes_when_a_rule_is_added_elsewhere(self):
-        """FOUND-BUGS B15: the tab counter updates from the poll, the list of the OPEN tab stays stale."""
+        """FOUND-BUGS B15 (fixed): the list of the OPEN tab follows a rule added elsewhere, and focus stays put."""
         page = self.open()
         page.locator("#fab").click()
         page.locator("button[data-t=rules]").click()
         self.panel.ok("add", {"rule": {"name": "elsewhere", "action": "block", "match": "/x"}})
         wait_for(lambda: "elsewhere" in self.panel_text(), 8, 0.3, "open list refreshed")
+        self.assertEqual(page.evaluate("document.querySelector('#proxy-panel-host').shadowRoot.activeElement?.dataset?.t"), "rules")
 
     def test_open_network_tab_tracks_cli_profile_and_packet_loss(self):
         page = self.open()

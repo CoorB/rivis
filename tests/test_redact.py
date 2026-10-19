@@ -42,6 +42,28 @@ class Headers(unittest.TestCase):
 
 
 class Bodies(unittest.TestCase):
+    def test_fido_login_proofs_are_masked_in_har(self):
+        proofs = ("uafResponse", "assertion", "signature", "clientDataJSON", "authenticatorData")
+        body = json.dumps({"login": {key: "PROOF-" + key for key in proofs}, "challengeId": "kept"})
+        e = R.har(har([entry(post=("application/json", body), text=body)]))["log"]["entries"][0]
+        for part in (e["request"]["postData"]["text"], e["response"]["content"]["text"]):
+            login = json.loads(part)["login"]
+            for key in proofs:
+                self.assertEqual(login[key], R.REDACTED, key)
+            self.assertEqual(json.loads(part)["challengeId"], "kept")
+
+    def test_short_secret_keys_in_har_request_and_echoed_response(self):
+        # R1A-02: pw leaked twice when an endpoint echoed the request body into its response.
+        keys = ("pw", "pwd", "pass", "password", "passcode", "pin", "otp", "secret", "token",
+                "user_pw", "newPin", "otpCode", "accessToken")
+        safe = {"pwned": "safe-pwned", "upward": "safe-upward", "pinned": "safe-pinned",
+                "opinion": "safe-opinion", "tokenism": "safe-tokenism"}
+        body = json.dumps({**{k: "LEAK-" + k for k in keys}, **safe})
+        doc = R.har(har([entry(post=("application/json", body), text=body)]))["log"]["entries"][0]
+        for out in (doc["request"]["postData"]["text"], doc["response"]["content"]["text"]):
+            obj = json.loads(out)
+            for key in keys: self.assertEqual(obj[key], R.REDACTED, key)
+            for key, value in safe.items(): self.assertEqual(obj[key], value, key)
     def test_secret_json_fields_nested_and_in_lists(self):
         body = json.dumps({"user": {"name": "alice", "password": "p@ss", "newPin": "1234", "otp": "9876"},
                            "access_token": JWT, "items": [{"id": 1, "refreshToken": "r"}], "pinned": True,

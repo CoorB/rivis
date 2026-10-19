@@ -12,7 +12,7 @@ system proxy, one CA per workstation, removed again with `off`.
                                             at the proxy and trusting only this CA. Your normal browser, the
                                             system proxy and the certificate store are not touched
   .\<cli>.ps1 projects list|use|show|new
-  .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|edit|allow-file PATH|disallow-file PATH|trusted-files
+  .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
                                             manage hot-reloaded interception rules
   .\<cli>.ps1 scripts list|new NAME -Lang py|js [-Match REGEX]|on NAME|off NAME|edit NAME|rm NAME
   .\<cli>.ps1 throttle [off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]]
@@ -126,8 +126,10 @@ $CaPem   = Join-Path $ConfDir "mitmproxy-ca-cert.pem"
 $CaCer   = Join-Path $ConfDir "mitmproxy-ca-cert.cer"
 $ProjectState = Join-Path (Join-Path $StateRoot "projects") $Project
 $RulesPath = Config-Env "RULES" (Join-Path $ProjectState "rules.json")
-$TokenPath = Join-Path $StateRoot "web-token"
-$BootstrapPath = Join-Path $StateRoot "web-bootstrap"
+# R4A-05: each web port keeps its own login (same names as the bash CLI), so a second instance cannot rotate the first's
+$PortSuffix = if ("$WebPort" -eq "8083") { "" } else { "-$WebPort" }
+$TokenPath = Join-Path $StateRoot "web-token$PortSuffix"
+$BootstrapPath = Join-Path $StateRoot "web-bootstrap$PortSuffix"
 
 function Write-PrivateFile([string]$path, [string]$text) {
   # Write a private sibling and rename it into place: readers see the old or new complete file, never a partial one.
@@ -295,7 +297,9 @@ function Test-OurMitmweb([int]$ProcessId) {
   } elseif (Get-Command ps -ErrorAction SilentlyContinue) {
     $commandLine = [string](& ps -ww -o args= -p $ProcessId 2>$null)
   }
-  return $commandLine.Contains("proxy_auth_token_file=$TokenPath")
+  # R4A-05: "web-token" is a prefix of "web-token-8085": match the whole value and this instance's web port
+  return ($commandLine -match ("proxy_auth_token_file=" + [regex]::Escape($TokenPath) + '(\s|$)')) -and
+         ($commandLine -match ("web_port=$WebPort" + '(\s|$)'))
 }
 
 function Our-Listening-Pids([int[]]$ports) {
@@ -536,7 +540,8 @@ if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report"
 } elseif ($Action -eq "list" -and $Command -in @("projects","rules","scripts","compose")) {
   if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif (@($Rest).Count -and $Command -ne "throttle" -and
-          -not ($Command -eq "tls" -and $Action -in @("allow","ignore"))) {
+          -not ($Command -eq "tls" -and $Action -in @("allow","ignore")) -and
+          -not ($Command -eq "rules" -and $Action -eq "test" -and @($Rest).Count -eq 1)) {
   $unexpected += @($Rest)
 }
 if ($unexpected.Count) { Die "unexpected argument(s): $($unexpected -join ' ')" }
@@ -612,8 +617,8 @@ switch ($Command) {
               "-s",(Join-Path $PSScriptRoot "addons\proxy_auth.py"),
               "--set","proxy_auth_token_file=$TokenPath","--set","proxy_bootstrap_file=$BootstrapPath",
               "--set","confdir=$ConfDir","--set","connection_strategy=lazy",
-              "--set",("http2=" + $(if ((Config-Env "HTTP2" "0") -eq "1") { "true" } else { "false" })),
-              "-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_retention.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_operability.py"),
+              "--set",("http2=" + $(if ((Config-Env "HTTP2" "0") -eq "1") { "true" } else { "false" })), "--set",("stream_large_bodies=" + (Config-Env "STREAM_LARGE_BODIES" "64m")),
+              "-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_source.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_retention.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_operability.py"),
               "--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project","--set","proxy_max_flows=$MaxFlows","--set","proxy_log_dir=$(Join-Path $StateRoot 'logs')")
     if ($Insecure) { $margs += @("--set","ssl_insecure=true"); Info "TLS: upstream verification OFF" }
     if ($ProjectOnly -and $ProjectConfig.hosts) {
@@ -694,6 +699,14 @@ switch ($Command) {
       Start-Process notepad.exe -ArgumentList ('"{0}"' -f $RulesPath) -Wait
       try { Get-Content -Raw $RulesPath | ConvertFrom-Json | Out-Null }
       catch { Die "file is no longer valid JSON: $($_.Exception.Message) - the proxy keeps the previous rules until fixed" }
+    } elseif ($subcommand -eq "test") {
+      # what each rule would do to this call; nothing is sent (same explanation as the panel's Test button)
+      if (-not $Name) { Die "usage: rules test URL [METHOD]" }
+      $python = Get-PythonCommand
+      $testArgs = @($Name)
+      if ($Method) { $testArgs += $Method } elseif (@($Rest).Count) { $testArgs += [string]@($Rest)[0] }
+      & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath rules test @testArgs
+      if ($LASTEXITCODE) { exit $LASTEXITCODE }
     } elseif ($subcommand -eq "add") {
       Write-Host "use: .\${Cli}.ps1 rules edit (see the project rules.example.json for every action)"
     } elseif ($subcommand -in @("allow-file","disallow-file","trusted-files")) {
@@ -718,7 +731,7 @@ switch ($Command) {
           if ($full.StartsWith($d + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { Die "refusing to trust ${target}: it is inside $d (keys and credentials)" }
         }
         $leaf = [IO.Path]::GetFileName($full).ToLowerInvariant()
-        if ($leaf -in @("web-token","web-bootstrap","trusted-files.json") -or $leaf -match '\.(pem|p12|pfx|key)$') { Die "refusing to trust ${target}: it looks like a key or a $ProductName secret" }
+        if ($leaf -in @("web-token","web-bootstrap","trusted-files.json") -or $leaf -match '^web-(token|bootstrap)-[0-9]+$' -or $leaf -match '\.(pem|p12|pfx|key)$') { Die "refusing to trust ${target}: it looks like a key or a $ProductName secret" }
         $files = @($files | Where-Object { $_ -ne $full }) + $full
         Write-Host "trusted on this machine: $full - rules may now read it"
       } else {
@@ -935,8 +948,8 @@ switch ($Command) {
       $pick = @(& $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath mock-pick $Action $Name $temp)
       if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally { if (Test-Path $temp) { Remove-Item -Force $temp } }
-    if ($pick.Count -ne 3) { Die "could not identify the captured response" }
-    $id,$status,$method = $pick
+    if ($pick.Count -ne 4) { Die "could not identify the captured response" }
+    $id,$status,$method,$headers = $pick
     $mockDir = Join-Path $ProjectState "mocks"
     New-Item -ItemType Directory -Force -Path $mockDir | Out-Null
     $file = Join-Path $mockDir "$Action.json"
@@ -944,7 +957,7 @@ switch ($Command) {
     catch { Die "could not read the response body" }
     try { Get-Content -Raw $file | ConvertFrom-Json | Out-Null }
     catch { $textFile = [IO.Path]::ChangeExtension($file, ".txt"); Move-Item -Force $file $textFile; $file = $textFile }
-    & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath rules add $Action "match=$Name" action=map_local "file=$file" "status=$status" "method=$method" | Out-Null
+    & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath rules mock-set $Action "match=$Name" action=map_local "file=$file" "status=$status" "method=$method" "headers=$headers" | Out-Null
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Info "saved the real $method response ($status) to $file"
     Info "map_local rule '$Action' is ON - edit that file; every save applies to the next call"

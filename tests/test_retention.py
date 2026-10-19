@@ -7,6 +7,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Background, Instance, LiveCase, Suite, wait_for
 
 
+class FooterCopy(unittest.TestCase):
+    def test_footer_describes_batch_trim(self):
+        # R4A-02: the footer must describe the existing low-water policy.
+        panel = open(os.path.join(os.path.dirname(__file__), "..", "addons", "panel.js")).read()
+        self.assertIn("keeps up to ${state.retention.limit}; trims oldest in batches", panel)
+        self.assertNotIn("keeps the last ${state.retention.limit}", panel)
+
+
 class Retention(LiveCase):
     INSTANCE_KW = {"extra_env": {"RIVIS_MAX_FLOWS": "25"}}
 

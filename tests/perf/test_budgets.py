@@ -124,5 +124,33 @@ class Budgets(unittest.TestCase):
             inst.stop()
 
 
+    def test_twenty_rules_on_add_under_5ms_median(self):
+        # Every call runs every ON rule's match and its hit counting: a project with many rules must stay fast.
+        inst = Instance(self.suite, "perfrules").start()
+        try:
+            rules = [{"name": "r%02d" % i, "enabled": True, "match": r"/never-%d(/|$)" % i, "action": "status", "status": 503}
+                     for i in range(18)]
+            rules += [{"name": "hdr", "enabled": True, "match": "/json/small", "action": "set_header", "side": "response",
+                       "header": "X-Perf", "value": "1"},
+                      {"name": "patch", "enabled": True, "match": "/json/small", "action": "json_patch", "set": {"perf": True}}]
+            inst.write_cfg({"rules": rules})
+            host = "127.0.0.1:%d" % self.up.http_port
+            url = "http://%s/json/small" % host
+            direct = http.client.HTTPConnection("127.0.0.1", self.up.http_port)
+            proxied = http.client.HTTPConnection("127.0.0.1", inst.proxy_port)
+            for _ in range(20):
+                through_proxy(direct, "/json/small", host, "/json/small")
+                through_proxy(proxied, url, host, "/json/small")
+            d_med, _ = median_ms(lambda: through_proxy(direct, "/json/small", host, "/json/small"), 300)
+            p_med, p_p95 = median_ms(lambda: through_proxy(proxied, url, host, "/json/small"), 300)
+            RESULTS["latency_20_rules_ms"] = {"direct_median": round(d_med, 2), "proxy_median": round(p_med, 2),
+                                              "added_median": round(p_med - d_med, 2), "proxy_p95": round(p_p95, 2)}
+            self.assertLess(p_med - d_med, 5.0, RESULTS["latency_20_rules_ms"])
+            hits = inst.panel.state()["rule_hits"]["rules"]
+            self.assertGreaterEqual(hits["patch"]["count"], 300)
+        finally:
+            inst.stop()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

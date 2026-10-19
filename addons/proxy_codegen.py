@@ -17,7 +17,7 @@ TARGETS = (
     ("postman", "Postman collection (v2.1)"),
 )
 TARGET_IDS = frozenset(x[0] for x in TARGETS)
-DROP_HEADERS = frozenset(("connection", "content-length", "keep-alive", "proxy-authenticate",
+DROP_HEADERS = frozenset(("connection", "content-length", "keep-alive", "proxy-authenticate", "proxy-connection",  # R7A-04: proxy-only, not for direct replay
                           "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"))
 SECRET_HEADERS = frozenset(("authorization", "cookie"))
 

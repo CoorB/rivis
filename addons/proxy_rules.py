@@ -34,6 +34,11 @@ disabled and the proxy keeps running. This stops a shared rules file from servin
 local files (security finding F-09).
 
 Every rule that fires appends "rule:<name>" to the flow comment, so the UI shows what changed a call.
+
+Hit counts: every enabled rule counts the calls it changed and the calls it matched but left unchanged (a map_remote
+whose replace finds nothing, a json_patch on a non-JSON response), with the number of calls seen since the rule was
+switched on or last edited. Applied hits are written when the response finishes; other call totals are polled, so
+`rules list` and the panel can say "ON but never matched" instead of leaving a tester with an inert rule.
 """
 import asyncio
 import importlib
@@ -56,8 +61,11 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
-from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PROFILE_VALUES, STATE_ROOT, breakpoints, project_profile,
-                          migrate_rules, rule_file_path, tls_config, tls_options, user_regex)
+from proxy_common import (PRODUCT, PROFILE_VALUES, atomic_json, STATE_ROOT, breakpoints, project_profile,
+                          migrate_rules, remote_url_problem, throttle_shorthand, tls_config, tls_options, user_regex)
+import proxy_rule_validation
+importlib.reload(proxy_rule_validation)      # mitmproxy reloads this add-on in place: the validator must see the new proxy_common too
+from proxy_rule_validation import compile_rule, rule_fingerprint
 
 DNS_TIMEOUT = 10        # seconds for the private-address guard's own lookup
 
@@ -80,9 +88,9 @@ def _parse_throttle(spec, manual=None):
         values = (float(m.get("latency_ms", 0)), float(m.get("jitter_ms", 0)), float(m.get("down_kbps", 0)),
                   float(m.get("up_kbps", 0)), float(m.get("loss_pct", 0)), float(m.get("response_delay_ms", 0)))
         return tuple(0 if not math.isfinite(v) or v < 0 else v for v in values)
-    m = re.fullmatch(r"(\d+)ms(?:/(\d+)kbps)?", spec)
-    if m:
-        return int(m.group(1)), 0, int(m.group(2) or 0), 0, 0, 0
+    shorthand = throttle_shorthand(spec)
+    if shorthand is not None:
+        return shorthand[0], 0, shorthand[1], 0, 0, 0
     raise ValueError(f"unknown throttle '{spec}' ({'|'.join(['off', *PROFILES, 'manual'])}|<ms>ms[/<kbps>kbps])")
 
 
@@ -103,6 +111,9 @@ def _bp_filter(bps):
             f += " & ~q"
         elif b.get("response") and not b.get("request"):
             f += " & ~s"
+        if b.get("response"):
+            # R4B-01: a streamed SSE body has no editable response snapshot, so do not pause its delivery.
+            f += " & ( ~q | !~hs '(?i)content-type: *text/event-stream' )" if b.get("request") else " & !~hs '(?i)content-type: *text/event-stream'"
         # Calls Rivis answers itself (Map Local / respond, tagged "mock:") are paused by proxy_rules, never by
         # mitmweb's Intercept: mitmweb 12.2.3 never sends a locally answered response it has intercepted.
         f += " & !~comment '(^| )mock:'"
@@ -160,60 +171,140 @@ def _confdir():
         return None
 
 
+def _no_body_for(resp):
+    """R7B-01: 204 and 304 never carry a body. Sending the old body with its Content-Length after the status line
+    says 204/304 leaves those bytes on a keep-alive connection, where the client reads them as the next response."""
+    if resp.status_code in (204, 304):
+        resp.content = b""
+        for k in ("content-length", "transfer-encoding", "content-encoding"):
+            resp.headers.pop(k, None)
+
+
 def _compile_rule(source, state_dir, fallback_name=None):
-    if not isinstance(source, dict):
-        raise TypeError("rule must be an object")
-    rule = dict(source)
-    rule["name"] = rule.get("name") or fallback_name or "unnamed"
-    action = rule.get("action")
-    if action not in ACTIONS:
-        raise ValueError(f"unknown action '{action}'")
-    missing = [key for key in ACTION_REQUIREMENTS[action] if key not in rule]
-    if missing:
-        raise ValueError(f"action '{action}' needs: {', '.join(missing)}")
-    rule["_re"] = user_regex(rule.get("match", "."))
-    if rule.get("method") is not None and not isinstance(rule["method"], str):
-        raise TypeError("method must be text")
-    if action == "map_remote":
-        rule["_replace"] = user_regex(rule["replace"])
-        if not isinstance(rule["with"], str):
-            raise TypeError("map_remote with must be text")
-    elif action == "respond":
-        int(rule.get("status", 200))
-        if rule.get("body_file"):
-            rule["body_file"] = rule_file_path(state_dir, rule["body_file"], "body_file", (_confdir(),))
-    elif action == "status":
-        int(rule["status"])
-        if rule.get("body_file"):
-            rule["body_file"] = rule_file_path(state_dir, rule["body_file"], "body_file", (_confdir(),))
-    elif action == "delay":
-        rule["ms"] = float(rule["ms"])
-        if rule["ms"] < 0:
-            raise ValueError("delay ms must not be negative")
-    elif action == "json_patch":
-        if not isinstance(rule["set"], dict) or not all(isinstance(k, str) for k in rule["set"]):
-            raise TypeError("json_patch set must be an object with text paths")
-    elif action == "set_header":
-        if not isinstance(rule["header"], str):
-            raise TypeError("set_header header must be text")
-        if rule.get("side", "request") not in ("request", "response"):
-            raise ValueError("set_header side must be request or response")
-    elif action == "map_local":
-        if not isinstance(rule["file"], str):
-            raise TypeError("map_local file must be text")
-        # A shared rules file must not turn the proxy into a reader for arbitrary
-        # local files: confine to the project state dir (symlinks resolved) unless the
-        # user trusted that file on this machine, or skip the rule with this error.
-        rule["file"] = rule_file_path(state_dir, rule["file"], "map_local file", (_confdir(),))
-    if "headers" in rule:
-        headers = rule["headers"]
-        if isinstance(headers, dict):
-            rule["headers"] = [[str(k), str(v)] for k, v in headers.items()]
-        elif isinstance(headers, list) and all(isinstance(x, (list, tuple)) and len(x) == 2 for x in headers):
-            rule["headers"] = [[str(k), str(v)] for k, v in headers]
-        else:
-            raise TypeError("headers must be an object or name/value pairs")
-    return rule
+    # R5A-02: CLI and proxy must reach the same skip decision.
+    return compile_rule(source, state_dir, fallback_name, _confdir())
+
+
+# ── R10-02: HTTP/1 interim (1xx) responses ─────────────────────────────────────────────────────────────────────────
+# Mitmproxy 12.2.3's HTTP/1 client takes the first status line it reads as the final response. An upstream that sends
+# `103 Early Hints` (or an unsolicited `100 Continue`) before its real answer therefore had the 103 delivered to the
+# app as the whole response, and the client then waited for ever. The interim heads are informational only (RFC 9110
+# 15.2), so they are dropped here and the real response is read and passed on as usual. 101 is a real switch and is
+# left alone. The wrap is installed once per process: a hot reload re-runs this module and must not wrap the wrapper.
+_INTERIM_HEAD = re.compile(rb"HTTP/1\.[01] (1(?!01)\d\d)\b")
+
+
+def _install_interim_drop():
+    try:
+        import logging
+        from mitmproxy.proxy import commands as _commands, events as _events
+        from mitmproxy.proxy.layers.http import _http1
+        original = _http1.Http1Client.read_headers
+    except (ImportError, AttributeError):
+        return False
+    if getattr(original, "_rivis_interim", False):
+        return True
+
+    def read_headers(self, event):
+        if isinstance(event, _events.DataReceived) and getattr(self, "request", None) is not None:
+            while True:
+                raw = bytes(self.buf)
+                m = _INTERIM_HEAD.match(raw)
+                if not m or (b"\r\n\r\n" not in raw and b"\n\n" not in raw):
+                    break                                  # a final head, or an interim one not complete yet
+                if self.buf.maybe_extract_lines() is None:
+                    break
+                yield _commands.Log("dropped an interim %s response from %s" % (
+                    m.group(1).decode(), getattr(self.conn, "address", "?")), logging.DEBUG)
+        yield from original(self, event)
+
+    read_headers._rivis_interim = True
+    _http1.Http1Client.read_headers = read_headers
+    return True
+
+
+# ── R10-04: upstream TLS failures answer with the reason and the fix ───────────────────────────────────────────────
+# Mitmproxy answers a failed upstream handshake with a bare "502 … Certificate verify failed: …" page. The error hook
+# (which runs just before that page is built) stores a full explanation under the original message; the wrapped
+# format_error swaps it in. The table lives on mitmproxy's module so a hot reload keeps feeding the installed wrap.
+def _error_texts():
+    try:
+        from mitmproxy.proxy.layers.http import _base
+    except ImportError:
+        return {}
+    table = getattr(_base, "_rivis_error_text", None)
+    if table is None:
+        table = _base._rivis_error_text = {}
+    return table
+
+
+def _install_error_text():
+    try:
+        from mitmproxy.proxy.layers.http import _base
+    except ImportError:
+        return False
+    import html as _html
+    import importlib as _importlib
+    original = _base.format_error
+
+    def format_error(status_code, message):
+        text = _error_texts().pop(message, None)
+        if text is None:
+            return original(status_code, message)
+        reason = status_codes.RESPONSES.get(status_code, "Unknown")
+        return ("<html>\n<head><title>%d %s</title></head>\n<body>\n<h1>%d %s</h1>\n"
+                "<pre style=\"white-space: pre-wrap\">%s</pre>\n</body>\n</html>"
+                % (status_code, reason, status_code, reason, _html.escape(text))).encode("utf-8", "replace")
+
+    format_error._rivis_error_text = True
+    installed = False
+    for name in ("_http1", "_http2", "_http3"):
+        try:
+            mod = _importlib.import_module("mitmproxy.proxy.layers.http." + name)
+        except ImportError:
+            continue
+        if getattr(getattr(mod, "format_error", None), "_rivis_error_text", False):
+            installed = True
+            continue
+        if hasattr(mod, "format_error"):
+            mod.format_error = format_error
+            installed = True
+    return installed
+
+
+_TLS_REASONS = (
+    ("unable to get local issuer certificate",
+     "The server did not send a chain this proxy can check. Usually the server leaves out its intermediate "
+     "certificate (an incomplete chain): browsers and phones download a missing intermediate themselves, Rivis does "
+     "not. Less often, your network inspects HTTPS with a root certificate this Mac does not trust."),
+    ("certificate has expired", "The server's certificate has expired."),
+    ("self-signed certificate", "The server uses a self-signed certificate that nothing trusts."),
+    ("self signed certificate", "The server uses a self-signed certificate that nothing trusts."),
+    ("hostname mismatch", "The server's certificate is for a different host name."),
+    ("ip address mismatch", "The server's certificate does not cover this IP address."),
+)
+
+
+def upstream_tls_text(message, host, cli="rivis"):
+    """The explanation for a failed upstream certificate check, or None for any other error."""
+    if not isinstance(message, str) or not message.startswith("Certificate verify failed"):
+        return None
+    detail = message.split(":", 1)[1].strip() if ":" in message else message
+    why = next((text for key, text in _TLS_REASONS if key in detail.lower()),
+               "The server's certificate could not be verified.")
+    return ("Rivis could not verify the HTTPS certificate of %(host)s (%(detail)s).\n%(why)s\n\n"
+            "The app was answered 502 by Rivis; the server was not asked.\n\n"
+            "To fix it:\n"
+            "  - Pass this host through without decrypting it (its calls are then not captured or changed):\n"
+            "      %(cli)s tls ignore add %(host)s   and   %(cli)s tls mode ignore\n"
+            "  - A dev or test server you trust: start with   %(cli)s start --insecure   (no upstream certificate"
+            " checks).\n"
+            "  - Your company inspects HTTPS: install IT's root certificate in Keychain Access, or start with"
+            " RIVIS_EXTRA_TRUST=/path/root.pem.\n" % {"host": host, "detail": detail, "why": why, "cli": cli})
+
+
+_install_interim_drop()
+_install_error_text()
 
 
 class ProxyRules:
@@ -226,6 +317,7 @@ class ProxyRules:
         self.throttle_re = None
         self.loss = 0
         self.skipped_rules = []
+        self.failed_rules = {}      # R2A-02: rules whose file could not be read at request time {name: error}
         self.last_good_cfg = {"rules": []}
         self._bp_filter = _UNSET
         self._intercept_set = _UNSET
@@ -235,6 +327,14 @@ class ProxyRules:
         self.project_hosts_re = None
         self._address_cache = {}
         self._https_pins = {}
+        self.hits = {}              # name → {fp, count, noop, noop_reason, last, since, seen_at_since}
+        self._parked_hits = {}      # (name, fp) → hit entry of a rule that is switched off (R9-01)
+        self.calls_seen = 0
+        self._hits_dirty = False
+        self._hits_unflushed = False
+        self._hits_written = 0.0
+        self._hits_lock = None      # asyncio.Lock, made on the proxy loop: one hit-file write in flight at a time
+        self._hits_tasks = set()
 
     def load(self, loader):
         loader.add_option("proxy_rules_file", str, DEFAULT_FILE, "project rules file (JSON, hot-reloaded)")
@@ -248,6 +348,7 @@ class ProxyRules:
             while True:
                 await asyncio.sleep(1)
                 self._reload()
+                await self._flush_hits()
         self._poller = asyncio.get_running_loop().create_task(poll())
 
     def configure(self, updated):
@@ -283,6 +384,7 @@ class ProxyRules:
             self._set_tls({})
             self.rules, self.throttle, self.loss, self.mtime = [], None, 0, None
             self.skipped_rules = []
+            self.failed_rules.clear()      # R3A-01: no removed rule may remain in doctor/panel state
             return
         if mtime == self.mtime:
             return
@@ -320,9 +422,11 @@ class ProxyRules:
             self._set_breakpoints(bp_filter or None)
             self._set_tls(cfg)
             self.rules, self.throttle = rules, throttle
+            self.failed_rules = {n: e for n, e in self.failed_rules.items() if n in {r["name"] for r in rules}}  # R3A-01
             self.throttle_re, self.loss = throttle_re, loss
             self.tls = tls
             self.skipped_rules = skipped
+            self._sync_hits(cfg.get("rules", []))
             self.last_good_cfg = cfg
             self.mtime = mtime
             names = ", ".join(r.get("name", "?") for r in rules) or "none"
@@ -385,6 +489,109 @@ class ProxyRules:
             await flow.wait_for_resume()
         return flow.error is None
 
+    # ── hit counts ───────────────────────────────────────────────
+    @property
+    def hits_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(os.path.expanduser(self.path))), "rule-hits.json")
+
+    PARKED_HITS_MAX = 200
+
+    def _sync_hits(self, sources):
+        # R9-01: a rule that is only switched off keeps its count (parked by fingerprint) so switching it back on
+        # resumes it; an edit changes the fingerprint and so still restarts the count.
+        now, keep = time.time(), {}
+        parked = self._parked_hits
+        for index, source in enumerate(sources):
+            if not isinstance(source, dict):
+                continue
+            name = source.get("name") or f"rule #{index + 1}"
+            fp = rule_fingerprint(source)
+            if not source.get("enabled", True):
+                old = self.hits.get(name)
+                if old and old.get("fp") == fp:
+                    parked.pop((name, fp), None)
+                    parked[(name, fp)] = old
+                continue
+            old = self.hits.get(name)
+            if not (old and old.get("fp") == fp):
+                old = parked.pop((name, fp), None)
+            keep[name] = old if old and old.get("fp") == fp else {
+                "fp": fp, "count": 0, "noop": 0, "noop_reason": None, "last": None, "since": now, "seen_at_since": self.calls_seen}
+        while len(parked) > self.PARKED_HITS_MAX:
+            parked.pop(next(iter(parked)))
+        if keep.keys() != self.hits.keys() or any(keep[n] is not self.hits.get(n) for n in keep):
+            self._hits_dirty = True
+        self.hits = keep
+
+    def _record(self, rule, changed=True, reason=None):
+        h = self.hits.get(rule["name"])
+        if h is None:
+            return
+        h["last"] = time.time()
+        if changed:
+            h["count"] += 1
+        else:
+            h["noop"] += 1
+            h["noop_reason"] = reason
+        self._hits_dirty = True
+        self._hits_unflushed = True
+
+    def _fired(self, flow, rule, suffix="", modified=True):
+        _tag_rule(flow, rule, suffix, modified)
+        self._record(rule)
+
+    def hit_summary(self):
+        return {"calls_seen": self.calls_seen, "rules": {n: {k: v for k, v in h.items() if k != "fp"} | {"calls_since": self.calls_seen - h["seen_at_since"]}
+                                                          for n, h in self.hits.items()}}
+
+    def _hits_doc(self):
+        return {"written": time.time(), "pid": os.getpid(), "rules_file": self.path,
+                **self.hit_summary(), "fingerprints": {n: h["fp"] for n, h in self.hits.items()}}
+
+    # Hit counts are diagnostic: written atomically (a reader never sees half a file) but without fsync, and on the
+    # proxy loop only the snapshot is taken — the file write runs in a worker thread, so a busy rule never stalls
+    # other connections (review 0.9.7 #3: two fsyncs per rule-firing call ran on the event loop).
+    def _write_hits(self, force=False):
+        """Synchronous write; only for shutdown, where there is no loop left to hand the write to."""
+        if not self._hits_dirty or (not force and time.monotonic() - self._hits_written < 0.5):   # R8D-07: was 2 s
+            return
+        try:
+            atomic_json(self.hits_path, self._hits_doc(), durable=False)
+            self._hits_dirty = False
+            self._hits_unflushed = False
+        except OSError as e:
+            ctx.log.debug(f"proxy_rules: cannot write {self.hits_path}: {e}")
+        self._hits_written = time.monotonic()
+
+    async def _flush_hits(self, force=False):
+        if self._hits_lock is None:
+            self._hits_lock = asyncio.Lock()
+        async with self._hits_lock:
+            # a caller queued behind another write finds its hit already written: nothing left to do
+            if not self._hits_dirty or (not force and time.monotonic() - self._hits_written < 0.5):   # R8D-07: was 2 s
+                return
+            doc = self._hits_doc()
+            self._hits_dirty = False
+            self._hits_unflushed = False
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, lambda: atomic_json(self.hits_path, doc, durable=False))
+            except OSError as e:
+                self._hits_dirty = True
+                ctx.log.debug(f"proxy_rules: cannot write {self.hits_path}: {e}")
+            self._hits_written = time.monotonic()
+
+    def _flush_hits_soon(self):
+        """From a synchronous hook: write the hit file off the loop without waiting for it."""
+        try:
+            task = asyncio.get_running_loop().create_task(self._flush_hits(force=True))
+        except RuntimeError:                      # no running loop (unit use): the poller or done() writes it
+            return
+        self._hits_tasks.add(task)
+        task.add_done_callback(self._hits_tasks.discard)
+
+    def done(self):
+        self._write_hits(force=True)
+
     def _intercept_replay(self, flow):
         """mitmproxy's Intercept addon skips client replays; apply our owned filter to them."""
         if flow.is_replay != "request" or flow.intercepted:
@@ -397,10 +604,9 @@ class ProxyRules:
             flow.intercept()
 
     def _matching(self, flow, actions):
-        url, method = flow.request.pretty_url, flow.request.method
+        url, method = flow.request.pretty_url, flow.request.method.upper()
         for r in self.rules:
-            if r.get("action") in actions and r["_re"].search(url) \
-                    and r.get("method", method).upper() == method:
+            if r.get("action") in actions and r["_re"].search(url) and r.get("_method") in (None, method):
                 yield r
 
     def _throttled(self, flow):
@@ -416,6 +622,10 @@ class ProxyRules:
         not checked, so all page-started requests need the same boundary. Simulator capture and the panel's own
         Repeat/Compose may reach private addresses: on a VPN the app's servers often resolve to them.
         """
+        # R7B-02: the rules file is re-read here, at the first hook of every call and before mitmweb's own intercept
+        # step: a 1 s stat throttle let the first calls after `rules add` / `breakpoint` slip through unblocked or
+        # unpaused while the CLI already said ON. One stat per call costs microseconds.
+        self._reload(force=True)
         host = flow.request.host
         plain = self._page_reachable(flow)
         insecure_page = getattr(ctx.options, "ssl_insecure", False) and self._insecure_page(flow)
@@ -574,6 +784,9 @@ class ProxyRules:
     # ── request side ─────────────────────────────────────────────
     async def request(self, flow: http.HTTPFlow):
         self._reload()
+        self.calls_seen += 1
+        if self.hits:
+            self._hits_dirty = True        # "ON but never matched" depends on calls seen, not only on hits
         answers_locally = any(True for _ in self._matching(flow, {"respond", "map_local"}))
         if not answers_locally:
             self._intercept_replay(flow)                       # Repeat: mitmweb's Intercept skips client replays
@@ -585,23 +798,35 @@ class ProxyRules:
             flow.kill()
             return
         for r in self._matching(flow, {"block"}):
-            _tag_rule(flow, r, modified=False)
+            self._fired(flow, r, modified=False)
+            self._flush_hits_soon()                      # a killed call has no response hook
             flow.kill()
             return
         for r in self._matching(flow, {"map_remote"}):
             new = r["_replace"].sub(r["with"], flow.request.pretty_url)
             if new != flow.request.pretty_url:
+                bad = remote_url_problem(new)
+                if bad:      # R2A-11: not a traceback and not a silent pass-through to the original server
+                    _tag(flow, f"rule:{r['name']} FAILED: {bad}")
+                    ctx.log.warn(f"proxy_rules: {r['name']}: map_remote result {bad}")
+                    flow.response = http.Response.make(502, f"Rivis: rule '{r['name']}' (map_remote) produced an unusable URL: {bad}".encode(),
+                                                       {"Content-Type": "text/plain; charset=utf-8"})
+                    flow.metadata["proxy_local"] = True
+                    return
                 flow.request.url = new
-                _tag_rule(flow, r, modified=False)
+                self._fired(flow, r, modified=False)
+            else:
+                self._record(r, changed=False, reason=f"matched, but replace={r['replace']!r} changed nothing in the URL "
+                                                       f"(replace is the URL pattern, with is the replacement)")
         for r in self._matching(flow, {"set_header"}):
             if r.get("side", "request") == "request":
                 if r.get("value") is None:
                     flow.request.headers.pop(r["header"], None)
                 else:
                     flow.request.headers[r["header"]] = str(r["value"])
-                _tag_rule(flow, r, modified=False)
+                self._fired(flow, r, modified=False)
         for r in self._matching(flow, {"delay"}):
-            _tag_rule(flow, r, f" +{r.get('ms', 0)}ms", modified=False)
+            self._fired(flow, r, f" +{r.get('ms', 0)}ms", modified=False)
             await asyncio.sleep(r.get("ms", 0) / 1000)
         if self._throttled(flow):
             lat, jit, _down, up, _l, _d = self.throttle
@@ -620,22 +845,62 @@ class ProxyRules:
                 else:
                     body = self._body(r)
                     ctype = "application/json"
-                headers = list(r.get("headers") or [])
+                headers = [list(pair) for pair in (r.get("headers") or [])]
                 if not any(k.lower() == "content-type" for k, _v in headers):
                     headers.insert(0, ["Content-Type", ctype])
+                origin = flow.request.headers.get("Origin")
+                if origin and not any(k.lower() == "access-control-allow-origin" for k, _v in headers):
+                    # R4B-02: a local answer never reaches the API that normally supplies its CORS policy.
+                    headers.append(["Access-Control-Allow-Origin", origin])
+                    for pair in headers:
+                        if pair[0].lower() == "access-control-allow-credentials":
+                            pair[1] = "true"
+                            break
+                    else:
+                        headers.append(["Access-Control-Allow-Credentials", "true"])
+                    for pair in headers:
+                        if pair[0].lower() == "vary":
+                            if "origin" not in [v.strip().lower() for v in pair[1].split(",")]:
+                                pair[1] += ", Origin"
+                            break
+                    else:
+                        headers.append(["Vary", "Origin"])
                 headers = http.Headers([(k.encode("ascii"), v.encode("utf-8")) for k, v in headers])
                 flow.response = http.Response.make(int(r.get("status", 200)), body, headers)
+                _no_body_for(flow.response)
                 flow.metadata["proxy_local"] = True     # answered locally: collections must not record it
-                _tag_rule(flow, r, modified=False)
+                self._fired(flow, r, modified=False)
+                self.failed_rules.pop(r["name"], None)
             except Exception as e:
+                # R2A-02: a mock that cannot be served must never fall through to the REAL server (a mocked payment call
+                # would reach the backend); answer 502 naming the rule and file, and flag it for rules list/panel/doctor
+                what = r.get("file") or r.get("body_file") or "its body"
+                msg = f"Rivis: rule '{r['name']}' ({r['action']}) cannot be served: {what}: {e}"
+                self.failed_rules[r["name"]] = f"{what}: {e}"
                 _tag(flow, f"rule:{r['name']} FAILED: {e}")
-                ctx.log.warn(f"proxy_rules: {r['name']}: {e}")
+                ctx.log.warn(f"proxy_rules: {msg}")
+                flow.response = http.Response.make(502, msg.encode("utf-8", "replace"),
+                                                   {"Content-Type": "text/plain; charset=utf-8"})
+                flow.metadata["proxy_local"] = True
             break
         if answers_locally and flow.response is not None:
             await self._pause_local(flow, "response")          # the mock can still be edited before the app gets it
 
     # ── response side ────────────────────────────────────────────
+    def responseheaders(self, flow: http.HTTPFlow):
+        if (flow.response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower() == "text/event-stream":
+            # R4B-01: the body may never finish, so buffering it would hide every event from the client.
+            flow.response.stream = True
+            flow.metadata["proxy_sse_stream"] = True
+
     async def response(self, flow: http.HTTPFlow):
+        if flow.metadata.get("proxy_sse_stream"):
+            return                         # R4B-01: streamed bytes are unavailable for response edits.
+        if flow.response.stream:
+            # R10-01: a body over stream_large_bodies went straight to the app and was not kept, so there is nothing
+            # left to edit, and the status line has already been sent.
+            _tag(flow, "large body streamed, not kept")
+            return
         self._reload()
         self._intercept_replay(flow)
         for r in self._matching(flow, {"status"}):
@@ -643,7 +908,8 @@ class ProxyRules:
             flow.response.reason = status_codes.RESPONSES.get(flow.response.status_code, "")   # not "503 OK"
             if r.get("body") is not None or r.get("body_file"):
                 flow.response.content = self._body(r)
-            _tag_rule(flow, r)
+            _no_body_for(flow.response)
+            self._fired(flow, r)
         for r in self._matching(flow, {"json_patch"}):
             try:
                 raw = flow.response.get_text()
@@ -657,9 +923,10 @@ class ProxyRules:
                     except KeyError:
                         missing.append(path)
                 flow.response.text = json.dumps(doc)
-                _tag_rule(flow, r, f" (missing: {', '.join(missing)})" if missing else "")
+                self._fired(flow, r, f" (missing: {', '.join(missing)})" if missing else "")
             except (TypeError, ValueError) as e:
                 _tag_rule(flow, r, " skipped: response is not JSON", modified=False)
+                self._record(r, changed=False, reason="matched, but the response was not JSON")
                 ctx.log.warn(f"proxy_rules: {r['name']}: json_patch left response unchanged: {e}")
         for r in self._matching(flow, {"set_header"}):
             if r.get("side") == "response":
@@ -667,7 +934,7 @@ class ProxyRules:
                     flow.response.headers.pop(r["header"], None)
                 else:
                     flow.response.headers[r["header"]] = str(r["value"])
-                _tag_rule(flow, r)
+                self._fired(flow, r)
         if self._throttled(flow):
             lat, _j, down, _u, _l, delay = self.throttle
             sample = flow.metadata.get("proxy_latency", lat)
@@ -675,6 +942,20 @@ class ProxyRules:
             wait = sample / 2000 + delay / 1000 + ((size * 8 / 1000) / down if down else 0)
             _tag(flow, f"throttle +{int(wait * 1000)}ms")
             await asyncio.sleep(wait)
+        if self._hits_unflushed:
+            await self._flush_hits(force=True)           # `rules list` after the response must see applied rules
+
+    def error(self, flow: http.HTTPFlow):
+        msg = flow.error.msg if flow.error else None
+        text = upstream_tls_text(msg, flow.request.pretty_host if flow.request else "?", PRODUCT["cli"])
+        if text:
+            table = _error_texts()
+            if len(table) > 256:              # never grows: an entry is taken back as soon as its 502 page is built
+                table.clear()
+            table[msg] = text
+            flow.error.msg = text             # the Error tab says the same as the app's 502 page
+        if self._hits_unflushed:
+            self._flush_hits_soon()                      # request-side rule on an upstream failure
 
 
 addons = [ProxyRules()]

@@ -492,7 +492,7 @@ class Modes(LiveCase):
     def test_root_dirs_exist_with_private_modes(self):
         self.assertEqual(oct(mode(os.path.join(self.inst.home, ".rivis"))), "0o700")
         self.assertEqual(oct(mode(self.inst.state_dir)), "0o700")
-        self.assertEqual(oct(mode(os.path.join(self.inst.home, ".rivis", "web-token"))), "0o600")
+        self.assertEqual(oct(mode(os.path.join(self.inst.home, ".rivis", "web-token-%d" % self.inst.web_port))), "0o600")
 
     def test_nothing_is_written_outside_the_state_dirs(self):
         self.fetch("/json/small")

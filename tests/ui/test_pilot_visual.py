@@ -42,7 +42,8 @@ class PilotVisual(UiBase):
         self.fetch("/json/small?pv=narrow")
         self.select("pv=narrow")
         self.call_tab()
-        self.page.wait_for_timeout(500)
+        # the narrow layout is applied by an observer after the drawer opens; a fixed 500 ms was flaky under a loaded run
+        self.page.wait_for_function("document.documentElement.dataset.narrow === '1'", timeout=10000)
         shot(self.page, "pv-narrow")
         self.assertEqual(self.page.evaluate("document.documentElement.dataset.narrow"), "1")
         got = self.page.evaluate("""() => { const c = [...document.querySelectorAll('.flow-table tbody td.col-path')].find((x) => x.textContent.includes('pv=narrow'));

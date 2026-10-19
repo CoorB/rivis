@@ -161,6 +161,9 @@
     .fstrip .fchip button:hover { background: color-mix(in srgb, var(--rv-accent) 22%, transparent); }
     .fstrip .cnt2 { margin-left: auto; font-variant-numeric: tabular-nums; }
     .fstrip .lnk { font-size: 12px; }
+    :host([data-sbrow]) .fstrip { padding-left: calc(var(--sb-w, 200px) + 16px); }
+    :host([data-sbrow]) .sbar, :host([data-sbrow]) .sbox { height: 26px; }
+    :host([data-sbrow]) .sbox input#sq { height: 22px; }
 
 
     /* right-click menu on a call */
@@ -182,7 +185,7 @@
     header { display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; border-bottom: 1px solid var(--rv-border); }
     header .mark { width: 22px; height: 22px; border-radius: 7px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; flex: none; }
     header .mark svg { width: 14px; height: 14px; stroke-width: 2.2; }
-    header b { font-size: 14px; flex: 1; font-weight: 650; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    header b { font-size: 14px; flex: 1; font-weight: 650; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     header b small { font-weight: 500; color: var(--rv-text-2); font-size: 13px; }
     .x { border: 0; background: transparent; font-size: 20px; line-height: 1; cursor: pointer; color: var(--rv-text-2); width: 26px; height: 26px; border-radius: var(--rv-r-md); }
     .x:hover { background: var(--rv-surface-2); color: var(--rv-text); }
@@ -194,7 +197,10 @@
     nav button svg.i { width: 17px; height: 17px; }
     nav button:hover { color: var(--rv-text); background: var(--rv-surface-2); }
     nav button.on { color: var(--rv-accent-text); border-bottom-color: var(--rv-accent); font-weight: 600; }
-    label.pj { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rv-text-3); }
+    label.pj { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rv-text-3); min-width: 0; flex: 0 1 auto; }
+    label.pj select { min-width: 58px; width: 100%; }
+    /* two menus (Show, Source) share a ~380 px header with the close button: drop their words before anything overflows */
+    @container rvdrawer (max-width: 430px) { label.pj .pjt { display: none; } }
     .info { color: var(--rv-text-3); cursor: help; font-size: 11px; }
     nav .cnt:empty { display: none; }
     nav .cnt { position: absolute; top: 3px; right: calc(50% - 24px); background: var(--rv-accent-soft); color: var(--rv-accent-text); border-radius: var(--rv-r-pill); padding: 0 6px; font-size: 10.5px; font-weight: 700; line-height: 16px; font-variant-numeric: tabular-nums; }
@@ -248,6 +254,7 @@
     input[type=checkbox] { accent-color: var(--rv-accent); }
     input.grow { flex: 1; min-width: 0; }
     #project { max-width: 120px; min-height: 26px; font-size: 12px; }
+    #source { max-width: 112px; min-height: 26px; font-size: 12px; }
     textarea { width: 100%; min-height: 260px; height: calc(100vh - 420px); font-family: var(--rv-mono); font-size: 12px; line-height: 1.55; border: 1px solid var(--rv-control); border-radius: var(--rv-r-md);
                padding: 10px; resize: vertical; background: var(--rv-surface-2); color: var(--rv-text); tab-size: 2; }
     textarea[readonly] { opacity: .75; }
@@ -324,6 +331,10 @@
     .banner { background: var(--rv-warn-soft); color: var(--rv-warn); border: 1px solid color-mix(in srgb, var(--rv-warn) 35%, transparent); border-radius: var(--rv-r-md); padding: 8px 11px; display: flex; align-items: center; gap: 8px; }
     .banner.bad { background: var(--rv-danger-soft); color: var(--rv-danger); border-color: color-mix(in srgb, var(--rv-danger) 35%, transparent); }
     .banner .sub { color: inherit; opacity: .85; }
+    .row .n div.rule-hits { white-space: normal; overflow: visible; }
+    .rule-hits.warn, .ruletest .warn { color: var(--rv-warn); }
+    .ruletest { border: 1px solid var(--rv-border, #8884); border-radius: var(--rv-r-md); padding: 6px 9px; margin: 6px 0 10px; }
+    .ruletest .fires { color: var(--rv-accent-text); }
     table.diff { width: 100%; border-collapse: collapse; font-size: 11.5px; table-layout: fixed; }
     table.diff td, table.diff th { border-bottom: 1px solid var(--rv-border); padding: 5px 6px; vertical-align: top; word-break: break-all; text-align: left; }
     table.diff th { color: var(--rv-text-3); font-weight: 600; }
@@ -390,7 +401,7 @@
   <div class="fstrip" id="fstrip"></div>
   <div class="cmenu" id="cmenu" role="menu" aria-label="Call actions"></div>
   <div class="drawer" id="drawer">
-    <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><label class="pj" title="Choose which project's calls the list shows">Show<select id="project" aria-label="Project shown in the call list"></select></label><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button></header>
+    <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><label class="pj" title="Choose which project's calls the list shows"><span class="pjt">Show</span><select id="project" aria-label="Project shown in the call list"></select></label><label class="pj" title="Show the calls of one device, or of one app on it"><span class="pjt">Source</span><select id="source" aria-label="Device or app shown in the call list"></select></label><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button></header>
     <nav>
       <button data-t="call" class="on">${ico("call", "sm")}This call</button>
       <button data-t="compose">${ico("compose", "sm")}Compose</button>
@@ -416,13 +427,94 @@
   <div class="lostbar info" id="updatebar" role="status"></div>`;
 
   const $ = (id) => root.getElementById(id);
-  let tab = "call", state = null, editing = null, pausedOpen = null, dismissed = new Set();
+  let tab = "call", state = null, editing = null, pausedOpen = null, dismissed = new Set(), sheetDirty = () => false, drawerTypingDirty = false;
+  // ── keyboard focus for what the panel opens (R6B-01/02/04/06) ──
+  // A sheet, editor or the drawer opened from the keyboard left focus on mitmweb's list (or on <body>), so Tab never
+  // reached it and the next "r" replayed the selected call. Whatever opens now takes focus, Tab cycles inside it,
+  // Esc does what its close button / backdrop does, and focus goes back to where it was (or, when that element was
+  // redrawn meanwhile, to the element with the same id).
+  const FOCUSABLE = "button:not([disabled]), a[href], input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+  const focusables = (box) => [...box.querySelectorAll(FOCUSABLE)].filter((el) => el.getClientRects().length > 0);
+  const deepActive = () => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; return a; };
+  const returnTo = {};                       // surface → element (or {id} of a panel element that gets redrawn)
+  const noteReturn = (key, from) => {
+    const a = from ? { id: from } : deepActive(), box = key === "editor" ? $("drawer") : $(key);
+    if (!returnTo[key] && a && a !== document.body && !(a.nodeType && box && box.contains(a))) returnTo[key] = a;
+  };
+  const focusInto = (box, prefer) => { const el = (prefer && box.querySelector(prefer)) || focusables(box)[0]; if (el) el.focus(); return el; };
+  const giveBack = (key) => {
+    const r = returnTo[key]; returnTo[key] = null;
+    let el = r && r.nodeType ? r : null;
+    if (el && !(el.isConnected && el.getClientRects().length)) el = null;
+    const id = r && (r.nodeType ? r.getRootNode() === root && r.id : r.id);
+    if (!el && id && $(id) && $(id).getClientRects().length) el = $(id);
+    if (!el && $("drawer").classList.contains("open")) el = root.querySelector("nav button.on");
+    // R6-04: a closed drawer cannot return keyboard shortcuts to a button inside this host.
+    if (key === "drawer" && !$("drawer").classList.contains("open") && el && root.contains(el)) el = null;
+    if (el) el.focus(); else if (key === "drawer" && !$("drawer").classList.contains("open")) {
+      const row = document.querySelector(".flow-table tbody tr.selected, .flow-table tbody tr.active");
+      if (row) { row.tabIndex = -1; row.focus({ preventScroll: true }); }
+      else { document.body.tabIndex = -1; document.body.focus({ preventScroll: true }); }
+    }
+  };
+  const openSheet = (id, prefer, auto = false) => { noteReturn(id); $(id).classList.add("open");
+    // R6-01: a polled pause must leave a live typing target alone; Tab can still enter the sheet.
+    const a = deepActive(), typing = a && (/^(INPUT|TEXTAREA)$/.test(a.tagName) || a.isContentEditable);
+    if (!(auto && typing) && !$(id).contains(root.activeElement)) focusInto($(id).querySelector(".sheet") || $(id), prefer);
+  };
+  const closeSheet = (id) => { const was = $(id).classList.contains("open"); $(id).classList.remove("open"); if (was) giveBack(id); else returnTo[id] = null; };
+  const topSheet = () => ["help", "pause", "welcome"].map($).find((x) => x.classList.contains("open")) || null;
+  const trapTab = (e, box) => {      // Tab / Shift+Tab move through box's controls only, wrapping at either end
+    const list = focusables(box); if (!list.length) return;
+    const i = list.indexOf(deepActive()), n = list.length;
+    e.preventDefault(); e.stopPropagation();
+    list[i < 0 ? (e.shiftKey ? n - 1 : 0) : (i + (e.shiftKey ? n - 1 : 1)) % n].focus();
+  };
   let viewers = { tokens:[], graphql_ops:[], graphql_error_ids:[], complete:false };
   const toast = (msg, err, action) => {
     const t = $("toast"); t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action.label)}</button>` : ""}`;
     t.className = "toast" + (err ? " err" : ""); t.style.display = "flex";
     if (action) t.querySelector("button").onclick = () => { t.style.display = "none"; action.run(); };
     clearTimeout(toast._t); toast._t = setTimeout(() => (t.style.display = "none"), action ? 8000 : err ? 5000 : 2500);
+  };
+  // R9-05: mitmweb's File → Open posts to /flows/dump and ignores the answer. The server now refuses a file it cannot
+  // read with a 400 and a readable reason (keeping the current calls); show that reason instead of nothing.
+  if (window.fetch && !window.fetch._rivisOpen) {
+    const origFetch = window.fetch;
+    const wrapped = function (input, init) {
+      const p = origFetch.apply(this, arguments);
+      try {
+        const url = typeof input === "string" ? input : (input && input.url) || "";
+        const method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
+        if (method === "POST" && /\/flows\/dump(?:[?#]|$)/.test(url)) {
+          p.then((r) => {
+            if (r.ok) return;
+            r.clone().text().then((t) => toast((t || "").trim() || `Could not open the file (HTTP ${r.status}). Your current calls were kept.`, true),
+                                  () => toast(`Could not open the file (HTTP ${r.status}).`, true));
+          }, () => {});
+        }
+      } catch (e) { /* never break mitmweb's own request */ }
+      return p;
+    };
+    wrapped._rivisOpen = true;
+    window.fetch = wrapped;
+  }
+  // ── sources (proxy_source.py): which device / app sent a call. Keys are "<kind>|<device>|<app id>"; a key ending in
+  // "|" is a whole device. mitmweb's flow JSON has no metadata, so rows map through client_conn.id → key.
+  const KIND_NAME = { ios: "iOS Simulator", android: "Android emulator", browser: "Web browser", mac: "This Mac", unknown: "Unknown" };
+  const sourceRows = () => (state && state.sources && state.sources.list) || [];
+  const sourceOfFlow = (f) => {
+    const key = f && f.client_conn && state && state.sources && state.sources.by_conn[f.client_conn.id];
+    return key ? sourceRows().find((r) => r.key === key) || null : null;
+  };
+  const deviceKey = (r) => r.kind + "|" + r.device + "|";
+  const deviceName = (r) => r.device || KIND_NAME[r.kind] || r.kind;
+  const sourceName = (sel) => {             // the chip / toast text for a selection
+    if (!sel) return "";
+    const row = sourceRows().find((r) => r.key === sel || deviceKey(r) === sel);
+    const [kind, device] = sel.split("|");
+    if (sel.endsWith("|")) return (row ? deviceName(row) : device || KIND_NAME[kind] || kind) + " (all apps)";
+    return row ? (row.app || deviceName(row)) + (row.app && row.device ? " on " + row.device : "") : sel.split("|").slice(2).join("|");
   };
   const tilde = (p) => { const h = state && state.home; return h && p && (p === h || String(p).startsWith(h + "/")) ? "~" + String(p).slice(h.length) : p; };
   const busy = new Set();
@@ -481,19 +573,22 @@
   async function builtinContent(id, side, views) {
     for (const view of views) {
       try {
-        const r = await fetch(`./flows/${id}/${side}/content/${encodeURIComponent(view)}.json`, { credentials:"same-origin" });
+        // R6-06: the decoded protobuf view must include every byte, including beyond the normal UI clip.
+        const r = await fetch(`./flows/${id}/${side}/content/${encodeURIComponent(view)}.json?full=1`, { credentials:"same-origin" });
         if (r.ok) return await r.json();
       } catch (e) { /* use the panel-side schema-less fallback */ }
     }
     return null;
   }
 
-  let renderSeq = 0;
+  let renderSeq = 0, editorCheckT = 0;
   async function render() {
     const seq = ++renderSeq;
+    clearTimeout(editorCheckT);  // R6-05: any redraw detaches the old editor and its JSON result node.
     if (!state) state = await api("state").catch(() => null);
     if (seq !== renderSeq) return;
     if (!state) { $("main").innerHTML = '<p class="muted">Cannot reach the panel API.</p>'; return; }
+    openTabSig = tabSig(state);              // B15: what this tab now shows; the poll redraws only when it changes
     badges();
     root.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.t === tab));
     const m = $("main");
@@ -534,8 +629,28 @@
     const options = `<option value="__all" ${state.project_only ? "" : "selected"}>All traffic</option>` +
       state.projects.filter((p) => p.id !== "default").map((p) => `<option value="${esc(p.id)}" ${state.project_only && p.id === state.view_project ? "selected" : ""}>${esc(p.label || p.id)} only</option>`).join("");
     if ($("project").innerHTML !== options) $("project").innerHTML = options;
+    sourceOptions();
     $("fablabel").textContent = state.paused.length ? `${state.paused.length} paused` : "Tools";
     $("fab").title = active ? "Tools — rules, breakpoints or network conditions are switched on (Alt+Shift+P)" : "Tools — Map Local, breakpoints, network conditions, scripts (Alt+Shift+P)";
+  }
+
+  function sourceOptions() {
+    // grouped by device: "All apps on <device>" first, then each app, with call counts. Not rebuilt while the menu has
+    // focus (a rebuild closes an open dropdown, and counts change on every poll).
+    const sel = $("source"); if (root.activeElement === sel) return;
+    const groups = new Map();
+    for (const r of sourceRows()) { const k = deviceKey(r); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
+    const cur = (state && state.source) || "";
+    let found = !cur, html = `<option value="" ${cur ? "" : "selected"}>All sources</option>`;
+    for (const [k, rows] of groups) {
+      const n = rows.reduce((a, r) => a + r.count, 0), first = rows[0];
+      const opt = (v, t) => { if (v === cur) found = true; return `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(t)}</option>`; };
+      html += `<optgroup label="${esc(deviceName(first) + " · " + (KIND_NAME[first.kind] || first.kind))}">` + opt(k, `All of ${deviceName(first)} (${n})`) +
+        rows.filter((r) => r.app).map((r) => opt(r.key, `${r.app} (${r.count})`)).join("") + `</optgroup>`;
+    }
+    if (!found) html += `<option value="${esc(cur)}" selected>${esc(sourceName(cur))} (no calls)</option>`;
+    if (sel.innerHTML !== html) sel.innerHTML = html;
+    sel.title = cur ? "Showing only " + sourceName(cur) : "Every device and app";
   }
 
   // ───────────── This call ─────────────
@@ -571,10 +686,11 @@
       viewer.grpc.builtin_request = decoded[0]; viewer.grpc.builtin_response = decoded[1];
     }
     if (seq !== renderSeq) return;
-    const focused = state.focus_host === r.pretty_host;
+    const focused = state.focus_host === r.pretty_host, src = sourceOfFlow(f), srcOn = src && state.source === src.key;
+    const srcLine = src ? `<div class="sub" id="srcline">From <b>${esc(src.app || deviceName(src))}</b>${src.app ? " on " + esc(deviceName(src)) : ""}${deviceName(src) === (KIND_NAME[src.kind] || src.kind) ? "" : " · " + esc(KIND_NAME[src.kind] || src.kind)}${src.id && src.id !== src.app ? ` · <code>${esc(src.id)}</code>` : ""} · <button class="lnk" id="srconly">${srcOn ? "Showing only this source — show all" : "Show only this " + (src.app ? "app" : "device")}</button></div>` : "";
     m.innerHTML = `
       <div class="call"><span class="m">${esc(r.method)}</span><span class="u" title="${esc(r.pretty_host + r.path)}"><span class="dim">${esc(r.pretty_host)}</span>${esc(r.path)}</span>
-        <div class="sub">${s ? "→ " + s.status_code : "no response yet"} · <button class="lnk" id="focus">${focused ? "Showing only this host — show all" : "Show only this host"}</button></div></div>
+        <div class="sub">${s ? "→ " + s.status_code : "no response yet"} · <button class="lnk" id="focus">${focused ? "Showing only this host — show all" : "Show only this host"}</button></div>${srcLine}</div>
       <h4>Map Local ${info("Saves this response and serves it instead of the server's. You can edit its body, status and headers.")}</h4>
       <div class="btns" style="margin-top:0"><button class="b p" id="mock">Map Local this call…</button>${s ? "" : '<span class="sub">no response yet — starts from 200 {}</span>'}</div>
       <h4>Breakpoint ${info("Pause calls to this endpoint so you can edit them. Request = before it reaches the server; Response = before the app gets it.")}</h4>
@@ -598,8 +714,8 @@
       ${tlsQuickHTML(r.pretty_host)}
       ${viewerHTML(viewer)}${viewerListsHTML()}`;
     $("mock").onclick = async () => {
-      const res = await run("mock", { flow_id: f.id }, (x) => (x.existing ? "Opened existing Map Local '" : "Map Local '") + x.name + "' is on");
-      if (res) openEditor(res.name);
+      const res = await run("mock", { flow_id: f.id, draft: true }, mockToast);
+      if (res) openEditor(res.name, "mock");
     };
     root.querySelectorAll("[data-ph]").forEach((c) => (c.onclick = async () => {
       const want = { request: !!(bpFor && bpFor.request), response: !!(bpFor && bpFor.response) };
@@ -620,6 +736,7 @@
     $("curlurl").onclick = () => copyExport(f.id, "url");
     $("cmpA").onclick = () => { cmpA = { id: f.id, label: r.method + " " + r.pretty_host + r.path }; tab = "cmp"; toast("Now select another call — Compare tab"); render(); };
     $("focus").onclick = () => run("focus_host", { host: state.focus_host === r.pretty_host ? null : r.pretty_host }, state.focus_host === r.pretty_host ? "Showing all hosts" : "Showing only " + r.pretty_host);
+    if (src) $("srconly").onclick = () => setSource(srcOn ? null : (src.app ? src.key : deviceKey(src)));
     $("force").onclick = () => run("quick", { flow_id: f.id, kind: "status", status: $("code").value }, (x) => "Rule '" + x.name + "' is on — see the Rules tab");
     $("block").onclick = () => run("quick", { flow_id: f.id, kind: "block" }, (x) => "Rule '" + x.name + "' is on — see the Rules tab");
     $("delay").onclick = () => run("quick", { flow_id: f.id, kind: "delay", ms: $("ms").value }, (x) => "Rule '" + x.name + "' is on — see the Rules tab");
@@ -733,7 +850,7 @@
       const path = $("mp").value;
       const res = await run("maplocal_add", { host: $("mh").value, path, method: $("mm").value, status: $("ms2").value,
         literal_query: pastedQuery || /\?[^#]*=/.test(path) }, (x) => "Map Local '" + x.name + (x.existing ? "' already exists" : "' added"));
-      if (res) openEditor(res.name);
+      if (res) openEditor(res.name, "madd");
     };
     wireRuleRows(m);
   }
@@ -794,9 +911,9 @@
     const mn = state.manual;
     m.innerHTML = `
       <h4>Traffic profiles</h4>
-      <div class="row" style="border:0;padding:0 0 8px;flex-wrap:wrap"><label class="sub" for="tm" style="white-space:nowrap">Only slow URLs containing</label>
-        <input type="text" id="tm" class="grow" value="${esc(state.throttle_match)}" placeholder="e.g. neo.sa — empty = every call" title="Text (or a pattern) matched against the URL, e.g. neo.sa. Empty slows down every call."></div>
-      <div class="sub" style="margin:-2px 0 10px">${cur === "off" && !extraLoss ? "Pick a profile — it only slows calls whose URL contains the text above." : `<b>On</b> for ${state.throttle_match ? "URLs containing <code>" + esc(state.throttle_match) + "</code>" : "every call"}.${extraLoss ? ` <b>Packet loss is active: ${esc(extraLoss)}%</b>.` : ""}`}</div>
+      <div class="row" style="border:0;padding:0 0 8px;flex-wrap:wrap"><label class="sub" for="tm" style="white-space:nowrap">Only slow URLs matching the pattern (regex)</label>
+        <input type="text" id="tm" class="grow" value="${esc(state.throttle_match)}" placeholder="e.g. neo\\.sa — empty = every call" title="A regular expression searched for in the URL, e.g. neo\\.sa (plain text such as neo.sa also works; . matches any character). Empty slows down every call."></div>
+      <div class="sub" style="margin:-2px 0 10px">${cur === "off" && !extraLoss ? "Pick a profile — it only slows calls whose URL matches the pattern above." : `<b>On</b> for ${state.throttle_match ? "URLs matching <code>" + esc(state.throttle_match) + "</code>" : "every call"}.${extraLoss ? ` <b>Packet loss is active: ${esc(extraLoss)}%</b>.` : ""}`}</div>
       ${state.profiles.map((p) => `
         <div class="card ${p.id === cur ? "on" : ""}" data-prof="${p.id}"><div class="ic">${ico(icons[p.id] || "net")}</div>
           <div><div class="t">${esc(p.name)}</div><div class="sub">${esc(desc(p))}</div></div>${p.id === cur ? `<div class="ok">${ico("check")}</div>` : ""}</div>`).join("")}
@@ -945,6 +1062,7 @@
            <div class="btns">Record calls matching <input type="text" id="cmatch" class="grow" value="${esc(c.record_match)}"></div>`}
       <h4>Replay</h4>
       <div class="row">${sw('id="cstrict"', c.strict)}<div class="n">Strict replay <div class="sub">Calls matching <code>${esc(c.record_match || ".")}</code> that are not in a replayed collection get a 404. ${c.record_match && c.record_match !== "." ? "Other calls still go to the real server." : "That is every call."}</div></div></div>
+      <div class="btns">Strict replay match <input type="text" id="smatch" class="grow" value="${esc(c.record_match)}"><button class="b" id="savematch">Save match</button></div>
       <h4>Collections (${c.items.length})</h4>
       ${c.items.length ? c.items.map((x, i) => `
         <div class="row">${sw(`data-ci="${i}"`, x.replay, c.recording === x.name ? "disabled" : "")}
@@ -962,6 +1080,7 @@
     $("crec") && ($("crec").onclick = () => run("coll_record", { name: $("cname").value, record_match: $("cmatch").value }, "Recording into " + $("cname").value));
     $("cstop") && ($("cstop").onclick = () => run("coll_stop", {}, "Recording stopped"));
     $("cstrict").onchange = () => run("coll_strict", { strict: $("cstrict").checked }, $("cstrict").checked ? "Strict replay on" : "Strict replay off");
+    $("savematch").onclick = () => run("coll_match", { record_match: $("smatch").value }, "Replay match saved");
     m.querySelectorAll("[data-ci]").forEach((cb) => (cb.onchange = () => run("coll_replay", { name: c.items[cb.dataset.ci].name, enabled: cb.checked }, cb.checked ? "Replaying " + c.items[cb.dataset.ci].name : "Replay off")));
     m.querySelectorAll("[data-cdel]").forEach((b) => (b.onclick = () => { const n = c.items[b.dataset.cdel].name; if (confirm("Delete collection '" + n + "'?")) { if (collOpen === n) collOpen = null; run("coll_delete", { name: n }, "Deleted " + n); } }));
     m.querySelectorAll("[data-cexp]").forEach((b) => (b.onclick = () => downloadHar("coll_export", c.items[b.dataset.cexp].name, "chsec")));
@@ -973,7 +1092,7 @@
       const name = $("chn").value.trim() || file.name.replace(/\.har$|\.json$/i, "").replace(/[^A-Za-z0-9._-]/g, "-");
       const overwrite = c.items.some((x) => x.name === name);
       if (overwrite && !confirm("A collection named '" + name + "' already exists. Replace it?\n\nIts recorded calls will be lost.")) return;
-      run("coll_import", { name, har, overwrite }, (x) => "Imported " + x.count + " calls into " + name);
+      run("coll_import", { name, har, overwrite }, (x) => "Imported " + x.count + " calls into " + name + (x.skipped_count ? " — left out " + x.skipped_count + " (failed calls / WebSocket upgrades)" : ""));
     };
     if (collOpen) api("coll_entries", { name: collOpen }).then((r) => {
       const box = $("centries"); if (!box) return;
@@ -1052,13 +1171,15 @@
     $("ssave").onclick = () => {
       const name = $("sn").value.trim(), overwrite = ss.some((x) => x.name === name);
       if (overwrite && !confirm("A session named '" + name + "' already exists. Replace it?\n\nThe earlier capture will be lost.")) return;
-      run("sess_save", { name, note: $("snote").value, visible_only: $("svis").checked, overwrite }, (x) => "Saved " + x.count + " calls");
+      run("sess_save", { name, note: $("snote").value, visible_only: $("svis").checked,
+        search_filter: $("svis").checked ? storeSearch() : "", overwrite }, (x) => "Saved " + x.count + " calls"); // R7A-05: mitmweb's search is separate from its view
     };
     m.querySelectorAll("[data-sload]").forEach((b) => (b.onclick = () => {
       const x = ss[b.dataset.sload];
       // two plain questions, so Cancel can always mean "do nothing" (it used to mean "add to the list")
-      let replace = confirm("Open '" + x.name + "' and REPLACE the current list?\n\nCancel to choose 'add' instead, or to stop.");
-      if (!replace && !confirm("ADD the calls of '" + x.name + "' to the current list?\n\nCancel = do nothing.")) return;
+      // R8D-17: say exactly what each button does
+      let replace = confirm("Open '" + x.name + "'.\n\nOK = REPLACE the current list with this session.\nCancel = don't replace; next you can ADD it to the list instead, or stop.");
+      if (!replace && !confirm("ADD the calls of '" + x.name + "' to the current list?\n\nOK = add them to the calls already in the list.\nCancel = do nothing.")) return;
       run("sess_load", { name: x.name, replace }, (r) => "Opened " + r.count + " calls");
     }));
     m.querySelectorAll("[data-sdel]").forEach((b) => (b.onclick = () => { const x = ss[b.dataset.sdel]; if (confirm("Delete session '" + x.name + "'?")) run("sess_delete", { name: x.name }, "Deleted"); }));
@@ -1108,7 +1229,7 @@
     $("sback").onclick = () => { editing = null; render(); };
     $("sesave").onclick = async () => {
       const r = await run("script_put", { file:s.file, match:$("sematch").value, method:$("semethod").value, content:$("sebody").value }, (x) => x.syntax_error ? "Saved, but it has a syntax error — " + x.syntax_error : "Script saved — hot reloads within 1 s");
-      if (r) { editing = null; tab = "scripts"; render(); }
+      if (r) { editing = null; tab = "scripts"; drawerTypingDirty = false; render(); }
     };
   }
 
@@ -1151,6 +1272,17 @@
     syncHost();
   }
   setSkin(skinOn()); applyTheme(themeMode()); applyDensity(compactOn());
+  // R10-04/06/07: a call that failed (TLS, refused, cut short) kept a blank or green status and "…" for ever. Always
+  // on, skin or not: the failed marker is information, not decoration.
+  if (!document.getElementById("rivis-fail")) {
+    const st = document.createElement("style"); st.id = "rivis-fail";
+    st.textContent = `.flow-table tbody td.col-status[data-failed] { color: #d93025 !important; font-weight: 600; }
+      :root[data-skin="off"] .flow-table tbody td.col-status[data-failed="1"]::before { content: "failed"; }
+      :root[data-skin="off"] .flow-table tbody td.col-status[data-failed="cut"]::after { content: " \\2715"; }
+      .flow-table tbody td.col-time[data-failed] { font-size: 0 !important; }
+      .flow-table tbody td.col-time[data-failed]::after { content: "failed"; font-size: 12px; color: #d93025; }`;
+    document.head.appendChild(st);
+  }
 
   // mitmweb's row components receive the flow as a prop; reading it from the React fiber (read-only) is exact even when the list is
   // virtualised, sorted or filtered — unlike guessing by row index (the first <tr> is a spacer).
@@ -1183,12 +1315,20 @@
     footerLabels();
   }
   // Attributes only (never children), so it is cheap and does not re-trigger the row observer below.
+  // R10-04/06/07: an HTTP call that ended in an error: "1" no response at all, "cut" a response that broke off.
+  const failOf = (flow) => flow && flow.type === "http" && flow.error && !flow.websocket ? (flow.response ? "cut" : "1") : null;
   function tagRows() {
     // host-only tunnel rows (not decrypted): attribute on the <tr> only (the path cell of a TCP flow reads "client ↔ server")
     document.querySelectorAll(".flow-table tbody tr").forEach((tr) => {
       const cell = tr.querySelector("td.col-path");
       const tunnel = cell && cell.textContent.includes(" ↔ ") ? "1" : "0";
       if (tr.dataset.tunnel !== tunnel) tr.dataset.tunnel = tunnel;
+      const flow = cell && flowOf(cell), fail = failOf(flow), why = fail ? "Failed: " + (flow.error.msg || "error") : null;
+      for (const sel of ["td.col-status", "td.col-time"]) {
+        const td = tr.querySelector(sel);
+        if (td) { setAttr(td, "data-failed", fail); if (sel === "td.col-time") setAttr(td, "title", why); }
+      }
+      setAttr(tr, "data-failed", fail);
     });
     if (!skinOn()) return;
     const errors = new Set(viewers.graphql_error_ids || []);
@@ -1197,8 +1337,11 @@
       if (!path) return;                                   // spacer rows
       const method = tr.querySelector("td.col-method"), status = tr.querySelector("td.col-status");
       if (method) setAttr(method, "data-m", method.textContent.trim());
-      if (status) { const t = status.textContent.trim(); setAttr(status, "data-code", t || "—"); setAttr(status, "data-s", /^\d/.test(t) ? t.charAt(0) : "x"); }
+      const fail = failOf(flowOf(path));
+      if (status) { const t = status.textContent.trim(); setAttr(status, "data-code", fail ? (t && fail === "cut" ? t + " \u2715" : "failed") : (t || "—")); setAttr(status, "data-s", /^\d/.test(t) ? t.charAt(0) : "x"); }
       const txt = path.textContent, at = txt.indexOf("://"), cut = at < 0 ? -1 : txt.indexOf("/", at + 3);
+      const scheme = txt.match(/^\s*(https?):\/\//i);
+      setAttr(tr, "data-rv-scheme", scheme ? scheme[1].toLowerCase() : null);
       const hl = String(cut < 0 ? txt.length : cut);
       if (path.style.getPropertyValue("--hl") !== hl) path.style.setProperty("--hl", hl);
       const flow = flowOf(path);
@@ -1213,7 +1356,9 @@
         setAttr(icon, "data-tag-glyph", top ? (top === "repeat" ? "↻" : TAG_TEXT[top][0]) : null);
         setAttr(icon, "title", top ? TAG_TEXT[top] + " — " + flow.comment : (tr.dataset.tunnel === "1" ? "TLS tunnel — not decrypted (add the host to the decrypt list in Network)" : null));
       }
-      if (status) { const g = flow && (errors.has(flow.id) || String(flow.comment || "").split(" | ").includes("graphql:error")); setAttr(status, "data-gql-error", g ? "1" : "0"); setAttr(status, "title", g ? "GraphQL: the response body contains errors" : null); }
+      const src = flow && sourceOfFlow(flow);        // the sending app (or device) as a chip at the right of the path
+      setAttr(path, "data-src", src ? (src.app || deviceName(src)) : null);
+      if (status) { const g = flow && (errors.has(flow.id) || String(flow.comment || "").split(" | ").includes("graphql:error")); setAttr(status, "data-gql-error", g ? "1" : "0"); setAttr(status, "title", g ? "GraphQL: the response body contains errors" : (fail ? "Failed: " + (flow.error.msg || "error") : null)); }
     });
   }
   // mitmweb's status-bar badges are developer jargon ("regular@8094", "ssl_insecure"). Relabel through attributes + CSS; the React text stays.
@@ -1230,7 +1375,7 @@
       const t = el.textContent.trim(); let m;
       if (/^Intercept:/.test(t)) { setAttr(el, "data-rv", "Breakpoints on — matching calls pause"); setAttr(el, "title", t); setAttr(el, "data-rv-tone", "warn"); return; }
       if ((m = t.match(/^(\d+) of (\d+) flows? selected$/))) {
-        const kept = state && state.retention && state.retention.limit ? ` · showing last ${state.retention.limit} calls` : "";
+        const kept = state && state.retention && state.retention.limit && state.retention.trimmed ? ` · ${state.retention.trimmed} older calls trimmed (keeps up to ${state.retention.limit}; trims oldest in batches)` : "";   // R4A-02: low-water batches may leave fewer than the cap
         setAttr(el, "data-rv", (m[1] === "0" ? `${m[2]} call${m[2] === "1" ? "" : "s"}` : `${m[1]} selected · ${m[2]} calls`) + kept); return;
       }
       if ((m = t.match(/^(?:regular|local|transparent|socks5|upstream|reverse)[^@]*@(?:.*:)?(\d+)$/))) {
@@ -1347,15 +1492,16 @@
   // Its own Search box only exists on the "Flow List" tab (it vanishes as soon as a call is selected), so this bar
   // finds the store through the React root (read-only fiber walk, like flowOf) and dispatches the same action the
   // stock box does.  An INVALID filter makes the server close the websocket, so every filter is checked with the
-  // server's own parser first (op filter_check).  Plain words become  ~u 'word'  (URL contains).
+  // server's own parser first (op filter_check). Plain words match URLs or TCP destinations (host-only tunnels).
   const reFilter = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\/g, "\\\\").replace(/'/g, "\\'");   // regex-escape, then the filter parser's own un-escaping (HANDOVER §6 #3)
-  const isExpr = (t) => /~[A-Za-z]/.test(t) || /^[!(]/.test(t) || /\s[&|]\s/.test(t);
+  const isExpr = (t) => t === "~" || /(^|[\s(!&|])~[A-Za-z]+(\s|$)/.test(t) ||   // R7A-03: bare ~ is an incomplete filter; R2A-13: embedded ~ is URL text
+     /^[!(]/.test(t) || /\s[&|]\s/.test(t);
   const toFilter = (text) => {
     const t = text.trim();
     if (!t) return "";
     if (isExpr(t)) return t;
     // a 3-digit status code (500, 404…) also matches the response status — what a tester typing "500" means
-    return t.split(/\s+/).map((w) => /^[1-5]\d\d$/.test(w) ? "( ~u '" + w + "' | ~c " + w + " )" : "~u '" + reFilter(w) + "'").join(" & ");
+    return t.split(/\s+/).map((w) => /^[1-5]\d\d$/.test(w) ? "( ~u '" + w + "' | ~c " + w + " )" : "( ~u '" + reFilter(w) + "' | ( ~tcp & ~dst '" + reFilter(w) + "' ) )").join(" & ");
   };
   let storeRef = null;
   const mwStore = () => {
@@ -1450,12 +1596,13 @@
       if (state.project_only) chips.push(["project", `Only ${label} calls`]);
       if (state.focus_host) chips.push(["host", `Only ${state.focus_host}`]);
       if (state.graphql_operation) chips.push(["gql", `GraphQL: ${state.graphql_operation}`]);
+      if (state.source) chips.push(["source", `Only ${sourceName(state.source)}`]);
     }
     const searching = !!(st && storeSearch());
     let counts = "";
     if (st) { try { const f = st.getState().flows; counts = searching ? `${f.view.length} of ${f.list.length} calls match` : ""; } catch (e) { /* cosmetic */ } }
     const sig = JSON.stringify([chips, searching, counts]);
-    const show = chips.length > 0 || searching;
+    const show = chips.length > 0 || searching || host.hasAttribute("data-sbrow");   // R6B-05: the strip carries the filter box
     if (drawStrip._sig !== sig) {
       drawStrip._sig = sig;
       el.innerHTML = (chips.length ? `<span>Showing</span>` : "") + chips.map(([k, t]) => `<span class="fchip"><span title="${esc(t)}">${esc(t)}</span><button data-un="${k}" aria-label="Show everything again: ${esc(t)}" title="Remove this limit">${ico("x", "sm")}</button></span>`).join("") +
@@ -1465,6 +1612,7 @@
         if (k === "search") { sq().value = ""; sbSync(); commitSearch(""); }
         else if (k === "host") run("focus_host", { host: null }, "Showing all hosts");
         else if (k === "gql") run("graphql_filter", { name: null }, "GraphQL filter cleared");
+        else if (k === "source") setSource(null);
         else run("view", { project_only: false, show_dns: state.show_dns }, "Showing all traffic");
       }));
     }
@@ -1473,6 +1621,7 @@
     host.style.setProperty("--strip-h", show ? "28px" : "0px");
   }
   // fixed bars follow mitmweb's header: left edge after the tabs, right edge before the brand pill
+  const SB_MIN = 200;          // the filter bar (box + clear-list button) never gets narrower than this
   function placeBars() {
     const hdr = document.querySelector("#container > header");
     const ready = !!hdr && !!mwStore();
@@ -1490,16 +1639,21 @@
     const brandL = window.innerWidth - openW - 12 - brand.offsetWidth;
     setAttr(DOC, "data-ribbon", hdr.getBoundingClientRect().width < 900 ? "icons" : null);
     hdr.querySelectorAll(".btn:not([title])").forEach((b) => { const t = b.textContent.replace(/[▾\s]+$/, "").trim(); if (t) b.title = t; });   // icon-only toolbar needs its names
-    const left = left0, room = brandL - left - 12;
+    const room = brandL - left0 - 12;
+    // R6B-05: beside an open drawer on a ~900 px window the box was clamped to 110 px and its input to 16 px, an
+    // unreadable filter. Below SB_MIN it moves to its own row under the header (the filter strip), list-wide.
+    const row = room - 34 < SB_MIN, mainW = window.innerWidth - openW;
+    const left = row ? 8 : left0;
+    const sbw = row ? Math.max(SB_MIN, Math.min(440, mainW - 16 - 230)) : Math.min(440, room - 34);   // 34 = the clear-list button; 230 = the strip's match count
     host.style.setProperty("--sb-left", left + "px");
-    const sbw = Math.max(110, Math.min(440, room - 34));   // 34 = the clear-list button
     host.style.setProperty("--sb-w", sbw + "px");
+    if (host.hasAttribute("data-sbrow") !== row) { if (row) host.setAttribute("data-sbrow", ""); else host.removeAttribute("data-sbrow"); drawStrip(); }
     if (host.hasAttribute("data-tight") !== (sbw < 270)) { if (sbw < 270) host.setAttribute("data-tight", ""); else host.removeAttribute("data-tight"); }
     host.style.setProperty("--hb", hb + "px");
     const rib = hdr.querySelector(":scope > div"), rr = rib ? rib.getBoundingClientRect() : null;
     host.style.setProperty("--fab-top", Math.round(rr && rr.height > 4 ? rr.top + (rr.height - 32) / 2 : hb + 8) + "px");
-    $("sbar").style.top = Math.round(nr.top + (nr.height - 30) / 2) + "px";
-    $("spop").style.top = Math.round(nr.top + (nr.height - 30) / 2 + 36) + "px";
+    $("sbar").style.top = (row ? hb + 1 : Math.round(nr.top + (nr.height - 30) / 2)) + "px";
+    $("spop").style.top = (row ? hb + 32 : Math.round(nr.top + (nr.height - 30) / 2 + 36)) + "px";
   }
   wireSearch();
 
@@ -1516,12 +1670,13 @@
       hostName = isHttp ? f.request.pretty_host : (tunnelHost && address[1] && !String(tunnelHost).endsWith(":" + address[1]) ? tunnelHost + ":" + address[1] : tunnelHost);
     const item = (k, label, icon, extra = "", cls = "", dis = false) => `<button role="menuitem" data-k="${k}" class="${cls}" ${dis ? "disabled" : ""}>${ico(icon, "sm")}${label}${extra}</button>`;
     const focused = state && isHttp && state.focus_host === hostName;
+    const src = sourceOfFlow(f), srcOn = !!(src && state.source && (state.source === src.key || state.source === deviceKey(src)));
     m.innerHTML = (isHttp
       ? `<div class="hd">${esc(f.request.method)} ${esc(hostName)}${esc(f.request.path.split("?")[0])}</div>` +
         item("map", "Map Local this call…", "map") + item("bp", "Pause on this call (Breakpoint)", "bp") +
         `<hr>` + item("repeat", "Repeat", "retry", `<kbd>${mod} ↵</kbd>`) + item("retry", "Edit &amp; Repeat…", "compose", `<kbd>${KALT} ${KSHIFT} ↵</kbd>`) + item("cmpA", "Compare: set as A", "cmp") +
         `<hr>` + item("curl", "Copy as cURL", "call") + item("url", "Copy URL", "call") +
-        `<hr>` + item("host", focused ? "Show all hosts again" : "Show only this host", "search") + item("tls", "Stop decrypting this host", "lock")
+        `<hr>` + item("host", focused ? "Show all hosts again" : "Show only this host", "search") + (src ? item("src", srcOn ? "Show every source again" : `Show only ${esc(src.app || deviceName(src))}`, "phone") : "") + item("tls", "Stop decrypting this host", "lock")
       : `<div class="hd">${esc(hostName || "Host-only row")} — not decrypted</div>` + item("tlson", "Decrypt this host", "unlock")) +
       `<hr>` + item("del", "Delete this call", "trash", "", "d");
     m.classList.add("open"); openCallMenu.at = Date.now();
@@ -1531,13 +1686,14 @@
     m.querySelectorAll("button").forEach((b) => (b.onclick = async () => {
       closeCallMenu();
       const k = b.dataset.k, id = mf.id;
-      if (k === "map") { const res = await run("mock", { flow_id: id }, (r) => (r.existing ? "Opened existing Map Local '" : "Map Local '") + r.name + "' is on"); if (res) { if (!$("drawer").classList.contains("open")) { setOpen(true); } openEditor(res.name); } }
+      if (k === "map") { const res = await run("mock", { flow_id: id, draft: true }, mockToast); if (res) { if (!$("drawer").classList.contains("open")) { setOpen(true); } openEditor(res.name); } }
       else if (k === "bp") { const added = await run("bp_add", { flow_id: id, request: true, response: true }); if (added) breakpointOn(id); }
       else if (k === "repeat") run("retry", { flow_id: id, edits: {} }, "Repeated — the new call is in the list (newest first)");
       else if (k === "retry") openRetry(id);
       else if (k === "cmpA") { cmpA = { id, label: f.request.method + " " + hostName + f.request.path }; openDrawer("cmp"); toast("Now select another call and press Compare"); }
       else if (k === "curl" || k === "url") copyExport(id, k);
       else if (k === "host") run("focus_host", { host: focused ? null : hostName }, focused ? "Showing all hosts" : "Showing only " + hostName);
+      else if (k === "src") setSource(srcOn ? null : (src.app ? src.key : deviceKey(src)));
       else if (k === "tls" || k === "tlson") run("tls_host", { flow_id: id, host: hostName, decrypt: k === "tlson" }, (r) => r.message);
       else if (k === "del" && confirm("Delete this call from the list?")) {
         try { const r = await fetch("./flows/" + id, { method: "DELETE", credentials: "same-origin", headers: { "X-XSRFToken": xsrf() } }); if (!r.ok) throw new Error("HTTP " + r.status); toast("Call deleted"); }
@@ -1569,25 +1725,28 @@
     $("sheet").innerHTML = `
       <header class="retry"><b>${ico("retry", "sm")} Edit &amp; Repeat</b><span class="sub">sends a copy; the original stays in the list</span></header>
       <main>
-        <div class="btns" style="margin-top:0"><select id="rm">${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((x) => `<option ${x === p.method ? "selected" : ""}>${x}</option>`).join("")}</select>
+        <div class="btns" style="margin-top:0"><select id="rm">${methodOpts(p.method)}</select>
           <input type="text" id="ru" class="grow" value="${esc(p.url)}"></div>
         <div class="seg"><button data-rsub="body" class="on">Body</button><button data-rsub="headers">Headers</button></div>
         <div id="rpb"><textarea id="rb" spellcheck="false" ${p.req_body_editable ? "" : "readonly"}>${esc(p.req_body)}</textarea></div>
         <div id="rph" style="display:none">${headersHTML(p.req_headers, "rhd")}</div>
       </main>
       <footer><button class="b" id="rcancel">Cancel</button><button class="b p" id="rsend">Send</button></footer>`;
-    $("pause").classList.add("open");
+    openSheet("pause", "#ru");     // R6B-04: the keyboard lands in the editor, not behind it
     wireHeaders($("sheet"));
+    // R6-02: Esc is a shortcut, so it must not invoke Cancel after any loaded value changes.
+    sheetDirty = () => $("rm").value !== p.method || $("ru").value !== p.url || $("rb").value !== p.req_body ||
+      JSON.stringify(readHeaders("rhd")) !== JSON.stringify(p.req_headers);
     root.querySelectorAll("[data-rsub]").forEach((b) => (b.onclick = () => {
       $("rpb").style.display = b.dataset.rsub === "body" ? "" : "none"; $("rph").style.display = b.dataset.rsub === "headers" ? "" : "none";
       root.querySelectorAll("[data-rsub]").forEach((x) => x.classList.toggle("on", x === b));
     }));
-    $("rcancel").onclick = () => $("pause").classList.remove("open");
+    $("rcancel").onclick = () => closeSheet("pause");
     $("rsend").onclick = async () => {
       const edits = { method: $("rm").value, url: $("ru").value, headers: readHeaders("rhd") };
       if ($("rb").value !== p.req_body && !$("rb").readOnly) edits.body = $("rb").value;
       const r = await run("retry", { flow_id: id, edits }, "Sent — the new call is in the list (newest first)");
-      if (r) $("pause").classList.remove("open");
+      if (r) closeSheet("pause");
     };
   }
 
@@ -1672,6 +1831,10 @@
 
   // ───────────── Compose (a new request from scratch) ─────────────
   const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+  // the call's own method is always an option: with PROPFIND, PURGE, … missing, the browser selected GET and an
+  // untouched Continue / Repeat sent GET (QA-05)
+  const methodOpts = (cur) => [...METHODS, ...(cur && !METHODS.includes(cur) ? [cur] : [])]
+    .map((x) => `<option ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("");
   const newDraft = () => ({ name: "", method: "GET", url: "", query: [], headers: [], body_mode: "none", body: "", form: [], note: "" });
   let draft = newDraft(), composeSub = "params", varRows = null, focusNew = null;
   const encQ = (x) => encodeURIComponent(x).replace(/%7B/gi, "{").replace(/%7D/gi, "}");
@@ -1794,7 +1957,7 @@
       const exists = names.includes(name), current = name === draft.name;
       if (exists && !current && !confirm("A saved request named '" + name + "' already exists. Replace it?")) return;
       const r = await run("compose_save", { name, spec: specOf(), overwrite: exists }, "Saved " + name);
-      if (r) { draft.name = name; render(); }
+      if (r) { draft.name = name; drawerTypingDirty = false; render(); }
     };
     $("csave").onclick = () => (draft.name ? saveAs(draft.name) : saveAs(prompt("Save as (letters, digits . _ -):", "")));
     $("csaveas").onclick = () => saveAs(prompt("Save as (letters, digits . _ -):", draft.name || ""));
@@ -1831,17 +1994,47 @@
     if (a === "block" || a === "drop") return "blocks the call (the app gets a network error)";
     return a;
   }
+  // Rule hit counts (from the proxy) — so an ON rule that never fires is visible, not silent
+  let ruleTest = null;                       // {flowId, result} of the last "Test against the selected call"
+  const ago = (t) => { const d = Math.max(0, Date.now() / 1000 - t); return d < 5 ? "just now" : d < 60 ? Math.round(d) + "s ago" : d < 3600 ? Math.round(d / 60) + " min ago" : Math.round(d / 3600) + " h ago"; };
+  const NEVER_MATCHED_AFTER = 10;            // calls seen since the rule was switched on before it is flagged
+  function hitHTML(r) {
+    const h = r.enabled !== false && ((state.rule_hits || {}).rules || {})[r.name];
+    if (!h) return "";
+    if (h.count > 0) return `<div class="sub rule-hits">${ico("check", "sm")}matched ${h.count} call${h.count === 1 ? "" : "s"} · last ${ago(h.last)}${h.noop ? ` · ${h.noop} matched without changing anything` : ""}</div>`;
+    if (h.noop > 0) return `<div class="sub rule-hits warn" role="note">${ico("warn", "sm")}matched ${h.noop} call${h.noop === 1 ? "" : "s"} but changed nothing — ${esc(h.noop_reason || "")}</div>`;
+    if (h.calls_since >= NEVER_MATCHED_AFTER) return `<div class="sub rule-hits warn" role="note">${ico("warn", "sm")}ON, but none of the ${h.calls_since} calls since it was switched on matched it. Select a call it should change, then <b>Test against the selected call</b>.</div>`;
+    return `<div class="sub rule-hits">no matching call yet</div>`;
+  }
+  function ruleTestHTML() {
+    const id = selectedFlow();
+    const btn = `<div class="btns" style="margin-top:0"><button class="b" id="ruletest" ${id ? "" : "disabled"} title="${id ? "Explain what each rule would do to the selected call" : "Select a call in the list first"}">Test against the selected call</button>${id ? "" : '<span class="sub">select a call in the list first</span>'}</div>`;
+    if (!ruleTest || ruleTest.flowId !== id) return btn;
+    const t = ruleTest.result;
+    return btn + `<div class="ruletest" aria-live="polite"><div class="sub"><b>${esc(t.method)}</b> ${esc(t.url)}</div>` +
+      (t.rules.length ? t.rules.map((x) => `<div class="sub ${x.fires ? "fires" : x.inert ? "warn" : ""}">${x.fires ? ico("check", "sm") + "<b>" + esc(x.name) + "</b> fires: " + esc(x.effect) : (x.inert ? ico("warn", "sm") : "· ") + "<b>" + esc(x.name) + "</b> does not fire: " + esc(x.reason)}</div>`).join("") : '<div class="sub">No rules.</div>') + "</div>";
+  }
+  function wireRuleTest(m) {
+    const b = m.querySelector("#ruletest");
+    if (b) b.onclick = async () => {
+      const id = selectedFlow();
+      try { ruleTest = { flowId: id, result: await api("rule_test", { flow_id: id }) }; render(); }
+      catch (e) { toast(e.message, true); }
+    };
+  }
   function renderRules(m) {
     const skipped = state.skipped_rules || [];
     if (!state.rules.length && !skipped.length) { m.innerHTML = emptyState("rules", "No rules yet", "Select a call and use <b>This call</b> — Map Local, a forced status, a block or a delay all become rules here."); return; }
-    m.innerHTML = (state.rules_error ? `<div class="banner bad"><b>${ico("warn", "sm")} rules.json has an error:</b> ${esc(state.rules_error)}</div>` : "") + (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") + state.rules.map((r, i) => `
+    m.innerHTML = (state.rules_error ? `<div class="banner bad"><b>${ico("warn", "sm")} rules.json has an error:</b> ${esc(state.rules_error)}</div>` : "") + (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") + ruleTestHTML() + state.rules.map((r, i) => `
       <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
         <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(ACTION_NAME[r.action] || r.action)}</span>${(state.rules_outside || []).includes(r.name) ? `<span class="tag" title="Reads a file outside the project. Allowed only for files you trusted on this machine (${esc(state.product.cli)} rules trusted-files). Edit it in your own editor.">external file</span>` : ""}</div>
-          <div class="sub">${esc(r.method ? r.method + " " : "")}${esc(pretty(r))} — ${esc(describe(r))}</div></div>
+          <div class="sub">${esc(r.method ? r.method + " " : "")}${esc(pretty(r))} — ${esc(describe(r))}</div>
+          ${(state.rule_warnings || {})[r.name] ? `<div class="sub rule-hits warn" role="alert">${ico("warn", "sm")} ${esc(state.rule_warnings[r.name])}</div>` : ""}${hitHTML(r)}</div>
         ${r.action === "map_local" && !(state.rules_outside || []).includes(r.name) ? `<button class="b" data-edit="${i}">Edit</button>` : ""}
         <button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") +
       `<p class="sub">Saved in ${esc(tilde(state.rules_file))} — also editable with <code>${esc(state.product.cli)} rules</code>.</p>`;
     wireRuleRows(m);
+    wireRuleTest(m);
   }
   function wireRuleRows(m) {
     m.querySelectorAll("input[data-i]").forEach((c) => (c.onchange = () =>
@@ -1854,50 +2047,91 @@
   }
 
   // ───────────── Map Local editor (Body / Headers, like FRTMProxy) ─────────────
-  async function openEditor(name) {
-    try { const r = await api("mockfile_get", { name }); editing = { name, sub: "body", ...r }; render(); }
-    catch (e) { toast(e.message, true); }
+  const mockToast = (x) => x.existing ? "Opened existing Map Local '" + x.name + "' (on)"
+    : "Map Local '" + x.name + "': edit the response, then Save to turn it on";
+  async function openEditor(name, from) {
+    noteReturn("editor", from);           // R6B-06: Back / Esc give focus back to the button that opened it
+    try { const r = await api("mockfile_get", { name }); editing = { name, sub: "body", focus: true, ...r,
+      original: { content: r.content, status: String(r.status), headers: JSON.stringify(r.headers) } }; render(); }  // R3A-10
+    catch (e) { returnTo.editor = null; toast(e.message, true); }
   }
+  const BIG_BODY = 1024 * 1024;         // above this, JSON is checked after typing pauses, not on every key (R6B-09)
   function renderEditor(m) {
     const e = editing;
+    // R6B-09: the body goes in through .value, never as escaped HTML: a 20 MB body through innerHTML froze the tab
     m.innerHTML = `
       <div class="btns" style="margin-top:0"><button class="b" id="back">${ico("back", "sm")}Back</button>
         <b style="flex:1;align-self:center;overflow:hidden;text-overflow:ellipsis">${esc(e.name)}</b>
-        status <input type="number" id="st" value="${esc(e.status)}" style="width:70px"></div>
+        status <input type="number" id="st" value="${esc(e.status)}" style="width:70px" aria-label="Status code"></div>
       <div class="sub" style="margin-top:6px">${esc(e.method || "ANY")} ${esc(pretty({ match: e.match }))}</div>
       <div class="seg"><button data-sub="body" class="${e.sub === "body" ? "on" : ""}">Body</button><button data-sub="headers" class="${e.sub === "headers" ? "on" : ""}">Headers</button></div>
       <div id="pbody" style="${e.sub === "body" ? "" : "display:none"}">
-        <textarea id="body" spellcheck="false" ${e.editable ? "" : "readonly"}>${esc(e.content)}</textarea>
+        ${e.binary ? `<div class="sub" style="margin-bottom:4px">Binary file (${e.size} bytes), shown as text. Save keeps its bytes unless you edit the text here.</div>` : ""}
+        <textarea id="body" spellcheck="false" aria-label="Response body" ${e.editable ? "" : "readonly"}></textarea>
         <div class="btns"><button class="b" id="fmt">Format JSON</button><span class="sub" id="jsonok"></span></div></div>
       <div id="phdr" style="${e.sub === "headers" ? "" : "display:none"}">${headersHTML(e.headers, "hd")}
         <div class="sub">Content-Type defaults to the file type when not set.</div></div>
       <div class="btns"><button class="b p" id="save" ${e.editable ? "" : "disabled"}>Save</button><span class="sub" id="dirty"></span></div>
+      <div class="errbox" id="discard" role="alert" style="display:none">Discard unsaved Map Local edits?
+        <div class="btns"><button class="b" id="keep">Keep editing</button><button class="b" id="discard-yes">Discard and Back</button></div></div>
       <div class="sub">${esc(tilde(e.file))} — the next matching call gets this.</div>`;
     const ta = $("body");
-    jsonCheck(ta, $("jsonok"));
-    ta.oninput = () => { jsonCheck(ta, $("jsonok")); editing.content = ta.value; $("dirty").textContent = "Modified"; };
-    root.querySelectorAll("[data-sub]").forEach((b) => (b.onclick = () => {
-      editing.content = ta.value; editing.headers = readHeaders("hd"); editing.status = $("st").value; editing.sub = b.dataset.sub; render();
+    ta.value = e.content;
+    // R3A-10: input and tab switches mutate editing; only Save updates e.original (read live: Save keeps this DOM)
+    const check = () => { clearTimeout(editorCheckT); if (ta.value.length < BIG_BODY) jsonCheck(ta, $("jsonok")); else editorCheckT = setTimeout(() => { if (ta.isConnected && $("jsonok")) jsonCheck(ta, $("jsonok")); }, 400); };
+    check();
+    ta.oninput = () => { check(); editing.content = ta.value; $("dirty").textContent = "Modified"; };
+    root.querySelectorAll("[data-sub]").forEach((b) => (b.onclick = () => {   // R6B-09: a tab switch only shows / hides
+      e.sub = b.dataset.sub; $("pbody").style.display = e.sub === "body" ? "" : "none"; $("phdr").style.display = e.sub === "headers" ? "" : "none";
+      root.querySelectorAll("[data-sub]").forEach((x) => x.classList.toggle("on", x === b));
     }));
     wireHeaders(m);
-    $("back").onclick = () => { editing = null; render(); };
-    $("fmt").onclick = () => { try { ta.value = JSON.stringify(JSON.parse(ta.value), null, 2) + "\n"; ta.oninput(); } catch (x) { toast("Not JSON — cannot format", true); } };
-    $("save").onclick = async () => {
-      if (!jsonCheck(ta, $("jsonok")) && !confirm("This is not valid JSON. Save anyway?")) return;
-      const headers = readHeaders("hd");
-      const saved = { content: ta.value, status: $("st").value, headers };
-      editing = { ...editing, ...saved };                  // before run(): it re-renders, which must show what was saved
-      await run("mockfile_put", { name: e.name, ...saved }, "Saved — next call gets it");   // a failure toasts its own error
+    const leave = () => { clearTimeout(editorCheckT); editing = null; drawerTypingDirty = false; render().then(() => giveBack("editor")); }; // R6-05
+    $("back").onclick = async () => {
+      // R3A-10: Back may delete a draft or discard an edit; require an in-panel choice only after a change.
+      const changed = ta.value !== e.original.content || $("st").value !== e.original.status || JSON.stringify(readHeaders("hd")) !== e.original.headers;
+      if (changed) { $("discard").style.display = ""; $("keep").focus(); return; }
+      // a new Map Local that was never saved is discarded, so it never answers a call (r1 B-03)
+      if (e.draft) { try { await api("delete", { name: e.name }); toast("Map Local '" + e.name + "' discarded (not saved)"); } catch (x) { toast(x.message, true); return; } }
+      leave();
     };
+    $("keep").onclick = () => { $("discard").style.display = "none"; $("back").focus(); };
+    $("discard-yes").onclick = async () => {
+      if (e.draft) { try { await api("delete", { name: e.name }); } catch (x) { toast(x.message, true); return; } }
+      leave();
+    };
+    $("fmt").onclick = () => { try { ta.value = JSON.stringify(JSON.parse(ta.value), null, 2) + "\n"; ta.oninput(); } catch (x) { toast("Not JSON — cannot format", true); } };
+    let saving = false;     // not save.disabled: disabling the focused button would drop keyboard focus to <body>
+    $("save").onclick = async () => {
+      if (saving) return;
+      clearTimeout(editorCheckT);
+      if (!jsonCheck(ta, $("jsonok")) && !confirm("This is not valid JSON. Save anyway?")) return;
+      const headers = readHeaders("hd"), content = ta.value, status = $("st").value;
+      // R6B-09: an unchanged body is not sent again (the server keeps the file's bytes), and Save does not redraw
+      // the editor: re-sending and re-rendering 20 MB blocked the page for ~8 s per Save
+      const body = { name: e.name, status, headers };
+      if (content !== e.original.content) body.content = content;
+      saving = true; $("dirty").textContent = "Saving…";
+      try {
+        const r = await api("mockfile_put", body);
+        if (r.state) state = r.state;
+        Object.assign(e, { content, status, headers, draft: false,
+          original: { content, status: String(status), headers: JSON.stringify(headers) } });   // R3A-10
+        $("dirty").textContent = ""; drawerTypingDirty = false; badges();
+        toast("Saved — next call gets it");
+      } catch (x) { $("dirty").textContent = "Modified"; toast(x.message, true); }
+      finally { saving = false; }
+    };
+    if (e.focus) { e.focus = false; focusInto(m, e.sub === "body" ? "#body" : "#st"); }   // R6B-06
   }
 
   // ───────────── Paused call sheet (opens by itself) ─────────────
-  async function openPaused(id) {
-    try { pausedOpen = await api("paused_get", { id }); pausedOpen.sub = "body"; drawPaused();
+  async function openPaused(id, auto = false) {
+    try { pausedOpen = await api("paused_get", { id }); pausedOpen.sub = "body"; drawPaused(auto);
       if (/NEXT matching call/.test($("toast").textContent)) $("toast").style.display = "none"; }   // it has hit: the hint is stale
-    catch (e) { pausedOpen = null; $("pause").classList.remove("open"); toast(e.message, true); }
+    catch (e) { pausedOpen = null; closeSheet("pause"); toast(e.message, true); }
   }
-  function drawPaused() {
+  function drawPaused(auto = false) {
     const p = pausedOpen, isResp = p.phase === "response";
     const q = state ? state.paused.length : 1;
     $("sheet").innerHTML = `
@@ -1905,7 +2139,7 @@
         <span class="sub" style="max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.method)} ${esc(p.url)}</span></header>
       <main>
         ${isResp ? `<div class="btns" style="margin-top:0">Status <input type="number" id="pst" value="${esc(p.status)}" style="width:80px"></div>`
-                 : `<div class="btns" style="margin-top:0"><select id="pm">${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((x) => `<option ${x === p.method ? "selected" : ""}>${x}</option>`).join("")}</select>
+                 : `<div class="btns" style="margin-top:0"><select id="pm">${methodOpts(p.method)}</select>
                     <input type="text" id="pu" class="grow" value="${esc(p.url)}"></div>`}
         <div class="seg"><button data-psub="body" class="${p.sub === "body" ? "on" : ""}">Body</button><button data-psub="headers" class="${p.sub === "headers" ? "on" : ""}">Headers</button></div>
         <div id="ppb" style="${p.sub === "body" ? "" : "display:none"}"><textarea id="pb" spellcheck="false" placeholder="No body" class="${(isResp ? p.resp_body : p.req_body) ? "" : "nobody"}" ${(isResp ? p.resp_body_editable : p.req_body_editable) ? "" : "readonly"}>${esc(isResp ? p.resp_body : p.req_body)}</textarea>
@@ -1916,9 +2150,13 @@
         ${q > 1 ? `<button class="lnk" id="pall">Resume all ${q}</button> · ` : ""}<button class="lnk" id="pbpoff">Turn off this breakpoint</button></span>
         <button class="b d" id="pabort">Abort</button><button class="b" id="pskip">Skip (send unchanged)</button>
         <button class="b p" id="pcont">Continue</button></footer>`;
-    $("pause").classList.add("open");
+    openSheet("pause", isResp ? "#pst" : "#pu", auto); // R6-01: polling must leave the current typing target focused.
     const ta = $("pb"); jsonCheck(ta, $("pjs")); ta.oninput = () => jsonCheck(ta, $("pjs"));
     wireHeaders($("sheet"));
+    // R6-02: a hidden paused sheet still owns unsent changes, so Esc cannot dismiss it while dirty.
+    sheetDirty = () => $("pb").value !== (isResp ? p.resp_body : p.req_body) ||
+      JSON.stringify(readHeaders("phd")) !== JSON.stringify(isResp ? p.resp_headers : p.req_headers) ||
+      (isResp ? $("pst").value !== String(p.status) : $("pm").value !== p.method || $("pu").value !== p.url);
     root.querySelectorAll("[data-psub]").forEach((b) => (b.onclick = () => {
       $("ppb").style.display = b.dataset.psub === "body" ? "" : "none"; $("pph").style.display = b.dataset.psub === "headers" ? "" : "none";
       root.querySelectorAll("[data-psub]").forEach((x) => x.classList.toggle("on", x === b));
@@ -1928,7 +2166,7 @@
       const id = p.id;
       const r = await run(op, { id, edits }, op === "paused_continue" ? "Continued with your edits" : op === "paused_skip" ? "Sent unchanged" : "Aborted");
       if (!r) return;
-      pausedOpen = null; $("pause").classList.remove("open");
+      pausedOpen = null; closeSheet("pause");
       const next = (state.paused || []).find((x) => !dismissed.has(x.id));
       if (next) openPaused(next.id);
     };
@@ -1945,7 +2183,7 @@
     const resumeAll = async () => {
       let n = 0;
       try { n = (await api("paused_resume_all", {})).resumed || 0; } catch (e) { toast(e.message, true); }
-      pausedOpen = null; $("pause").classList.remove("open");
+      pausedOpen = null; closeSheet("pause");
       return n;
     };
     if ($("pall")) $("pall").onclick = async () => toast("Resumed " + await resumeAll() + " paused call(s) unchanged");
@@ -2018,6 +2256,28 @@
     if (other) bar.innerHTML = `<b>${esc(sp.owner)}</b> is your Mac's proxy (${esc(sp.host)}:${esc(sp.port)}): the iOS Simulator sends its calls there, not to ${esc(name)}. Quit ${esc(sp.owner)}; ${esc(name)} cleans up what it leaves behind.`;
     bar.classList.toggle("open", !!other && !$("lostbar").classList.contains("open"));
   };
+  // B15: the open Rules / Breakpoints / Map Local / Scripts tab follows changes made elsewhere (CLI, another browser tab,
+  // the proxy's hit counts). Redraw only when that tab's data changed and nobody is typing; give focus back to the same
+  // control afterwards, so a keyboard user does not lose their place.
+  let openTabSig = "";
+  const hitSig = (s) => Object.entries((s.rule_hits || {}).rules || {}).map(([n, h]) => [n, h.count, h.noop, h.calls_since >= NEVER_MATCHED_AFTER]);
+  function tabSig(s) {
+    if (tab === "rules" || tab === "map") return JSON.stringify([tab, s.rules, s.skipped_rules, s.rule_warnings, s.rules_outside, s.rules_error, hitSig(s)]);
+    if (tab === "bp") return JSON.stringify([tab, s.breakpoints]);
+    return JSON.stringify([tab, s.scripts, s.script_status]);
+  }
+  function refreshOpenTab(s) {
+    const sig = tabSig(s);
+    if (sig === openTabSig) return;
+    const field = root.activeElement;
+    if (field && field.closest && field.closest("#main") && /^(INPUT|SELECT|TEXTAREA)$/.test(field.tagName) && field.type !== "checkbox") return;
+    let again = null;
+    if (field && field.closest && field.closest("#main")) {
+      again = field.id ? "#" + CSS.escape(field.id)
+        : [...field.attributes].filter((a) => a.name.startsWith("data-")).map((a) => `[${a.name}="${CSS.escape(a.value)}"]`).join("") || null;
+    }
+    render().then(() => { if (again) { const el = $("main").querySelector(again); if (el) el.focus({ preventScroll: true }); } });
+  }
   async function poll() {
     try {
       const s = await Promise.race([api("state"), new Promise((_, no) => setTimeout(() => no(new Error("no answer")), 4000))]);
@@ -2026,14 +2286,14 @@
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
       await refreshFlows(); tagCells(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
-      if (!pausedOpen && waiting.length && !$("pause").classList.contains("open")) openPaused(waiting[0].id);
-      if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) { pausedOpen = null; $("pause").classList.remove("open"); }
+      if (!pausedOpen && waiting.length && !$("pause").classList.contains("open")) openPaused(waiting[0].id, true);
+      if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) { pausedOpen = null; closeSheet("pause"); }
       if ($("drawer").classList.contains("open") && tab === "net" && !editing) {
         const field = root.activeElement;
         if (!(field && field.closest && field.closest("#main") && /^(INPUT|SELECT|TEXTAREA)$/.test(field.tagName))) render();
       }
       if ($("drawer").classList.contains("open") && tab === "coll" && !editing && !root.activeElement && s.collections.recording) render();
-      if ($("drawer").classList.contains("open") && !editing && (tab === "bp" || tab === "rules" || tab === "map" || tab === "scripts") && !root.activeElement) render();
+      if ($("drawer").classList.contains("open") && !editing && (tab === "bp" || tab === "rules" || tab === "map" || tab === "scripts")) refreshOpenTab(s);
     } catch (e) {          // mitmweb restarting, stopped or frozen: say so after two misses, keep trying
       if (!lostSince) lostSince = Date.now();
       if (++missed >= 2) showLost(true);
@@ -2053,18 +2313,26 @@
   window.addEventListener("resize", () => { if ($("drawer").classList.contains("open") && host.style.getPropertyValue("--drawer-w") !== drawerW() + "px") setOpen(true); });
   $("fab").onclick = () => {
     if (state && state.paused.length && !pausedOpen) { dismissed.clear(); return openPaused(state.paused[0].id); }
-    setOpen(!$("drawer").classList.contains("open")); state = null; render(); refreshViewerSummaries().then(() => {
+    const opening = !$("drawer").classList.contains("open");
+    if (!opening) return closeDrawer();   // R6-04/07: click close shares focus and stale-target cleanup with X.
+    noteReturn("drawer"); setOpen(true); state = null; render(); refreshViewerSummaries().then(() => {
       if ($("drawer").classList.contains("open") && tab === "call" && !editing) render();
     });
   };
-  $("close").onclick = () => setOpen(false);
-  $("pause").onclick = (e) => { if (e.target === $("pause")) { dismissed.add(pausedOpen && pausedOpen.id); pausedOpen = null; $("pause").classList.remove("open"); toast("Still paused — click the Tools button (it shows how many are waiting) to reopen"); } };
+  $("close").onclick = () => closeDrawer();
+  const dismissPaused = () => { dismissed.add(pausedOpen && pausedOpen.id); pausedOpen = null; closeSheet("pause"); toast("Still paused — click the Tools button (it shows how many are waiting) to reopen"); };
+  $("pause").onclick = (e) => { if (e.target === $("pause")) dismissPaused(); };
   $("project").onchange = () => {
     const v = $("project").value, label = $("project").selectedOptions[0].textContent.replace(/ only$/, "");
     if (v === "__all") return run("view", { project_only: false, show_dns: state.show_dns }, "Showing all traffic");
-    run("view", { project: v, project_only: true, show_dns: false }, `Showing only ${label} calls. Its rules load when you start with --project ${v}`);
+    const hint = v === state.active_project ? "" : ` Its rules load when you start with --project ${v}`;
+    run("view", { project: v, project_only: true, show_dns: false }, `Showing only ${label} calls.${hint}`);
   };
-  root.querySelectorAll("nav button").forEach((b) => (b.onclick = () => { tab = b.dataset.t; editing = null; render(); }));
+  const setSource = (v) => run("source", { source: v || null }, v ? "Showing only " + sourceName(v) : "Showing every source");
+  $("source").onchange = () => { const v = $("source").value; $("source").blur(); setSource(v); };
+  root.querySelectorAll("nav button").forEach((b) => (b.onclick = () => { clearTimeout(editorCheckT); tab = b.dataset.t; editing = null; render(); })); // R6-05
+  // R6-03: remember typing across a redraw or tab switch; Esc must not silently drop a Tools draft.
+  $("drawer").addEventListener("input", (e) => { if (e.target.matches("input:not([type=checkbox]), textarea")) drawerTypingDirty = true; });
   // mitmweb changes the selection with history.replaceState, which fires no "hashchange" —
   // so watch the selected call id ourselves
   // tells flow retention which call to keep; mitmweb sets its XSRF cookie only after its first requests,
@@ -2086,15 +2354,30 @@
   // a chord that targets a section lower in a tab: scroll it into view once the tab has drawn (R3-NET-06b)
   const revealWhenDrawn = (id, tries = 30) => { const el = $(id); if (el) el.scrollIntoView({ block: "start" }); else if (tries > 0) setTimeout(() => revealWhenDrawn(id, tries - 1), 100); };
   const openDrawer = (t) => {
-    if (!$("drawer").classList.contains("open")) { setOpen(true); state = null; }
+    if (!$("drawer").classList.contains("open")) { noteReturn("drawer"); setOpen(true); state = null; }
     if (t) { tab = t; editing = null; }
-    render();
+    return render();
   };
+  // R6B-01: a chord moves the keyboard into the drawer (Compose: its URL field; other tabs: their tab button), so
+  // keys typed next go to the panel and never to mitmweb's list shortcuts. Checked once more after a redraw.
+  const focusDrawer = (again = 1) => {
+    const el = (tab === "compose" && !editing && $("cu")) || root.querySelector("nav button.on");
+    if (el && $("drawer").classList.contains("open")) el.focus({ preventScroll: true });
+    if (again) setTimeout(() => { if ($("drawer").classList.contains("open") && !$("drawer").contains(root.activeElement)) focusDrawer(0); }, 300);
+  };
+  const closeDrawer = () => { clearTimeout(editorCheckT); setOpen(false); returnTo.editor = null; giveBack("drawer"); }; // R6-05/07
   const repeatSelected = () => {
     const id = selectedFlow();
     if (!id) return toast("Select a call in the list first", true);
     run("retry", { flow_id: id, edits: {} }, "Repeated — the new call is in the list (newest first)");
   };
+  // R3A-09: mitmweb's toolbar Replay mutates the selected flow; route it through repeat before React sees it.
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("#container > header button");
+    if (b && /\bReplay\b/i.test([b.textContent, b.title, b.getAttribute("aria-label")].join(" "))) {
+      e.preventDefault(); e.stopImmediatePropagation(); repeatSelected();
+    }
+  }, true);
   const focusFilter = () => {
     if (skinOn() && host.hasAttribute("data-sbar")) return focusSearch();
     const link = [...document.querySelectorAll("header nav a")].find((a) => a.textContent.trim() === "Flow List");
@@ -2103,15 +2386,16 @@
   };
   // chords are Alt+Shift+<key>: the Cmd/Cmd-Alt combinations desktop proxy tools use are claimed by the browser
   const CHORDS = {
-    KeyP: ["Open / close the tools drawer", () => (state && $("drawer").classList.contains("open") ? setOpen(false) : openDrawer())],
-    KeyC: ["Compose a new request", () => openDrawer("compose")],
-    KeyL: ["Map Local", () => openDrawer("map")],
-    KeyB: ["Breakpoints", () => openDrawer("bp")],
-    KeyN: ["Network conditions", () => openDrawer("net")],
-    KeyE: ["TLS decryption list (SSL proxying)", () => { openDrawer("net"); revealWhenDrawn("tlssec"); }],
-    KeyS: ["Scripts", () => openDrawer("scripts")],
-    KeyD: ["Compare (diff) two calls", () => openDrawer("cmp")],
-    KeyV: ["Devices: set up simulators / emulators", () => openDrawer("dev")],
+    // R6B-08: open/closed is the drawer's own class; waiting for state as well made a fast second press open it again
+    KeyP: ["Open / close the tools drawer", () => ($("drawer").classList.contains("open") ? closeDrawer() : openDrawer().then(() => focusDrawer()))],
+    KeyC: ["Compose a new request", () => openDrawer("compose").then(() => focusDrawer())],
+    KeyL: ["Map Local", () => openDrawer("map").then(() => focusDrawer())],
+    KeyB: ["Breakpoints", () => openDrawer("bp").then(() => focusDrawer())],
+    KeyN: ["Network conditions", () => openDrawer("net").then(() => focusDrawer())],
+    KeyE: ["TLS decryption list (SSL proxying)", () => { openDrawer("net").then(() => focusDrawer()); revealWhenDrawn("tlssec"); }],
+    KeyS: ["Scripts", () => openDrawer("scripts").then(() => focusDrawer())],
+    KeyD: ["Compare (diff) two calls", () => openDrawer("cmp").then(() => focusDrawer())],
+    KeyV: ["Devices: set up simulators / emulators", () => openDrawer("dev").then(() => focusDrawer())],
     KeyF: ["Search / filter the list", focusFilter],
     Enter: ["Edit & Repeat the selected call", () => { const id = selectedFlow(); if (id) openRetry(id); else toast("Select a call in the list first", true); }],
   };
@@ -2131,6 +2415,7 @@
       [kb(KMOD, "↵"), "Repeat the selected call"],
       [kb(KALT, KSHIFT, "↵"), "Edit & Repeat the selected call"],
       [kb("?"), "This sheet"],
+      [kb("Esc"), "Close the open sheet, editor or drawer — focus goes back where it was"],
       ["Right-click a call", "Map Local, Breakpoint, Repeat, Copy as cURL, Delete…"],
     ]],
     ["Built-in list shortcuts (click the list first)", [
@@ -2150,7 +2435,8 @@
     ["Repeat / Edit & Repeat", "Repeat: " + kb(KMOD, "↵") + " or " + kb("r") + ". Edit: <b>This call → Edit &amp; Repeat…</b>", "call"],
     ["Diff two requests", "<b>Compare</b> tab: <i>Compare: set as A</i> on a call, then select another", "cmp"],
     ["Export HAR", "<b>Sessions</b> or <b>Collections</b> → <i>HAR</i>", "sess"],
-    ["Filter by host / app", "The filter box at the top (" + kb(KMOD, "F") + "): type a host or part of a URL. Or <b>right-click → Show only this host</b>", "filter"],
+    ["Filter by host", "The filter box at the top (" + kb(KMOD, "F") + "): type a host or part of a URL. Or <b>right-click → Show only this host</b>", "filter"],
+    ["Filter by device / app", "<b>Source</b> menu in the Tools header: one simulator or emulator, or one app on it (two builds of one app stay apart). Or <b>right-click → Show only &lt;app&gt;</b>", "source"],
     ["Clear the session", "The trash button next to the filter box (asks first)", "filter"],
     ["Right-click a call", "Map Local, Breakpoint, Repeat, Copy as cURL, Show only this host…", "call"],
     ["SSL Proxying list", "<b>Network → HTTPS decryption</b> (every host, only the hosts you list, or all except the ones you list)", "net"],
@@ -2158,10 +2444,10 @@
     ["Save a session", "<b>Sessions</b> tab → save, add a note, reopen later", "sess"],
     ["Copy as cURL", "<b>This call → Copy cURL</b> or <b>Copy as…</b> (many languages)", "call"],
   ];
-  const goTo = (t) => { closeHelp(); if (t === "filter") focusFilter(); else openDrawer(t); };
+  const goTo = (t) => { closeHelp(); if (t === "filter") focusFilter(); else if (t === "source") { openDrawer("call"); $("source").focus(); } else openDrawer(t); };
   const mapTable = (rows) => `<table class="map"><tr><th>In Proxyman you did</th><th>Here</th><th></th></tr>${rows.map(([a, b, g]) =>
     `<tr><td>${a}</td><td>${b}</td><td class="go"><button class="lnk" data-go="${g}">Open →</button></td></tr>`).join("")}</table>`;
-  const closeHelp = () => $("help").classList.remove("open");
+  const closeHelp = () => closeSheet("help");
   function updatesRowHTML() {
     const u = (state && state.update) || {}, name = (state && state.product && state.product.name) || "Rivis", v = (state && state.version) || "";
     let sub = "", act = "", extra = "";
@@ -2206,7 +2492,7 @@
     const body = {
       map: () => `<p class="sub" style="margin:0 0 8px">Same tools, same names where they are generic — placed on the call or in the drawer. Rivis runs in a browser tab, captures the simulator per process (no system proxy) and has a project switcher.</p>${mapTable(MAPPING)}`,
       keys: () => SHORTCUTS.map(([h, rows]) => `<h4>${h}</h4><table class="map">${rows.map(([k, d]) => `<tr><td style="width:46%">${k}</td><td>${d}</td></tr>`).join("")}</table>`).join("") +
-        `<p class="sub">Single keys are ignored while you type in a field. Alt+Shift chords avoid the browser's own ${KMOD} shortcuts.</p>`,
+        `<p class="sub">Single keys are ignored while focus is in the ${esc((state && state.product.name) || "Rivis")} panel. Tab stays inside an open sheet or the drawer. Alt+Shift chords avoid the browser's own ${KMOD} shortcuts.</p>`,
       settings: () => `
         <div class="set"><div><b>Theme</b><span class="sub">System follows your OS setting</span></div>
           <div class="seg" style="margin:0">${["system", "light", "dark"].map((m) => `<button data-theme-set="${m}" class="${themeMode() === m ? "on" : ""}">${m[0].toUpperCase() + m.slice(1)}</button>`).join("")}</div></div>
@@ -2220,7 +2506,7 @@
         <div class="seg" style="margin:0">${Object.entries(tabs).map(([k, v]) => `<button data-h="${k}" class="${k === which ? "on" : ""}">${v}</button>`).join("")}</div>
         <button class="x" id="hclose" aria-label="Close">×</button></header>
       <main>${body[which]()}</main>`;
-    $("help").classList.add("open");
+    openSheet("help", "[data-h].on");
     $("hclose").onclick = closeHelp;
     root.querySelectorAll("[data-h]").forEach((b) => (b.onclick = () => openHelp(b.dataset.h)));
     root.querySelectorAll("#hsheet [data-go]").forEach((a) => (a.onclick = () => goTo(a.dataset.go)));
@@ -2235,18 +2521,18 @@
   $("gear").onclick = () => openHelp("settings");
   $("btheme").onclick = () => applyTheme({ system: "light", light: "dark", dark: "system" }[themeMode()]);
 
-  const closeWelcome = () => { LS.set("rivis-welcome", "done"); $("welcome").classList.remove("open"); try { drawEmptyList(); } catch (e) { /* cosmetic */ } };
+  const closeWelcome = () => { LS.set("rivis-welcome", "done"); closeSheet("welcome"); try { drawEmptyList(); } catch (e) { /* cosmetic */ } };
   $("wscrim").onclick = closeWelcome;
   function showWelcome() {
     if (LS.get("rivis-welcome", "") === "done") return;
     const name = (state && state.product.name) || "Rivis";
     $("welcome").innerHTML = `
       <h3><span class="mark">${ico("mark")}</span>Welcome to ${esc(name)}</h3>
-      <div class="wbody"><p>Coming from Proxyman? The tools you know are here, placed on the call or in the drawer on the right.
+      <div class="wbody"><p>Coming from Proxyman? Open Tools → Devices or Tools → Network in the drawer on the right; call actions are on the selected call.
         Same names where they are generic. Rivis runs in a browser tab and does not set a system proxy.</p>
       ${mapTable(MAPPING)}</div>
       <div class="btns wfoot" style="justify-content:flex-end"><button class="b" id="w-keys">Shortcuts</button><button class="b p" id="w-ok">Got it</button></div>`;
-    $("welcome").classList.add("open");
+    openSheet("welcome", "#w-ok");
     $("w-ok").onclick = closeWelcome;
     $("w-keys").onclick = () => { closeWelcome(); openHelp("keys"); };
     root.querySelectorAll("#welcome [data-go]").forEach((a) => (a.onclick = () => { closeWelcome(); goTo(a.dataset.go); }));
@@ -2280,6 +2566,7 @@
     if (state.project_only) limits.push(`only ${label} calls`);
     if (state.focus_host) limits.push(`only ${state.focus_host}`);
     if (state.graphql_operation) limits.push(`GraphQL ${state.graphql_operation}`);
+    if (state.source) limits.push(`only ${sourceName(state.source)}`);
     const sig = JSON.stringify([kind, q, limits, cli, proj]);
     if (box.dataset.sig === sig && box.classList.contains("open")) return;
     box.dataset.sig = sig;
@@ -2296,28 +2583,53 @@
         </div>
         <div class="foot">Or from a terminal, as above (<code>${esc(cli + proj + " setup")}</code> does every running device). Nothing from a simulator? Another proxy app (Proxyman, Charles) may have set the Mac's system proxy — quit it, or run <code>${esc(cli)} net-reset</code>.</div></div>`;
     } else {
-      const why = q ? `No calls match <b>${esc(q)}</b>` : "No matching calls";
-      const sub = q ? "Try a shorter word, or the host name only. Filters with <code>~</code> must be written exactly (see the examples in the search box)."
-                    : `Showing ${esc(limits.join(" and "))}. The calls are still captured — remove the limit to see them.`;
+      // R9-03: with no search and no limit nothing is hidden — the list was cleared (or a file replaced it)
+      const why = q ? `No calls match <b>${esc(q)}</b>` : limits.length ? "No matching calls" : "No calls in the list";
+      // R8C-05: when a Source / host / project limit is also on, it may be what hides the calls — say so
+      const sub = q && limits.length ? `Showing ${esc(limits.join(" and "))}, and none of those calls match. The other calls are still captured — try <b>Show all traffic</b>, or a shorter word.`
+                : q ? "Try a shorter word, or the host name only. Filters with <code>~</code> must be written exactly (see the examples in the search box)."
+                    : limits.length ? `Showing ${esc(limits.join(" and "))}. The calls are still captured — remove the limit to see them.`
+                    : "The list is empty — nothing is hidden. New calls show up here within a second as the app makes them.";
       box.innerHTML = `<div class="box"><div class="glyph">${ico("search")}</div><h3>${why}</h3><div class="lede">${sub}</div>
         <div class="btns">${q ? '<button class="b p" data-act="clear">Clear filter</button>' : ""}${limits.length ? `<button class="b ${q ? "" : "p"}" data-act="all">Show all traffic</button>` : ""}</div></div>`;
     }
-    box.classList.add("open"); placeEmptyList(box); setAttr(DOC, "data-rv-empty", kind === "first" ? "1" : null);
+    box.classList.add("open"); placeEmptyList(box); setAttr(DOC, "data-rv-empty", "1");
     box.querySelectorAll("[data-copy]").forEach((c) => (c.onclick = () => navigator.clipboard.writeText(c.dataset.copy).then(() => toast("Copied — paste it in a terminal"), () => toast("Select the command and copy it"))));
     box.querySelectorAll("[data-act]").forEach((b) => (b.onclick = async () => {
       if (b.dataset.act === "devices") { tab = "dev"; editing = null; if (!$("drawer").classList.contains("open")) setOpen(true); render(); }
       else if (b.dataset.act === "clear") { sq().value = ""; sbSync(); commitSearch(""); }
-      else { if (state.focus_host) await run("focus_host", { host: null }); if (state.graphql_operation) await run("graphql_filter", { name: null }); await run("view", { project_only: false, show_dns: state.show_dns }, "Showing all traffic"); }
+      else { if (state.focus_host) await run("focus_host", { host: null }); if (state.graphql_operation) await run("graphql_filter", { name: null }); if (state.source) await run("source", { source: null }); await run("view", { project_only: false, show_dns: state.show_dns }, "Showing all traffic"); }
     }));
   }
 
   window.addEventListener("keydown", (e) => {
-    const t = e.composedPath ? e.composedPath()[0] : e.target;
+    const path = e.composedPath ? e.composedPath() : [e.target], t = path[0];
     const typing = !!t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
+    // R6B-01: anything focused inside the panel (a Send button, a tab) is not mitmweb's list: no single-key replay
+    const inPanel = path.includes(host), inDrawer = path.includes($("drawer"));
+    if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {      // R6B-02/04/06: Tab stays in what is open
+      const box = topSheet() || (inDrawer && $("drawer").classList.contains("open") ? $("drawer") : null);
+      if (box) { trapTab(e, box); return; }
+    }
+    if (e.key === "Escape" && !$("help").classList.contains("open") && !e.defaultPrevented) {
+      if ($("pause").classList.contains("open")) {       // Esc = Cancel on Edit & Repeat, = the backdrop click on a paused call
+        e.preventDefault(); e.stopPropagation();
+        if (sheetDirty()) return;  // R6-02: the explicit buttons remain available for a deliberate discard.
+        if ($("rcancel")) $("rcancel").click(); else if (pausedOpen) dismissPaused(); else closeSheet("pause");
+        return;
+      }
+      if (inDrawer && !$("welcome").classList.contains("open") && $("drawer").classList.contains("open")) {
+        e.preventDefault(); e.stopPropagation();
+        const back = $("main").querySelector("#back, #sback");     // an editor: Esc = its Back (asks first when edited)
+        if (back && back.id === "back") back.click(); else if (!drawerTypingDirty) { if (back) back.click(); else closeDrawer(); } // R6-03
+        return;
+      }
+    }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.code === "KeyF" && skinOn() && host.hasAttribute("data-sbar") && root.activeElement !== sq()) { e.preventDefault(); e.stopPropagation(); focusSearch(); return; }   // a second press lets the browser's find-in-page open
     if (e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && CHORDS[e.code]) { e.preventDefault(); e.stopPropagation(); CHORDS[e.code][1](); return; }
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Enter" && !typing) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
-    if (e.key.toLowerCase() === "r" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !typing) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
+    if (topSheet() && !inPanel && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) { e.stopPropagation(); return; }   // a modal sheet is up: list keys wait
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Enter" && !typing && !inPanel && !topSheet()) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
+    if (e.key.toLowerCase() === "r" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !typing && !inPanel && !topSheet()) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
     if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey && !typing) { e.preventDefault(); e.stopPropagation(); openHelp("keys"); return; }
     if (e.key === "Escape" && $("help").classList.contains("open")) { e.stopPropagation(); closeHelp(); }
     else if (e.key === "Escape" && $("welcome").classList.contains("open")) { e.stopPropagation(); closeWelcome(); }
@@ -2334,8 +2646,21 @@
       group.setAttribute("aria-hidden", "true");
     }
   });
+  // R6B-07: proxy_panel clips a body view too big to paint and says so in mitmweb's view title; next to it, offer the
+  // whole body. Our own <span> at the end of the controls row, kept in step with the title (React owns the rest).
+  const linkClipped = () => document.querySelectorAll(".contentview > .controls").forEach((c) => {
+    const h = c.querySelector("h5"), m = h && /\((showing first [^)]+)\)/.exec(h.textContent);
+    const side = (location.hash.replace(/^#\/?/, "").split("?")[0].split("/")[2] || "").toLowerCase(), id = selectedFlow();
+    let a = c.querySelector(":scope > .rv-clip");
+    if (!m || !id || !/^(request|response)$/.test(side)) { if (a) a.remove(); return; }
+    const url = `./flows/${encodeURIComponent(id)}/${side}/content.data`;
+    if (a && a.dataset.url === url) return;
+    if (!a) { a = document.createElement("span"); a.className = "rv-clip"; c.appendChild(a); }
+    a.dataset.url = url;
+    a.innerHTML = `<b>${esc(m[1])}</b> · <a href="${esc(url)}" download>Download</a> · <a href="${esc(url)}" target="_blank" rel="noopener">Open raw</a>`;
+  });
   let exportCheck = 0;     // the call list mutates constantly under traffic: check at most once per frame
-  new MutationObserver(() => { if (!exportCheck) exportCheck = requestAnimationFrame(() => { exportCheck = 0; hideNativeExport(); }); })
+  new MutationObserver(() => { if (!exportCheck) exportCheck = requestAnimationFrame(() => { exportCheck = 0; hideNativeExport(); try { linkClipped(); } catch (e) { /* cosmetic */ } }); })
     .observe(document.body, { childList: true, subtree: true });
   hideNativeExport();
 

@@ -88,6 +88,100 @@ class Collections(LiveCase):
         self.assertEqual(json.loads(r.json()["body"]), {"x": 9})
         self.assertEqual(self.up.hits_for("/echo"), [])
 
+    def test_exported_har_reimported_still_replays_posts_by_body(self):
+        # A collection shared as HAR (export here, import on a teammate's machine) must replay its POSTs with bodies.
+        # The export carried no request-body identity, so after import every such POST went live (or 404 in strict).
+        self.reset_state(collections=self.coll())
+        self.record("shared")
+        self.fetch("/echo?s=1", method="POST", data=json.dumps({"user": "a"}))
+        self.fetch("/echo?s=1", method="POST", data=json.dumps({"user": "b"}))
+        self.panel.ok("coll_stop")
+        har = self.panel.ok("coll_export", {"name": "shared"})
+        self.panel.ok("coll_delete", {"name": "shared"})
+        self.panel.ok("coll_import", {"name": "shared-copy", "har": har.get("har", har), "overwrite": True})
+        self.panel.ok("coll_replay", {"name": "shared-copy", "enabled": True})
+        self.panel.ok("coll_strict", {"strict": True})
+        time.sleep(1.3)
+        self.up.reset_hits()
+        r = self.fetch("/echo?s=1", method="POST", data=json.dumps({"user": "b"}))
+        self.assertEqual(r.status, 200, r.text[:200])
+        self.assertEqual(json.loads(r.json()["body"]), {"user": "b"})
+        self.assertEqual(self.up.hits_for("/echo"), [])
+        self.panel.ok("coll_strict", {"strict": False})
+
+    def test_strict_refuses_a_body_it_never_recorded(self):
+        # R2A-04: a "wrong password" login was answered with the recorded successful one, even in strict mode
+        self.reset_state(collections=self.coll())
+        self.record("logins")
+        self.fetch("/echo?j=1", method="POST", data="user=a")
+        self.fetch("/echo?j=1", method="POST", data="user=b")
+        self.panel.ok("coll_stop")
+        self.panel.ok("coll_replay", {"name": "logins", "enabled": True})
+        self.panel.ok("coll_strict", {"strict": True})
+        time.sleep(1.3)
+        self.up.reset_hits()
+        self.assertEqual(self.fetch("/echo?j=1", method="POST", data="user=b").json()["body"], "user=b")
+        r = self.fetch("/echo?j=1", method="POST", data="user=WRONG")
+        self.assertEqual(r.status, 404)
+        self.assertIn("body not in the replayed collection", r.text)
+        self.assertEqual(self.up.hits_for("/echo"), [])
+        self.assertIn("strict body miss", self.comment("/echo?j=1"))
+
+    def test_lenient_unrecorded_post_body_goes_upstream(self):
+        # R3A-04: a new login body must not receive an unrelated recorded success.
+        self.reset_state(collections=self.coll())
+        self.record("login")
+        self.fetch("/echo?login=1", method="POST", data="user=alice")
+        self.panel.ok("coll_stop")
+        self.panel.ok("coll_replay", {"name": "login", "enabled": True})
+        time.sleep(1.3)
+        self.up.reset_hits()
+        r = self.fetch("/echo?login=1", method="POST", data="user=carol")
+        self.assertEqual(r.json()["body"], "user=carol")
+        self.assertTrue(self.up.hits_for("/echo"))
+
+    def test_imported_collection_strict_match_can_be_changed(self):
+        # R3A-04: after import, strict scope must be editable without starting a recording.
+        self.reset_state(collections=self.coll())
+        har = {"log": {"entries": [{"request": {"method": "GET", "url": self.up.url("/text"), "headers": []},
+                                     "response": {"status": 200, "headers": [], "content": {"text": "saved"}}}]}}
+        self.panel.ok("coll_import", {"name": "imported", "har": har})
+        self.panel.ok("coll_replay", {"name": "imported", "enabled": True})
+        self.panel.ok("coll_match", {"record_match": r"/echo\?strict-scope=1"})
+        self.assertEqual(self.panel.state()["collections"]["record_match"], r"/echo\?strict-scope=1")
+        self.panel.ok("coll_strict", {"strict": True})
+        time.sleep(1.3)
+        self.assertEqual(self.fetch("/echo?strict-scope=1").status, 404)
+        self.assertEqual(self.fetch("/echo?strict-scope=2").status, 200)
+
+    def test_har_import_keeps_request_bodies_so_they_replay_apart(self):
+        # R2A-05: from_har wrote req_body "" for every entry, so POSTs differing only by body collapsed onto the first
+        def entry(body, status, text):
+            return {"request": {"method": "POST", "url": self.up.url("/echo?h=1"), "headers": [],
+                                "postData": {"mimeType": "application/json", "text": body}},
+                    "response": {"status": status, "headers": [], "content": {"mimeType": "text/plain", "text": text}}}
+        har = {"log": {"entries": [entry('{"id":"A"}', 200, "paid-A"), entry('{"id":"B"}', 402, "declined-B")]}}
+        self.reset_state(collections=self.coll())
+        self.panel.ok("coll_import", {"name": "hb", "har": har})
+        self.panel.ok("coll_replay", {"name": "hb", "enabled": True})
+        time.sleep(1.3)
+        r = self.fetch("/echo?h=1", method="POST", data='{ "id": "B" }')
+        self.assertEqual((r.status, r.text), (402, "declined-B"))
+        r = self.fetch("/echo?h=1", method="POST", data='{"id":"A"}')
+        self.assertEqual((r.status, r.text), (200, "paid-A"))
+
+    def test_har_import_reports_what_it_left_out(self):
+        # R2A-10: failed calls and WebSocket upgrades were dropped/imported silently
+        def entry(path, status):
+            return {"request": {"method": "GET", "url": self.up.url(path), "headers": []},
+                    "response": {"status": status, "headers": [], "content": {"text": "x"}}}
+        har = {"log": {"entries": [entry("/ok", 200), entry("/down", 0), entry("/ws", 101)]}}
+        self.reset_state(collections=self.coll())
+        doc = self.panel.ok("coll_import", {"name": "skipme", "har": har})
+        self.assertEqual((doc["count"], doc["skipped_count"]), (1, 2))
+        self.assertTrue(any("/ws" in x and "WebSocket" in x for x in doc["skipped"]), doc)
+        self.assertEqual([e["path"] for e in self.entries("skipme")], ["/ok"])
+
     def test_strict_mode_answers_404_for_unrecorded_calls(self):
         self.reset_state(collections=self.coll())
         self.record("s")
@@ -241,6 +335,16 @@ class Collections(LiveCase):
         self.assertEqual([e["path"] for e in self.entries("same-name")], ["/second"])
 
 
+class SessionOpenCopy(unittest.TestCase):
+    def test_open_confirm_says_what_ok_and_cancel_do(self):
+        # R8D-17: "Cancel to choose 'add' instead, or to stop" left it unclear what Cancel does.
+        panel = open(os.path.join(os.path.dirname(__file__), "..", "addons", "panel.js")).read()
+        self.assertIn("OK = REPLACE the current list with this session.", panel)
+        self.assertIn("Cancel = don't replace; next you can ADD it to the list instead, or stop.", panel)
+        self.assertIn("OK = add them to the calls already in the list.", panel)
+        self.assertNotIn("Cancel to choose 'add' instead, or to stop.", panel)
+
+
 class Sessions(LiveCase):
     def setUp(self):
         super().setUp()
@@ -359,6 +463,39 @@ class Sessions(LiveCase):
     def test_save_does_not_include_paused_calls_and_visible_only(self):
         self.fetch("/json/small")
         self.assertGreaterEqual(self.panel.ok("sess_save", {"name": "v", "visible_only": True})["count"], 1)
+
+    def test_r8d06_saved_session_excludes_tunnels_hidden_by_tls_all(self):
+        self.panel.ok("focus_host", {"host": ""})
+        self.reset_state(tls={"mode": "ignore", "ignore": ["127.0.0.1"]})
+        self.panel.state()
+        wait_for(lambda: self.fetch("/echo", tls=True, cacert=self.up.cert).status == 200 and
+                 any(f.get("type") == "tcp" for f in self.inst.flows()), 15, 0.3, "tunnel row")
+        self.reset_state(tls={"mode": "all"})
+        self.panel.state()
+        self.fetch("/json/small")
+        visible = [f for f in self.inst.flows() if f.get("type") == "http"]
+        saved = self.panel.ok("sess_save", {"name": "visible-types"})
+        self.assertEqual(saved["count"], len(visible))
+        self.assertEqual(self.panel.state()["sessions"][0]["count"], len(visible))
+        self.assertEqual(len(self.panel.ok("sess_har", {"name": "visible-types"})["har"]["log"]["entries"]), len(visible))
+
+    def test_r7a05_visible_save_uses_search_and_host_focus_and_rejects_empty(self):
+        # R7A-05: the full flow view still contained hidden calls, so the checked save exported every call.
+        self.fetch("/echo?r7a05=keep")
+        self.fetch("/text?r7a05=hide")
+        self.fetch("/echo?r7a05=other-host", up=self.up2)
+        self.panel.ok("focus_host", {"host": "127.0.0.1"})
+        search = "~u 'r7a05=keep'"
+        doc = self.panel.ok("sess_save", {"name": "only-one", "visible_only": True, "search_filter": search})
+        self.assertEqual(doc["count"], 1)
+        entries = self.panel.ok("sess_har", {"name": "only-one"})["har"]["log"]["entries"]
+        self.assertEqual(len(entries), 1)
+        self.assertIn("r7a05=keep", entries[0]["request"]["url"])
+        code, body, _ = self.panel.post("sess_save", {"name": "no-match", "visible_only": True,
+                                                       "search_filter": "~u 'r7a05=absent'"})
+        self.assertEqual(code, 400)
+        self.assertIn("no calls", body["error"].lower())
+        self.assertFalse(os.path.exists(self.inst.path("sessions", "no-match.flows")))
 
     def test_loading_a_saved_session_after_clear_restores_flows(self):
         self.fetch("/json/small")

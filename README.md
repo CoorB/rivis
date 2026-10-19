@@ -12,12 +12,13 @@ Built on [mitmproxy](https://mitmproxy.org) (unchanged). Runs only on your Mac, 
 | You want to… | In Rivis |
 |---|---|
 | See every call the app makes | The call list, with a filter box and a view of just your app's hosts |
+| See only one simulator, one emulator or one app | **Source** menu in the Tools header: each device, and each app on it (e.g. *NEO UAT* and *NEO SIT* side by side on one simulator), with its call count |
 | Pause a call and edit it before it continues | **Breakpoint** on a call: change the request or the response, then *Continue* |
 | Serve your own response instead of the server's | **Map Local this call**, then edit the mock |
 | Force an error, a delay or a dropped call | One click on a call: status `503`, delay, block |
 | Test on a slow or flaky network | **Network** tab: 3G, congested LTE, VPN latency, packet loss |
 | Send a call again, or edit and resend it | **Repeat** (`⌘↵`) / **Edit & Repeat** (`⌥⇧↵`), or build one in **Compose** |
-| Compare two calls | Right-click → **Compare** |
+| Compare two calls | Right-click the first → **Compare: set as A**, select the second, then in **Compare** click **Compare A with B** |
 | Keep or share evidence | Save a **session**, or export a **HAR** (secrets are masked) |
 | Set up a simulator or emulator | **Tools → Devices → Set up**, one click per device |
 | Test a web app | **Tools → Devices → Web browser**, or `rivis browser https://your.app`: a separate Chrome/Edge window with its own profile, pointed at Rivis. Your normal browser is not touched |
@@ -49,12 +50,28 @@ Mac with Apple Silicon. No admin password, nothing else to download. Apple's Com
 2. Download the zip from the [latest release](https://github.com/CoorB/rivis/releases) into **Downloads**.
 3. Paste this into Terminal (the release page has the same line for its version):
    ```bash
-   cd ~/Downloads && { [ -d rivis-installer-0.9.6 ] || unzip -q rivis-installer-0.9.6.zip; } && ./rivis-installer-0.9.6/install.sh
+   cd ~/Downloads && { [ -d rivis-installer-0.9.7 ] || unzip -q rivis-installer-0.9.7.zip; } && ./rivis-installer-0.9.7/install.sh
    ```
+   For scripted installs, pass `--yes --skip-local-capture` to `install.sh`.
    It works whether or not Safari already unzipped the file. For iOS, approve *Mitmproxy Redirector* when
    System Settings opens; the installer continues by itself as soon as you do (or press Enter to skip).
 4. At the end, press Enter to start Rivis; it opens in your browser. Go to **Tools → Devices** and click **Set up**
    for your simulator or emulator. (Later, from a new Terminal window: `rivis start --background`.)
+
+Installing an update restarts a running instance on the new version when its saved start settings are available. If
+the installer reports an instance still running on an older version, use the shown ports with `rivis restart` before
+using the updated features. `rivis status` also reports a running version that differs from the installed version.
+
+**Devices** and **Network** are inside the **Tools** drawer; they are not top tabs.
+
+### Uninstall
+
+1. **First**, while the `rivis` command is still there, remove Rivis from every simulator and emulator you set up:
+   `rivis ios off --all` and `rivis android off --all`. After uninstalling, the command is gone and you have to remove
+   the certificate on each device by hand.
+2. Run the installer from the unzipped release folder with `--uninstall`:
+   `~/Downloads/rivis-installer-<version>/install.sh --uninstall`. It stops Rivis and keeps your saved projects
+   (`~/.rivis`) and the certificate (`~/.mitmproxy`); it prints the commands to delete those too.
 
 ---
 
@@ -67,10 +84,15 @@ rivis browser URL          # web apps: open a separate Chrome/Edge window that g
 rivis browser --current    # the same, for the page open in your browser's front tab
 rivis status               # is it running?
 rivis stop                 # stop
+rivis restart              # restart with saved options; load a new `projects use` selection unless start used --project
 rivis --version            # which version you have
 ```
 
 Everything else is in the browser panel. The full command list is in [docs/REFERENCE.md](docs/REFERENCE.md).
+
+To run two projects at once, give each instance its own `RIVIS_PORT` and `RIVIS_WEB_PORT`. Use the matching
+`RIVIS_WEB_PORT` with `rivis ui` to reopen each panel; each web port keeps its own login. Uninstall stops every
+instance using this installation before removing its add-ons, and leaves saved projects and the CA in place.
 
 ---
 
@@ -88,14 +110,27 @@ Everything else is in the browser panel. The full command list is in [docs/REFER
 2. A call answers **403 Private upstream destinations are blocked**: that server is on a private (VPN) address and the
    call is plain HTTP or comes from a web page. Add the app's domain to your project (`rivis projects use <app>`), or
    start with `--allow-private-hosts 'REGEX'`. Apps' HTTPS calls are never blocked.
-3. HTTPS calls fail with **certificate verify failed** on your company network: Rivis trusts what your Mac trusts, so
-   ask IT for their root certificate and install it in Keychain Access (or start with `RIVIS_EXTRA_TRUST=/path/root.pem`).
-4. Still stuck? Run `rivis bug-report` and attach the zip it creates (it contains no calls, tokens or keys),
+3. HTTPS calls fail with **502 … could not verify the HTTPS certificate**: the 502 body says why. If the server sends
+   an incomplete chain, an expired, self-signed or wrong-host certificate (often a dev server; browsers fetch a missing
+   intermediate themselves, Rivis does not), run `rivis tls ignore add HOST` and `rivis tls mode ignore` to pass that
+   host through undecrypted, or start with `--insecure`. If it fails for every site on your company network, Rivis
+   trusts what your Mac trusts: install IT's root certificate in Keychain Access (or start with
+   `RIVIS_EXTRA_TRUST=/path/root.pem`).
+4. A server requires a **client certificate** (mTLS): leave that host undecrypted with
+   `rivis tls ignore add HOST` and `rivis tls mode ignore`. The app must already have its client certificate;
+   Rivis does not supply one. Calls to that host will no longer show request or response contents.
+5. It broke right after an upgrade: `rivis health` says what is wrong, and `rivis rollback` takes you back to the
+   version you had before, with the same options.
+6. Still stuck? Run `rivis bug-report` and attach the zip it creates (it contains no calls, tokens or keys),
    together with the output of `rivis --version`.
 
 ---
 
-## Repository layout
+## From a source checkout (developers)
+
+Only for people working on Rivis itself: the installed copy contains just what is needed to run it (no `install/` or
+`tests/`), and testers can skip this section. A source checkout looks like this; developer setup and the test suite
+are in [docs/REFERENCE.md](docs/REFERENCE.md#from-a-source-checkout-developers).
 
 ```
 rivis              # the command (macOS)        rivis.ps1   # the command (Windows, not in the pilot yet)

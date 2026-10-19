@@ -18,21 +18,31 @@ into mitmweb; the installed mitmproxy is never modified.
 
 ## Install and first run
 
-Testers: use the installer zip from the release (see the [README](../README.md#install)).
-
-From a source checkout (developers): install the approved mitmproxy build, then link the command without copying it:
-
-```bash
-mkdir -p ~/bin
-ln -sf "$PWD/rivis" ~/bin/rivis
-rivis projects list
-rivis start
-```
+Use the installer zip from the release (see the [README](../README.md#install)). Developers working from a source
+checkout: see [From a source checkout (developers)](#from-a-source-checkout-developers) at the end.
 
 On macOS, enable the Mitmproxy Redirector network extension when prompted. Quit tools that own the system
 proxy before iOS Simulator testing; otherwise simulator traffic goes to that other proxy.
 
 Windows uses `rivis.ps1`. The iOS Simulator is macOS-only.
+
+### Upgrading, checking it works, going back
+
+Run the newer installer's `install.sh` while Rivis is running or stopped. A running Rivis is stopped, upgraded and
+started again with the same project, ports and options, then **health-checked**: the installer prints
+`health check :8080/:8083 ok`, or `health check FAILED` with what is wrong and the command to go back.
+
+```bash
+rivis health                 # proxy answers, panel answers, running version = installed version (exit 0 = yes)
+rivis rollback --list        # versions installed on this Mac (each install keeps its own folder)
+rivis rollback               # back to the version before the current one, restarted with the same options
+rivis rollback 0.9.7         # or to a named version — also how you undo a rollback
+```
+
+Versions before 0.9.7 have no `rollback` command: after going back to one of them, come forward again with
+`~/.local/rivis/tool-0.9.7/rivis rollback 0.9.7` (rollback prints this line for you), or re-run the newer installer.
+`rollback` only switches between versions already installed on this Mac; it never deletes one. Rules, Map Local
+files, sessions and collections are shared by all versions and are not changed.
 
 ## Projects
 
@@ -49,13 +59,19 @@ rivis --project bank-a status
 rivis rules list --project bank-a
 ```
 
+`projects use` selects the project but does not filter the call list; to hide other apps' calls, set **Show** in the
+Tools header to the project (for example *NEO only*).
+For a proxy started without `--project`, run `rivis restart` after `projects use ID` to load that project's rules.
+A proxy started with `--project ID` keeps that explicit project on restart; stop and start it with another ID to change it.
+
 Resolution order is `--project ID`, `$<PREFIX>_PROJECT`, `current-project`, then `default`. Every command accepts
 `--project`. Project state is isolated under:
 
 ```text
 ~/.rivis/
 ├── current-project
-├── web-token
+├── web-token                         # default web port login
+├── web-token-<web-port>              # other web ports keep separate logins
 ├── profiles/<id>/{project.json,rules.example.json}
 └── projects/<id>/
     ├── rules.json
@@ -64,6 +80,9 @@ Resolution order is `--project ID`, `$<PREFIX>_PROJECT`, `current-project`, then
     ├── collections/
     └── sessions/
 ```
+
+`status` reports the project running on the selected proxy and web ports. If your current selection differs, it
+also shows the selected project separately.
 
 On first use, the project's example rules are copied to its state directory. A first run also copies legacy
 `~/.neo-mitm/` state into the NEO project when needed; it never moves or deletes the original.
@@ -79,22 +98,43 @@ The profile's `hosts` regex drives the “<label> only” panel view, `record_ma
 
 ```bash
 rivis start [--project-only] [--insecure] [--all] [--no-ios] [--no-open]
-rivis stop | ui | status | cert
+rivis stop | restart | ui | status | cert # status exits 0 when running, 3 when not (for scripts and CI)
 rivis browser [URL | --current] [--browser chrome|edge|chromium|brave] [--fresh] [--list]   # web apps, see below
 rivis ios on|off [--udid UDID | --all]     # --all: every booted simulator
 rivis android on|off [-s emulator-5554 | --all] [--manual] [--yes] [--strict] [--proxy-only]   # Play images: one restart, like Proxyman (--strict: back to normal at once, 2–4 min)
 rivis setup                                          # every booted simulator + running emulator
 rivis rules list | on NAME | off NAME | show NAME | rm NAME | edit
+rivis rules test URL [METHOD]                        # what each rule would do to this call; sends nothing
+rivis health | rollback [VERSION|--list]             # after an upgrade: is it working? / go back a version
 rivis rules add NAME match=REGEX action=ACTION [key=value ...]
 rivis scripts list | new NAME --lang py|js [--match REGEX] | on NAME | off NAME | edit NAME | rm NAME
 rivis throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]
               [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
 rivis tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
 rivis compose list | send NAME [--var name=value] [--no-wait]
-rivis breakpoint REGEX [--request|--response] [--method M] | off [NAME]
+rivis breakpoint [REGEX [--request|--response] [--method M] | off [NAME]]   # no arguments: list; paused calls: Continue in the UI
 rivis mock NAME URL-REGEX
 rivis net-reset [--dry-run]
+rivis update [check|install|login|logout|status]     # signed in-app updates from the team's GitHub releases
 ```
+
+For `throttle`, `loss=` applies only to that command; a later profile uses its own packet loss.
+Each throttle command starts with all calls in scope; pass `match=REGEX` to scope that profile. `throttle off` clears the previous scope.
+`throttle` and `rules list` show the active manual latency, jitter, bandwidth, loss and response delay values.
+`rules add`, `rules on` and `rules edit` check enabled rules against the proxy's load validation. `rules list`
+marks rules that the proxy skips as `SKIPPED` and prints the reason. Editing a rules file saves only after that
+validation succeeds. `breakpoint off NAME` reports an unknown name and shows the available names.
+An invalid `mock` URL pattern exits with a single validation error.
+
+For Map Remote, `match` selects calls, `replace` is the URL regex to replace, and `with` is the replacement URL.
+For example, to send a call from one local server to another:
+
+```bash
+rivis rules add move-echo match='/echo' action=map_remote replace='^http://127\.0\.0\.1:50525/echo$' with='http://127.0.0.1:50526/echo'
+```
+
+The `replace` pattern must match the full URL, not just the path shown in the call list. `rules add`, `rules list`
+and the Rules tab warn when a simple `match` example would leave the URL unchanged.
 
 `android on` turns the emulator's proxy on only once the CA is verified on it; otherwise it prints the steps and
 exits with status 2 (not done), so no emulator is left with a proxy it cannot use. After installing the CA by
@@ -122,6 +162,23 @@ Server certificates are checked against what this Mac trusts: Apple's root store
 marked as trusted in Keychain Access (as Safari and Proxyman do), so networks that inspect HTTPS keep working.
 `RIVIS_EXTRA_TRUST=/path/root.pem` (several joined with `:`) adds a root the keychain lacks;
 `RIVIS_SYSTEM_TRUST=0` uses mitmproxy's own list only; `--insecure` turns the check off.
+When an upstream certificate fails the check (incomplete chain, expired, self-signed, wrong host), the app gets a
+502 from Rivis whose body names the reason and the fixes, and the call shows as **failed** in the list. A server that
+leaves out its intermediate certificate works in browsers and phones (they fetch the missing intermediate themselves)
+but not through Rivis: pass that host through undecrypted with `rivis tls ignore add HOST` + `rivis tls mode ignore`,
+or start with `--insecure` for a dev server.
+
+Large bodies: a body over 64 MB (`RIVIS_STREAM_LARGE_BODIES`, a mitmproxy size such as `256m`) is streamed straight
+to the app and **not kept**: it cannot be viewed, edited by a response rule, mocked from or breakpointed, and the call
+is tagged *large body streamed, not kept*. This keeps one big download from holding gigabytes of memory. Smaller
+bodies are kept as before; the body view renders only the start of a body over 4 MB (Download / Open raw give all of
+it), so opening a large response never stalls other traffic.
+
+Interim responses: an HTTP/1 `103 Early Hints` (or any other 1xx except `101`) from the server is dropped and the real
+response that follows is passed on.
+
+Calls that fail (connection refused, TLS failure, body cut short) show **failed** in the status and time columns
+(a cut-short response shows its status with ✕); hover for the reason, or open the Error tab.
 
 Servers on private addresses (VPN, internal DNS): app HTTPS calls, simulator capture and Repeat/Compose reach them on
 any project. Plain-HTTP proxy requests to a private address are refused (403), because a web page could aim the proxy
@@ -138,15 +195,33 @@ match=neo\.sa loss=5`); GNU-style options use their PowerShell spellings, such a
 `--dev` remains an alias of `--insecure`; `--neo-only` remains an alias of `--project-only`. The legacy
 `neo-mitm` and `neo-mitm.ps1` wrappers select project `neo` unless an explicit project is supplied.
 
+`breakpoint` can save a rule while the proxy is stopped. A running proxy hot-reloads it within about one second;
+wait for that reload before sending the call that should pause.
+
 Environment variables are named from `product.json`: `<PREFIX>_PORT`, `_WEB_PORT`, `_RULES`, `_WEB_PASSWORD`,
 `_CONFDIR`, and `_PROJECT`. Legacy `NEO_MITM_*` variables remain fallback aliases.
+`<PREFIX>_MAX_FLOWS` (default 5000, 1 to 1000000) caps how many calls are kept: the oldest are dropped past it, and the footer shows how many were trimmed. Sessions and HARs saved afterwards contain only the survivors.
+Trimming happens in batches to a low-water mark, so the list can contain fewer than 5000 calls just after trimming.
+
+For simultaneous projects, start each with a different `<PREFIX>_PORT` and `<PREFIX>_WEB_PORT`. Use the same
+`<PREFIX>_WEB_PORT` for `ui`, `status`, `stop`, or `restart`; web login and saved start settings belong to that port.
+After an upgrade, the installer restarts running instances whose saved start settings identify their ports and flags.
+If it cannot restart one, it names the instance and tells you to run `rivis restart`; `start` and `status` warn when
+the running version differs from the installed version. Uninstall stops every instance using this installation
+before removing add-ons. It retains `~/.rivis` and `~/.mitmproxy` and prints separate removal commands for each.
 
 ## Panel
 
 Open the mitmweb UI and click the **Tools** button at the right end of the toolbar. Tabs provide This call, Compose, Map Local,
-Breakpoints, Network, Devices, Collections, Compare, Sessions, Scripts, and Rules. The header shows `Rivis · <project label>` and has
+Breakpoints, Network, Devices, Collections, Compare, Sessions, Scripts, and Rules. The header shows `Rivis / <project label>` (for example `Rivis / NEO`, or `Rivis / All`) and has
 a project selector. That selector changes only the host view; restart with `--project ID` to load a different
 rules file.
+
+Devices and Network are pages inside the **Tools** drawer on the right, not tabs along the top.
+`rivis rules rm NAME` removes a Map Local rule but keeps its mock file in the project `mocks/` directory;
+delete that file separately when it is no longer needed.
+The panel script editor checks syntax on Save. For a CLI-edited JavaScript file, send a matching call before
+checking `rivis scripts list` or `rivis doctor` for a syntax error.
 
 Saved data is owner-only. Rules hot-reload within about one second. A malformed file leaves the previous good
 configuration active, and a bad individual rule is skipped and shown in the panel.
@@ -159,12 +234,48 @@ configuration active, and a bad individual rule is skipped and shown in the pane
   checked with the server's own parser before it is applied (an invalid one would drop mitmweb's connection), so
   half-typed `~` filters show a red outline and the list keeps the last good result. It drives mitmweb's own filter:
   the Search box on mitmweb's *Calls* tab is hidden while the bar is active, and `?s=…` in the address still works.
+  When the header has too little room for a readable box (a ~900 px window with the drawer open) the bar moves to
+  its own row under the toolbar, in the filter strip.
 - **Why did my call vanish?** A strip under the toolbar lists everything that hides calls — an active filter, "Only
   <project> calls", "Only <host>", a GraphQL operation — each with an ✕ to undo it. If *everything* is hidden, the
   list explains why and offers one button to clear it.
+- **Source: one device or one app** (Proxyman's per-app view). The **Source** menu in the Tools header (next to
+  **Show**) lists every device that sent calls — each iOS Simulator by name, each Android emulator by AVD, *This Mac*
+  (curl, tools), the `rivis browser` window — and each app on it, with the number of calls the list can show. Choosing
+  a device or an app limits the list to it; it combines with the filter box, **Show** and *Only <host>*, and shows in
+  the strip with an ✕. A wide list shows each call's app as a chip at the right of the URL; **This call** says
+  *From <app> on <device>* with its bundle ID; right-click → **Show only <app>**. `rivis status` lists the sources too.
+  How a call is attributed (`addons/proxy_source.py`, once per connection, off the event loop):
+  - iOS Simulator (local capture): the redirector knows the sending process; Rivis reads that app's `Info.plist`
+    (display name, bundle ID) and the simulator's name. Two builds installed on one simulator have different bundle IDs,
+    so they are separate entries; the same build on two simulators is listed under each simulator. Safari's and web
+    views' pages are fetched by the simulator's WebKit networking process and show as *Web content (Safari / web
+    views)*; system services (`geod`, `trustd`, …) show under their own names.
+  - Android emulator, `rivis browser`, Mac tools (proxy port): the process on the other end of the connection. A
+    program that already talked to Rivis is recognised in-process (microseconds); a new program's first connection
+    needs one `lsof` run, shared by every connection that opened at the same time. A request is never held for this:
+    only the first response on a new connection may wait, at most half a second and usually not at all (the lookup
+    runs while the server answers). Emulators: the AVD name (with emulator 36+ all emulators share one network process, `netsimd`; with
+    several running, the one whose guest has a connection to Rivis at that moment is chosen, else *Android
+    emulator*). The app inside the emulator is named (package) only when exactly one app is talking to Rivis at that
+    moment; otherwise the row shows the AVD.
+  - Sessions keep each call's source; a session's HAR export carries it as `_rivisSource` on each entry, and opening
+    that HAR with **File → Open** brings the sources back. Repeats and edited copies keep the original call's source.
+    Calls with no source — made in Compose, opened from a HAR made elsewhere, or not attributable (an unknown process,
+    Windows) — are listed under **Unknown**, which can be chosen like any source. When more than 512 new connections
+    await a lookup at once, the excess calls are marked *Unknown* so a lookup can never build an unlimited queue.
+  - The counts in the Source menu are the calls the list can show: under **Show → <project> only** only that
+    project's calls are counted. A mitmproxy upgrade
+    that changes its local-capture internals also turns simulator attribution into *Unknown* (capture keeps working);
+    re-test after an upgrade.
 - **Clear all calls**: the trash button next to the filter (asks first; saved sessions, rules and scripts stay).
+- **Save session** keeps the call types shown by the list (HTTP calls, plus tunnel rows when TLS mode shows them,
+  and other network rows when **Show network calls** is on).
+  The **Only calls visible with the current filter** checkbox also narrows the save to the current filter.
 - **Right-click a call** for Map Local, Breakpoint, Repeat, Edit & Repeat, Compare as A, Copy as cURL / URL, Show
   only this host, decrypt / stop decrypting the host, and Delete.
+- **Compare two calls**: right-click the first → **Compare: set as A**, select the second, open **Compare**
+  (`⌥⇧D`), then click **Compare A with B**. The result lists both URLs and highlights header and body differences.
 - **Map Local to your own file anywhere** (e.g. `~/Desktop/mock.json`): `rivis rules add NAME match=REGEX action=map_local
   file=PATH` trusts that file on this machine; for a hand-edited rule run `rivis rules allow-file PATH`
   (`disallow-file`, `trusted-files` to review). Files from shared or imported rules are only read inside the project,
@@ -189,6 +300,12 @@ by a tiny same-origin boot script in `<head>` (the page CSP forbids inline scrip
 - **Project switch:** the **Show** menu in the drawer header picks *All traffic* or *<project> only* (list view; rules still load via `--project`).
 - **Kill switch:** add `?theme=off` to the URL (or turn the skin off in Settings) to fall back to stock mitmweb;
   `?theme=on` restores it. Both are remembered in `localStorage`, so stock mode persists until you turn it back on.
+- **Response and request bodies:** valid UTF-8 text with little or no ASCII (Arabic, Hebrew, emoji) shows as text
+  (view *Text*) instead of a hex dump, and right-to-left lines run right to left. A body view longer than 256 KB
+  (a 5 MB one-line script, a 20 MB JSON) shows its first 256 KB with "showing first … of … MB" and **Download** /
+  **Open raw** links for the whole body; the full body is still what is captured, mapped and exported.
+- **Keyboard:** the chords, Edit & Repeat, a paused call's sheet and the Map Local editor take focus; `Tab` stays
+  inside them and `Esc` closes them like their own Cancel / Back / close button, then focus goes back where it was.
 - Press **`?`** for the keyboard-shortcut sheet. First-time users get a dismissible **"Coming from Proxyman?"**
   card, always reachable again from the Help (`?`) button.
 
@@ -259,6 +376,12 @@ the lists are *Hosts to decrypt* and *Hosts to leave alone*. It is stored per pr
   is still captured; in local-capture mode (iOS Simulator) everything to that host is tunnelled, plain HTTP included.
   An empty `allow` list therefore decrypts nothing (Rivis passes mitmproxy a never-matching pattern, because mitmproxy
   itself ignores nothing when both lists are empty).
+- **Servers requiring a client certificate (mTLS):** Rivis does not configure or forward client certificates while
+  decrypting HTTPS. If the app already has a certificate for the server, let it negotiate directly through a tunnel:
+  `rivis tls ignore add api.example.test`, then `rivis tls mode ignore`. Start a new connection (reopen the app or
+  screen). The client still needs its certificate; this setting cannot create one. The call's contents cannot be
+  inspected or changed while that host is ignored. If you use the `allow` mode instead, leave the host out of the
+  allow list.
 - A host that is not decrypted still appears as a host-only **tunnel** row marked "🔒 not decrypted" (Rivis
   turns on mitmproxy's `show_ignored_hosts` and lets the list show those rows when the mode is not `all`; mitmproxy
   warns that this keeps the tunnels' bytes in memory, which adds up over a long session). IP-only
@@ -311,29 +434,33 @@ flow stays unchanged, but blocking user code in that abandoned worker may contin
 Supported actions are `respond`, `map_local`, `status`, `json_patch`, `delay`, `set_header`, `map_remote`, and
 `block`. CLI-added rules append in file order; quick panel errors are inserted first so they can override an
 older local response. Breakpoints pause requests/responses in mitmweb for editing and continuation.
+`text/event-stream` responses stream events to the client as they arrive. Their calls appear in the panel without a
+body; response rules and response breakpoints cannot edit streamed events.
+Other HTTP responses are buffered before Rivis forwards their headers and body. A slow download can therefore deliver
+its first byte to the app only after the entire response arrives at Rivis; app timeouts and progress indicators may
+behave differently than they do without capture. This also applies when no response rule or breakpoint is enabled.
 
-Tests: see [Testing](#testing).
+### Is my rule working? (hit counts and Test)
+
+While Rivis runs, every ON rule counts the calls it changed and when it last did. The **Rules** tab and
+`rivis rules list` show it under each rule:
+
+- `matched 12 calls · last 3s ago` — the rule is working.
+- `matched 4 calls but changed nothing — …` — the rule's pattern matches, but it had no effect (for example a Map
+  Remote whose `replace` does not occur in the URL, or Edit JSON on a response that is not JSON). The reason is given.
+- `ON, but none of the 15 calls since it was switched on matched it` — shown after 10 calls: check the pattern
+  and the method.
+
+Counts start again when a rule is edited (not when it is only switched off and on) and when Rivis restarts.
+
+To find out why a rule does or does not change a call, select the call and click **Test against the selected
+call** in the Rules tab, or run `rivis rules test URL [METHOD]`. Each rule gets one line: what it would do, or why it
+does not fire (pattern does not match, other method, an earlier Map Local already answers the call, a blocking
+rule, a Map Remote that would change nothing). Nothing is sent.
 
 Traffic profiles include 3G Urban, congested LTE, high-latency VPN, packet loss, manual values, and legacy
 profiles. Collection replay keys calls by method, host, path, canonical query, then request-body hash; repeated
 calls replay in recorded order and stick on the last result.
-
-## Testing
-
-```bash
-tests/run.sh            # everything (CLI, PowerShell, rules, profiles, breakpoints, collections, panel, scripts, viewers,
-                        # TLS, installer, security, perf budgets, browser UI)
-tests/run.sh --fast     # same without the browser UI and the perf budgets
-tests/run.sh --ui       # only the browser UI smoke
-tests/run.sh -k tls     # select by name; --jobs N sets parallelism (default 4)
-```
-
-The suite is hermetic: every module gets a fake `HOME`, a private CA, a shim directory first on `PATH`, random ports
-and a local upstream test server; it never touches `~/.rivis`, `~/.mitmproxy`, the system proxy or devices. It needs only
-`/usr/bin/python3` with `pytest`, `mitmweb`, `node` and `curl`. The run ends with a table of pass/fail/xfail/skip
-counts plus a check that nothing was left behind. Known product bugs live in `tests/FOUND-BUGS.md`; their tests are
-marked `expectedFailure`, so fixing a bug turns its test into an "unexpected success" failure (delete the marker then).
-The browser tests need Playwright: `pip3 install --user playwright && python3 -m playwright install chromium`.
 
 ## Troubleshooting with `rivis doctor`
 
@@ -360,7 +487,7 @@ It is **read-only** by default and checks, in order:
 8. **Android emulators**: running, `http_proxy`, CA in the user store, Play vs Google APIs image.
 9. The **running instance**: project, rule counts, skipped (broken) rules, script errors, throttle,
    TLS mode and — flagged loudly — anything that silently changes traffic (an active throttle,
-   block/rewrite rules, armed breakpoints, strict replay). A forgotten rule is a common "my app is
+   block/rewrite rules, armed breakpoints, and active or strict collection replay). A forgotten rule is a common "my app is
    broken".
 10. **Network reachability** for the project's `doctor_hosts` (DNS, TCP 443, TLS), distinguishing a
     DNS failure, no route (VPN down), a reset tunnel, and a certificate SAN mismatch. Skip with `--no-net`.
@@ -381,9 +508,40 @@ mitmproxy version) otherwise.
 | iOS shows DNS but no API calls | Quit another tool that owns the system proxy. |
 | Emulator has no network | Run `rivis android off`, or start the proxy on the configured port. |
 | Client rejects the CA | Install it with `ios on`/`android on` and use a build that trusts the workstation CA. |
-| Upstream certificate cannot validate | Your network inspects HTTPS with a root this Mac does not trust: install IT's root in Keychain Access, or `RIVIS_EXTRA_TRUST=/path/root.pem rivis start`. Only if the server's own certificate is invalid (e.g. a dev environment) and the project policy allows it, start with `--insecure`. |
+| Upstream certificate cannot validate | Read the 502 body: it names the reason. Incomplete chain, expired, self-signed or wrong-host server: `rivis tls ignore add HOST` + `rivis tls mode ignore` (not captured), or `--insecure` for a dev server. Otherwise your network inspects HTTPS with a root this Mac does not trust: install IT's root in Keychain Access, or `RIVIS_EXTRA_TRUST=/path/root.pem rivis start`. Only if the server's own certificate is invalid (e.g. a dev environment) and the project policy allows it, start with `--insecure`. |
 | 403 *Private upstream destinations are blocked* | The server is on a private address and the call is plain HTTP or from a web page: add its domain to the project's `hosts`, or start with `--allow-private-hosts 'REGEX'`. |
 | A port is occupied | Stop the previous mitmweb instance or choose another `<PREFIX>_PORT`/`_WEB_PORT`. |
 
 The panel relies on mitmweb internals and must be retested after mitmproxy upgrades. Never use
 `simctl keychain reset`; `ios off` removes only this workstation's mitmproxy CA row.
+
+## From a source checkout (developers)
+
+This section is for people working on Rivis itself. The installed copy has no `tests/` or `install/` directory, and
+testers do not need anything here.
+
+Install the approved mitmproxy build, then link the command without copying it:
+
+```bash
+mkdir -p ~/bin
+ln -sf "$PWD/rivis" ~/bin/rivis
+rivis projects list
+rivis start
+```
+
+### Running the test suite
+
+```bash
+tests/run.sh            # everything (CLI, PowerShell, rules, profiles, breakpoints, collections, panel, scripts, viewers,
+                        # TLS, installer, security, perf budgets, browser UI)
+tests/run.sh --fast     # same without the browser UI and the perf budgets
+tests/run.sh --ui       # only the browser UI smoke
+tests/run.sh -k tls     # select by name; --jobs N sets parallelism (default 4)
+```
+
+The suite is hermetic: every module gets a fake `HOME`, a private CA, a shim directory first on `PATH`, random ports
+and a local upstream test server; it never touches `~/.rivis`, `~/.mitmproxy`, the system proxy or devices. It needs only
+`/usr/bin/python3` with `pytest`, `mitmweb`, `node` and `curl`. The run ends with a table of pass/fail/xfail/skip
+counts plus a check that nothing was left behind. Known product bugs live in `tests/FOUND-BUGS.md`; their tests are
+marked `expectedFailure`, so fixing a bug turns its test into an "unexpected success" failure (delete the marker then).
+The browser tests need Playwright: `pip3 install --user playwright && python3 -m playwright install chromium`.

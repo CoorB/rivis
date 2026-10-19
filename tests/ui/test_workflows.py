@@ -125,6 +125,37 @@ class Workflows(UiBase):
         self.assertIn(original, [f["id"] for f in flows])
         self.assertGreaterEqual(len({f["id"] for f in flows}), 2)
 
+    def test_toolbar_replay_keeps_original_and_adds_row(self):
+        # R3A-09: stock toolbar Replay mutates the original instead of making a repeat row.
+        self.fetch("/echo?toolbar-replay=1")
+        self.open()
+        self.select("toolbar-replay=1")
+        original = self.inst.flow_for("toolbar-replay=1")["id"]
+        self.page.locator("#container > header button", has_text="Replay").first.click()
+        rows = wait_for(lambda: (lambda fs: fs if len(fs) >= 2 else None)([
+            f for f in self.inst.flows() if "toolbar-replay=1" in ((f.get("request") or {}).get("path") or "")]),
+            10, 0.2, "toolbar Replay made a second row")
+        self.assertIn(original, [f["id"] for f in rows])
+        self.assertTrue(any((f.get("comment") or "").startswith("repeat of") for f in rows))
+
+    def test_map_local_back_warns_before_discarding_edits(self):
+        # R3A-10: Back keeps the draft on screen until the in-panel choice is made.
+        self.fetch("/json/small?back-warning=1")
+        self.open()
+        self.select("back-warning=1")
+        self.tab("call")
+        self.P("#mock").click()
+        self.P("#body").fill('{"changed":true}')
+        self.P("[data-sub=headers]").click()      # R3A-10: tab switches must not reset the dirty baseline
+        self.P("#back").click()
+        self.assertTrue(self.P("#discard").is_visible())
+        self.assertEqual(self.P("#body").input_value(), '{"changed":true}')
+        self.P("#keep").click()
+        self.assertFalse(self.P("#discard").is_visible())
+        self.P("#back").click()
+        self.P("#discard-yes").click()
+        wait_for(lambda: self.P("#body").count() == 0, 5, 0.1, "editor closed after discard")
+
     def test_response_breakpoint_changes_what_the_app_receives(self):
         self.fetch("/json/small?wfc=1")
         self.open()
@@ -205,6 +236,44 @@ class Workflows(UiBase):
         self.P("#save").click()
         self.page.wait_for_timeout(1200)
         self.assertEqual(self.fetch("/json/small?wfg=1").json(), {"v": 2})
+
+    def test_map_local_back_discards_the_draft_and_next_call_is_live(self):
+        # B-03: the visible Back path is the cancel path, including removal of the draft file.
+        path = "/json/small?wf-draft-back=1"
+        self.fetch(path)
+        self.open()
+        self.select("wf-draft-back=1")
+        self.tab("call")
+        self.P("#mock").click()
+        self.P("#body").wait_for(timeout=10000)
+        draft = next(r for r in self.inst.cfg()["rules"] if r.get("draft"))
+        self.assertFalse(draft["enabled"])
+        file = draft["file"]
+        self.P("#back").click()
+        wait_for(lambda: all(r["name"] != draft["name"] for r in self.inst.cfg()["rules"]), 5, 0.2, "draft discarded")
+        self.assertFalse(os.path.exists(file))
+        self.up.reset_hits()
+        self.fetch(path)
+        self.assertTrue(self.up.hits_for(path), "Back left an active mock on the next call")
+        self.assertNotIn("mock:", self.inst.flow_for(path)["comment"] or "")
+
+    def test_failed_map_local_save_keeps_the_draft_discardable(self):
+        # B-03 review: the failed Save used to clear the editor's draft flag before the API replied.
+        self.fetch("/json/small?wf-bad-save=1")
+        self.open()
+        self.select("wf-bad-save=1")
+        self.tab("call")
+        self.P("#mock").click()
+        self.P("#st").fill("999")
+        self.P("#save").click()
+        wait_for(lambda: "status" in self.toast().lower(), 5, 0.2, "invalid status rejected")
+        draft = next(r for r in self.inst.cfg()["rules"] if r.get("draft"))
+        file = draft["file"]
+        self.P("#back").click()
+        self.assertTrue(self.P("#discard").is_visible())  # R3A-10: the rejected status is still an unsaved edit
+        self.P("#discard-yes").click()
+        wait_for(lambda: all(r["name"] != draft["name"] for r in self.inst.cfg()["rules"]), 5, 0.2, "failed save discarded")
+        self.assertFalse(os.path.exists(file))
 
     def test_map_local_pasted_url_keeps_its_query(self):
         self.open()
@@ -314,6 +383,32 @@ class Workflows(UiBase):
         self.page.wait_for_timeout(1200)
         self.assertEqual(self.fetch("/text?wfi=1", timeout=8).status, 200)
         self.assertEqual(self.panel.state()["paused"], [])
+
+    def test_a_paused_propfind_continued_untouched_stays_propfind(self):
+        # QA-05: the sheet's method list had 7 verbs; with PROPFIND missing the browser selected GET and Continue sent it
+        self.fetch("/echo?qam=1", method="PROPFIND")
+        self.open()
+        self.breakpoint_from_call("qam=1")
+        t, box = self.in_background("/echo?qam=1", method="PROPFIND")
+        self.sheet()
+        self.assertEqual(self.P("#pm").input_value(), "PROPFIND")
+        self.P("#pcont").click()
+        t.join(20)
+        self.assertEqual(box["r"].json()["method"], "PROPFIND")
+
+    def test_opening_a_session_with_replace_keeps_a_paused_call(self):
+        # QA-03: Sessions -> Open (replace) cleared the paused call too; the app hung with nothing left to Continue
+        self.fetch("/echo?qas=1")
+        self.panel.ok("sess_save", {"name": "qa-ui-sess", "overwrite": True})
+        self.open()
+        self.breakpoint_from_call("qas=1")
+        t, box = self.in_background("/echo?qas=1", timeout=45)
+        self.sheet()
+        self.panel.ok("sess_load", {"name": "qa-ui-sess", "replace": True})
+        paused = wait_for(lambda: self.panel.state()["paused"], 5, 0.2, "paused call still listed")
+        self.panel.ok("paused_continue", {"id": paused[0]["id"], "edits": {}})
+        t.join(20)
+        self.assertEqual(box["r"].status, 200)
 
 
 if __name__ == "__main__":

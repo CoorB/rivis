@@ -1,6 +1,7 @@
 """W11 crash-safe state, schema migrations, rotating logs, and redacted bug reports."""
 import json
 import os
+import shutil
 import stat
 import sys
 import tempfile
@@ -97,6 +98,30 @@ class LogsAndReports(unittest.TestCase):
                 self.assertNotIn(forbidden, data)
             self.assertIn("[REDACTED]", data)
 
+
+    def test_bundle_masks_the_har_redactors_field_names_and_device_names(self):
+        # R6A-02: otp/pin/cvv/session/csrf stayed readable in logs and doctor output; R6A-03: simulator names shipped
+        lines = ['{"otp": "OTP-111222", "pin": "PIN-3344", "cvv": "CVV-556"}', "session=SESS-7788 csrf_token=CSRF-99",
+                 "booted: NEOCommand-17PM (iOS 26)", "avd Rivis_Test_Play ok"]
+        out = bug_report.redact("\n".join(lines), None, ["NEOCommand-17PM", "Rivis_Test_Play"])
+        for marker in ("OTP-111222", "PIN-3344", "CVV-556", "SESS-7788", "CSRF-99", "NEOCommand-17PM", "Rivis_Test_Play"):
+            self.assertNotIn(marker, out, out)
+        self.assertIn("<device 1>", out)
+        self.assertEqual(out.count("\n"), 3)                 # layout kept: still one finding per line
+
+    def test_installed_tree_reports_its_version(self):
+        # R6A-01: installed trees keep VERSION at the root (install/ is the source layout), so bundles said "unknown"
+        with tempfile.TemporaryDirectory() as root:
+            open(os.path.join(root, "VERSION"), "w").write("9.8.7\n")
+            state = os.path.join(root, "state"); os.makedirs(os.path.join(state, "logs"))
+            output = os.path.join(root, "r.zip")
+            shutil.copy(os.path.join(os.path.dirname(bug_report.HERE), "product.json"), root)
+            with mock.patch.object(bug_report, "ROOT", root), mock.patch.object(bug_report, "device_names", return_value=[]), \
+                    mock.patch.object(bug_report, "command", side_effect=[(0, "{}"), (0, "m"), (0, "n")]):
+                bug_report.main(["--state-root", state, "--project", "default", "--rules", "r", "--confdir", root,
+                                 "--port", "1", "--web-port", "2", "--script-dir", root, "--output", output])
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(json.loads(archive.read("manifest.json"))["product_version"], "9.8.7")
 
     def test_header_secrets_are_redacted_in_every_shape(self):
         # Night QA lane B: "Authorization: Bearer <opaque>" kept the token (the word Bearer was masked instead), and

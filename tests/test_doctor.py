@@ -9,7 +9,7 @@ import doctor
 from doctor import (
     Report, _cert_dates, _trusted_panel_listener, check_ca, check_network, check_running,
     classify_network_failure, classify_system_proxy, executable_is_safe, is_loopback,
-    parse_lsof_listener, parse_netstat_listener, parse_networksetup_proxy, summarize_state,
+    parse_lsof_listener, parse_netstat_listener, parse_networksetup_proxy, summarize_state, WARN,
 )
 
 
@@ -35,6 +35,59 @@ class Lsof(unittest.TestCase):
                "Proxyman 42 me 10u IPv4 0x1 0t0 TCP *:8080 (LISTEN)\n")
         rows = parse_lsof_listener(out)
         self.assertEqual(rows[0]["command"], "Proxyman")
+
+
+class AndroidEmulator(unittest.TestCase):
+    def check(self, proxy):
+        def adb_run(argv, **_):
+            cmd = " ".join(argv[1:])
+            if cmd == "devices": return 0, "List of devices attached\nemulator-5554\tdevice\n", ""
+            if "settings get global http_proxy" in cmd: return 0, proxy, ""
+            if "pm list packages com.android.vending" in cmd: return 0, "package:com.android.vending", ""
+            if "shell id -u" in cmd: return 0, "2000", ""
+            return 0, "", ""
+        rep = Report()
+        adb = os.path.join(os.path.dirname(__file__), "fakes", "emulator_adb.py")
+        with mock.patch("doctor.run", side_effect=adb_run), mock.patch("doctor.port_owner", return_value=[]) as owner:
+            doctor.check_android(rep, adb)
+        return rep, owner
+
+    def test_dead_emulator_proxy_is_an_error(self):
+        # B-02: an emulator with this dead proxy has no network, even if the Mac port is free.
+        rep, owner = self.check("10.0.2.2:50141")
+        owner.assert_called_once_with(50141)
+        self.assertTrue(any(level == "error" and "nothing listens" in title for _, level, title, _, _ in rep.items), rep.items)
+        self.assertFalse(any(level == "ok" and "http_proxy" in title for _, level, title, _, _ in rep.items))
+
+    def test_a_recorded_install_is_confirmed_on_a_play_image(self):
+        # R5B-02: no root to read the store, but `android on` verified and recorded this CA for this AVD
+        with mock.patch("devices.ca_sha256", return_value="AB" * 32), mock.patch("os.path.isfile", return_value=True), \
+                mock.patch("devices.avd_name", return_value="Rivis_Test_Play"), \
+                mock.patch("devices._android_records", return_value={"Rivis_Test_Play": "AB" * 32}):
+            rep = self.check_with_confdir(":0")
+        self.assertTrue(any(level == "ok" and "fingerprint matches" in title for _, level, title, _, _ in rep.items), rep.items)
+        self.assertFalse(any("no adb root" in title for _, _, title, _, _ in rep.items))
+
+    def check_with_confdir(self, proxy):
+        def adb_run(argv, **_):
+            cmd = " ".join(argv[1:])
+            if cmd == "devices": return 0, "List of devices attached\nemulator-5554\tdevice\n", ""
+            if "settings get global http_proxy" in cmd: return 0, proxy, ""
+            if "pm list packages com.android.vending" in cmd: return 0, "package:com.android.vending", ""
+            if "shell id -u" in cmd: return 0, "2000", ""
+            return 0, "", ""
+        rep = Report()
+        adb = os.path.join(os.path.dirname(__file__), "fakes", "emulator_adb.py")
+        with mock.patch("doctor.run", side_effect=adb_run), mock.patch("doctor.port_owner", return_value=[]):
+            doctor.check_android(rep, adb, confdir="/nonexistent-confdir")
+        return rep
+
+    def test_google_play_advice_names_android_on(self):
+        # B-05: the one-restart Play-image CA path replaced the old manual-only guidance.
+        rep, _ = self.check(":0")
+        advice = " ".join(detail + " " + fix for _, _, title, detail, fix in rep.items if "Google Play image" in title)
+        self.assertIn("android on", advice)
+        self.assertNotIn("manual Settings step", advice)
 
 
 class Netstat(unittest.TestCase):
@@ -171,7 +224,7 @@ class RunningInstanceTrust(unittest.TestCase):
                 self.urls.append(url)
                 return Reply(b'{}' if "/proxy/api/state" in url else b"x")
         with tempfile.TemporaryDirectory() as state:
-            token_path = os.path.join(state, "web-token")
+            token_path = os.path.join(state, "web-token-18083")
             with open(token_path, "w") as fh:
                 fh.write("a+b&c")
             opener = Opener()
@@ -262,6 +315,11 @@ class SummarizeState(unittest.TestCase):
         self.assertIn("skipped", titles)
         self.assertIn("script error", titles)
 
+    def test_unreadable_rules_file_is_reported(self):
+        # R2A-08: doctor said "running" and nothing else while the panel showed rules_error
+        lines, _ = summarize_state(self.base(rules_error="Expecting value: line 1 column 1"))
+        self.assertTrue(any(lv == WARN and "rules.json is unreadable" in t for lv, t, _ in lines), lines)
+
     def test_throttle_flagged(self):
         _, flags = summarize_state(self.base(throttle="3g-urban", throttle_match="neo"))
         self.assertTrue(any("throttle active" in f for f in flags))
@@ -271,6 +329,16 @@ class SummarizeState(unittest.TestCase):
             rules=[{"name": "kill", "enabled": True, "action": "block"}]))
         self.assertTrue(any("rewrite/replace traffic" in f for f in flags))
 
+    def test_many_rules_warning_is_bounded(self):
+        # R4A-03: a long enabled list must leave the rest of doctor readable.
+        _, flags = summarize_state(self.base(rules=[{"name": "bulk-%d" % i, "action": "block"} for i in range(1205)]))
+        warning = next(f for f in flags if "rewrite/replace traffic" in f)
+        self.assertIn("1205 rule(s)", warning)
+        self.assertIn("bulk-0", warning)
+        self.assertIn("+1200 more (rivis rules list)", warning)
+        self.assertNotIn("bulk-1204", warning)
+        self.assertLess(len(warning), 200)
+
     def test_disabled_rule_not_flagged(self):
         _, flags = summarize_state(self.base(
             rules=[{"name": "kill", "enabled": False, "action": "block"}]))
@@ -279,6 +347,18 @@ class SummarizeState(unittest.TestCase):
     def test_strict_replay_flagged(self):
         _, flags = summarize_state(self.base(collections={"strict": True}))
         self.assertTrue(any("strict replay" in f for f in flags))
+
+    def test_active_replay_and_bad_rules_are_reported(self):
+        # R3A-05/R3A-07: panel state has replay in items, and raw rules may contain junk.
+        lines, flags = summarize_state(self.base(rules=[1, {"name": "ok", "action": "block"}],
+                                              collections={"items": [{"name": "journey", "replay": True}]}))
+        self.assertTrue(any("journey" in f for f in flags))
+        self.assertTrue(any("not objects" in title for _, title, _ in lines))
+
+    def test_collection_replay_flagged_from_panel_items(self):
+        # R3A-05: doctor receives the panel's items list, not the stored replay names.
+        _, flags = summarize_state(self.base(collections={"items": [{"name": "journey", "replay": True}]}))
+        self.assertIn("replaying collection(s): journey", flags)
 
     def test_breakpoint_flagged(self):
         _, flags = summarize_state(self.base(

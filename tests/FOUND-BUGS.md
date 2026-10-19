@@ -136,7 +136,7 @@ cookie + XSRF pair. In the suite this is `harness.Panel`. `P` below means "POST 
 - **Tests:** `test_cli.py::Throttle::test_out_of_range_and_non_finite_numbers_are_refused`,
   `test_powershell.py::Commands::test_throttle_rejects_out_of_range_and_non_finite_numbers` (expectedFailure).
 
-## B15 — the panel's open tab does not refresh when state changes elsewhere (low)
+## B15 — FIXED 2026-10-18 — the panel's open tab does not refresh when state changes elsewhere (low)
 - **Repro:** open the panel on the *Rules* tab; run `rivis rules add …` (or call `add` from another browser tab). The tab badge
   updates (`Rules 2`) but the list keeps showing 1 rule until you switch tabs and come back (screenshot:
   `tests/.artifacts/ui-dbg.png` when the test is run with a failing wait). Same for CLI edits to throttle/breakpoints etc.

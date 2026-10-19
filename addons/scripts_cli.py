@@ -62,10 +62,19 @@ def main(argv):
     os.makedirs(script_dir, mode=0o700, exist_ok=True)
     cfg = load(rules)
     if command == "list":
+        # R1A-03: the live panel's script_status is keyed by filename; keep offline lists usable without it.
+        state = json.load(sys.stdin) if rest == ["--errors-stdin"] else {}
+        # review 0.9.7 #6: both sides through realpath, or a symlinked state dir hides the live ERROR text
+        live = state.get("rules_file")
+        errors = (state.get("script_status") or {}).get("errors") or {} \
+            if live and os.path.realpath(os.path.expanduser(live)) == os.path.realpath(rules) else {}
         print(f"scripts ({script_dir}):")
         for item in sorted(cfg["scripts"], key=lambda x: x.get("file", "").lower()):
             state = "ON " if item.get("enabled", True) else "off"
-            print(f"  {state} {item.get('name','?'):<24} {item.get('lang','?'):<2} {item.get('method') or 'ANY':<6} {item.get('match') or '.'}  {item.get('file','?')}")
+            err = errors.get(item.get("file"))
+            message = str(err.get("message", "") if isinstance(err, dict) else err or "").splitlines()[0] if err else ""
+            print(f"  {state} {item.get('name','?'):<24} {item.get('lang','?'):<2} {item.get('method') or 'ANY':<6} {item.get('match') or '.'}  {item.get('file','?')}" +
+                  ("  ERROR: " + message if message else ""))
         if not cfg["scripts"]: print("  (none)")
         return
     if not rest: raise SystemExit(f"scripts {command}: NAME required")

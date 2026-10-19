@@ -144,6 +144,21 @@ def _android_records(state_root):
     return rec
 
 
+def avd_name(adb, serial, runner=None):
+    """The AVD name of a running emulator. `adb emu avd name` sometimes answers empty right after a boot or a restart
+    (R5B-01: the Devices tab then never matched the CLI's record and showed a set-up emulator as not set up), so retry
+    it, then fall back to the system property the emulator sets. "" when neither answers."""
+    runner = runner or (lambda argv: _run(argv)[:2])
+    for argv in ([adb, "-s", serial, "emu", "avd", "name"],) * 3 + (
+            [adb, "-s", serial, "shell", "getprop", "ro.boot.qemu.avd_name"],
+            [adb, "-s", serial, "shell", "getprop", "ro.kernel.qemu.avd_name"]):
+        out = runner(argv)[1] or ""
+        name = next((x.strip() for x in out.splitlines() if x.strip() and x.strip() != "OK"), "")
+        if re.fullmatch(r"[A-Za-z0-9._-]+", name):
+            return name
+    return ""
+
+
 def android_devices(adb, want, state_root, proxy_port):
     if not adb:
         return None
@@ -157,8 +172,7 @@ def android_devices(adb, want, state_root, proxy_port):
         if len(parts) != 2 or parts[1] != "device" or not SERIAL.match(parts[0]):
             continue
         s = parts[0]
-        _, avd = _run([adb, "-s", s, "emu", "avd", "name"])
-        avd = next((x.strip() for x in avd.splitlines() if x.strip() and x.strip() != "OK"), s)
+        avd = avd_name(adb, s) or s
         _, proxy = _run([adb, "-s", s, "shell", "settings", "get", "global", "http_proxy"])
         _, btype = _run([adb, "-s", s, "shell", "getprop", "ro.build.type"])
         _, release = _run([adb, "-s", s, "shell", "getprop", "ro.build.version.release"])

@@ -76,5 +76,24 @@ class Live(LiveCase):
         self.assertIn("nested repetition", doc["error"])
 
 
+class ProjectProfiles(unittest.TestCase):
+    """R5A-06: a project's hosts regex runs on every call (project filter, private-host allow-list): an unsafe one
+    in a hand-made or older project.json is dropped on load, never matched."""
+
+    def test_unsafe_profile_regexes_are_dropped_with_a_reason(self):
+        import json, os, tempfile
+        from unittest import mock
+        import proxy_common
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "profiles", "evil"))
+            with open(os.path.join(d, "profiles", "evil", "project.json"), "w") as fh:
+                json.dump({"id": "evil", "label": "E", "hosts": "(a+)+$", "record_match": "(.*)*x", "throttle_match": r"api\.test"}, fh)
+            with mock.patch.object(proxy_common, "STATE_ROOT", d):
+                doc = proxy_common.project_profile("evil")
+        self.assertEqual((doc["hosts"], doc["record_match"], doc["throttle_match"]), ("", ".", r"api\.test"))
+        self.assertIn("nested repetition", doc["regex_errors"]["hosts"])
+        self.assertNotIn("throttle_match", doc["regex_errors"])
+
+
 if __name__ == "__main__":
     unittest.main()

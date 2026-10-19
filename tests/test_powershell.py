@@ -6,6 +6,7 @@ import os
 import stat
 import subprocess
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +50,35 @@ class PowerShellSource(unittest.TestCase):
         self.assertIn('& $PSCommandPath android on -All', self.src)
         self.assertIn('iOS: unavailable on Windows', self.src)
 
+    def test_rules_cli_runs_when_fcntl_is_unavailable(self):
+        script = """import builtins, runpy, sys
+original_import = builtins.__import__
+def without_fcntl(name, *args, **kwargs):
+    if name == 'fcntl':
+        raise ModuleNotFoundError("No module named 'fcntl'")
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = without_fcntl
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            rules_path = os.path.join(directory, "rules.json")
+            with open(rules_path, "w") as fh:
+                json.dump({"rules": []}, fh)
+            cli = os.path.join(harness.REPO, "addons", "rules_cli.py")
+            for args in (("rules", "list"), ("rules", "test", "https://example.test/x"),
+                         ("breakpoint", "off")):
+                cp = subprocess.run([sys.executable, "-I", "-c", script, cli, rules_path, *args],
+                                    capture_output=True, text=True, timeout=15)
+                self.assertEqual(cp.returncode, 0, (args, cp.stdout, cp.stderr))
+
+    def test_mock_keeps_captured_headers_and_replaces_prior_mock(self):
+        mock = self.src[self.src.index('  "mock" {'):self.src.index('  "android" {')]
+        self.assertIn('$pick.Count -ne 4', mock)
+        self.assertIn('$id,$status,$method,$headers = $pick', mock)
+        self.assertIn('rules mock-set $Action', mock)
+        self.assertIn('"headers=$headers"', mock)
+
     def test_stop_waits_for_both_ports_and_has_a_forced_bounded_fallback(self):
         stop = self.src[self.src.index('  "stop" {'):self.src.index('  "ui" {')]
         self.assertIn('Wait-Process', stop)
@@ -60,7 +90,8 @@ class PowerShellSource(unittest.TestCase):
         ownership = self.src[self.src.index('function Test-OurMitmweb'):self.src.index('function Ensure-Rules')]
         stop = self.src[self.src.index('  "stop" {'):self.src.index('  "ui" {')]
         self.assertIn('$process.ProcessName -eq "mitmweb"', ownership)
-        self.assertIn('proxy_auth_token_file=$TokenPath', ownership)
+        self.assertIn('"proxy_auth_token_file=" + [regex]::Escape($TokenPath)', ownership)   # R4A-05: whole value, not a prefix
+        self.assertIn('web_port=$WebPort', ownership)
         self.assertGreaterEqual(stop.count('Our-Listening-Pids'), 2)
         self.assertNotIn('Listening-Pids @', stop.replace('Our-Listening-Pids @', ''))
 
@@ -143,11 +174,12 @@ class Commands(unittest.TestCase):
         self.assertNotIn("web_password", line)
         self.assertNotIn("ps-secret", cp.stdout + cp.stderr)
         self.assertIn("proxy_auth.py", line)
-        token = os.path.join(self.state, "web-token")
-        self.assertIn("proxy_auth_token_file=" + token, line)
-        self.assertIn("proxy_bootstrap_file=" + os.path.join(self.state, "web-bootstrap"), line)
+        sfx = "" if env.get("RIVIS_WEB_PORT", "8083") == "8083" else "-" + env["RIVIS_WEB_PORT"]   # R4A-05: per UI port
+        token, boot = os.path.join(self.state, "web-token" + sfx), os.path.join(self.state, "web-bootstrap" + sfx)
+        self.assertIn("proxy_auth_token_file=%s " % token, line + " ")
+        self.assertIn("proxy_bootstrap_file=%s " % boot, line + " ")
         self.assertIn("http2=false", line)
-        for path in (token, os.path.join(self.state, "web-bootstrap")):
+        for path in (token, boot):
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600, path)
         with open(token) as fh:
             self.assertEqual(fh.read().strip(), "ps-secret-0123456789abcdef")
@@ -239,6 +271,14 @@ class Commands(unittest.TestCase):
         self.bad("rules", "on", "ghost")
         self.bad("rules", "rm", "ghost")
         self.assertIn("r1", self.bash("rules", "list"))            # (file modes are NTFS ACLs on Windows; not asserted here)
+
+    def test_rules_test_explains_like_the_bash_cli(self):
+        self.bash("rules", "add", "post-500", "match=/api/pay", "action=status", "status=500", "method=POST")
+        out = self.ok("rules", "test", "https://api.example.test/api/pay", "POST")
+        self.assertRegex(out, r"FIRES\s+post-500")
+        out = self.ok("rules", "test", "https://api.example.test/api/pay", "-Method", "GET")
+        self.assertIn("only for POST", out)
+        self.bad("rules", "test", msg="usage: rules test URL")
 
     def test_throttle_profiles_options_and_validation(self):
         for profile in ("off", "3g-urban", "lte-congested", "high-latency-vpn", "packet-loss-8", "lte", "3g", "edge", "slow", "150ms", "300ms/500kbps"):

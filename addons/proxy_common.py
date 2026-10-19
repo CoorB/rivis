@@ -32,8 +32,11 @@ def _fsync_directory(path):
         pass
 
 
-def atomic_write_bytes(path, data, mode=0o600):
-    """Crash-safe private write: temp file, flush+fsync, replace, then directory fsync."""
+def atomic_write_bytes(path, data, mode=0o600, durable=True):
+    """Crash-safe private write: temp file, flush+fsync, replace, then directory fsync.
+
+    durable=False keeps the atomic replace (a reader never sees a half-written file) but skips both fsyncs:
+    for diagnostic files rewritten on the proxy's hot path, where losing the last write in a power cut is harmless."""
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(directory, mode=0o700, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".%s-" % os.path.basename(path), suffix=".tmp")
@@ -41,28 +44,30 @@ def atomic_write_bytes(path, data, mode=0o600):
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
             fh.flush()
-            os.fsync(fh.fileno())
-        commit_temp_file(tmp, path, mode)
+            if durable:
+                os.fsync(fh.fileno())
+        commit_temp_file(tmp, path, mode, durable)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
 
 
-def atomic_write_text(path, text, mode=0o600):
-    atomic_write_bytes(path, str(text).encode("utf-8"), mode)
+def atomic_write_text(path, text, mode=0o600, durable=True):
+    atomic_write_bytes(path, str(text).encode("utf-8"), mode, durable)
 
 
-def atomic_json(path, value, mode=0o600):
-    atomic_write_text(path, json.dumps(value, indent=2, ensure_ascii=False) + "\n", mode)
+def atomic_json(path, value, mode=0o600, durable=True):
+    atomic_write_text(path, json.dumps(value, indent=2, ensure_ascii=False) + "\n", mode, durable)
 
 
-def commit_temp_file(tmp, path, mode=0o600):
+def commit_temp_file(tmp, path, mode=0o600, durable=True):
     """Commit an already flushed temporary file and persist its directory entry."""
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.chmod(tmp, mode)
     os.replace(tmp, path)
     os.chmod(path, mode)
-    _fsync_directory(directory)
+    if durable:
+        _fsync_directory(directory)
 
 
 def _migrate(doc, current, kind):
@@ -172,7 +177,17 @@ def project_profile(project_id):
         path = os.path.join(base, project_id, "project.json")
         if os.path.isfile(path):
             with open(path) as fh:
-                return json.load(fh)
+                doc = json.load(fh)
+            # R5A-06: these regexes run on the event loop for every call (project filter, private-host allow-list,
+            # recording, throttle scope): one that can backtrack forever is dropped, never matched
+            for key in ("hosts", "record_match", "throttle_match"):
+                if isinstance(doc, dict) and isinstance(doc.get(key), str) and doc[key]:
+                    try:
+                        user_regex(doc[key])
+                    except re.error as e:
+                        doc.setdefault("regex_errors", {})[key] = str(e)
+                        doc[key] = "" if key == "hosts" else "."
+            return doc
     raise ValueError("unknown project '%s'" % project_id)
 
 
@@ -236,7 +251,7 @@ def forbidden_file(path, extra_dirs=()):
         if real == d or real.startswith(d + os.sep):
             return "it is inside %s (keys and credentials)" % d
     name = os.path.basename(real)
-    if name in _FORBIDDEN_NAMES or name.lower().endswith(_FORBIDDEN_SUFFIXES):
+    if name in _FORBIDDEN_NAMES or re.fullmatch(r"web-(?:token|bootstrap)-[0-9]+", name) or name.lower().endswith(_FORBIDDEN_SUFFIXES):  # R4A-05
         return "it looks like a key or a %s secret (%s)" % (PRODUCT["name"], name)
     return None
 
@@ -471,6 +486,19 @@ def _ambiguous_nested(body):
     return any(op in _REPEATS and _adjacent_overlap(av[2]) for op, av in body)
 
 
+def remote_url_problem(url):
+    """R2A-11: why a map_remote result cannot be connected to (None when usable): it must be http(s) with a host."""
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(url)
+        u.port
+    except ValueError as e:
+        return str(e)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return "'%s' is not an http(s) URL with a host" % url[:80]
+    return None
+
+
 def user_regex(pattern, flags=0):
     """Compile a user-, rule- or profile-supplied regex, refusing the shapes that hang the proxy (F-05).
 
@@ -602,6 +630,18 @@ PROFILE_VALUES = {
     "slow": (2000, 0, 50, 0, 0, 0),
 }
 PRESETS = ("off", *PROFILE_VALUES, "manual")
+
+
+def throttle_shorthand(spec):
+    """Parse <ms>ms[/<kbps>kbps], or None when the shape is not shorthand."""
+    m = re.fullmatch(r"(\d+)ms(?:/(\d+)kbps)?", spec)
+    if not m:
+        return None
+    # R1A-01: use the manual latency/bandwidth caps before a typo can hang every matching call.
+    for raw, key, cap in ((m.group(1), "latency_ms", 120000), (m.group(2), "down_kbps", 1000000)):
+        if raw is not None and (len(raw.lstrip("0")) > len(str(cap)) or int(raw.lstrip("0") or "0") > cap):
+            raise ValueError("%s must be 0..%s" % (key, cap))
+    return int(m.group(1).lstrip("0") or "0"), int((m.group(2) or "").lstrip("0") or "0")
 PANEL_PROFILES = [{"id": "off", "name": "No profile", "desc": "No throttling applied"}]
 for _profile_id, _profile_name in (
         ("3g-urban", "3G Urban"), ("lte-congested", "LTE (congested)"),

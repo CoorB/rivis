@@ -1,5 +1,6 @@
 """Panel API (/proxy/api/<op>): auth, XSRF, Host check, every op with valid + invalid input, path confinement."""
 import json
+import mimetypes
 import os
 import re
 import socket
@@ -150,6 +151,14 @@ class Ops(LiveCase):
         self.panel.ok("delete", {"name": "p1"})
         self.assertEqual(self.rules(), [])
 
+    def test_r7a02_reversed_map_remote_warning_reaches_panel(self):
+        rule = {"name": "backwards", "action": "map_remote", "match": "/remote",
+                "replace": "https://destination.test/echo", "with": "/remote"}
+        self.panel.ok("add", {"rule": rule})
+        warning = self.panel.state()["rule_warnings"]["backwards"]
+        self.assertIn("replace is the URL pattern", warning)
+        self.assertIn("may never rewrite", warning)
+
     def test_add_validation(self):
         self.bad("add", {"rule": {"name": "bad name!", "action": "respond"}}, "name")
         self.bad("add", {"rule": {"name": "x", "action": "explode"}}, "action")
@@ -168,6 +177,14 @@ class Ops(LiveCase):
         self.bad("add", {"rule": {"name": "dup", "match": "/dup", "action": "block"}}, "exists")
         self.bad("toggle", {"name": "ghost", "enabled": True}, "no rule")
         self.bad("delete", {"name": "ghost"}, "no rule")
+
+    def test_out_of_range_shorthand_in_rules_file_is_rejected(self):
+        # R1A-01: a hand-edited rules file must not bypass the CLI's throttle cap at panel load.
+        cfg = self.inst.cfg()
+        cfg["throttle"] = "999999999ms/1000001kbps"
+        self.inst.write_cfg(cfg, sync=False)
+        error = wait_for(lambda: self.panel.state().get("rules_error"), 5, 0.2, "invalid throttle rejected")
+        self.assertIn("latency_ms", error)
 
     def test_quick_actions_from_a_call(self):
         self.fetch("/json/small")
@@ -210,6 +227,47 @@ class Ops(LiveCase):
         self.assertEqual((r.json(), r.header("x-m")), ({"edited": True}, "1"))
         self.bad("mockfile_get", {"name": "ghost"}, "no rule")
         self.bad("mock", {"flow_id": "nope"}, "no longer")
+
+    def test_draft_mock_serves_nothing_until_save_and_delete_removes_its_file(self):
+        # B-03: opening the editor and going Back must leave no active response or orphan mock file.
+        path = "/json/small?draft=1"
+        self.fetch(path)
+        name = self.panel.ok("mock", {"flow_id": self.flow_id(path), "draft": True})["name"]
+        rule = next(r for r in self.rules() if r["name"] == name)
+        self.assertEqual((rule["enabled"], rule.get("draft")), (False, True))
+        self.assertTrue(self.panel.ok("mockfile_get", {"name": name})["draft"])
+        self.up.reset_hits()
+        self.fetch(path)
+        self.assertTrue(self.up.hits_for(path), "draft answered the next call")
+        self.assertNotIn("mock:", self.comment_after(path))
+        file = rule["file"]
+        self.panel.ok("delete", {"name": name})
+        self.assertFalse(os.path.exists(file), "discarded draft left its mock file")
+        self.assertFalse(any(r["name"] == name for r in self.rules()))
+
+        name = self.panel.ok("mock", {"flow_id": self.flow_id(path), "draft": True})["name"]
+        self.panel.ok("mockfile_put", {"name": name, "content": '{"saved": true}'})
+        rule = next(r for r in self.rules() if r["name"] == name)
+        self.assertTrue(rule["enabled"])
+        self.assertNotIn("draft", rule)
+        self.assertFalse(self.panel.ok("mockfile_get", {"name": name})["draft"])
+
+    def test_draft_toggle_on_clears_draft_but_plain_mock_starts_on(self):
+        # B-03: an explicit toggle commits the draft; the old API call keeps its immediate-on contract.
+        self.fetch("/json/small?draft-toggle=1")
+        fid = self.flow_id("draft-toggle=1")
+        name = self.panel.ok("mock", {"flow_id": fid, "draft": True})["name"]
+        draft = next(r for r in self.rules() if r["name"] == name)
+        self.assertEqual((draft["enabled"], draft.get("draft")), (False, True))
+        self.panel.ok("toggle", {"name": name, "enabled": True})
+        rule = next(r for r in self.rules() if r["name"] == name)
+        self.assertTrue(rule["enabled"])
+        self.assertNotIn("draft", rule)
+        self.panel.ok("delete", {"name": name})
+        name = self.panel.ok("mock", {"flow_id": fid})["name"]
+        rule = next(r for r in self.rules() if r["name"] == name)
+        self.assertTrue(rule["enabled"])
+        self.assertNotIn("draft", rule)
 
     def test_mock_from_a_call_that_never_got_a_response(self):
         """An unreachable server is exactly when you want Map Local: start from a 200 {} template."""
@@ -348,6 +406,18 @@ class Ops(LiveCase):
         self.bad("mockfile_get", {"name": "plain"}, "not a map local")
         self.bad("mockfile_put", {"name": "plain", "content": "x"}, "not a map local")
 
+    def test_maplocal_add_uses_url_extension_for_content_type(self):
+        # R4B-03: manual static asset mocks need the browser's strict module/style MIME checks to pass.
+        for name, path in (("js", "/lib.js"), ("css", "/site.css"), ("html", "/part.html"), ("json", "/data")):
+            ctype = mimetypes.guess_type(path)[0] or "application/json"
+            self.panel.ok("maplocal_add", {"name": name, "host": "127.0.0.1", "path": path, "body": "x"})
+            rule = next(r for r in self.rules() if r["name"] == name)
+            self.assertEqual(rule["headers"]["Content-Type"], ctype)
+            self.assertEqual(self.fetch(path).header("content-type"), ctype)
+        full_url = self.up.url("/bundle.js")
+        self.panel.ok("maplocal_add", {"name": "full-url-js", "host": full_url, "body": "x"})
+        self.assertEqual(self.fetch("/bundle.js").header("content-type"), mimetypes.guess_type("/bundle.js")[0])
+
     def test_maplocal_reuses_matching_manual_rule_and_rejects_duplicates(self):
         self.panel.ok("maplocal_add", {"name": "manual", "host": "127.0.0.1:%d" % self.up.http_port,
                                        "path": "/json/small", "body": '{"manual":1}', "status": 218})
@@ -482,6 +552,14 @@ class Ops(LiveCase):
                          ("compose_get", {"flow_id": "nope"})):
             self.bad(op, body)
 
+    def test_compose_from_call_keeps_original_json_bytes(self):
+        # R3A-02: reformatting signed JSON before Compose changes the request.
+        raw = '{"a":1}'
+        self.fetch("/echo?compose-raw=1", method="POST", data=raw, headers={"Content-Type": "application/json"})
+        spec = self.panel.ok("compose_get", {"flow_id": self.flow_id("compose-raw=1")})["spec"]
+        self.assertEqual(spec["body"], raw)
+        self.assertEqual(spec["body_mode"], "json")
+
     def test_compose_send_goes_through_rules_and_is_listed(self):
         self.reset_state(rules=[self.rule("mockecho", "respond", "/echo", status=207, body={"mocked": True},
                                           headers={"X-Via": "rule"})])
@@ -503,6 +581,35 @@ class Ops(LiveCase):
         self.assertIn("sent GET", r.stdout)
         wait_for(lambda: self.up.hits_for("/json/small"), 10, 0.2, "upstream hit by the CLI send")
         self.panel.ok("compose_delete", {"name": "clisend"})          # the instance is shared by this class
+
+    def test_flow_result_op_reports_the_status_of_a_sent_call(self):
+        doc = self.panel.ok("compose_send", {"spec": {"method": "GET", "url": self.up.url("/json/small?fr=1")}})
+        got = wait_for(lambda: self.panel.ok("flow_result", {"id": doc["id"]}).get("status"), 10, 0.2, "flow_result status")
+        self.assertEqual(got, 200)
+        self.bad("flow_result", {"id": "no-such-flow"})
+
+    def test_cli_compose_send_prints_the_status_line(self):
+        """R2A-03: the CLI polled GET /flows/<id> (405 on mitmweb 12.2.3) and always ended with 'no response yet' after 20 s."""
+        self.panel.ok("compose_save", {"name": "clistat", "spec": {"method": "GET", "url": self.up.url("/json/small?stat=1")}})
+        t0 = time.time()
+        r = harness.subprocess.run(["/bin/bash", harness.RIVIS, "compose", "send", "clistat"], env=self.inst.env,
+                                   capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("→ 200", r.stdout)
+        self.assertNotIn("no response yet", r.stdout)
+        self.assertLess(time.time() - t0, 15)
+        self.panel.ok("compose_delete", {"name": "clistat"})
+
+    def test_cli_project_flag_against_a_running_proxy_of_another_project_warns(self):
+        """R2A-07: `rivis --project X rules add` against a running proxy of another project was silently inert."""
+        active = self.panel.state()["active_project"]
+        other = "neo" if active != "neo" else "default"
+        r = harness.subprocess.run(["/bin/bash", harness.RIVIS, "--project", other, "rules", "list"], env=self.inst.env,
+                                   capture_output=True, text=True, timeout=60)
+        self.assertIn("running proxy serves project '%s', not '%s'" % (active, other), r.stderr)
+        r = harness.subprocess.run(["/bin/bash", harness.RIVIS, "--project", active, "rules", "list"], env=self.inst.env,
+                                   capture_output=True, text=True, timeout=60)
+        self.assertNotIn("running proxy serves", r.stderr)
 
     def test_compose_send_a_saved_request_with_variable_override(self):
         self.panel.ok("compose_save", {"name": "saved", "spec": {"method": "GET", "url": "{{base}}/json/small"}})
@@ -547,6 +654,19 @@ class Ops(LiveCase):
         self.assertIn("edit & retry", (self.find_flow(doc["id"]) or {}).get("comment", "edit & retry"))
         self.bad("retry_get", {"flow_id": "nope"}, "no longer")
         self.bad("retry", {"flow_id": "nope"}, "no longer")
+
+    def test_r7a01_repeat_and_compose_accept_unicode_urls(self):
+        # R7A-01: assigning the sheet's raw URL to mitmproxy raised a Python ASCII codec error.
+        self.fetch("/echo?r7a01=source")
+        fid = self.flow_id("/echo?r7a01=source")
+        url = self.up.url("/مرحبا?text=أهلا")
+        doc = self.panel.ok("retry", {"flow_id": fid, "edits": {"url": url}})
+        flow = wait_for(lambda: self.find_flow(doc["id"]), 10, 0.2, "unicode repeat")
+        self.assertIn("/%D9%85", flow["request"]["path"])
+        self.assertIn("text=%D8%A3", flow["request"]["path"])
+        composed = self.panel.ok("compose_send", {"spec": {"url": url}})
+        flow = wait_for(lambda: self.find_flow(composed["id"]), 10, 0.2, "unicode compose")
+        self.assertIn("/%D9%85", flow["request"]["path"])
 
     def test_plain_repeat_is_labelled_repeat_not_edit(self):
         # L2 / MQ-19: a Repeat with no changes was tagged "edit & retry" (COMPOSED in the list)
@@ -688,6 +808,29 @@ class Ops(LiveCase):
         missing = sorted(op for op in ops if ('"%s"' % op) not in text and ("'%s'" % op) not in text)
         self.assertEqual(missing, [], "panel ops with no test")
         self.assertGreaterEqual(len(ops), 55)
+
+
+class SearchBarFilterDetection(unittest.TestCase):
+    @harness.skip_unless(harness.node_ok(), "node not installed")
+    def test_r7a03_bare_tilde_is_an_incomplete_expression(self):
+        # R7A-03: a bare ~ was treated as URL text and replaced the last good result with an empty list.
+        src = open(os.path.join(harness.REPO, "addons", "panel.js")).read()
+        start = src.index("const isExpr")
+        code = src[start:src.index("const toFilter", start)]
+        out = harness.subprocess.run([harness.NODE, "-e", code + "console.log(isExpr('~'))"],
+                                     capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.stdout.strip(), "true", out.stderr)
+
+    @harness.skip_unless(harness.node_ok(), "node not installed")
+    def test_tilde_inside_a_url_or_word_is_text_not_a_filter(self):
+        """R2A-13: /~alice/ and a~b were sent to the server as filter expressions and the box turned red."""
+        src = open(os.path.join(harness.REPO, "addons", "panel.js")).read()
+        a = src.index("const isExpr")
+        code = src[a:src.index("const toFilter", a)]
+        cases = ["host/~alice/profile", "a~b", "~u foo", "foo ~m GET", "!~u foo", "(~u a | ~u b)", "~/x", "plain"]
+        out = harness.subprocess.run([harness.NODE, "-e", code + "console.log(JSON.stringify(%s.map(isExpr)))" % json.dumps(cases)],
+                                     capture_output=True, text=True, timeout=30)
+        self.assertEqual(json.loads(out.stdout), [False, False, True, True, True, True, False, False], out.stderr)
 
 
 class Confinement(LiveCase):
@@ -845,11 +988,11 @@ class MalformedInput(LiveCase):
                 self.assertEqual(code, 400, "%s %r -> %s" % (op, raw, code))
 
     def test_panel_operations_have_request_and_field_size_limits(self):
-        code, doc, _ = self.panel.post("view", raw=b" " * (8 * 1024 * 1024 + 1), timeout=30)
+        code, doc, _ = self.panel.post("view", raw=b" " * (64 * 1024 * 1024 + 1), timeout=60)
         self.assertEqual(code, 413)
-        code, doc, _ = self.panel.post("view", {"oversized": "x" * (2 * 1024 * 1024 + 1)}, timeout=30)
+        code, doc, _ = self.panel.post("view", {"oversized": "x" * (32 * 1024 * 1024 + 1)}, timeout=60)
         self.assertEqual(code, 400)
-        self.assertIn("2 MiB", doc["error"])
+        self.assertIn("32 MiB", doc["error"])
 
     def test_wrongly_typed_names_give_json_error_not_500(self):
         """FOUND-BUGS B1: name/host given as number, list, object or bool → HTTP 500."""

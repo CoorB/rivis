@@ -2,6 +2,7 @@
 
   rules_cli.py FILE rules list
   rules_cli.py FILE rules on|off|show|rm NAME
+  rules_cli.py FILE rules test URL [METHOD]     what each rule would do to this call (no traffic is sent)
   rules_cli.py FILE rules add NAME match=REGEX action=ACTION [key=value ...]
   rules_cli.py FILE rules edit
   rules_cli.py FILE throttle off|lte|3g|edge|slow|<ms>ms[/<kbps>kbps] [match=REGEX] [loss=PCT]
@@ -15,12 +16,15 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
-from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PRODUCT, SAFE_NAME, atomic_json, breakpoints, confined_path,
-                           forbidden_file, migrate_rules, set_trusted_file, trusted_files, user_regex)
+from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PROFILE_VALUES, PRODUCT, SAFE_NAME, atomic_json, breakpoints, confined_path,
+                           forbidden_file, migrate_rules, remote_url_problem, set_trusted_file, throttle_shorthand,
+                           trusted_files, user_regex)
+from proxy_rule_validation import compile_rule, explain_rules, map_remote_warning, rule_fingerprint
 
 ACTIONS = ACTION_REQUIREMENTS
 
@@ -33,13 +37,36 @@ def die(msg):
 def load(path):
     with open(path) as f:
         try:
-            return migrate_rules(json.load(f))
+            cfg = migrate_rules(json.load(f))
         except ValueError as e:              # a hand edit gone wrong: say where, never a traceback
             die("%s is not valid JSON: %s — fix it (rivis rules edit) or restore it" % (path, e))
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("rules", []), list):
+        die("%s: rules.json must be an object with a rules list" % path)
+    return cfg
 
 
 def save(path, cfg):
-    atomic_json(path, migrate_rules(cfg))
+    try:
+        atomic_json(path, migrate_rules(cfg))
+    except OSError as e:
+        die("could not save rules to %s: %s" % (path, e.strerror or e))
+
+
+def acquire_lock(path):
+    try:
+        import fcntl
+    except ImportError:
+        return None                    # Windows has no flock; commands must still work there
+    lock = None
+    try:
+        lock = os.fdopen(os.open(os.path.join(os.path.dirname(os.path.abspath(os.path.expanduser(path))), ".rules.lock"),
+                                 os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return lock
+    except OSError:
+        if lock is not None:
+            lock.close()
+        return None                    # read-only or missing dir: the command reports that itself
 
 
 def value(v):
@@ -63,17 +90,26 @@ def throttle_number(text, name):
 
 def find(cfg, name):
     for r in cfg.get("rules", []):
-        if r.get("name") == name:
+        if isinstance(r, dict) and r.get("name") == name:
             return r
     die("no rule named '%s' (%s rules list)" % (name, PRODUCT["cli"]))
 
 
-def describe(r):
+def describe(r, status=None):
     extra = {k: v for k, v in r.items() if k not in ("name", "enabled", "match", "action", "method", "note")}
     bits = " ".join("%s=%s" % (k, json.dumps(v, ensure_ascii=False)) for k, v in extra.items())
     return "%-3s %-24s %-10s %s%s  %s" % (
-        "ON" if r.get("enabled", True) else "off", r.get("name", "?"), r.get("action", "?"),
-        (r.get("method", "") + " ") if r.get("method") else "", r.get("match", "."), bits)
+        status or ("ON" if r.get("enabled", True) else "off"), r.get("name", "?"), r.get("action", "?"),
+        (str(r["method"]) + " ") if r.get("method") else "", r.get("match", "."), bits)
+
+
+def proxy_rule_error(path, r):
+    # R5A-02: use the proxy's own per-rule load check before claiming a rule is ON.
+    try:
+        compile_rule(r, os.path.dirname(os.path.abspath(path)), confdir=os.environ.get("RIVIS_RULE_CONFDIR") or os.environ.get("RIVIS_CONFDIR"))
+    except (KeyError, TypeError, ValueError, re.error) as e:
+        return str(e)
+    return None
 
 
 def validate(r):
@@ -93,8 +129,27 @@ def validate(r):
                 user_regex(r[k])
             except re.error as e:
                 die("bad regex in %s: %s" % (k, e))
+    if "method" in r and not isinstance(r["method"], str):
+        die("method must be text, e.g. method=POST")
+    if a == "delay":
+        try:
+            ms = float(r["ms"])
+        except (TypeError, ValueError):
+            ms = -1
+        if not 0 <= ms <= 600000:                  # inf / nan / 1e12 would hang every matching call
+            die("delay ms must be a number from 0 to 600000")
+    if a == "map_remote" and isinstance(r.get("with"), str):
+        # R2A-11: a rewrite that turns an ordinary URL into something that is not http(s)+host can never work. The
+        # replacement alone is not a URL (it may be a path fragment), so probe it on a sample URL the pattern matches
+        try:
+            probe = "https://example.com/p?q=1"
+            out = user_regex(r["replace"]).sub(r["with"], probe)
+        except (re.error, IndexError, ValueError):
+            out = probe
+        if out != probe and remote_url_problem(out):
+            die("map_remote with=%r turns a URL into something unusable: %s" % (r["with"], remote_url_problem(out)))
     if a == "map_local" and not os.path.isfile(os.path.expanduser(r["file"])):
-        die("file not found: %s (use an absolute path)" % r["file"])
+        die("file not found: %s" % r["file"])
 
 
 def trust_local_files(path, r):
@@ -127,10 +182,10 @@ def trust_cmd(path, cmd, args):
     if len(args) != 1:
         die("usage: rules %s PATH" % cmd)
     if cmd == "allow-file":
-        if not os.path.isfile(os.path.expanduser(args[0])):
+        if not os.path.isfile(os.path.abspath(os.path.expanduser(args[0]))):
             die("file not found: %s" % args[0])
         try:
-            real = set_trusted_file(state_dir, args[0])
+            real = set_trusted_file(state_dir, os.path.abspath(os.path.expanduser(args[0])))
         except ValueError as e:
             die(str(e))
         print("trusted on this machine: %s — rules may now read it (restart not needed)" % real)
@@ -140,25 +195,122 @@ def trust_cmd(path, cmd, args):
         os.utime(path)      # the proxy hot-reloads rules when rules.json changes
 
 
+NEVER_MATCHED_AFTER = 10      # calls seen since a rule was switched on before "never matched" is reported
+
+
+def read_hits(path):
+    """The running proxy's hit counts for this rules file (rule-hits.json next to it), or None."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(path)), "rule-hits.json")) as f:
+            doc = json.load(f)
+        return doc if isinstance(doc, dict) and isinstance(doc.get("rules"), dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _ago(t):
+    import time
+    d = max(0, time.time() - float(t))
+    return "%ds ago" % d if d < 60 else "%d min ago" % (d // 60) if d < 3600 else "%d h ago" % (d // 3600)
+
+
+def hit_line(hits, r):
+    """One line about how this rule has behaved on real traffic, or None when nothing is known."""
+    if not hits or not r.get("enabled", True):
+        return None
+    h = hits["rules"].get(r.get("name"))
+    if not isinstance(h, dict) or (hits.get("fingerprints") or {}).get(r.get("name")) != rule_fingerprint(r):
+        return None                      # edited since the proxy last wrote its counts
+    count, noop, since = h.get("count", 0), h.get("noop", 0), h.get("calls_since", 0)
+    if count:
+        return "    matched %d call%s · last %s%s" % (count, "" if count == 1 else "s", _ago(h["last"]),
+                                                    " · %d matched without changing anything" % noop if noop else "")
+    if noop:
+        return "      ! matched %d call%s but changed nothing — %s" % (noop, "" if noop == 1 else "s", h.get("noop_reason") or "")
+    if since >= NEVER_MATCHED_AFTER:
+        return ("      ! ON, but none of the %d calls since it was switched on matched it — try: rules test URL [METHOD]" % since)
+    return "    no matching call yet"
+
+
 def rules_cmd(path, args):
     cfg = load(path)
     cmd = args[0] if args else "list"
     if cmd == "list":
         rules = cfg.get("rules", [])
-        print("throttle: %s%s   loss: %s%%" % (cfg.get("throttle", "off"),
-              ("  (match %s)" % cfg["throttle_match"]) if cfg.get("throttle_match") else "", cfg.get("loss", 0)))
+        print(throttle_description(cfg))
         print("rules (%s):" % path)
-        for r in rules:
-            print("  " + describe(r))
+        hits = read_hits(path)
+        for i, r in enumerate(rules, 1):
+            if not isinstance(r, dict):
+                print("  ! rules.json entry %d is not an object (skipped)" % i)  # R3A-07: hand edits can contain junk
+                continue
+            reason = proxy_rule_error(path, r) if r.get("enabled", True) else None
+            print("  " + describe(r, "SKIPPED" if reason else None))
+            if reason:
+                print("      ! " + reason)
+            warning = map_remote_warning(r)
+            if warning:
+                print("      ! " + warning)
+            f = r.get("file") if r.get("action") == "map_local" else r.get("body_file")
+            if isinstance(f, str) and f and r.get("enabled", True) and not os.access(os.path.expanduser(f), os.R_OK):
+                print("      ! %s is missing or unreadable — this rule answers 502" % f)
+            line = None if reason else hit_line(hits, r)
+            if line:
+                print(line)
         if not rules:
             print("  (none)")
         return
     if cmd == "edit":
-        subprocess.call([os.environ.get("EDITOR", "nano"), path])
+        # R5A-02: edit a staging copy so a rule the proxy would skip never replaces the active file.
+        fd, staged = tempfile.mkstemp(prefix=".rules-edit-", suffix=".json", dir=os.path.dirname(path))
+        staged_ready = saved = False
         try:
-            load(path)
-        except ValueError as e:
-            die("file is no longer valid JSON: %s — the proxy keeps the previous rules until fixed" % e)
+            with open(path, "rb") as src, os.fdopen(fd, "wb") as out:
+                original = src.read()
+                out.write(original)
+            staged_ready = True
+            if subprocess.call([os.environ.get("EDITOR", "nano"), staged]):
+                die("editor exited without saving rules")
+            edited = load(staged)
+            for r in edited.get("rules", []):
+                if isinstance(r, dict) and r.get("enabled", True):
+                    reason = proxy_rule_error(path, r)
+                    if reason:
+                        die("rule '%s' skipped by proxy: %s" % (r.get("name", "?"), reason))
+            lock = acquire_lock(path)
+            try:
+                with open(path, "rb") as current:
+                    if current.read() != original:
+                        die("rules changed while the editor was open; review the current rules and merge your edit")
+                save(path, edited)
+                saved = True
+            finally:
+                if lock is not None:
+                    lock.close()
+        finally:
+            if saved or not staged_ready:
+                os.unlink(staged)
+            else:
+                print("%s: edited rules kept at %s" % (PRODUCT["cli"], staged), file=sys.stderr)
+        return
+    if cmd == "test":
+        if len(args) < 2 or len(args) > 3:
+            die("usage: rules test URL [METHOD]   (e.g. rules test https://api.example.com/v1/users POST)")
+        url, method = args[1], (args[2] if len(args) == 3 else "GET").upper()
+        if not re.match(r"(?i)^https?://[^/\s]+", url):
+            die("rules test needs a full URL starting with http:// or https://, got '%s'" % url)
+        rows = explain_rules(cfg.get("rules", []), os.path.dirname(os.path.abspath(path)), url, method,
+                             os.environ.get("RIVIS_RULE_CONFDIR") or os.environ.get("RIVIS_CONFDIR"))
+        print("%s %s" % (method, url))
+        for x in rows:
+            if x["fires"]:
+                print("  FIRES  %-24s %s" % (x["name"], x["effect"]))
+            else:
+                print("  %-6s %-24s %s" % ("!" if x.get("inert") else "-", x["name"], x["reason"]))
+        if not rows:
+            print("  (no rules)")
+        elif not any(x["fires"] for x in rows):
+            print("no rule changes this call")
         return
     if cmd in ("allow-file", "disallow-file", "trusted-files"):
         return trust_cmd(path, cmd, args[1:])
@@ -166,7 +318,12 @@ def rules_cmd(path, args):
         die("usage: rules %s NAME" % cmd)
     name = args[1]
     if cmd in ("on", "off"):
-        find(cfg, name)["enabled"] = cmd == "on"
+        r = find(cfg, name)
+        if cmd == "on":
+            reason = proxy_rule_error(path, r)
+            if reason:
+                die("rule '%s' skipped by proxy: %s" % (name, reason))
+        r["enabled"] = cmd == "on"
         save(path, cfg)
         print("%s → %s" % (name, cmd.upper()))
     elif cmd == "show":
@@ -176,10 +333,12 @@ def rules_cmd(path, args):
         cfg["rules"].remove(r)
         save(path, cfg)
         print("removed " + name)
-    elif cmd == "add":
+    elif cmd in ("add", "mock-set"):
         if not SAFE_NAME.fullmatch(name) or name.startswith("."):      # F-17: same rule as the panel
             die("rule name '%s': letters, digits, . _ - only (max 64, not starting with .)" % name)
-        if any(r.get("name", "").lower() == name.lower() for r in cfg.get("rules", [])):
+        if any(str(r.get("name", "")).lower() == name.lower() and
+               (cmd != "mock-set" or r.get("action") != "map_local")
+               for r in cfg.get("rules", []) if isinstance(r, dict)):
             die("rule '%s' exists — rm it first or pick another name" % name)
         r = {"name": name, "enabled": True}
         for kv in args[2:]:
@@ -188,11 +347,38 @@ def rules_cmd(path, args):
             k, v = kv.split("=", 1)
             r[k] = value(v) if k not in ("match", "replace", "with", "file", "header", "body") else v
         r.setdefault("match", ".")
+        if r.get("action") == "map_local" and isinstance(r.get("file"), str):
+            r["file"] = os.path.abspath(os.path.expanduser(r["file"]))  # R3A-08: proxy cwd differs from CLI cwd
+        if "method" in r and not str(r["method"] or "").strip():     # method= (empty) means any method
+            del r["method"]
         validate(r)
         trust_local_files(path, r)
+        reason = proxy_rule_error(path, r)
+        if reason:
+            die("rule '%s' skipped by proxy: %s" % (name, reason))
+        superseded = []
+        if cmd == "mock-set":
+            if r.get("action") != "map_local":
+                die("mock-set requires action=map_local")
+            # A Map Local rule for another method can serve the same URL independently.
+            # Replace the same named rule, or a rule with both the same match and method.
+            def is_superseded(old):
+                return (isinstance(old, dict) and old.get("action") == "map_local" and
+                        (str(old.get("name", "")).lower() == name.lower() or
+                         (old.get("match") == r["match"] and
+                          str(old.get("method") or "").strip().upper() ==
+                          str(r.get("method") or "").strip().upper())))
+
+            superseded = [old.get("name", "?") for old in cfg.get("rules", []) if is_superseded(old)]
+            cfg["rules"] = [old for old in cfg.get("rules", []) if not is_superseded(old)]
         cfg.setdefault("rules", []).append(r)
         save(path, cfg)
+        if superseded:
+            print("replaced Map Local rule%s: %s" % ("s" if len(superseded) != 1 else "", ", ".join(superseded)))
         print("added and ON: " + describe(r))
+        warning = map_remote_warning(r)
+        if warning:
+            print("  ! " + warning)
     else:
         die("unknown rules command '%s'" % cmd)
 
@@ -200,15 +386,18 @@ def rules_cmd(path, args):
 def throttle_cmd(path, args):
     cfg = load(path)
     if not args:
-        print("throttle: %s  match: %s  loss: %s%%" % (cfg.get("throttle", "off"),
-              cfg.get("throttle_match", "") or "(all)", cfg.get("loss", 0)))
+        print(throttle_description(cfg))
         return
     spec = args[0].lower()
-    if spec not in PRESETS and not re.fullmatch(r"\d+ms(/\d+kbps)?", spec):
+    try:
+        shorthand = throttle_shorthand(spec)
+    except ValueError as e:
+        die("throttle: %s" % e)
+    if spec not in PRESETS and shorthand is None:
         die("throttle: " + " | ".join(PRESETS) + " | <ms>ms[/<kbps>kbps]")
     cfg["throttle"] = spec
-    if spec == "off":
-        cfg["loss"] = 0          # "throttle off" = clean network, unless loss= is given below
+    cfg["loss"] = 0              # R3A-03: loss= belongs to one command; a later profile uses its own loss
+    cfg["throttle_match"] = ""  # a later profile applies to all calls unless scoped again
     for kv in args[1:]:
         k, _, v = kv.partition("=")
         if k == "match":
@@ -225,7 +414,19 @@ def throttle_cmd(path, args):
         else:
             die("throttle options: match=REGEX loss=PCT, and for manual: latency_ms= jitter_ms= down_kbps= up_kbps= loss_pct= response_delay_ms=")
     save(path, cfg)
-    print("throttle: %s  match: %s  loss: %s%%" % (spec, cfg.get("throttle_match", "") or "(all)", cfg.get("loss", 0)))
+    print(throttle_description(cfg))
+
+
+def throttle_description(cfg):
+    # R5A-04: include the manual fields that actually shape traffic, including profile loss.
+    spec = cfg.get("throttle", "off")
+    manual = cfg.get("manual", {}) if spec == "manual" else {}
+    detail = "  " + "  ".join("%s=%s" % (k, manual.get(k, 0)) for k in (
+        "latency_ms", "jitter_ms", "down_kbps", "up_kbps", "loss_pct", "response_delay_ms")) if isinstance(manual, dict) and manual else ""
+    preset = PROFILE_VALUES.get(spec) if isinstance(spec, str) else None
+    loss = cfg.get("loss", 0) or (manual.get("loss_pct", 0) if isinstance(manual, dict) else 0) or (preset[4] if preset else 0)
+    return "throttle: %s  match: %s  loss: %s%%%s" % (spec,
+           cfg.get("throttle_match", "") or "(all)", loss, detail)
 
 
 def breakpoint_cmd(path, args):
@@ -244,6 +445,8 @@ def breakpoint_cmd(path, args):
         return
     if args[0] == "off":
         if len(args) > 1:
+            if not any(b.get("name") == args[1] for b in bps):
+                die("no breakpoint named '%s' (existing: %s)" % (args[1], ", ".join(b.get("name", "?") for b in bps) or "none"))  # R5A-05
             cfg["breakpoints"] = [b for b in bps if b.get("name") != args[1]]
         else:
             cfg["breakpoints"] = []
@@ -280,7 +483,10 @@ def breakpoint_cmd(path, args):
 def mock_cmd(path, args, flows_json, body_file):
     """mock NAME REGEX: save the newest matching call's real response to a file + map_local rule on it."""
     cfg = load(path)
-    name, rx = args[0], user_regex(args[1])
+    try:
+        rx = user_regex(args[1])
+    except re.error as e:
+        die("bad regex: %s" % e)  # R5A-01: bad input must produce one CLI error, not a traceback
     flows = [f for f in json.load(open(flows_json)) if f.get("type") == "http" and f.get("response")
              and rx.search(f["request"]["scheme"] + "://" + f["request"]["pretty_host"] + f["request"]["path"])]
     if not flows:
@@ -289,12 +495,21 @@ def mock_cmd(path, args, flows_json, body_file):
     print(f["id"])
     print(f["response"]["status_code"])
     print(f["request"]["method"])
+    headers = f["response"].get("headers") or []
+    if isinstance(headers, dict):
+        headers = headers.items()
+    content_type = next((v for k, v in headers if k.lower() == "content-type"), None)
+    print(json.dumps([["Content-Type", content_type]] if content_type else []))
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         die(__doc__)
     path, what, rest = sys.argv[1], sys.argv[2], sys.argv[3:]
+    # R7B-03: two commands at once each read the file, changed it and wrote it back: both said "added", one was lost.
+    # Hold an exclusive sidecar lock for the whole read-change-write where flock is available.
+    # An editor may stay open for minutes. It takes this lock only when saving.
+    _lock = None if what == "rules" and rest and rest[0] == "edit" else acquire_lock(path)
     if what == "rules":
         rules_cmd(path, rest)
     elif what == "throttle":

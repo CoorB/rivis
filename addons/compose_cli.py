@@ -95,7 +95,7 @@ def do_send(name, directory, port, token_file, overrides, wait, project=None):
             die("the running proxy serves project '%s', not '%s' — restart it with --project %s (or use --project %s)"
                 % (running, project, project, running))
 
-    def post(op, body):
+    def post(op, body, fatal=True):
         request = urllib.request.Request(base + "/proxy/api/" + op, data=json.dumps(body).encode(), method="POST",
                                          headers={"Content-Type": "application/json", "X-XSRFToken": xsrf})
         try:
@@ -105,6 +105,8 @@ def do_send(name, directory, port, token_file, overrides, wait, project=None):
                 detail = json.load(e).get("error")
             except ValueError:
                 detail = None
+            if not fatal:
+                return {}
             die("%s failed: %s" % (op, detail or "HTTP %d" % e.code))
 
     sent = post("compose_send", {"name": name, "vars": overrides})
@@ -113,14 +115,14 @@ def do_send(name, directory, port, token_file, overrides, wait, project=None):
         return
     for _ in range(40):
         time.sleep(0.5)
-        try:
-            flow = json.load(opener.open("%s/flows/%s" % (base, sent["id"]), timeout=10))
+        try:   # R2A-03: mitmweb 12.2.3 refuses GET /flows/<id> (405), so ask the panel; a real error is shown, not retried
+            got = post("flow_result", {"id": sent["id"]}, fatal=False)
         except (urllib.error.URLError, OSError, ValueError):
             continue
-        if flow.get("error"):
-            die("call failed: %s" % flow["error"].get("msg"))
-        if flow.get("response"):
-            print("→ %s" % flow["response"]["status_code"])
+        if got.get("error"):
+            die("call failed: %s" % got["error"])
+        if got.get("status"):
+            print("→ %s" % got["status"])
             return
     print("no response yet — check the proxy list")
 

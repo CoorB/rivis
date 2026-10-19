@@ -4,6 +4,8 @@ import gzip
 import hashlib
 import json
 import os
+import select
+import subprocess
 import sys
 import time
 import unittest
@@ -15,6 +17,70 @@ from upstream import SMALL_JSON, big_body
 
 
 class Actions(LiveCase):
+    def test_event_stream_arrives_before_upstream_finishes(self):
+        # R4B-01: curl must see the first event while later events are still sleeping upstream.
+        self.reset_state(rules=[self.rule("patch", "json_patch", "/sse", set={"x": 1}),
+                                self.rule("status", "status", "/sse", status=503)],
+                         breakpoints=[{"name": "sse-response", "match": "/sse", "response": True}])
+        cmd = ["curl", "-sS", "-N", "--noproxy", "", "-x", "http://127.0.0.1:%d" % self.inst.proxy_port,
+               "--max-time", "10", self.up.url("/sse?ms=800")]
+        start = time.monotonic()
+        proc = subprocess.Popen(cmd, env=self.suite.env(self.inst.home), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            ready, _, _ = select.select([proc.stdout], [], [], 1.5)
+            self.assertTrue(ready, "first event was buffered until upstream completion")
+            first = os.read(proc.stdout.fileno(), 1024)
+            self.assertIn(b"data: tick0\n\n", first)
+            self.assertLess(time.monotonic() - start, 1.5)
+            rest, err = proc.communicate(timeout=6)
+            self.assertEqual(proc.returncode, 0, err.decode())
+            self.assertIn(b"data: tick2\n\n", first + rest)
+            self.assertGreater(time.monotonic() - start, 2.0)
+            self.assertEqual(self.fetch("/sse?ms=10").status, 200)   # response rules and breakpoints cannot edit it
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=5)
+
+    def test_non_event_stream_response_stays_buffered(self):
+        # R4B-01: the streaming exception must stay limited to text/event-stream.
+        cmd = ["curl", "-sS", "-N", "--noproxy", "", "-x", "http://127.0.0.1:%d" % self.inst.proxy_port,
+               "--max-time", "10", self.up.url("/sse?ms=800&type=text/plain")]
+        proc = subprocess.Popen(cmd, env=self.suite.env(self.inst.home), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            ready, _, _ = select.select([proc.stdout], [], [], 1.2)
+            self.assertFalse(ready, "a non-event-stream response was streamed")
+            body, err = proc.communicate(timeout=6)
+            self.assertEqual(proc.returncode, 0, err.decode())
+            self.assertIn(b"data: tick2\n\n", body)
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=5)
+
+    def test_local_mock_cors_defaults_preserve_explicit_origin(self):
+        # R4B-02: both local actions echo the request Origin unless the rule supplied its own policy.
+        path = self.inst.path("cors.json")
+        open(path, "w").write('{"ok":true}')
+        self.reset_state(rules=[self.rule("map", "map_local", "/cors/map", file=path,
+                                          headers={"Vary": "Accept-Language", "Access-Control-Allow-Credentials": "false"}),
+                                self.rule("respond", "respond", "/cors/respond", body={"ok": True}),
+                                self.rule("explicit", "respond", "/cors/explicit", body="x",
+                                          headers={"Access-Control-Allow-Origin": "*"})])
+        origin = "http://app.example:53721"
+        for endpoint in ("map", "respond"):
+            r = self.fetch("/cors/" + endpoint, headers={"Origin": origin})
+            self.assertEqual(r.header("access-control-allow-origin"), origin)
+            self.assertEqual(r.header("access-control-allow-credentials"), "true")
+            self.assertEqual(r.header_all("access-control-allow-credentials"), ["true"])
+            self.assertIn("Origin", r.header("vary"))
+            if endpoint == "map":
+                self.assertIn("Accept-Language", r.header("vary"))
+        r = self.fetch("/cors/explicit", headers={"Origin": origin})
+        self.assertEqual(r.header_all("access-control-allow-origin"), ["*"])
+        self.assertIsNone(r.header("access-control-allow-credentials"))
+        self.assertIsNone(self.fetch("/cors/respond").header("access-control-allow-origin"))
+
     def test_respond_json_headers_and_never_hits_upstream(self):
         self.reset_state(rules=[self.rule("r", "respond", "/echo", status=201, body={"hello": "world"},
                                           headers={"X-Mock": "1"})])
@@ -35,6 +101,48 @@ class Actions(LiveCase):
         self.reset_state(rules=[self.rule("r", "respond", "/echo", body_file=path)])
         self.assertEqual(self.fetch("/echo").body, blob)
 
+    def test_status_204_and_304_carry_no_body(self):
+        # R7B-01: the old body and Content-Length stayed after the status line said 204/304: a keep-alive client then
+        # read those bytes as the next response
+        self.reset_state(rules=[self.rule("nc", "status", "/json/small", status=204),
+                                self.rule("nm", "respond", "/echo", status=304, body={"x": 1})])
+        for path, code in (("/json/small", 204), ("/echo", 304)):
+            r = self.fetch(path)
+            self.assertEqual((r.status, r.body, r.header("content-length")), (code, b"", None), path)
+
+    def test_interim_status_and_bad_set_header_are_skipped_not_applied(self):
+        # R7B-01: a 1xx "final" answer left the client waiting; R7B-04: an invalid header name made the server answer
+        # 400 to every matching call, and a line break in the value added a header line
+        self.reset_state(rules=[self.rule("s100", "status", "/echo", status=100),
+                                self.rule("hname", "set_header", "/echo", header="X Bad Name", value="v"),
+                                self.rule("hcrlf", "set_header", "/echo", header="X-Ok", value="a\r\nX-Evil: injected")])
+        skipped = {x["name"]: x["error"] for x in self.panel.state()["skipped_rules"]}
+        self.assertIn("200 to 599", skipped.get("s100", ""))
+        self.assertIn("not a valid header name", skipped.get("hname", ""))
+        self.assertIn("one line", skipped.get("hcrlf", ""))
+        r = self.fetch("/echo")
+        self.assertEqual(r.status, 200)
+        self.assertNotIn("x-evil", [k.lower() for k, _v in r.json()["headers"]])
+
+    def test_status_warns_about_rules_skipped_by_the_stricter_validation(self):
+        # review 0.9.7 #11: a rule that 0.9.6 accepted is skipped after the upgrade; `rivis status` must say so
+        self.reset_state(rules=[self.rule("slow", "delay", "/echo", ms=900000), self.rule("ok", "status", "/never", status=503)])
+        wait_for(lambda: [x for x in self.panel.state()["skipped_rules"] if x["name"] == "slow"], 5, 0.1, "slow skipped")
+        out = self.suite.rivis("status", home=self.inst.home, env=self.inst.env).stdout
+        line = [ln for ln in out.splitlines() if ln.startswith("WARNING:") and "skipped" in ln]
+        self.assertTrue(line, out)
+        self.assertIn("1 rule(s) skipped", line[0])
+        self.assertIn("slow (", line[0])
+        self.assertIn("rules list", line[0])
+
+    def test_a_just_saved_block_rule_applies_to_the_very_next_call(self):
+        # R7B-02: the file was stat-ed at most once a second, so the first calls after `rules add` reached the server
+        self.reset_state(rules=[])
+        time.sleep(0.05)
+        self.inst.write_cfg({"rules": [self.rule("blk", "block", "/json/small")]}, sync=False)
+        self.assertNotEqual(self.fetch("/json/small").status, 200)          # block kills the connection
+        self.assertEqual(self.up.hits_for("/json/small"), [])
+
     def test_map_local_content_type_from_extension(self):
         jf, tf, bf = (self.inst.path(n) for n in ("a.json", "a.txt", "a.zzz"))
         open(jf, "w").write('{"j": 1}')
@@ -50,11 +158,31 @@ class Actions(LiveCase):
         self.assertEqual((r.body, r.header("content-type")), (b"\x00\x01\x02", "application/octet-stream"))
         self.assertEqual(self.up.hits, [])
 
-    def test_map_local_missing_file_falls_through_and_is_tagged(self):
+    def test_map_local_missing_file_fails_closed_and_is_flagged(self):
+        # R2A-02: a mock whose file is gone must NOT reach the real server; 502 naming rule+file, flagged in state
         self.reset_state(rules=[self.rule("ml", "map_local", "/json/small", file=self.inst.path("missing.json"))])
         r = self.fetch("/json/small")
-        self.assertEqual(r.json(), SMALL_JSON)                 # the real server answered
+        self.assertEqual(r.status, 502)
+        self.assertIn("'ml'", r.text)
+        self.assertIn("missing.json", r.text)
+        self.assertEqual(self.up.hits_for("/json/small"), [])          # never forwarded upstream
         self.assertIn("rule:ml FAILED", self.comment("/json/small"))
+        self.assertIn("ml", [s["name"] for s in self.panel.state()["skipped_rules"]])
+
+    def test_removed_broken_map_local_clears_warning(self):
+        # R3A-01: deleting a broken rule must clear its old runtime failure from doctor/panel state.
+        self.reset_state(rules=[self.rule("gone", "map_local", "/json/small", file=self.inst.path("missing.json"))])
+        self.assertEqual(self.fetch("/json/small").status, 502)
+        self.assertIn("gone", [s["name"] for s in self.panel.state()["skipped_rules"]])
+        self.reset_state(rules=[])
+        wait_for(lambda: not any(s["name"] == "gone" for s in self.panel.state()["skipped_rules"]),
+                 5, 0.2, "deleted rule warning cleared")
+
+    def test_respond_missing_body_file_fails_closed(self):
+        self.reset_state(rules=[self.rule("rb", "respond", "/json/small", body_file=self.inst.path("nope.json"))])
+        r = self.fetch("/json/small")
+        self.assertEqual(r.status, 502)
+        self.assertEqual(self.up.hits_for("/json/small"), [])
 
     def test_status_rewrites_real_response(self):
         self.reset_state(rules=[self.rule("s", "status", "/json/small", status=503)])
@@ -121,6 +249,15 @@ class Actions(LiveCase):
         self.assertIsNone(r.header("content-type"))
         hdrs = {k.lower() for k, v in self.up.hits[0]["headers"]}
         self.assertNotIn("x-resp", hdrs)                       # response-side rule must not leak to the server
+
+    def test_map_remote_to_an_unusable_target_answers_502_not_a_traceback(self):
+        # R2A-11: with=not-a-url forwarded unchanged (log: ValueError); ftp:// gave a bare 502 with no hint
+        self.reset_state(rules=[self.rule("bad", "map_remote", "/json/small", replace="^.*$", **{"with": "ftp://x.example/y"})])
+        r = self.fetch("/json/small")
+        self.assertEqual(r.status, 502)
+        self.assertIn("'bad'", r.text)
+        self.assertEqual(self.up.hits_for("/json/small"), [])
+        self.assertIn("rule:bad FAILED", self.comment("/json/small"))
 
     def test_map_remote_rewrites_url_before_sending(self):
         self.reset_state(rules=[self.rule("m", "map_remote", "/json/small", replace=r":%d/" % self.up.http_port,

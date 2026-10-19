@@ -160,6 +160,26 @@ def on_request(context, url, request):
         err = wait_for(lambda: self.errors().get("rboom2.py"), 4, 0.2, "recorded error")
         self.assertIn("ValueError: boom", err["message"])
 
+    def test_cli_list_shows_the_running_scripts_last_error(self):
+        # R1A-03: ON alone concealed a script that raised on every matching call.
+        self.install("listboom.py", "def on_request(context, url, request):\n    raise RuntimeError('list boom')\n", match="/echo")
+        self.fetch("/echo")
+        wait_for(lambda: self.errors().get("listboom.py"), 5, 0.2, "script error in panel state")
+        listed = self.suite.rivis("scripts", "list", home=self.inst.home, env=self.inst.env)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        line = next(line for line in listed.stdout.splitlines() if "listboom" in line)
+        self.assertIn("ON", line)
+        self.assertIn("ERROR: RuntimeError: list boom", line)
+
+    def test_javascript_syntax_error_in_cli_has_reason(self):
+        # R3A-06: Node's first line is a location; the useful SyntaxError follows it.
+        if not harness.NODE: self.skipTest("Node.js unavailable")
+        self.install("bad-r3.js", 'async function onRequest(c,u,r) { let x = ; }\n', match="/echo")
+        self.fetch("/echo")
+        wait_for(lambda: self.errors().get("bad-r3.js"), 5, 0.2, "JavaScript syntax error")
+        listed = self.suite.rivis("scripts", "list", home=self.inst.home, env=self.inst.env)
+        self.assertIn("SyntaxError:", listed.stdout)
+
     def test_syntax_error_at_load_is_reported_and_other_scripts_still_run(self):
         self.install("bad.py", "def on_request(:\n")
         self.install("good.py", 'def on_request(context, url, request):\n    request["headers"]["X-Good"] = "1"\n    return request\n', match="/echo")
@@ -429,6 +449,76 @@ class NodeMissing(LiveCase):
             else:
                 os.environ["RIVIS_NODE"] = old
 
+
+
+class ListErrorsThroughSymlink(unittest.TestCase):
+    def test_live_error_is_shown_when_the_rules_path_goes_through_a_symlink(self):
+        # review 0.9.7 #6: the CLI passes the rules path as given (abspath) and the proxy reports its realpath
+        import subprocess
+        import tempfile
+        base = tempfile.mkdtemp(prefix="rivis-t-%s-symlink-" % os.environ.get("RIVIS_TEST_RUN", "x"))
+        try:
+            real = os.path.join(base, "real")
+            os.makedirs(real)
+            os.symlink(real, os.path.join(base, "link"))
+            with open(os.path.join(real, "rules.json"), "w") as fh:
+                json.dump({"rules": [], "scripts": [{"name": "boom", "file": "boom.py", "lang": "py", "enabled": True}]}, fh)
+            state = {"rules_file": os.path.realpath(os.path.join(real, "rules.json")),
+                     "script_status": {"errors": {"boom.py": {"message": "NameError: oops\nTraceback"}}}}
+            r = subprocess.run([sys.executable, "-I", os.path.join(harness.REPO, "addons", "scripts_cli.py"),
+                                os.path.join(base, "link", "rules.json"), "list", "--errors-stdin"],
+                               input=json.dumps(state), capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("ERROR: NameError: oops", r.stdout)
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+
+# review 0.9.7 #9: a script that finishes right at the timeout must not get its pool thread's NEXT script stopped.
+# Deterministic: wait_for lets the first job finish, starts a second job on the same (single) worker thread, and only
+# then reports the timeout, exactly the window the review describes.
+_STOP_RACE_PROBE = r"""
+import asyncio, concurrent.futures, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+import proxy_scripts as ps
+ps._py_pool = concurrent.futures.ThreadPoolExecutor(1)
+started, result = threading.Event(), {}
+def second():
+    started.set()
+    try:
+        end = time.monotonic() + 1.5
+        while time.monotonic() < end:
+            pass
+        result["second"] = "clean"
+    except ps.ScriptTimeout:
+        result["second"] = "stopped by the first script's timeout"
+real_wait_for = asyncio.wait_for
+async def finished_at_the_deadline(aw, timeout):
+    await aw
+    fut = ps._py_pool.submit(second)
+    while not started.is_set():
+        await asyncio.sleep(0.01)
+    raise asyncio.TimeoutError()
+async def main():
+    asyncio.wait_for = finished_at_the_deadline
+    try:
+        await ps._in_worker(lambda: "first", ())
+    except asyncio.TimeoutError:
+        pass
+    asyncio.wait_for = real_wait_for
+asyncio.run(main())
+ps._py_pool.shutdown(wait=True)
+print(result.get("second"))
+"""
+
+
+class StopRace(unittest.TestCase):
+    def test_timeout_never_lands_on_the_next_script_in_the_same_worker(self):
+        import subprocess
+        r = subprocess.run([sys.executable, "-I", "-c", _STOP_RACE_PROBE, os.path.join(harness.REPO, "addons")],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip().splitlines()[-1], "clean", r.stdout + r.stderr)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

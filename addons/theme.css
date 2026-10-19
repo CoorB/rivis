@@ -21,7 +21,7 @@
  *                 td.col-tls(-https) .col-icon .col-path .col-method .col-status .col-size .col-time .col-quickactions,
  *                 .resource-icon, .marker, .quickaction, .fa
  *                 + attributes WE add on <td>/<tr> (never children): td[data-m] td[data-s] td[data-code] td[data-gql-error]
- *                   td.col-path[style*=--hl] td.col-path[data-tag] tr[data-tunnel]
+ *                   td.col-path[style*=--hl] td.col-path[data-tag] td.col-path[data-src] tr[data-tunnel]
  *                 + React fiber (read-only) on a td: memoizedProps.flow {id, comment, modified, type, request, response}
  *   Flow details  .flow-detail, .nav-tabs-sm (a, a.active), .close-button, section.request, section.response, .first-line,
  *                 .inline-input, .kv-editor, .kv-row (key span, literal ": ", value span — do not display:contents),
@@ -251,6 +251,8 @@ input[type="checkbox"] { accent-color: var(--rv-accent); }
 /* https is the norm: no strip (mitmweb paints it green). Plain http is the exception worth seeing */
 .flow-table td.col-tls.col-tls-https { background-color: transparent; }
 .flow-table tbody tr.has-request td.col-tls:not(.col-tls-https) { background-color: var(--rv-warn); }
+/* Composed HTTPS flows can lack mitmweb's col-tls-https class even though their request URL is HTTPS. */
+.flow-table tbody tr.has-request[data-rv-scheme="https"] td.col-tls:not(.col-tls-https) { background-color: transparent; }
 .flow-table td.col-icon, .flow-table th.col-icon { width: 30px; min-width: 30px !important; padding: 0 0 0 6px; overflow: visible; text-overflow: clip; }
 .flow-table .resource-icon { opacity: .75; filter: saturate(.8); border-radius: var(--rv-r-sm); }
 :root[data-theme="dark"] .flow-table .resource-icon { filter: invert(.88) hue-rotate(180deg) saturate(.8); opacity: .8; }
@@ -326,6 +328,20 @@ input[type="checkbox"] { accent-color: var(--rv-accent); }
 }
 :root[data-wide="1"] .flow-table td.col-icon[data-tag]::before { display: none; }
 :root[data-wide="1"] .flow-table td.col-path[data-tag]:has(> .fa)::after { right: 30px; }
+/* the app (or device) that sent the call, from proxy_source.py: a quiet chip at the right of the path, left of a tag chip.
+   Wide list only; the narrow list keeps the room for the URL (the call's source is on This call). */
+:root[data-wide="1"] .flow-table td.col-path[data-src] { padding-right: 132px; }
+:root[data-wide="1"] .flow-table td.col-path[data-src][data-tag] { padding-right: 208px; }
+:root[data-wide="1"] .flow-table td.col-path[data-src]::before {
+  content: attr(data-src); position: absolute; right: 8px; top: 50%; transform: translateY(-50%); text-indent: 0; max-width: 116px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 10px/16px var(--rv-font); padding: 0 6px; border-radius: var(--rv-r-sm);
+  color: var(--rv-text-2); -webkit-text-fill-color: var(--rv-text-2); background: var(--rv-surface-2); box-shadow: inset 0 0 0 1px var(--rv-border, transparent);
+}
+:root[data-wide="1"] .flow-table td.col-path[data-src][data-tag]::before { right: 84px; }
+:root[data-wide="1"] .flow-table td.col-path[data-src]:has(> .fa)::before { right: 30px; }
+:root[data-wide="1"] .flow-table td.col-path[data-src][data-tag]:has(> .fa)::before { right: 106px; }
+:root[data-wide="1"] .flow-table tbody tr[data-tunnel="1"] td.col-path[data-src] { padding-right: 254px; }
+:root[data-wide="1"] .flow-table tbody tr[data-tunnel="1"] td.col-path[data-src]::before { right: 130px; }
 /* TLS tunnel rows (host-only, not decrypted): the attribute lives on the <tr> */
 .flow-table tbody tr[data-tunnel="1"] td { opacity: .8; font-style: italic; }
 .flow-table tbody tr[data-tunnel="1"] td.col-icon { opacity: 1; font-style: normal; }
@@ -385,6 +401,12 @@ input[type="checkbox"] { accent-color: var(--rv-accent); }
   font-family: var(--rv-mono); font-size: 12px; line-height: 1.55; tab-size: 2;
 }
 .contentview pre code, .contentview pre div { font-family: var(--rv-mono); }
+/* Arabic / Hebrew lines run right to left (each line by its own first letter); code lines stay left to right */
+.contentview pre > div { unicode-bidi: plaintext; }
+/* a body too big to paint is clipped by the add-on: panel.js adds Download / Open raw for the whole of it */
+.contentview .controls .rv-clip { flex-basis: 100%; order: 9; font-size: 12px; color: var(--rv-text-2); padding: 4px 0 2px; }
+.contentview .controls .rv-clip b { color: var(--rv-warn); font-weight: 600; }
+.contentview .controls .rv-clip a { color: var(--rv-accent-text); font-weight: 600; }
 /* JSON syntax colours: mitmweb's content view emits these span classes */
 .contentview .cm-string, .contentview .token.string, .contentview span.string { color: var(--rv-ok); }
 .contentview .cm-number, .contentview .token.number, .contentview span.number { color: var(--rv-info); }
@@ -499,7 +521,7 @@ footer .label[data-rv-tone="warn"] { color: var(--rv-warn); background: var(--rv
 /* the always-visible search bar (panel.js) replaces mitmweb's own Search box, which only exists on the "Flow List" tab */
 :root[data-sbar="1"]:not([data-skin="off"]) .filter-input:has(> input[placeholder="Search"]) { display: none; }
 :root[data-sbar="1"][data-fstrip="1"]:not([data-skin="off"]) #container > header { margin-bottom: 28px; }
-/* first run: mitmweb's own "mitmproxy is running…" placeholder is replaced by the panel's centred hint */
+/* empty list: mitmweb's own "mitmproxy is running…" placeholder is replaced by the panel's hint */
 :root[data-rv-empty="1"] .main-view > div[style*="padding: 1em 2em"] { visibility: hidden; }
 /* plain-language tab names ("Flow List" → Calls …): panel.js sets data-rv; React's text stays underneath */
 #container header nav.nav-tabs-lg a[data-rv] { font-size: 0; }

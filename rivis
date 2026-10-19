@@ -21,14 +21,14 @@
 #                                 --allow-private-hosts REGEX  also let plain-HTTP calls reach these hosts on private
 #                                              addresses (HTTPS, simulator capture and Repeat always may)
 #   <cli> projects list|use ID|show ID|new ID --label L --hosts REGEX
-#   <cli> ui | stop | status | cert
+#   <cli> ui | stop | restart | status | cert
 #   <cli> browser [URL | --current] [--browser chrome|edge|chromium|brave] [--fresh] [--list]
 #                                 web apps: a separate browser window with its own profile, pointed at the
 #                                 proxy and trusting only this CA. Your normal browser, the system proxy
 #                                 and the keychain are not touched. --current: open the page of your
 #                                 browser's front tab (Chrome, Edge, Brave, Chromium, Safari). --fresh: a
 #                                 temporary profile
-#   <cli> rules list|on NAME|off NAME|show NAME|rm NAME|edit|allow-file PATH|disallow-file PATH|trusted-files
+#   <cli> rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
 #   <cli> rules add NAME match=REGEX action=ACTION [key=value ...]
 #                                 Proxyman-style rules, hot-reloaded, kept across restarts:
 #                                 respond | map_local | status | json_patch | delay |
@@ -41,8 +41,9 @@
 #                                 *.example.test. Hot-reloaded for NEW connections — no restart.
 #   <cli> compose list | send NAME [--var name=value] [--no-wait]
 #                                 replay a request saved in the panel's Compose tab through the running proxy
-#   <cli> breakpoint URL-REGEX [--request|--response] | off
-#                                 pause matching calls in the UI to edit them, then Resume
+#   <cli> breakpoint [URL-REGEX [--request|--response] [--method M] | off [NAME]]
+#                                 pause matching calls in the UI to edit them, then Continue
+#                                 (no arguments: list them; off without NAME: remove all)
 #   <cli> mock NAME URL-REGEX              save the last matching response and Map-Local it
 #   <cli> setup                            ios on --all + android on --all: every booted simulator and
 #                                 running emulator, in one go (each one is skipped if already done)
@@ -64,6 +65,8 @@
 #                                 --fix-safe does only safe, reversible fixes (asks y/N)
 #   <cli> bug-report [--output PATH]     create a redacted support bundle (no flows or tokens)
 #   <cli> update [check|install|login|logout|status]   signed in-app updates from the team's GitHub releases
+#   <cli> health                  is the running proxy answering, on the installed version? (exit 0 = yes)
+#   <cli> rollback [VERSION|--list]   go back to an earlier installed version and restart with the same options
 set -uo pipefail
 umask 077
 
@@ -158,6 +161,11 @@ PROJECT_STATE="$STATE_ROOT/projects/$PROJECT"
 
 PORT="$(env_value PORT 8080)"
 WEB_PORT="$(env_value WEB_PORT 8083)"
+# R4A-05: web port becomes part of a private filename; reject paths and malformed port values.
+for p in "$PORT" "$WEB_PORT"; do [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ] && [ "$p" -le 65535 ] || die "proxy and web ports must be integers from 1 to 65535"; done
+# R4A-05: a second web port must not rotate the first instance's login or one-time bootstrap.
+if [ "$WEB_PORT" = 8083 ]; then TOKEN_FILE="$STATE_ROOT/web-token"; BOOTSTRAP_FILE="$STATE_ROOT/web-bootstrap"; START_FILE="$STATE_ROOT/last-start"
+else TOKEN_FILE="$STATE_ROOT/web-token-$WEB_PORT"; BOOTSTRAP_FILE="$STATE_ROOT/web-bootstrap-$WEB_PORT"; START_FILE="$STATE_ROOT/last-start-$WEB_PORT"; fi
 MAX_FLOWS="$(env_value MAX_FLOWS 5000)"
 [[ "$MAX_FLOWS" =~ ^[0-9]+$ ]] && [ "$MAX_FLOWS" -ge 1 ] && [ "$MAX_FLOWS" -le 1000000 ] || \
   { echo "$CLI: ${ENV_PREFIX}_MAX_FLOWS must be an integer from 1 to 1000000" >&2; exit 1; }
@@ -360,7 +368,14 @@ PY
       [ -n "$label" ] || die "projects new: --label is required"
       [ -n "$hosts" ] || die "projects new: --hosts is required"
       [ ! -e "$STATE_ROOT/profiles/$id" ] || die "user profile '$id' already exists"
-      /usr/bin/python3 -I -c 'import re,sys; re.compile(sys.argv[1])' "$hosts" 2>/dev/null || die "invalid hosts regex"
+      # R5A-06: the same safety check as every other user regex — this one runs on every call through the proxy
+      local rx_err; rx_err=$(PYTHONPATH="$SCRIPT_DIR/addons" /usr/bin/python3 -I -c 'import sys; sys.path.insert(0, sys.argv[2])
+import re
+from proxy_common import user_regex
+try: user_regex(sys.argv[1])
+except re.error as e: print(e); sys.exit(1)' "$hosts" "$SCRIPT_DIR/addons" 2>&1) || die "invalid hosts regex: $rx_err"
+      # R2A-09: the project filter compares the host WITHOUT its port, so "host:8443" would never match and "<project> only" stays empty
+      /usr/bin/python3 -I -c 'import re,sys; sys.exit(1 if re.search(r":(\\d|[0-9])", sys.argv[1]) else 0)' "$hosts" 2>/dev/null || die "--hosts matches host names only, not ports: drop the ':port' (e.g. 'localhost' instead of 'localhost:3000')"
       local new_tmp="$STATE_ROOT/profiles/.$id.tmp.$$"
       (umask 077; mkdir -p "$STATE_ROOT/profiles"; mkdir "$new_tmp"; cp "$SCRIPT_DIR/projects/_template/rules.example.json" "$new_tmp/rules.example.json") || { rm -rf "$new_tmp"; die "could not create user profile '$id'"; }
       if ! /usr/bin/python3 -I - "$new_tmp/project.json" "$id" "$label" "$hosts" <<'PY'
@@ -427,6 +442,7 @@ cmd_start() {
   # Already running (the installer offers to start it, then the quickstart says `start` again): say so, exit 0.
   if [ -n "$(our_listeners)" ]; then
     info "$PRODUCT_NAME is already running (proxy 127.0.0.1:$PORT, UI http://127.0.0.1:$WEB_PORT/)."
+    warn_running_version # R4A-01: installed --version alone says nothing about a live old proxy.
     info "  open the UI: $CLI ui    ·    to start it with other options: $CLI stop, then $CLI start …"
     return 0
   fi
@@ -434,12 +450,13 @@ cmd_start() {
   o=$(port_owner "$PORT"); [ -n "$o" ] && die "port $PORT already taken by another program: $o — $free_hint"
   o=$(port_owner "$WEB_PORT"); [ -n "$o" ] && die "UI port $WEB_PORT already taken by another program: $o — $free_hint"
   # how this instance was started, so an in-app update can restart it the same way (addons/update_install.sh)
-  { printf 'START_PORT=%q\nSTART_WEB_PORT=%q\nSTART_ARGS=(' "$PORT" "$WEB_PORT"
-    printf '%q ' --project "$PROJECT" start --background --no-open "${fwd[@]}"; printf ')\n'; } > "$STATE_ROOT/last-start.tmp" \
-    && chmod 600 "$STATE_ROOT/last-start.tmp" && mv -f "$STATE_ROOT/last-start.tmp" "$STATE_ROOT/last-start"
+  { printf 'START_PORT=%q\nSTART_WEB_PORT=%q\nSTART_PROJECT_SOURCE=%q\nSTART_ARGS=(' "$PORT" "$WEB_PORT" "${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}"
+    printf '%q ' --project "$PROJECT" start --background --no-open "${fwd[@]}"; printf ')\n'; } > "$START_FILE.tmp" \
+    && chmod 600 "$START_FILE.tmp" && mv -f "$START_FILE.tmp" "$START_FILE"
   if [ "$bg" = 1 ]; then   # same start, detached from this terminal; output goes to a private log
     mkdir -p "$STATE_ROOT/logs"; local log="$STATE_ROOT/logs/mitmweb.log"
-    nohup "$0" --project "$PROJECT" start ${fwd[@]+"${fwd[@]}"} < /dev/null > "$log" 2>&1 &
+    # R2A-14: line-buffered, so script log() lines show in the log while the proxy runs, not only after stop
+    RIVIS_START_PROJECT_SOURCE="${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}" PYTHONUNBUFFERED=1 nohup "$0" --project "$PROJECT" start ${fwd[@]+"${fwd[@]}"} < /dev/null > "$log" 2>&1 &
     local child=$! i; disown "$child" 2>/dev/null || true
     for i in $(seq 1 60); do [ -n "$(port_owner "$WEB_PORT")" ] && break; kill -0 "$child" 2>/dev/null || break; sleep 0.5; done
     [ -n "$(port_owner "$WEB_PORT")" ] || { tail -5 "$log" >&2; die "did not start — full log: $log"; }
@@ -451,9 +468,9 @@ cmd_start() {
   # UI login: one token per run (or the product-prefixed WEB_PASSWORD). We open the browser ourselves
   # WITH the token — mitmweb's own auto-open lands on a "403 Authentication Required" page.
   local token="${WEB_PASSWORD:-$(openssl rand -hex 16)}"
-  atomic_private_text "$STATE_ROOT/web-token" "$token" || die "could not save private UI password"
+  atomic_private_text "$TOKEN_FILE" "$token" || die "could not save private UI password"
   local bootstrap; bootstrap=$(openssl rand -hex 16)
-  atomic_private_text "$STATE_ROOT/web-bootstrap" "$bootstrap" || die "could not save one-time UI login"
+  atomic_private_text "$BOOTSTRAP_FILE" "$bootstrap" || die "could not save one-time UI login"
   local url="http://127.0.0.1:$WEB_PORT/"
   local bootstrap_url="http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap"
   local args=(--listen-host 127.0.0.1 --mode "regular@$PORT"
@@ -462,9 +479,9 @@ cmd_start() {
               # HTTP/1.1 to the app lets one app connection retain one reusable upstream connection. With HTTP/2,
               # app streams to an HTTP/1.1-only origin each open a new upstream TLS connection. That is especially
               # expensive for TLS 1.2 static-RSA gateways over a VPN. RIVIS_HTTP2=1 opts back in.
-              --set "http2=$([ "$(env_value HTTP2 0)" = 1 ] && echo true || echo false)"
-              -s "$AUTH_ADDON" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_panel.py" -s "$SCRIPT_DIR/addons/proxy_retention.py" -s "$SCRIPT_DIR/addons/proxy_operability.py"
-              --set "proxy_auth_token_file=$STATE_ROOT/web-token" --set "proxy_bootstrap_file=$STATE_ROOT/web-bootstrap"
+              --set "http2=$([ "$(env_value HTTP2 0)" = 1 ] && echo true || echo false)" --set "stream_large_bodies=$(env_value STREAM_LARGE_BODIES 64m)"
+              -s "$AUTH_ADDON" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_source.py" -s "$SCRIPT_DIR/addons/proxy_panel.py" -s "$SCRIPT_DIR/addons/proxy_retention.py" -s "$SCRIPT_DIR/addons/proxy_operability.py"
+              --set "proxy_auth_token_file=$TOKEN_FILE" --set "proxy_bootstrap_file=$BOOTSTRAP_FILE"
               --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT" --set "proxy_max_flows=$MAX_FLOWS" --set "proxy_log_dir=$STATE_ROOT/logs")
   [ -n "$private_hosts" ] && args+=(--set "proxy_private_hosts=$private_hosts")
   # local capture: the iOS Simulator shares the Mac network stack and has no proxy
@@ -529,7 +546,47 @@ cmd_start() {
 
 our_mitmweb() {   # our_mitmweb PID — a mitmweb started from THIS state dir (never another HOME's or user's)
   ps -o comm= -p "$1" 2>/dev/null | grep -q mitmweb || return 1
-  ps -ww -o args= -p "$1" 2>/dev/null | grep -qF "proxy_auth_token_file=$STATE_ROOT/web-token"
+  local args; args=$(ps -ww -o args= -p "$1" 2>/dev/null) || return 1
+  case "$args" in *"web_port=$WEB_PORT "*) ;; *) return 1 ;; esac
+  case "$args" in *"proxy_auth_token_file=$TOKEN_FILE "*) return 0 ;; esac
+  # R4A-05: an older proxy on a nondefault port still used the shared file until restarted.
+  [ "$WEB_PORT" = 8083 ] || case "$args" in *"proxy_auth_token_file=$STATE_ROOT/web-token "*) return 0 ;; esac
+  return 1
+}
+running_tool_dir() { # R4A-01: read the actual add-on path, not the launcher or current symlink.
+  local arg
+  for arg in $(ps -ww -o args= -p "$1" 2>/dev/null); do
+    case "$arg" in "$HOME/.local/$CLI/tool-"*/addons/proxy_auth.py) printf '%s\n' "${arg%/proxy_auth.py}"; return 0 ;; esac
+  done
+}
+warn_running_version() {
+  local pid path version installed
+  installed=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || cat "$SCRIPT_DIR/install/VERSION" 2>/dev/null || echo dev)
+  installed=$(echo "$installed" | tr -d '[:space:]')
+  for pid in $(our_listeners); do
+    path=$(running_tool_dir "$pid"); [ -n "$path" ] || continue
+    version=${path%/addons}; version=${version##*/tool-}
+    [ "$version" = "$installed" ] || echo "!! running pid $pid is $PRODUCT_NAME $version; installed is $installed — run $CLI restart" >&2
+  done
+}
+# curl to this Rivis's own UI. Never through a proxy the shell exports (it would record the UI token in Rivis's own
+# call list, or hand it to a corporate proxy: QA-07), and the URL with its token goes in a config read from stdin, not
+# in argv, where `ps` shows it to every local user (R3-DATA-11).   ui_curl PATH [curl options…]
+ui_curl() {
+  local path="$1" tok sep="?"; shift
+  # percent-encoded (a custom ${ENV_PREFIX}_WEB_PASSWORD may hold & " \ …); read from the file, never passed in argv
+  tok=$(/usr/bin/python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip(), safe=""))' \
+        < "$TOKEN_FILE" 2>/dev/null) && [ -n "$tok" ] || return 1
+  case "$path" in *\?*) sep="&" ;; esac
+  printf 'url = "http://127.0.0.1:%s%s%stoken=%s"\n' "$WEB_PORT" "$path" "$sep" "$tok" | curl -sf --noproxy '*' -K - "$@"
+}
+# R2A-07: rules/scripts load only at start, so `--project X` against a running proxy of project Y changes files nobody reads.
+# Prints the running project on stderr when it differs from the requested one (silent when not running or the same).
+warn_running_project() {
+  [ -n "$PROJECT_ARG" ] || return 0
+  local running; running=$(ui_curl /proxy/api/state 2>/dev/null | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("active_project") or "")' 2>/dev/null) || return 0
+  [ -z "$running" ] || [ "$running" = "$PROJECT" ] || echo "$CLI: warning: the running proxy serves project '$running', not '$PROJECT' — changes to '$PROJECT' apply only after: $CLI --project $PROJECT stop && $CLI --project $PROJECT start" >&2
+  return 0
 }
 our_listeners() { local pid; for pid in $(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u); do our_mitmweb "$pid" && echo "$pid"; done; true; }
 # ───────────────────────── update ─────────────────────────
@@ -580,15 +637,102 @@ cmd_stop() {   # stop our mitmweb on our ports (only ours — never another app,
     for i in $(seq 1 20); do [ -z "$(our_listeners)" ] && break; sleep 0.1; done
   fi
   [ -z "$(our_listeners)" ] || die "ports $PORT/$WEB_PORT are still in use after stopping mitmweb"
+  # R4A-05: leave other web ports' credentials intact; an older instance on another port may still use the shared file
+  if [ "$WEB_PORT" != 8083 ] || ! ps -axww -o args= 2>/dev/null | grep -qF "proxy_auth_token_file=$STATE_ROOT/web-token "; then
+    rm -f "$TOKEN_FILE" "$BOOTSTRAP_FILE"
+  fi
   info "stopped mitmweb on :$PORT/:$WEB_PORT"
+}
+
+# health — is the instance on these ports really serving, and on the installed version? Used after every upgrade
+# restart and rollback, so "restarted" is never claimed for a proxy that came up broken or on the wrong version.
+cmd_health() {
+  local bad=0 installed state running code
+  installed=$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION" 2>/dev/null || tr -d '[:space:]' < "$SCRIPT_DIR/install/VERSION" 2>/dev/null)
+  if [ -z "$(our_listeners)" ]; then echo "not running on :$PORT/:$WEB_PORT"; return 3; fi
+  # R8D-01: any HTTP request to the proxy becomes a row in the tester's call list (and in saved evidence), so the
+  # proxy port is checked with a bare TCP connection; the panel answering below proves the same process serves.
+  if /usr/bin/python3 -I -c 'import socket,sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 5).close()' "$PORT" 2>/dev/null
+  then echo "proxy :$PORT        accepts connections"
+  else echo "proxy :$PORT        DOES NOT ANSWER a test call"; bad=1; fi
+  state=$(ui_curl /proxy/api/state --max-time 8 2>/dev/null) || state=""
+  running=$(printf '%s' "$state" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("version") or "")' 2>/dev/null)
+  if [ -n "$running" ]; then echo "panel :$WEB_PORT      answers ($PRODUCT_NAME $running)"
+  else echo "panel :$WEB_PORT      DOES NOT ANSWER"; bad=1; fi
+  if [ -n "$running" ] && [ -n "$installed" ] && [ "$running" != "$installed" ]; then
+    echo "version            running $running, installed $installed — run: $CLI restart"; bad=1
+  fi
+  if [ "$bad" = 0 ]; then echo "healthy"; return 0; fi
+  echo "NOT healthy — to go back to the version you had before: $CLI rollback"; return 1
+}
+
+# rollback — switch to an earlier installed version (the installer keeps each version in its own tool-<version> folder)
+# and restart this instance with its saved start, then check it. Never deletes a version.
+cmd_rollback() {
+  local root="$HOME/.local/$CLI" cur target list arg="${1:-}"
+  # Any installed version folder may run this (also a newer one while an older is current: 0.9.6 has no rollback
+  # command, so going forward again is  ~/.local/<cli>/tool-<new>/<cli> rollback <new>).
+  [ -L "$root/current" ] && case "$SCRIPT_DIR" in "$(cd "$root" 2>/dev/null && pwd -P)"/tool-*) true ;; *) false ;; esac \
+    || die "this copy is not an installed one ($SCRIPT_DIR) — rollback switches installed versions only"
+  cur=$(tr -d '[:space:]' < "$root/current/VERSION" 2>/dev/null)
+  list=$(for d in "$root"/tool-*; do [ -x "$d/$CLI" ] && printf '%s\n' "${d##*/tool-}"; done |
+         /usr/bin/python3 -I -c 'import sys,re
+vs=[l.strip() for l in sys.stdin if l.strip()]
+key=lambda v: [int(x) if x.isdigit() else x for x in re.split(r"[.-]", v)]
+print("\n".join(sorted(vs, key=key)))')
+  if [ "$arg" = --list ] || [ "$arg" = list ]; then
+    printf '%s\n' "$list" | while read -r v; do [ -n "$v" ] && echo "$v$([ "$v" = "$cur" ] && echo '   ← current')"; done; return 0
+  fi
+  if [ -n "$arg" ]; then target="$arg"
+  else target=$(printf '%s\n' "$list" | awk -v c="$cur" '$0==c{print p; exit} {p=$0}'); fi
+  [ -n "$target" ] || die "no earlier version is installed (installed: $(printf '%s' "$list" | tr '\n' ' ')) — reinstall the older installer zip instead"
+  [ "$target" != "$cur" ] || die "$PRODUCT_NAME $cur is already the current version"
+  [ -x "$root/tool-$target/$CLI" ] || die "$PRODUCT_NAME $target is not installed (installed: $(printf '%s' "$list" | tr '\n' ' '))"
+  local was_running=""; [ -n "$(our_listeners)" ] && was_running=1
+  START_PORT=""; START_WEB_PORT=""; START_ARGS=()
+  if [ -n "$was_running" ]; then
+    [ -f "$START_FILE" ] && . "$START_FILE"
+    [ ${#START_ARGS[@]} -gt 0 ] || START_ARGS=(start --background --no-open)
+    cmd_stop || return
+  fi
+  ln -sfn "$root/tool-$target" "$root/current" || die "could not switch to $target"
+  info "switched $cur → $target"
+  grep -q '^cmd_rollback()' "$root/tool-$target/$CLI" 2>/dev/null \
+    || info "$PRODUCT_NAME $target has no rollback command; to come back to $cur later run: $root/tool-$cur/$CLI rollback $cur"
+  if [ -z "$was_running" ]; then info "it was not running — start it with: $CLI start"; return 0; fi
+  "$root/current/$CLI" "${START_ARGS[@]}" || die "could not start $target — run: $CLI start (or $CLI rollback $cur to undo)"
+  local i; for i in $(seq 1 20); do "$root/current/$CLI" health >/dev/null 2>&1 && break; sleep 0.5; done
+  if "$root/current/$CLI" health >/dev/null 2>&1; then info "$PRODUCT_NAME $target is running and healthy"
+  else
+    # an older version may not have the health command: check the ports directly
+    [ -n "$(our_listeners)" ] && info "$PRODUCT_NAME $target is running on :$PORT/:$WEB_PORT" \
+      || die "$target did not come up on :$PORT/:$WEB_PORT — run: $CLI rollback $cur to undo"
+  fi
+}
+
+cmd_restart() { # R4A-01: replay saved project and flags after an upgrade, for this web port only.
+  START_PORT=""; START_WEB_PORT=""; START_PROJECT_SOURCE=""; START_ARGS=()
+  [ -f "$START_FILE" ] || die "no saved start for :$WEB_PORT — run $CLI start with the desired options"
+  . "$START_FILE"
+  [ "$START_PORT" = "$PORT" ] && [ "$START_WEB_PORT" = "$WEB_PORT" ] && [ ${#START_ARGS[@]} -gt 0 ] \
+    || die "saved start does not match :$PORT/:$WEB_PORT — run $CLI start with the desired options"
+  # A normal start follows `projects use`; an explicit --project start keeps its chosen project.
+  case "$START_PROJECT_SOURCE" in
+    default|current-project|legacy)
+      [ "${START_ARGS[0]:-}" = --project ] && START_ARGS[1]="$PROJECT" ;;
+  esac
+  cmd_stop || return
+  [ -z "$(port_owner "$PORT")$(port_owner "$WEB_PORT")" ] \
+    || die "ports $PORT/$WEB_PORT are held by another program — stop it or choose other ports; nothing was restarted"
+  RIVIS_START_PROJECT_SOURCE="$START_PROJECT_SOURCE" "$0" "${START_ARGS[@]}"
 }
 
 cmd_ui() {
   [ -n "$(port_owner "$WEB_PORT")" ] || die "mitmweb is not running — $CLI start"
-  [ -f "$STATE_ROOT/web-token" ] || die "no token file — restart with $CLI start"
+  [ -f "$TOKEN_FILE" ] || die "no token file — restart with $CLI start"
   local bootstrap
   bootstrap=$(openssl rand -hex 16) || die "could not generate a one-time UI login"
-  atomic_private_text "$STATE_ROOT/web-bootstrap" "$bootstrap" || die "could not save one-time UI login"
+  atomic_private_text "$BOOTSTRAP_FILE" "$bootstrap" || die "could not save one-time UI login"
   open "http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap"
 }
 
@@ -678,9 +822,8 @@ cmd_browser() {
   # Web apps on localhost go through Rivis only when this Rivis allows them (start --allow-private-hosts): by default
   # it refuses private destinations, so the browser reaches localhost directly, as usual (review R8). The Rivis UI
   # itself always stays direct (it would record itself).
-  local bypass="127.0.0.1:$WEB_PORT;localhost:$WEB_PORT" loopback=0 tok allowed=""
-  tok=$(cat "$STATE_ROOT/web-token" 2>/dev/null) && allowed=$(curl -sf --noproxy '*' --max-time 5 \
-    "http://127.0.0.1:$WEB_PORT/options?token=$tok" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["proxy_private_hosts"]["value"])' 2>/dev/null)
+  local bypass="127.0.0.1:$WEB_PORT;localhost:$WEB_PORT" loopback=0 allowed=""
+  allowed=$(ui_curl /options --max-time 5 | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["proxy_private_hosts"]["value"])' 2>/dev/null)
   if [ -n "$allowed" ] && /usr/bin/python3 -I -c 'import re,sys; sys.exit(0 if all(re.fullmatch(sys.argv[1], h) for h in ("localhost", "127.0.0.1")) else 1)' "$allowed" 2>/dev/null; then
     bypass="<-loopback>;$bypass"; loopback=1
   fi
@@ -709,26 +852,46 @@ cmd_mock() {
   safe_name "$1"     # F-17: before anything is written under mocks/
   ensure_rules
   [ -n "$(port_owner "$WEB_PORT")" ] || die "mitmweb is not running — $CLI start"
-  local tok; tok=$(cat "$STATE_ROOT/web-token")
-  local tmp; tmp=$(mktemp); curl -sf "http://127.0.0.1:$WEB_PORT/flows?token=$tok" > "$tmp" \
+  local tmp; tmp=$(mktemp); ui_curl /flows > "$tmp" \
     || { rm -f "$tmp"; die "could not read the captured calls"; }
   local pick; pick=$(/usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" mock-pick "$1" "$2" "$tmp") || { rm -f "$tmp"; exit 1; }
   rm -f "$tmp"
-  local id status method; { read -r id; read -r status; read -r method; } <<< "$pick"
-  mkdir -p "$PROJECT_STATE/mocks"
-  local file="$PROJECT_STATE/mocks/$1.json"
-  curl -sf "http://127.0.0.1:$WEB_PORT/flows/$id/response/content.data?token=$tok" -o "$file" || die "could not read the response body"
-  /usr/bin/python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$file" 2>/dev/null \
-    || { mv "$file" "${file%.json}.txt"; file="${file%.json}.txt"; }
-  /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" rules add "$1" "match=$2" action=map_local \
-    "file=$file" "status=$status" "method=$method" >/dev/null || exit 1
+  local id status method headers; { read -r id; read -r status; read -r method; read -r headers; } <<< "$pick"
+  mkdir -p "$PROJECT_STATE/mocks" || die "could not save the response body: cannot create the mocks folder"
+  local file="$PROJECT_STATE/mocks/$1.json" body_tmp curl_rc=0
+  body_tmp=$(mktemp "$PROJECT_STATE/mocks/.$1.XXXXXX") || die "could not save the response body: mocks folder is not writable"
+  ui_curl "/flows/$id/response/content.data" -o "$body_tmp" || curl_rc=$?
+  if [ "$curl_rc" -ne 0 ]; then
+    rm -f "$body_tmp"
+    [ "$curl_rc" -eq 23 ] && die "could not save the response body: write failed (check project folder and free space)"
+    die "could not read the response body (curl exit $curl_rc)"
+  fi
+  /usr/bin/python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$body_tmp" 2>/dev/null \
+    || file="${file%.json}.txt"
+  mv -f "$body_tmp" "$file" || { rm -f "$body_tmp"; die "could not save the response body: project folder is not writable"; }
+  RIVIS_RULE_CONFDIR="$CONFDIR" /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" rules mock-set "$1" "match=$2" action=map_local \
+    "file=$file" "status=$status" "method=$method" "headers=$headers" || exit 1
   info "saved the real $method response ($status) to $file"
   info "map_local rule '$1' is ON — edit that file; every save applies to the next call"
   info "turn off: $CLI rules off $1"
 }
 
-cmd_rules()    { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" rules "$@"; }
-cmd_scripts()  { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" --script-dir "$PROJECT_STATE/scripts" "$@"; }
+cmd_rules()    { ensure_rules; warn_running_project; RIVIS_RULE_CONFDIR="$CONFDIR" /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" rules "$@"; } # R5A-02: same file guard as proxy load
+cmd_scripts()  {
+  ensure_rules
+  # R1A-03: last_errors is runtime state, so list asks this instance's authenticated panel while it is available.
+  # ui_curl reads the token from its file via stdin; neither the token nor the state is placed in argv.
+  local state=""
+  if [ $# -eq 0 ] || [ "$1" = list ]; then
+    state=$(ui_curl /proxy/api/state --max-time 3 2>/dev/null) || state=""
+    if [ -n "$state" ]; then
+      printf '%s' "$state" | /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" \
+        --script-dir "$PROJECT_STATE/scripts" list --errors-stdin
+      return
+    fi
+  fi
+  /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" --script-dir "$PROJECT_STATE/scripts" "$@"
+}
 cmd_throttle() { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" throttle "$@"; }
 cmd_tls() {
   ensure_rules
@@ -741,7 +904,7 @@ cmd_compose() {
   case "$sub" in
     list) /usr/bin/python3 -I "$SCRIPT_DIR/addons/compose_cli.py" list --dir "$PROJECT_STATE/composer" ;;
     send) [ $# -ge 1 ] || die "compose send NAME [--var name=value] [--no-wait]"
-          local tokfile="$STATE_ROOT/web-token"
+          local tokfile="$TOKEN_FILE"
           /usr/bin/python3 -I "$SCRIPT_DIR/addons/compose_cli.py" send "$@" --dir "$PROJECT_STATE/composer" \
             --port "$WEB_PORT" --token-file "$tokfile" --project "$PROJECT" ;;
     *) die "compose list | send NAME" ;;
@@ -812,8 +975,18 @@ ui_install_ca() {
 ca_fingerprint() { openssl x509 -in "$CA_PEM" -noout -fingerprint -sha256 | cut -d= -f2; }   # AA:BB:… as Settings shows it
 android_record() {   # android_record SERIAL — note "<avd>\t<CA sha256>" after a VERIFIED install (read by the Devices tab)
   local avd f="$STATE_ROOT/android-ca" fp; fp=$(ca_fingerprint | tr -d ':') || return 0
-  avd=$("$ADB" -s "$1" emu avd name 2>/dev/null | tr -d '\r' | awk 'NF && $0 != "OK" {print; exit}')
-  [[ "$avd" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
+  local i q
+  # R5B-01: `emu avd name` can answer empty right after a boot/restart; retry, then the emulator's own property
+  for i in 1 2 3; do
+    avd=$("$ADB" -s "$1" emu avd name 2>/dev/null | tr -d '\r' | awk 'NF && $0 != "OK" {print; exit}')
+    [[ "$avd" =~ ^[A-Za-z0-9._-]+$ ]] && break; avd=""; sleep 1
+  done
+  for q in ro.boot.qemu.avd_name ro.kernel.qemu.avd_name; do
+    [ -n "$avd" ] && break
+    avd=$("$ADB" -s "$1" shell getprop "$q" 2>/dev/null | tr -d '\r')
+    [[ "$avd" =~ ^[A-Za-z0-9._-]+$ ]] || avd=""
+  done
+  [ -n "$avd" ] || { echo "!! $1: could not read the emulator's AVD name, so Tools → Devices may still show it as not set up (the CA IS installed)" >&2; return 0; }
   { grep -v "^$avd	" "$f" 2>/dev/null; printf '%s\t%s\n' "$avd" "$fp"; } > "$f.tmp" && mv "$f.tmp" "$f"
 }
 ui_list_mentions() {   # ui_list_mentions SERIAL TEXT — on this screen, or one scroll further down?
@@ -850,6 +1023,15 @@ ui_has_current_ca() {   # does the user store hold THIS CA? (an older "mitmproxy
     ui_tap "$s" "OK" || "$ADB" -s "$s" shell input keyevent KEYCODE_BACK
   done
   return 1
+}
+ui_user_store_clean() {   # true when Trusted credentials → User lists no "mitmproxy" entry at all
+  local s="$1"
+  if ! "$ADB" -s "$s" shell am start -W -f 0x10008000 -a com.android.settings.TRUSTED_CREDENTIALS_USER 2>/dev/null | grep -q "Status: ok"; then
+    open_credentials "$s" && ui_tap "$s" "Trusted credentials" && ui_tap "$s" "USER|User" || return 1
+  fi
+  sleep 1
+  # B-04: an unreadable/blank Settings screen is not proof that the certificate is gone.
+  ui_screen_has "$s" "USER|User" && ! ui_list_mentions "$s" "mitmproxy"
 }
 ui_remove_ca() {   # prints "REMOVED KEPT": user-store "mitmproxy" entries removed / left alone
   # Only an entry whose SHA-256 is one this workstation recorded (ca-history) is uninstalled. Every mitmproxy CA is
@@ -989,6 +1171,10 @@ cmd_android() {
         if [ "$auto_ui" = 1 ] && n=$(ui_remove_ca "$s"); then
           info "$s: removed ${n% *} CA entr$( [ "${n% *}" = 1 ] && echo y || echo ies ) of this workstation via Settings"
           [ "${n#* }" = 0 ] || info "$s: left ${n#* } other \"mitmproxy\" certificate(s) in place — not this workstation's CA"
+        elif [ "$auto_ui" = 1 ] && ui_user_store_clean "$s"; then
+          # a Settings step after the removal failed (e.g. the confirm dialog), but the list shows no mitmproxy entry
+          # any more: say what is true instead of sending the tester to remove it by hand (overnight QA r1 B-04)
+          info "$s: this workstation's CA is no longer in Settings → Trusted credentials → User"
         else info "$s: remove the CA by hand: Encryption & credentials → Trusted credentials → User → mitmproxy → Uninstall"; fi
         "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
       fi
@@ -1111,8 +1297,29 @@ cmd_status() {
   ensure_rules
   local o; o=$(port_owner "$PORT"); echo "proxy :$PORT     ${o:-not listening}"
   local w; w=$(port_owner "$WEB_PORT"); echo "web UI :$WEB_PORT   ${w:-not listening}"
+  warn_running_version # R4A-01
   local sp; sp=$(scutil --proxy | awk '/HTTPSEnable/{e=$3} /HTTPSProxy/{h=$3} /HTTPSPort/{p=$3} END{if(e==1)print h":"p; else print "off"}')
-  echo "project: $PROJECT ($PROJECT_LABEL)"
+  # R5A-03: these ports may host a different project from the CLI's current selection.
+  local running_project="" pid args state_json=""
+  if [ -n "$w" ] && [ -n "$(our_listeners)" ]; then
+    state_json=$(ui_curl /proxy/api/state --max-time 3 2>/dev/null) || state_json=""
+    running_project=$(printf '%s' "$state_json" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("active_project") or "")' 2>/dev/null) || running_project=""
+    if [ -z "$running_project" ]; then
+      for pid in $(our_listeners); do
+        args=$(ps -ww -o args= -p "$pid" 2>/dev/null) || continue
+        running_project=$(printf '%s\n' "$args" | sed -n 's/.*proxy_project=\([a-z0-9._-]*\).*/\1/p')
+        [ -z "$running_project" ] || break
+      done
+    fi
+  fi
+  if [ -n "$running_project" ] && [ "$running_project" != "$PROJECT" ]; then
+    echo "project: $running_project (running on :$PORT)"
+    echo "selected project: $PROJECT ($PROJECT_LABEL)"
+  else
+    echo "project: ${running_project:-$PROJECT} ($PROJECT_LABEL)"
+  fi
+  warn_running_project
+  [ -z "$state_json" ] || printf '%s' "$state_json" | /usr/bin/python3 -I -c 'import json,sys; s=[x for x in (json.load(sys.stdin).get("skipped_rules") or []) if isinstance(x, dict)]; s and print("WARNING: %d rule(s) skipped, not applied: %s. Details: %s rules list" % (len(s), "; ".join("%s (%s)" % (x.get("name", "?"), x.get("error", "invalid")) for x in s), sys.argv[1]))' "$CLI" 2>/dev/null # review 0.9.7 #11
   /usr/bin/python3 -I -c 'import json,sys; sys.path.insert(0,sys.argv[1]); from proxy_common import tls_config
 t=tls_config(json.load(open(sys.argv[2]))); n=len(t[t["mode"]]) if t["mode"]!="all" else 0
 print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n==1 else "s")) if t["mode"]!="all" else " (every host)"))' "$SCRIPT_DIR/addons" "$RULES" 2>/dev/null || echo "TLS decryption: unreadable rules file"
@@ -1125,6 +1332,19 @@ print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n
     done
   fi
   xcrun simctl list devices booted 2>/dev/null | grep -E "Booted" | sed 's/^ */ios booted: /'
+  # which devices and apps the running instance has calls from (proxy_source.py), as in the panel's Source menu
+  [ -n "$state_json" ] && printf '%s' "$state_json" | /usr/bin/python3 -I -c 'import json,sys
+s=json.load(sys.stdin); rows=(s.get("sources") or {}).get("list") or []
+kind={"ios":"iOS Simulator","android":"Android emulator","browser":"web browser","mac":"this Mac","unknown":"unknown"}
+print("sources: %s" % ("none yet" if not rows else "%d (calls in the list)" % len(rows)))
+for r in rows: print("  %-52s %6d  %s" % ((r["app"] + " on " if r["app"] else "") + (r["device"] or kind.get(r["kind"], r["kind"])), r["count"], kind.get(r["kind"], r["kind"])))
+sel=s.get("source")
+if sel:
+  row=next((r for r in rows if r["key"]==sel), None); dev=sel.split("|")
+  if sel.startswith("unknown|"): text="calls with no known source (Unknown)"
+  elif row: text=(row["app"]+" on " if row["app"] else "")+(row["device"] or kind.get(row["kind"],row["kind"]))
+  else: text="every app on "+(dev[1] or kind.get(dev[0],dev[0]))
+  print("  list shows only: %s" % text)' 2>/dev/null
   systemextensionsctl list 2>/dev/null | grep -q "macos-redirector.*activated enabled" \
     && echo "local-capture extension: enabled" \
     || echo "local-capture extension: NOT enabled — System Settings → General → Login Items & Extensions → Network Extensions → Mitmproxy Redirector"
@@ -1133,6 +1353,8 @@ print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n
     node_path=$(/usr/bin/python3 -I -c 'import runpy,sys; d=runpy.run_path(sys.argv[1]); print(d["find_node"]() or "")' "$SCRIPT_DIR/addons/proxy_scripts.py")
     [ -n "$node_path" ] || echo "scripts: Node.js not installed — JS scripts disabled (Python scripts still work)"
   fi
+  # exit status answers "is it running?" for scripts and CI (QA-11): 0 running, 3 not running (the LSB status code)
+  [ -n "$(our_listeners)" ] && [ -n "$o" ] && [ -n "$w" ] || return 3
 }
 
 # doctor — read-only health check (never writes unless --fix-safe + confirm).
@@ -1182,6 +1404,9 @@ case "${1:-}" in
   ui)        cmd_ui ;;
   browser)   shift; cmd_browser "$@" ;;
   stop)      cmd_stop ;;
+  restart)   cmd_restart ;;
+  health)    cmd_health ;;
+  rollback)  shift; cmd_rollback "$@" ;;
   rules)     shift; cmd_rules "$@" ;;
   scripts)   shift; cmd_scripts "$@" ;;
   throttle)  shift; cmd_throttle "$@" ;;

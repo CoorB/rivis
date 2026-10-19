@@ -39,6 +39,12 @@ class CliBase(unittest.TestCase):
         self.assertEqual(r.returncode, 0, "rivis %s -> rc=%s\nout=%s\nerr=%s" % (" ".join(args), r.returncode, r.stdout, r.stderr))
         return r
 
+    def stopped_status(self, *args, **kw):
+        """`status` while nothing runs: prints everything, exit code 3 (QA-11)."""
+        r = self.cli("status", *args, **kw)
+        self.assertEqual(r.returncode, 3, "rivis status (nothing running) -> rc=%s\nout=%s\nerr=%s" % (r.returncode, r.stdout, r.stderr))
+        return r
+
     def refused(self, *args, msg=None, **kw):
         r = self.cli(*args, **kw)
         self.assertNotEqual(r.returncode, 0, "rivis %s unexpectedly succeeded: %s" % (" ".join(args), r.stdout))
@@ -103,16 +109,23 @@ class Projects(CliBase):
         self.assertIn("neo", self.ok("projects", "show").stdout)        # default argument = current project
 
     def test_resolution_order_flag_env_current_default(self):
+        # R2A-09: a port in --hosts can never match (the filter compares host names), so it is refused up front
+        for bad in (r"127\.0\.0\.1:18081", r"api\.test:\d+"):
+            self.assertIn("host names only", self.refused("projects", "new", "p-port", "--label", "P", "--hosts", bad).stderr)
+        # R5A-06: --hosts runs on every call through the proxy, so it gets the same safety check as rules and throttle
+        self.assertIn("nested repetition", self.refused("projects", "new", "p-rx", "--label", "R", "--hosts", "(a+)+$").stderr)
         self.ok("projects", "new", "p-flag", "--label", "F", "--hosts", "f")
         self.ok("projects", "new", "p-env", "--label", "E", "--hosts", "e")
         self.ok("projects", "new", "p-cur", "--label", "C", "--hosts", "c")
-        self.assertIn("project: default", self.ok("status").stdout)
+        self.assertIn("project: default", self.stopped_status().stdout)
         self.ok("projects", "use", "p-cur")
-        self.assertIn("project: p-cur", self.ok("status").stdout)
+        self.assertIn("project: p-cur", self.stopped_status().stdout)
         env = dict(self.env, RIVIS_PROJECT="p-env")
-        self.assertIn("project: p-env", self.ok("status", env=env).stdout)
-        self.assertIn("project: p-flag", self.ok("--project", "p-flag", "status", env=env).stdout)
-        self.assertIn("project: p-flag", self.ok("status", "--project=p-flag", env=env).stdout)
+        self.assertIn("project: p-env", self.stopped_status(env=env).stdout)
+        r = self.cli("--project", "p-flag", "status", env=env)
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn("project: p-flag", r.stdout)
+        self.assertIn("project: p-flag", self.stopped_status("--project=p-flag", env=env).stdout)
         self.assertIn("project: p-flag", self.ok("rules", "list", "--project", "p-flag", env=env).stdout.replace("rules (", "project: p-flag ("))
         # state is isolated per project
         self.assertTrue(os.path.isfile(self.rules_file("p-flag")))
@@ -121,9 +134,9 @@ class Projects(CliBase):
     def test_legacy_env_alias_is_a_fallback(self):
         self.ok("projects", "new", "p-leg", "--label", "L", "--hosts", "l")
         env = dict(self.env, NEO_MITM_PROJECT="p-leg")
-        self.assertIn("project: p-leg", self.ok("status", env=env).stdout)
+        self.assertIn("project: p-leg", self.stopped_status(env=env).stdout)
         env["RIVIS_PROJECT"] = "default"        # the product-prefixed name wins over the legacy one
-        self.assertIn("project: default", self.ok("status", env=env).stdout)
+        self.assertIn("project: default", self.stopped_status(env=env).stdout)
 
     def test_invalid_ids_are_refused(self):
         for bad in ("../x", "A", "Up", ".hidden", "-lead", "a/b", "a b", "x" * 65, "semi;colon", "$(id)"):
@@ -152,12 +165,12 @@ class Projects(CliBase):
         os.makedirs(self.state)
         with open(os.path.join(self.state, "current-project"), "w") as fh:
             fh.write("../../etc\n")
-        r = self.ok("status")
+        r = self.stopped_status()
         self.assertIn("project: default", r.stdout)
         self.assertIn("ignoring invalid current-project", r.stderr)
         with open(os.path.join(self.state, "current-project"), "w") as fh:
             fh.write("deleted-project\n")
-        r = self.ok("status")
+        r = self.stopped_status()
         self.assertIn("project: default", r.stdout)
         self.assertIn("no longer exists", r.stderr)
 
@@ -203,6 +216,119 @@ class Projects(CliBase):
 
 
 class Rules(CliBase):
+    def test_mock_set_preserves_other_methods_on_same_match(self):
+        mock_file = os.path.join(self.home, "mock.json")
+        with open(mock_file, "w") as fh:
+            fh.write('{}')
+
+        def set_mock(name, method):
+            return self.ok("rules", "mock-set", name, "match=/shared", "action=map_local",
+                           "file=" + mock_file, "method=" + method)
+
+        set_mock("get-mock", "GET")
+        post = set_mock("post-mock", "POST")
+        self.assertNotIn("replaced Map Local", post.stdout)
+        self.assertEqual({r["name"] for r in self.cfg()["rules"]}, {"get-mock", "post-mock"})
+
+        replaced = set_mock("post-new", "post")
+        self.assertIn("replaced Map Local rule: post-mock", replaced.stdout)
+        self.assertEqual({r["name"] for r in self.cfg()["rules"]}, {"get-mock", "post-new"})
+
+    def test_r10_10_unwritable_project_reports_a_single_actionable_error(self):
+        self.ok("rules", "add", "r10-10", "match=/x", "action=status", "status=503")
+        project = os.path.dirname(self.rules_file())
+        os.chflags(project, stat.UF_IMMUTABLE)
+        try:
+            for args in (("rules", "off", "r10-10"),
+                         ("rules", "add", "r10-10-new", "match=/y", "action=status", "status=504")):
+                with self.subTest(args=args):
+                    r = self.refused(*args)
+                    self.assertIn("could not save rules", r.stderr)
+                    self.assertNotIn("Traceback", r.stderr)
+                    self.assertEqual(len(r.stderr.strip().splitlines()), 1, r.stderr)
+        finally:
+            os.chflags(project, 0)
+
+    def test_missing_map_local_file_messages_are_actionable(self):
+        missing = os.path.join(self.home, "missing-mock.json")
+        add = self.refused("rules", "add", "missing", "match=/x", "action=map_local", "file=" + missing)
+        self.assertIn("file not found: " + missing, add.stdout + add.stderr)
+        self.assertNotIn("use an absolute path", add.stdout + add.stderr)
+
+        with open(missing, "w") as fh:
+            fh.write("{}")
+        self.ok("rules", "add", "gone", "match=/x", "action=map_local", "file=" + missing)
+        os.unlink(missing)
+        listed = self.ok("rules", "list").stdout
+        self.assertIn("is missing or unreadable — this rule answers 502", listed)
+        self.assertNotIn("R2A-02", listed)
+
+    def test_r5a02_add_and_list_use_proxy_rule_validation(self):
+        # R5A-02: a rule advertised ON must survive the proxy's load check.
+        for name, fields, reason in (("bad-headers", ("action=respond", "headers=nope"), "headers must be"),
+                                     ("bad-patch", ("action=json_patch", "set=nope"), "json_patch set"),
+                                     ("bad-side", ("action=set_header", "header=X-QA", "side=whatever"), "set_header side")):
+            self.refused("rules", "add", name, "match=/x", *fields, msg=reason)
+        self.assertEqual(self.cfg()["rules"], [])
+        c = self.cfg()
+        c["rules"] = [{"name": "imported", "enabled": True, "match": "/x", "action": "respond", "headers": "nope"},
+                      {"name": "bad-method", "enabled": True, "match": "/x", "action": "block", "method": 7},
+                      {"name": "bad-file", "enabled": True, "match": "/x", "action": "map_local", "file": 7}]
+        with open(self.rules_file(), "w") as fh:
+            json.dump(c, fh)
+        out = self.ok("rules", "list").stdout
+        self.assertRegex(out, r"SKIPPED\s+imported")
+        self.assertIn("headers must be", out)
+        self.assertRegex(out, r"SKIPPED\s+bad-method")
+        self.assertRegex(out, r"SKIPPED\s+bad-file")
+
+    def test_concurrent_adds_all_persist(self):
+        # R7B-03: simultaneous adds each read, changed and rewrote the file; all said "added", only the last survived
+        import threading
+        out = []
+        ts = [threading.Thread(target=lambda n=n: out.append(self.ok("rules", "add", "par-%d" % n, "match=/par%d" % n,
+                                                                      "action=block").returncode)) for n in range(6)]
+        [t.start() for t in ts]; [t.join(60) for t in ts]
+        self.assertEqual(out, [0] * 6)
+        listed = self.ok("rules", "list").stdout
+        self.assertEqual([n for n in range(6) if "par-%d" % n in listed], list(range(6)), listed)
+
+    def test_r7a02_reversed_map_remote_is_reported(self):
+        # R7A-02: the reversed keys left an ON rule that matched calls but never rewrote their URLs.
+        self.ok("rules", "add", "backwards", "match=/remote", "action=map_remote",
+                "replace=https://destination.test/echo", "with=/remote")
+        listed = self.ok("rules", "list").stdout
+        self.assertIn("backwards", listed)
+        self.assertIn("replace", listed)
+        self.assertIn("never", listed.lower())
+
+    def test_r5a02_edit_refuses_rule_proxy_would_skip(self):
+        # R5A-02: a rejected edit leaves the rules file that the proxy reloads intact.
+        self.ok("rules", "list")
+        before = open(self.rules_file()).read()
+        editor = os.path.join(self.home, "invalid-editor")
+        with open(editor, "w") as fh:
+            fh.write('#!/bin/sh\nprintf \'%s\\n\' \'{"rules":[{"name":"bad","action":"respond","headers":"nope"}]}\' > "$1"\n')
+        os.chmod(editor, 0o700)
+        r = self.refused("rules", "edit", env=dict(self.env, EDITOR=editor), msg="headers must be")
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual(open(self.rules_file()).read(), before)
+        staged = [os.path.join(os.path.dirname(self.rules_file()), name)
+                  for name in os.listdir(os.path.dirname(self.rules_file())) if name.startswith(".rules-edit-")]
+        self.assertEqual(len(staged), 1, staged)
+        self.assertIn(staged[0], r.stderr)
+        self.assertIn("kept", r.stderr)
+        self.assertEqual(json.load(open(staged[0]))["rules"][0]["name"], "bad")
+
+    def test_non_object_rule_entries_do_not_crash_cli(self):
+        # R3A-07: hand-edited junk must not hide valid rules or raise a traceback.
+        self.ok("rules", "list")
+        with open(self.rules_file(), "w") as fh:
+            json.dump({"rules": [1, "x", None, {"name": "ok", "match": "/x", "action": "block", "enabled": True}]}, fh)
+        self.assertIn("entry 1 is not an object", self.ok("rules", "list").stdout)
+        self.ok("rules", "off", "ok")
+        self.ok("rules", "rm", "ok")
+
     def test_add_list_show_on_off_rm(self):
         r = self.ok("rules", "add", "hello", "match=/hello", "action=respond", "status=201", "body=hi")
         self.assertIn("added and ON", r.stdout)
@@ -249,6 +375,9 @@ class Rules(CliBase):
         self.refused("rules", "add", "a", "action=delay", msg="needs: ms")
         self.refused("rules", "add", "a", "action=set_header", msg="needs: header")
         self.refused("rules", "add", "a", "action=map_remote", "replace=x", msg="needs: with")
+        # R2A-11: a map_remote whose result is not http(s)+host is refused when added, not at the first call
+        self.refused("rules", "add", "a", "action=map_remote", "replace=^.*$", "with=not-a-url", msg="unusable")
+        self.refused("rules", "add", "a", "action=map_remote", "replace=^.*$", "with=ftp://x.example/y", msg="unusable")
         self.refused("rules", "add", "a", "action=explode", msg="action must be one of")
         self.refused("rules", "add", "a", msg="action must be one of")
         self.refused("rules", "add", "a", "action=block", "match=(unclosed", msg="bad regex")
@@ -277,6 +406,30 @@ class Rules(CliBase):
         self.assertNotIn("Traceback", r.stderr)
         self.assertEqual(open(self.rules_file()).read(), "{ not json")
 
+    def test_rules_edit_does_not_lock_out_other_commands_or_overwrite_their_changes(self):
+        self.ok("rules", "list")
+        editor = os.path.join(self.home, "waiting-editor")
+        ready = os.path.join(self.home, "editor-ready")
+        release = os.path.join(self.home, "editor-release")
+        with open(editor, "w") as fh:
+            fh.write('#!/bin/sh\ntouch "$RIVIS_TEST_EDITOR_READY"\n'
+                     'while [ ! -e "$RIVIS_TEST_EDITOR_RELEASE" ]; do sleep 0.1; done\n')
+        os.chmod(editor, 0o700)
+        env = dict(self.env, EDITOR=editor, RIVIS_TEST_EDITOR_READY=ready, RIVIS_TEST_EDITOR_RELEASE=release)
+        editing = subprocess.Popen(["/bin/bash", harness.RIVIS, "rules", "edit"], env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            wait_for(lambda: os.path.exists(ready), 5, 0.05, "editor did not open")
+            added = self.cli("rules", "add", "concurrent", "action=block", timeout=3)
+            self.assertEqual(added.returncode, 0, added.stderr)
+        finally:
+            open(release, "w").close()
+            out, err = editing.communicate(timeout=5)
+        self.assertNotEqual(editing.returncode, 0, out + err)
+        self.assertIn("changed while the editor was open", err)
+        self.assertIn("concurrent", [r["name"] for r in self.cfg()["rules"]])
+        self.assertIn("edited rules kept at", err)
+
     def test_rules_file_written_atomically_and_private(self):
         self.ok("rules", "add", "a", "action=block")
         self.assertEqual(mode(self.rules_file()), 0o600)
@@ -285,7 +438,35 @@ class Rules(CliBase):
 
 
 class Throttle(CliBase):
+    def test_r5a04_manual_values_are_reported(self):
+        # R5A-04: both the setter and readback must show the active manual settings.
+        out = self.ok("throttle", "manual", "latency_ms=120", "jitter_ms=4", "down_kbps=500",
+                      "up_kbps=250", "loss_pct=3", "response_delay_ms=20", "match=/x").stdout
+        for text in ("latency_ms=120", "jitter_ms=4", "down_kbps=500", "up_kbps=250", "loss_pct=3", "response_delay_ms=20"):
+            self.assertIn(text, out)
+            self.assertIn(text, self.ok("throttle").stdout)
+        self.assertIn("loss: 3.0%", self.ok("throttle").stdout)
+        self.assertIn("latency_ms=120", self.ok("rules", "list").stdout)
+
     PROFILES = ["3g-urban", "lte-congested", "high-latency-vpn", "packet-loss-8", "lte", "3g", "edge", "slow", "manual"]
+
+    def test_loss_override_expires_when_profile_changes(self):
+        # R3A-03: one loss=100 experiment must not poison subsequent profiles.
+        self.ok("throttle", "packet-loss-8", "loss=100")
+        self.ok("throttle", "3g-urban")
+        self.assertEqual(self.cfg()["loss"], 0)
+        self.ok("throttle", "packet-loss-8")
+        self.assertEqual(self.cfg()["loss"], 0)
+
+    def test_r906_match_scope_expires_when_profile_changes(self):
+        self.ok("throttle", "300ms", "match=only-this")
+        self.assertEqual(self.cfg()["throttle_match"], "only-this")
+        out = self.ok("throttle", "packet-loss-8").stdout
+        self.assertIn("match: (all)", out)
+        self.assertEqual(self.cfg()["throttle_match"], "")
+        self.ok("throttle", "lte", "match=next-only")
+        self.assertIn("match: (all)", self.ok("throttle", "off").stdout)
+        self.assertEqual(self.cfg()["throttle_match"], "")
 
     def test_every_profile(self):
         for p in self.PROFILES:
@@ -301,6 +482,15 @@ class Throttle(CliBase):
         self.assertEqual(self.cfg()["throttle"], "250ms/512kbps")
         self.ok("throttle", "LTE")
         self.assertEqual(self.cfg()["throttle"], "lte")
+
+    def test_shorthand_latency_and_bandwidth_have_manual_caps(self):
+        # R1A-01: a typo in shorthand once stored eleven days of latency as a valid profile.
+        self.ok("throttle", "120000ms/1000000kbps")
+        before = self.cfg()["throttle"]
+        for spec, label in (("120001ms", "latency_ms"), ("999999999ms", "latency_ms"),
+                            ("1ms/1000001kbps", "down_kbps")):
+            self.refused("throttle", spec, msg=label)
+            self.assertEqual(self.cfg()["throttle"], before)
 
     def test_options(self):
         self.ok("throttle", "3g-urban", r"match=api\.x\.test", "loss=5")
@@ -349,6 +539,14 @@ class Throttle(CliBase):
 
 
 class Breakpoints(CliBase):
+    def test_r5a05_unknown_name_is_refused_with_choices(self):
+        # R5A-05: a typo must not claim that an armed breakpoint was removed.
+        self.ok("breakpoint", "/real")
+        before = self.cfg()["breakpoints"]
+        r = self.refused("breakpoint", "off", "mistyped", msg="no breakpoint named")
+        self.assertIn(before[0]["name"], r.stderr)
+        self.assertEqual(self.cfg()["breakpoints"], before)
+
     def test_add_list_off(self):
         self.ok("breakpoint", r"/api/login")
         self.ok("breakpoint", r"/api/pay", "--request", "--method", "post")
@@ -442,7 +640,7 @@ class Tls(CliBase):
         self.assertIn("tls mode: allow", self.ok("tls", "mode").stdout)
         self.ok("tls", "mode", "ignore")
         self.ok("tls", "mode", "all")
-        self.assertIn("TLS decryption: all", self.ok("status").stdout)
+        self.assertIn("TLS decryption: all", self.stopped_status().stdout)
 
     def test_allow_ignore_add_rm(self):
         self.ok("tls", "allow", "add", "*.Example.test")
@@ -456,7 +654,7 @@ class Tls(CliBase):
         self.ok("tls", "allow", "rm", "*.example.test")
         self.assertEqual(self.cfg()["tls"]["allow"], [])
         self.ok("tls", "mode", "ignore")
-        self.assertIn("TLS decryption: ignore (1 host pattern)", self.ok("status").stdout)
+        self.assertIn("TLS decryption: ignore (1 host pattern)", self.stopped_status().stdout)
 
     def test_invalid_patterns(self):
         for bad in ("http://x.test", "a b", "a/b", ".x.test", "x.test:99999", "x.test:0", ""):
@@ -767,14 +965,104 @@ class StartArgv(CliBase):
 
     def test_writes_token_file_private(self):
         self.start_argv("--no-ios")
-        tf = os.path.join(self.state, "web-token")
+        tf = os.path.join(self.state, "web-token-" + self.env["RIVIS_WEB_PORT"])
         self.assertEqual(open(tf).read().strip(), "x")
         self.assertEqual(mode(tf), 0o600)
 
+    def test_nondefault_web_port_gets_its_own_private_token_and_bootstrap(self):
+        # R4A-05: a second project cannot replace the first project's login files.
+        first = dict(self.env, SHIM_DRYRUN="1", RIVIS_WEB_PORT="18083")
+        second = dict(self.env, SHIM_DRYRUN="1", RIVIS_WEB_PORT="18084")
+        self.ok("start", "--no-open", "--no-ios", env=first)
+        path = os.path.join(self.state, "web-token-18083")
+        original = open(path).read()
+        self.ok("start", "--no-open", "--no-ios", env=second)
+        self.assertEqual(open(path).read(), original)
+        self.assertTrue(os.path.isfile(os.path.join(self.state, "web-token-18084")))
+        self.assertTrue(os.path.isfile(os.path.join(self.state, "web-bootstrap-18083")))
+        self.assertTrue(os.path.isfile(os.path.join(self.state, "web-bootstrap-18084")))
+        self.assertEqual(mode(path), 0o600)
+
 
 class StatusUiStop(CliBase):
+    def test_r904_restart_loads_project_selected_with_projects_use(self):
+        self.ok("projects", "new", "qa_alpha", "--label", "Alpha", "--hosts", "alpha.test")
+        try:
+            self.ok("start", "--background", "--no-open", "--no-ios", timeout=60)
+            self.ok("projects", "use", "qa_alpha")
+            self.ok("restart", timeout=60)
+            out = self.ok("status").stdout
+            self.assertIn("project: qa_alpha (Alpha)", out)
+            self.assertNotIn("selected project:", out)
+            self.ok("projects", "use", "neo")
+            self.ok("restart", timeout=60)
+            self.assertIn("project: neo (NEO)", self.ok("status").stdout)
+        finally:
+            self.cli("stop")
+
+    def test_restart_preserves_explicit_start_project(self):
+        self.ok("projects", "new", "qa_alpha", "--label", "Alpha", "--hosts", "alpha.test")
+        try:
+            self.ok("--project", "qa_alpha", "start", "--background", "--no-open", "--no-ios", timeout=60)
+            self.ok("projects", "use", "neo")
+            self.ok("restart", timeout=60)
+            out = self.ok("status").stdout
+            self.assertIn("project: qa_alpha (running", out)
+            self.assertIn("selected project: neo", out)
+        finally:
+            self.cli("stop")
+
+    def test_r5a03_status_identifies_running_project_on_port(self):
+        # R5A-03: the selected default can differ from the instance on these ports.
+        self.ok("projects", "new", "qa_alpha", "--label", "Alpha", "--hosts", "alpha.test")
+        try:
+            self.ok("--project", "qa_alpha", "start", "--background", "--no-open", "--no-ios", timeout=60)
+            out = self.ok("status").stdout
+            self.assertIn("project: qa_alpha", out)
+            self.assertIn("selected project: default", out)
+        finally:
+            self.cli("stop")
+
+    def test_r5a01_mock_bad_regex_has_one_error_line(self):
+        # R5A-01: invalid user input must not reveal a Python traceback.
+        try:
+            self.ok("start", "--background", "--no-open", "--no-ios", timeout=60)
+            r = self.refused("mock", "bad", "[", msg="bad regex")
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertEqual(len(r.stderr.strip().splitlines()), 1)
+        finally:
+            self.cli("stop")
+
+    def test_two_running_web_ports_reopen_independently(self):
+        # R4A-05: reopening A after starting or stopping B must authenticate against A's saved token.
+        import http.cookiejar
+        import urllib.request
+        first = dict(self.env)
+        second = dict(self.env, RIVIS_PORT=str(harness.free_port()), RIVIS_WEB_PORT=str(harness.free_port()))
+        try:
+            self.ok("start", "--background", "--no-open", "--no-ios", env=first)
+            first_token = open(os.path.join(self.state, "web-token-" + first["RIVIS_WEB_PORT"])).read()
+            self.ok("start", "--background", "--no-open", "--no-ios", env=second)
+            self.assertEqual(open(os.path.join(self.state, "web-token-" + first["RIVIS_WEB_PORT"])).read(), first_token)
+            before = self.suite.shim_log("open.log")
+            self.ok("ui", env=first)
+            opened = self.suite.shim_log("open.log")[len(before):].strip().splitlines()[-1]
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+                                                 urllib.request.ProxyHandler({}))
+            self.assertEqual(opener.open(opened, timeout=10).status, 200)
+            self.ok("stop", env=second)
+            self.assertFalse(os.path.exists(os.path.join(self.state, "web-token-" + second["RIVIS_WEB_PORT"])))
+            self.assertTrue(os.path.exists(os.path.join(self.state, "web-token-" + first["RIVIS_WEB_PORT"])))
+            before = self.suite.shim_log("open.log")
+            self.ok("ui", env=first)
+            opened = self.suite.shim_log("open.log")[len(before):].strip().splitlines()[-1]
+            self.assertEqual(opener.open(opened, timeout=10).status, 200)
+        finally:
+            self.cli("stop", env=first)
+            self.cli("stop", env=second)
+
     def test_status_when_nothing_runs(self):
-        out = self.ok("status").stdout
+        out = self.stopped_status().stdout
         self.assertRegex(out, r"proxy :\d+\s+not listening")
         self.assertRegex(out, r"web UI :\d+\s+not listening")
         self.assertIn("project: default (All)", out)
@@ -786,8 +1074,9 @@ class StatusUiStop(CliBase):
         self.refused("browser", msg="no Chrome, Edge")
 
     def test_ui_needs_a_running_proxy(self):
+        before = self.suite.shim_log("open.log")      # other tests in this class may have opened a browser already
         self.refused("ui", msg="not running")
-        self.assertEqual(self.suite.shim_log("open.log"), "")
+        self.assertEqual(self.suite.shim_log("open.log"), before)
 
     def test_stop_with_nothing_running_is_harmless(self):
         self.assertIn("nothing to stop", self.ok("stop").stdout)
@@ -963,6 +1252,16 @@ class TrustedFiles(CliBase):
         self.assertEqual(os.stat(p).st_mode & 0o777, 0o600)
         with open(p) as fh:
             return json.load(fh)["files"]
+
+    def test_relative_map_local_path_is_stored_absolute(self):
+        # R3A-08: CLI cwd and proxy cwd differ; an ON rule must target the same file in both.
+        path = os.path.join(self.home, "relative.json")
+        open(path, "w").write("{}")
+        env = dict(self.env, PWD=self.home)
+        r = self.suite.run(["/bin/bash", harness.RIVIS, "rules", "add", "relative", "match=/x",
+                            "action=map_local", "file=relative.json"], env=env, cwd=self.home)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.cfg()["rules"][0]["file"], path)
 
     def test_rules_add_with_an_outside_file_trusts_it_and_says_so(self):
         mine = os.path.join(self.home, "Desktop", "mock.json")
@@ -1169,6 +1468,14 @@ class AndroidCaRemoval(CliBase):
         self.assertEqual(sorted(os.listdir(user)), ["0.pem", "2.pem"], out)
         self.assertIn("removed 1 CA entry of this workstation", out)
         self.assertIn("left 2 other", out)
+
+    def test_android_off_does_not_request_manual_removal_when_user_store_is_empty(self):
+        # B-04: Settings removal can return failure after the entry has gone; verify the final list.
+        os.makedirs(os.path.join(self.emu, "user"))
+        os.remove(self.ours)                         # no CA fingerprint on record makes ui_remove_ca fail
+        out = self.ok("android", "off", timeout=120).stdout
+        self.assertNotIn("remove the CA by hand", out)
+        self.assertIn("no longer in Settings", out)
 
 
 if __name__ == "__main__":

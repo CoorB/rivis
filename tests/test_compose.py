@@ -10,6 +10,11 @@ from proxy_compose import ComposerStore, normalize_request
 
 
 class Normalize(unittest.TestCase):
+    def test_r7a01_unicode_path_query_and_idna_host(self):
+        # R7A-01: browser-style URLs need UTF-8 escapes and an ASCII host before mitmproxy sees them.
+        out = normalize_request({"url": "https://مثال.إختبار/مرحبا?text=أهلا"})
+        self.assertEqual(out["url"], "https://xn--mgbh0fb.xn--kgbechtv/%D9%85%D8%B1%D8%AD%D8%A8%D8%A7?text=%D8%A3%D9%87%D9%84%D8%A7")
+
     def test_query_table_replaces_url_query_and_toggle(self):
         spec = {"method": "get", "url": "https://h.test/p?old=1",
                 "query": [["a", "1 2"], ["b", "x&y"], ["off", "z", False], ["", "ignored"]]}
@@ -46,6 +51,15 @@ class Normalize(unittest.TestCase):
         self.assertEqual([h for h in keep["headers"] if h[0].lower() == "content-type"],
                          [("content-type", "application/vnd.x+json")])
         with self.assertRaises(ValueError):
+            normalize_request({"url": "https://h.test/", "body_mode": "json", "body": "{nope"})
+
+    def test_json_body_is_kept_byte_for_byte(self):
+        # R2A-06: json.loads/dumps turned 10.00 into 10.0, 1E3 into 1000.0 and dropped duplicate keys
+        typed = '{"amount":10.00,"big":12345678901234567890123,"e":1E3,"dup":1,"dup":2,"s":"\u0639"}'
+        for spec in ({"body_mode": "json"}, {"headers": [["Content-Type", "application/json"]]}, {}):
+            out = normalize_request(dict(spec, method="POST", url="https://h.test/", body=typed))
+            self.assertEqual(out["body"], typed.encode(), spec)
+        with self.assertRaisesRegex(ValueError, "JSON body is invalid"):
             normalize_request({"url": "https://h.test/", "body_mode": "json", "body": "{nope"})
 
     def test_nonempty_body_without_mode_is_never_dropped(self):

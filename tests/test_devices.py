@@ -194,3 +194,20 @@ class AdbPathIsAbsolute(unittest.TestCase):
                 os.chdir(cwd)
             self.assertNotEqual(found, "platform-tools/adb")
             self.assertTrue(found is None or os.path.isabs(found), found)
+
+class AvdName(unittest.TestCase):
+    """R5B-01: `adb emu avd name` sometimes answers empty right after a boot; the Devices tab then never matched the
+    CLI's record and showed a set-up emulator as not set up."""
+
+    def test_falls_back_to_the_emulator_property_when_emu_answers_empty(self):
+        calls = []
+        def runner(argv):
+            calls.append(" ".join(argv[3:]))
+            return 0, ("Rivis_Test_Play\n" if argv[-1] == "ro.boot.qemu.avd_name" else "")
+        self.assertEqual(devices.avd_name("adb", "emulator-5554", runner), "Rivis_Test_Play")
+        self.assertEqual(calls.count("emu avd name"), 3)
+
+    def test_first_answer_wins_and_junk_is_refused(self):
+        self.assertEqual(devices.avd_name("adb", "e", lambda a: (0, "Pixel_A\nOK\n")), "Pixel_A")
+        self.assertEqual(devices.avd_name("adb", "e", lambda a: (0, "bad name; rm\n")), "")
+

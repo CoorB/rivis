@@ -35,6 +35,10 @@ GRPC_BODY = b"\x00\x00\x00\x00\x07" + b"\x08\x96\x01\x12\x02hi"
 SMALL_JSON = {"user": {"name": "alice", "roles": ["a", "b"]}, "items": [{"id": 1}, {"id": 2}], "flag": False}
 
 
+ARABIC_TEXT = "مرحبا بالعالم، اختبار واجهة من اليمين إلى اليسار\n" * 40
+EMOJI_TEXT = "😀 مرحبا 🚀 שלום 🎉\n" * 40
+
+
 def big_body(mb):
     block = hashlib.sha256(b"rivis").digest() * 32768      # 1 MiB
     return block * mb
@@ -114,6 +118,21 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/slow":
             time.sleep(int((q.get("ms") or ["1000"])[0]) / 1000)
             return self._send(200, {"slow": True})
+        if p == "/sse":
+            # R4B-01: an unbounded body must deliver each event before the upstream closes it.
+            pause = int((q.get("ms") or ["800"])[0]) / 1000
+            self.send_response(200)
+            self.send_header("Content-Type", (q.get("type") or ["text/event-stream"])[0])
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            for n in range(3):
+                event = ("data: tick%d\n\n" % n).encode()
+                self.wfile.write(("%X\r\n" % len(event)).encode() + event + b"\r\n")
+                self.wfile.flush()
+                time.sleep(pause)
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+            return
         if p.startswith("/status/"):
             return self._send(int(p.split("/")[2]), {"status": int(p.split("/")[2])})
         if p == "/cookies":
@@ -154,6 +173,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, b"", ctype="application/json")
         if p == "/text":
             return self._send(200, "not json at all", ctype="text/plain")
+        if p == "/arabic":            # R6B-03: valid UTF-8, almost no ASCII, labelled text/plain
+            return self._send(200, ARABIC_TEXT.encode(), ctype="text/plain; charset=utf-8")
+        if p == "/emoji":
+            return self._send(200, EMOJI_TEXT.encode(), ctype="text/plain")
+        if p == "/bigline":           # R6B-07: one line of mb MiB, as a script or as one JSON string value
+            n = int(float((q.get("mb") or ["5"])[0]) * 1048576)
+            if (q.get("type") or ["js"])[0] == "json":
+                return self._send(200, b'{"data":"' + b"a" * n + b'"}', ctype="application/json")
+            return self._send(200, b'var x="' + b"b" * n + b'";', ctype="application/javascript")
         if p == "/deep":
             n = int((q.get("n") or ["2000"])[0])
             return self._send(200, "[" * n + "]" * n)
@@ -162,6 +190,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "no such path", "path": p})
 
     do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _route
+    do_PROPFIND = do_PURGE = _route      # WebDAV / cache verbs: kept by breakpoints and Repeat (QA-05)
 
 
 class _Server(ThreadingHTTPServer):

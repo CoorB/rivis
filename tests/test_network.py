@@ -150,6 +150,38 @@ class Breakpoints(LiveCase):
         self.assertEqual(self.panel.state()["paused"], [])
         self.assertIn("edited at breakpoint", self.comment("/echo"))
 
+    def test_continue_with_edited_url_host_updates_the_host_header(self):
+        # R2A-01: the sheet sends every header back; the stale Host must not undo the URL host edit
+        self.reset_state(breakpoints=[bp()])
+        call = self.bg("/echo?hostedit=1")
+        p = self.paused()[0]
+        info = self.panel.ok("paused_get", {"id": p["id"]})
+        self.panel.ok("paused_continue", {"id": p["id"], "edits": {
+            "url": info["url"].replace("127.0.0.1", "localhost"), "headers": info["req_headers"]}})
+        host = [v for k, v in call.result().json()["headers"] if k.lower() == "host"]
+        self.assertEqual(host, ["localhost:%d" % self.up.http_port])
+
+    def test_continue_keeps_an_explicitly_edited_host_header(self):
+        self.reset_state(breakpoints=[bp()])
+        call = self.bg("/echo?hostedit=2")
+        p = self.paused()[0]
+        info = self.panel.ok("paused_get", {"id": p["id"]})
+        hdrs = [[k, v] for k, v in info["req_headers"] if k.lower() != "host"] + [["Host", "vhost.example"]]
+        self.panel.ok("paused_continue", {"id": p["id"], "edits": {
+            "url": info["url"].replace("127.0.0.1", "localhost"), "headers": hdrs}})
+        host = [v for k, v in call.result().json()["headers"] if k.lower() == "host"]
+        self.assertEqual(host, ["vhost.example"])
+
+    def test_edit_and_repeat_with_edited_url_host_updates_the_host_header(self):
+        self.reset_state()
+        self.fetch("/echo?rep=1")
+        f = self.inst.flow_for("rep=1")
+        info = self.panel.ok("retry_get", {"flow_id": f["id"]})
+        self.panel.ok("retry", {"flow_id": f["id"], "edits": {
+            "url": info["url"].replace("127.0.0.1", "localhost"), "headers": info["req_headers"]}})
+        hit = wait_for(lambda: next((h for h in self.up.hits_for("/echo?rep=1")[1:]), None), 10, 0.2, "replayed hit")
+        self.assertEqual([v for k, v in hit["headers"] if k.lower() == "host"], ["localhost:%d" % self.up.http_port])
+
     def test_request_pause_skip_sends_unchanged(self):
         self.reset_state(breakpoints=[bp()])
         call = self.bg("/echo", method="POST", data="same")

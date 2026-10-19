@@ -62,6 +62,16 @@ class GetWithQuery(unittest.TestCase):
         self.assertIn("Accept: application/json", argv)
         self.assertEqual(argv[-1], "https://api.example.test/v1/items?x=1&y=a%20b")
 
+    def test_r7a04_curl_omits_proxy_and_hop_headers(self):
+        # R7A-04: the proxy-only header leaked into a direct replay of the copied command.
+        hops = ["Proxy-Connection", "Proxy-Authorization", "Connection", "Keep-Alive", "TE", "Trailer",
+                "Upgrade", "Transfer-Encoding"]
+        out = generate(req(headers=[(name, "probe") for name in hops] + [("X-Keep", "yes")]), "curl", False)
+        argv = shlex.split(out.replace("\\\n", " "))
+        self.assertIn("X-Keep: yes", argv)
+        for name in hops:
+            self.assertNotIn(name + ": probe", argv)
+
     def test_mask_off_keeps_token(self):
         for target in IDS:
             out = generate(req(headers=self.headers), target, mask_secrets=False)
@@ -73,6 +83,14 @@ class PostJson(Tools):
     body = json.dumps({"a": [1, 2.5], "s": 'quote " and \'single\' $x `tick`\nnew\\line é ☃', "n": None, "t": True},
                       ensure_ascii=False).encode()
     headers = [("Content-Type", "application/json"), ("Content-Length", str(len(body)))]
+
+    def test_copy_as_masks_pw_body_field(self):
+        # R1A-02: Copy as uses the HAR redactor and must not expose a short password key.
+        request = req("POST", headers=self.headers, body=b'{"pw":"LEAK-pw","pwned":"safe"}')
+        masked = generate(request, "curl")
+        self.assertNotIn("LEAK-pw", masked)
+        self.assertIn("safe", masked)
+        self.assertIn("LEAK-pw", generate(request, "curl", mask_secrets=False))
 
     def test_python_native_literal(self):
         out = generate(req("POST", headers=self.headers, body=self.body), "python")
@@ -134,9 +152,12 @@ class FormData(unittest.TestCase):
     def test_form_body(self):
         headers = [("Content-Type", "application/x-www-form-urlencoded")]
         body = b"user=a%40b.test&pw=p%26w"
-        self.assertIn("--data-binary 'user=a%40b.test&pw=p%26w'", generate(req("POST", headers=headers, body=body), "curl"))
-        self.assertIn("data=%r" % body.decode(), generate(req("POST", headers=headers, body=body), "python"))
-        self.assertIn("user=a%40b.test&pw=p%26w", generate(req("POST", headers=headers, body=body), "wget"))
+        request = req("POST", headers=headers, body=body)
+        for target in ("curl", "python", "wget"):
+            self.assertNotIn("p%26w", generate(request, target), target)       # R1A-02: default masking includes pw
+        self.assertIn("--data-binary 'user=a%40b.test&pw=p%26w'", generate(request, "curl", mask_secrets=False))
+        self.assertIn("data=%r" % body.decode(), generate(request, "python", mask_secrets=False))
+        self.assertIn("user=a%40b.test&pw=p%26w", generate(request, "wget", mask_secrets=False))
 
     def test_httpie_raw_body_exact(self):
         out = generate(req("POST", body=b'{"a": 1}'), "httpie")

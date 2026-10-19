@@ -307,6 +307,82 @@ def _capture_user_call(fn, args):
         return False, exc, "".join(traceback.format_exception(type(exc), exc, exc.__traceback__, limit=8))
 
 
+class ScriptTimeout(BaseException):
+    """Raised inside a Python script's worker thread when it ran over PYTHON_TIMEOUT."""
+
+
+# Python script hooks run on their own small pool, never on asyncio's default executor: mitmproxy resolves every
+# upstream name (getaddrinfo) there. A script stuck in a loop used to keep one default-executor thread per call;
+# after cpu+4 of them no name resolved any more and every call through Rivis timed out until a restart (QA-01).
+PY_WORKERS = 4
+_py_pool = None
+
+
+def _pool():
+    global _py_pool
+    if _py_pool is None:
+        import concurrent.futures
+        _py_pool = concurrent.futures.ThreadPoolExecutor(PY_WORKERS, thread_name_prefix="rivis-script")
+    return _py_pool
+
+
+def _stop_thread(tid, exc=ScriptTimeout):
+    """Raise ScriptTimeout inside a runaway worker. Interrupts Python code (a busy loop) at its next bytecode;
+    a thread blocked in C (sleep, a socket) holds no lock the proxy needs and stops when that call returns.
+    exc=None takes back an exception that is still pending (not yet raised) in that thread."""
+    try:
+        import ctypes
+        return ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(tid), ctypes.py_object(exc) if exc else None) == 1
+    except Exception:  # noqa: BLE001 - no ctypes: the dedicated pool still keeps the proxy working
+        return False
+
+
+async def _in_worker(fn, args):
+    """fn(*args) on the script pool under PYTHON_TIMEOUT; on timeout the worker is stopped. Returns
+    (outcome, stopped) where stopped is False if the worker could not be stopped within a second."""
+    import threading
+    slot = {}
+    guard = threading.Lock()
+
+    # Review 0.9.7 #9: the stop and the end of the script are decided under one lock. The stopper sends ScriptTimeout
+    # only while the script has not finished; a script that finishes after the stop was sent takes the still-pending
+    # exception back before its pool thread moves on, so it can never land in the next script on that thread.
+    def finish():
+        with guard:
+            slot["done"] = True
+            if slot.get("stopping"):
+                _stop_thread(slot["tid"], None)
+
+    def tracked():
+        slot["tid"] = threading.get_ident()
+        try:
+            return fn(*args)
+        except ScriptTimeout:
+            return False, ScriptTimeout(), ""
+        finally:
+            try:
+                finish()
+            except ScriptTimeout:         # delivered inside finish(): it was the one pending exception, none is left
+                slot["done"] = True
+
+    future = asyncio.get_running_loop().run_in_executor(_pool(), tracked)
+    try:
+        return await asyncio.wait_for(asyncio.shield(future), PYTHON_TIMEOUT), True
+    except asyncio.TimeoutError:
+        if "tid" not in slot:                       # never started: every worker is busy with a stuck script
+            future.cancel()
+            raise asyncio.TimeoutError("busy")
+        with guard:
+            if not slot.get("done"):
+                slot["stopping"] = True
+                _stop_thread(slot["tid"])
+        for _ in range(20):
+            if slot.get("done"):
+                break
+            await asyncio.sleep(0.05)
+        raise asyncio.TimeoutError(bool(slot.get("done")))
+
+
 async def _capture_user_awaitable(awaitable):
     """Async equivalent that contains SystemExit inside the task that runs user code."""
     try:
@@ -427,11 +503,9 @@ class ProxyScripts:
                 try:
                     if item["file"].endswith(".py"):
                         try:
-                            outcome, namespace = await asyncio.wait_for(
-                                asyncio.to_thread(self._load_python, item), PYTHON_TIMEOUT)
+                            (outcome, namespace), _ = await _in_worker(self._load_python, (item,))
                         except asyncio.TimeoutError as exc:
-                            raise ScriptFailure(
-                                "top-level execution timed out after 2 s (the worker thread cannot be killed)") from exc
+                            raise ScriptFailure("top-level execution timed out after 2 s and was stopped") from exc
                         ok, value, short_traceback = outcome
                         if not ok:
                             raise ScriptFailure(f"{type(value).__name__}: {value}", short_traceback)
@@ -566,11 +640,18 @@ class ProxyScripts:
             result = value
         else:
             try:
-                ok, value, short_traceback = await asyncio.wait_for(
-                    asyncio.to_thread(_capture_user_call, fn, args), PYTHON_TIMEOUT)
+                (ok, value, short_traceback), _ = await _in_worker(_capture_user_call, (fn, args))
             except asyncio.TimeoutError as exc:
+                busy = bool(exc.args) and exc.args[0] == "busy"
+                stopped = busy or bool(exc.args and exc.args[0])
+                if busy:
+                    raise ScriptFailure("skipped: other scripts kept every script worker busy for 2 s") from exc
+                if not stopped:
+                    item["_stopped"] = True      # cannot be interrupted: stop calling it until the file is saved again
                 raise ScriptFailure(
-                    "timed out after 2 s (the worker thread cannot be killed; its result is ignored)") from exc
+                    "timed out after 2 s and was stopped; the call went on unchanged" if stopped else
+                    "timed out after 2 s and is still running: Rivis no longer calls this script until you save it again"
+                ) from exc
             if not ok:
                 raise ScriptFailure(f"{type(value).__name__}: {value}", short_traceback)
             result = value
@@ -701,7 +782,8 @@ class ProxyScripts:
         for line in msg.get("logs", []): ctx.log.info(f"script:{item['name']}: {line}")
         if msg.get("error"):
             lines = str(msg["error"]).splitlines()
-            raise ScriptFailure(lines[0] if lines else "JavaScript error", "\n".join(lines[:12]))
+            message = next((line.strip() for line in reversed(lines) if "SyntaxError:" in line), None) or (lines[0] if lines else "JavaScript error")
+            raise ScriptFailure(message, "\n".join(lines[:12]))  # R3A-06: Node leads with file:line; the cause is lower down
         if not msg.get("invoked", True):
             return NO_HOOK
         context.clear(); context.update(msg.get("context") or {})
@@ -719,6 +801,7 @@ class ProxyScripts:
                 break
             if not item["_re"].search(flow.request.pretty_url): continue
             if item.get("method") and item["method"].upper() != flow.request.method: continue
+            if item.get("_stopped"): continue
             context = self.contexts.setdefault(item["file"], ScriptContext())
             context.update(flow_id=flow.id, project=self.project)
             call_context = ScriptContext(copy.deepcopy(context))

@@ -14,15 +14,17 @@ Tested on mitmproxy 12.2.3. Re-test after any mitmproxy upgrade (already a secur
 import json
 import importlib
 import math
+import mimetypes
 import os
 import re
 import secrets
 import subprocess
 import sys
 import tempfile
+import zlib
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
-from mitmproxy import ctx, http
+from mitmproxy import ctx, flowfilter, http
 from mitmproxy.addonmanager import traverse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -52,13 +54,16 @@ from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRODUCT,
                           atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
                           confined_path, migrate_collection, migrate_rules, project_profile,
                           project_profiles, project_state, tls_config, tls_covering, tls_update,
-                          user_regex)
+                          throttle_shorthand, user_regex)
 from proxy_codegen import TARGETS, generate
 import proxy_redact
 import devices
 importlib.reload(devices)
-from proxy_compose import ComposerStore, normalize_request
+from proxy_compose import ComposerStore, normalize_request, normalize_url
+from proxy_rule_validation import explain_rules, map_remote_warning
 from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, find_jwts)
+import proxy_source        # helpers only (summaries, the list-filter clause); the add-on itself is loaded by the CLI
+importlib.reload(proxy_source)
 
 DEFAULT_STATE = os.path.join(STATE_ROOT, "projects", "default")
 _VERSION_AT_LOAD = None
@@ -78,9 +83,12 @@ SCRIPT_TEMPLATES = {
     "latency": "add latency to one endpoint",
     "token": "log every token refresh",
 }
-MAX_PANEL_REQUEST_BYTES = 8 * 1024 * 1024
-MAX_PANEL_TEXT_BYTES = 2 * 1024 * 1024
-MAX_PANEL_VALUES = 10000
+# Bounds on what the signed-in panel may send. Sized for real QA work (QA-02, QA-06): a HAR of a whole user journey
+# from Proxyman, Charles or a browser (thousands of calls, ~80 JSON values per call) and editing a large catalogue or
+# transaction-history body at a breakpoint or in Map Local. The old 8 MiB / 2 MiB / 10 000 refused a 55-call HAR.
+MAX_PANEL_REQUEST_BYTES = 64 * 1024 * 1024
+MAX_PANEL_TEXT_BYTES = 32 * 1024 * 1024
+MAX_PANEL_VALUES = 1000000
 MAX_PANEL_DEPTH = 16
 
 
@@ -162,6 +170,120 @@ def patch_mitmweb_js(source, warn=None):
     return patched if n == 1 else source
 
 
+# ── mitmweb's response viewer: text that is text, bodies too big to paint ───────
+# R6B-03: mitmproxy's automatic view treats any body whose first bytes are mostly >0x7e as binary, so valid UTF-8
+# Arabic or emoji text/plain showed as a hex dump. This view claims such bodies above Hex Dump (0.5) and below every
+# format-specific view (1.0); pure ASCII is left to Raw, images to Image, real binary (control bytes) to Hex Dump.
+class Utf8TextView:
+    name = "Text"
+    syntax_highlight = "none"
+
+    @staticmethod
+    def _text(data):
+        if not data or data.isascii() or b"\x00" in data:
+            return None
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        sample = text[:65536]
+        ctrl = sum(1 for c in sample if c < " " and c not in "\t\n\r\f\v\x1b")
+        return text if ctrl <= len(sample) // 100 else None
+
+    def prettify(self, data, metadata):
+        text = self._text(data)
+        return text if text is not None else data.decode("utf-8", "replace")
+
+    def render_priority(self, data, metadata):
+        if (getattr(metadata, "content_type", None) or "").lower().startswith("image/"):
+            return 0
+        return 0.6 if self._text(data) is not None else 0
+
+
+# R6B-07: mitmweb paints a view's text into one <pre>; a 5 MB one-line script or a 20 MB JSON string is wider than
+# Chromium can lay out (33,554,430 px), so the block stayed empty. Views are clipped to their first VIEW_CLIP
+# characters, with the size in the view's title and a last line saying how to get all of it (panel.js turns the
+# title into Download / Open raw links).
+VIEW_CLIP = 256 * 1024
+
+
+def _size(n):
+    return "%.1f MB" % (n / 1048576) if n >= 1048576 else "%d KB" % max(1, round(n / 1024))
+
+
+# R10-01: a content view is built on the event loop that also moves every call, so rendering a 400 MB body stalled all
+# traffic for 22 s (50 MB: 3 s). Only the first VIEW_SOURCE bytes of a body larger than VIEW_SOURCE_LIMIT are rendered
+# (decoded incrementally when gzip/deflate), which is still far more text than VIEW_CLIP shows. Bodies up to the limit
+# render exactly as before; Download / Open raw still give the whole body.
+VIEW_SOURCE_LIMIT = 4 * 1024 * 1024
+VIEW_SOURCE = 1024 * 1024
+
+
+def body_prefix(message, limit):
+    """(first `limit` decoded bytes, True when the body is longer) without decoding the rest — or None when the
+    encoding cannot be decoded piecewise here (the caller decodes the whole body)."""
+    raw = message.raw_content or b""
+    enc = (message.headers.get("content-encoding") or "").strip().lower()
+    if enc in ("", "identity", "none"):
+        return raw[:limit], len(raw) > limit
+    if enc in ("gzip", "x-gzip", "deflate"):
+        for wbits in ((31,) if "gzip" in enc else (15, -15)):
+            try:
+                d = zlib.decompressobj(wbits)
+                out = d.decompress(raw, limit)
+                return out, bool(d.unconsumed_tail) or len(out) >= limit
+            except zlib.error:
+                continue
+    return None
+
+
+def preview_message(message):
+    """A copy of message whose body is only its first VIEW_SOURCE decoded bytes, or None when it is small enough to
+    render whole (or cannot be cut)."""
+    raw = getattr(message, "raw_content", None)
+    if not isinstance(raw, (bytes, bytearray)) or len(raw) <= VIEW_SOURCE_LIMIT or not hasattr(message, "headers"):
+        return None
+    cut = body_prefix(message, VIEW_SOURCE)
+    if cut is None:
+        return None
+    preview = message.copy()
+    preview.headers.pop("content-encoding", None)
+    preview.raw_content = cut[0]
+    return preview
+
+
+def request_url(r):
+    """r.pretty_url with an IPv6 host in brackets (R10-09): mitmproxy writes http://::1:8080/x, which curl and every
+    URL parser reject as a bad port."""
+    url = r.pretty_url
+    if getattr(r, "first_line_format", "") == "authority":
+        return url
+    for host in (r.pretty_host, r.host):
+        if host and ":" in host and not host.startswith("["):
+            prefix = "%s://%s" % (r.scheme, host)
+            if url.startswith(prefix):
+                return "%s://[%s]%s" % (r.scheme, host, url[len(prefix):])
+    return url
+
+
+def clip_view(result, total=None, partial=False):
+    """A mitmweb content-view reply ({text, view_name, description, …}) cut to VIEW_CLIP characters; other replies
+    (a list of websocket messages, an error) unchanged. partial: the view was built from the body's start only, so it
+    says so even when its text is short."""
+    if not isinstance(result, dict) or not isinstance(result.get("text"), str):
+        return result
+    if len(result["text"]) <= VIEW_CLIP and not partial:
+        return result
+    text = result["text"]
+    cut = text.rfind("\n", VIEW_CLIP - 4096, VIEW_CLIP) if len(text) > VIEW_CLIP else len(text)
+    cut = cut if cut > 0 else min(VIEW_CLIP, len(text))
+    note = "showing first %s of %s" % (_size(cut), _size(max(total or 0, len(text))))
+    out = dict(result)
+    out["text"] = text[:cut] + "\n\n… [%s — Download or Open raw for the whole body]" % note
+    out["description"] = ((result.get("description") or "") + " (" + note + ")").strip()
+    return out
+
+
 class ProxyPanel:
     def __init__(self):
         self._device_jobs = devices.Jobs()
@@ -176,6 +298,7 @@ class ProxyPanel:
         self.show_dns = False
         self.focused_host = None
         self.graphql_operation = None
+        self.source = None              # "<kind>|<device>|<app id>" (one app) or "<kind>|<device>|" (one device)
         self.selected_flow_id = None
         self._coll_count_cache = {}
         self._viewer_cache = {}
@@ -246,7 +369,8 @@ class ProxyPanel:
                 if not isinstance(rule, dict):
                     raise ValueError("each rule must be an object")
             throttle = str(cfg.get("throttle", "off") or "off").lower()
-            if throttle not in {p["id"] for p in PROFILES} and not re.fullmatch(r"\d+ms(/\d+kbps)?", throttle):
+            shorthand = throttle_shorthand(throttle)
+            if throttle not in {p["id"] for p in PROFILES} and shorthand is None:
                 raise ValueError("unknown throttle '%s'" % throttle)
             if cfg.get("throttle_match"):
                 user_regex(cfg["throttle_match"])
@@ -289,7 +413,7 @@ class ProxyPanel:
             if depth > MAX_PANEL_DEPTH:
                 raise PanelError("request is nested too deeply")
             if isinstance(item, str) and len(item.encode("utf-8")) > MAX_PANEL_TEXT_BYTES:
-                raise PanelError("text value exceeds the 2 MiB panel limit")
+                raise PanelError("text value exceeds the %d MiB panel limit" % (MAX_PANEL_TEXT_BYTES // (1024 * 1024)))
             if isinstance(item, dict):
                 stack.extend((key, depth + 1) for key in item)
                 stack.extend((child, depth + 1) for child in item.values())
@@ -309,6 +433,11 @@ class ProxyPanel:
             raise PanelError("name: letters, digits, . _ - only (max 64)")
         if r.get("action") not in ACTIONS:
             raise PanelError("unknown action")
+        if "method" in r:
+            if r["method"] is not None and not isinstance(r["method"], str):
+                raise PanelError("method must be text")
+            if not (r["method"] or "").strip():
+                del r["method"]                     # "" / null = any method, as the engine reads it
         for k in ("match", "replace"):
             if k in r:
                 try:
@@ -386,6 +515,8 @@ class ProxyPanel:
             "home": os.path.expanduser("~"),          # the panel shows file paths as ~/… (shorter, and no temp-dir noise)
             "rules_error": self._rules_error,
             "rules": cfg["rules"],
+            "rule_warnings": {r.get("name", "?"): w for r in cfg["rules"] if isinstance(r, dict)
+                              for w in [map_remote_warning(r)] if w},
             "rules_outside": self._rules_outside(cfg),
             "throttle": cfg.get("throttle", "off"),
             "throttle_match": cfg.get("throttle_match", ""),
@@ -397,6 +528,7 @@ class ProxyPanel:
             "collections": self.collections(cfg),
             "sessions": self.sessions(),
             "skipped_rules": self.skipped_rules(),
+            "rule_hits": self.rule_hits(),
             "scripts": self.scripts(cfg),
             "script_status": self.script_status(),
             "retention": self.retention_state(),
@@ -408,6 +540,8 @@ class ProxyPanel:
             "project_only": self.project_only,
             "show_dns": self.show_dns,
             "graphql_operation": self.graphql_operation,
+            "source": self.source,
+            "sources": proxy_source.summarize(self.all_flows(), self._listed),
             "tls": tls,
             "composer": self.composer_state(),
             "codegen_targets": [{"id": k, "name": v} for k, v in TARGETS],
@@ -435,11 +569,49 @@ class ProxyPanel:
                 found.append(addon)
         return found
 
+    @staticmethod
+    def _edit_request(req, e, hdr):
+        """Apply method/url/headers edits from the paused sheet / Edit & Repeat. R2A-01: the sheet sends EVERY header back,
+        so an edited URL host would be undone by the stale Host header; when the URL host changed and the sheet's Host is
+        still the old one (the user did not touch it), the Host follows the new URL."""
+        if e.get("method"):
+            req.method = e["method"].upper()
+        old_host = req.headers.get("Host")
+        if e.get("url") and e["url"] != req.url:
+            req.url = normalize_url(e["url"])   # R7A-01: the sheet can contain a browser-style Unicode URL
+        new_host = req.headers.get("Host")
+        if "headers" in e:
+            req.headers = hdr(e["headers"])
+            if new_host != old_host and req.headers.get("Host") == old_host:
+                req.headers["Host"] = new_host
+
     def skipped_rules(self):
         for addon in self._addons():
             if addon.__class__.__name__ == "ProxyRules":
-                return list(getattr(addon, "skipped_rules", []))
+                failed = getattr(addon, "failed_rules", {})     # R2A-02: mock files that vanished after load
+                return list(getattr(addon, "skipped_rules", [])) + [
+                    {"name": n, "error": "mock file unusable, requests get 502: " + e} for n, e in failed.items()]
         return []
+
+    def rule_hits(self):
+        for addon in self._addons():
+            if addon.__class__.__name__ == "ProxyRules" and hasattr(addon, "hit_summary"):
+                return addon.hit_summary()
+        return None
+
+    def rule_test(self, flow_id):
+        """Explain, rule by rule, what the current rules would do to this call (the panel's "Test against this call")."""
+        f = self.flow_any(flow_id)
+        if not hasattr(f, "request"):
+            raise PanelError("this row is a tunnel to a host that is not decrypted: there is no URL to test")
+        cfg = self.load_cfg()
+        try:
+            confdir = os.path.expanduser(ctx.options.confdir)
+        except (AttributeError, KeyError):
+            confdir = None
+        state_dir = os.path.dirname(os.path.abspath(os.path.expanduser(self.rules_path)))
+        rows = explain_rules(cfg.get("rules", []), state_dir, f.request.pretty_url, f.request.method, confdir)
+        return {"url": f.request.pretty_url, "method": f.request.method, "rules": rows}
 
     def script_status(self):
         for addon in self._addons():
@@ -676,6 +848,10 @@ class ProxyPanel:
     def _content(message, limit=None):
         if message is None:
             return b""
+        if limit:
+            cut = body_prefix(message, limit)          # R10-01: a 400 MB body is not decoded to read its first MB
+            if cut is not None:
+                return cut[0]
         try:
             content = message.get_content(strict=False) or b""
         except Exception:
@@ -873,6 +1049,17 @@ class ProxyPanel:
                         pass
         return sorted(out, key=lambda m: m["created"], reverse=True)
 
+    def read_session(self, name):
+        """The saved flows of a session; a damaged (e.g. truncated) file is a clear 400 naming it, not a 500 (QA-10)."""
+        from mitmproxy import exceptions, io as mio
+        fpath, _ = self.sess_paths(name)
+        try:
+            with open(fpath, "rb") as fh:
+                return list(mio.FlowReader(fh).stream())
+        except exceptions.FlowReadException as e:
+            raise PanelError("session '%s' is damaged and cannot be read (%s). Delete it, or keep the file %s aside."
+                             % (name, e, fpath))
+
     @staticmethod
     def sess_paths(name):
         if not SAFE_NAME.fullmatch(name or ""):
@@ -906,7 +1093,40 @@ class ProxyPanel:
             q = re.escape(self.graphql_operation).replace("\\", "\\\\").replace("'", "\\'")
             g = f"( ~u '{q}' | ~bq '{q}' )"
             base = f"{base} & {g}" if base else g
+        if self.source:
+            s = proxy_source.filter_clause(self.source)
+            base = f"{base} & {s}" if base else s
         return base
+
+    def _listed(self, f):
+        """Could the list show this call without the source limit? (DNS / UDP / TCP rows only in the matching views;
+        R8C-06: under Show → <project> only, only the project's calls, so the Source menu never counts hidden calls.)"""
+        if not (isinstance(f, http.HTTPFlow) or self.show_dns or (self._tls_tunnels and getattr(f, "type", "") == "tcp")):
+            return False
+        pf = self.project_filter(self.view_profile) if self.project_only else ""
+        if not pf:
+            return True
+        cached = getattr(self, "_listed_pf", (None, None))
+        if cached[0] != pf:
+            try:
+                cached = (pf, flowfilter.parse(pf))
+            except Exception:
+                cached = (pf, None)
+            self._listed_pf = cached
+        return cached[1] is None or bool(cached[1](f))
+
+    @staticmethod
+    def source_from_filter(text):
+        """The source selection inside a view filter (the inverse of proxy_source.filter_clause), or None."""
+        if "!~meta '^rivis_source_key: '" in (text or ""):
+            return proxy_source.UNKNOWN["key"]          # R8C-03: the Unknown choice (never stamped, or stamped unknown)
+        m = re.search(r"~meta '\^rivis_source_key: ((?:[^'\\]|\\.)*)'", text or "")
+        if not m:
+            return None
+        body = m.group(1).replace("\\'", "'").replace("\\\\", "\\")
+        whole = body.endswith("$") and not body.endswith("\\$")
+        sel = re.sub(r"\\(.)", r"\1", body[:-1] if whole else body)
+        return sel if whole or sel.endswith("|") else None
 
     def _sync_view_state(self):
         """Reflect edits made in mitmweb's filter box without writing the option."""
@@ -922,6 +1142,7 @@ class ProxyPanel:
             self.focused_host = re.sub(r"\\(.)", r"\1", escaped)
         else:
             self.focused_host = None
+        self.source = self.source_from_filter(current)
 
     def _write_view_filter(self):
         self._panel_view_filter = self.view_filter()
@@ -1070,7 +1291,7 @@ class ProxyPanel:
         headers = [(k, v) for k, v in r.headers.items(multi=True)]
         if body != raw:     # body was decoded for us — the Content-Encoding header no longer applies
             headers = [(k, v) for k, v in headers if k.lower() != "content-encoding"]
-        return {"method": r.method, "url": r.pretty_url, "headers": headers, "body": body}
+        return {"method": r.method, "url": request_url(r), "headers": headers, "body": body}
 
     def _compose_spec(self, f):
         """Prefill the Compose tab from a captured call."""
@@ -1090,7 +1311,8 @@ class ProxyPanel:
         elif r.raw_content:
             if "json" in ctype or text.lstrip().startswith(("{", "[")):
                 try:
-                    body, mode = json.dumps(json.loads(text), indent=2, ensure_ascii=False), "json"
+                    json.loads(text)      # R3A-02: validate for the JSON editor, but keep signed request bytes intact
+                    body, mode = text, "json"
                 except (ValueError, RecursionError):
                     body, mode = text, "raw"
             elif "x-www-form-urlencoded" in ctype:
@@ -1204,6 +1426,8 @@ class ProxyPanel:
             return {"id": flow_id}
         if op == "devices":
             return self.devices_state()
+        if op == "rule_test":
+            return self.rule_test(a.get("flow_id"))
         if op == "device_job":
             return {"job": self._device_jobs.summary()}
         if op == "update_check":
@@ -1254,7 +1478,7 @@ class ProxyPanel:
                 raise PanelError(str(e))
         cfg = self.load_cfg()
         if op == "viewer":
-            return self._flow_viewer(self.flow(a["flow_id"]))
+            return self._flow_viewer(self.flow(a["flow_id"]), VIEW_SOURCE_LIMIT)
         elif op == "viewer_summaries":
             return {"viewers": self.viewer_summaries(a.get("limit", 12))}
         elif op == "script_new":
@@ -1312,12 +1536,26 @@ class ProxyPanel:
         elif op == "graphql_filter":
             self.graphql_operation = a.get("name") or None
             self._write_view_filter()
+        elif op == "source":           # Source chooser: one app, one device ("<kind>|<device>|"), or everything (None)
+            sel = a.get("source") or None
+            if sel is not None and not (isinstance(sel, str) and len(sel) <= 400 and sel.count("|") >= 2
+                                        and not re.search(r"[\x00-\x1f\x7f]", sel)):
+                raise PanelError("source: a device or app from the Source menu")   # it becomes part of a filter
+            self.source = sel
+            self._write_view_filter()
         elif op == "toggle":
-            self.find(cfg, a["name"])["enabled"] = bool(a["enabled"])
+            r = self.find(cfg, a["name"])
+            r["enabled"] = bool(a["enabled"])
+            if r["enabled"]:
+                r.pop("draft", None)                 # switched on by hand: no longer a discardable draft
             self.save_cfg(cfg)
         elif op == "delete":
             r = self.find(cfg, a["name"])
             cfg["rules"].remove(r)
+            if r.get("draft") and r.get("action") == "map_local":   # a never-saved draft: its mock file goes too
+                path = os.path.realpath(os.path.expanduser(r.get("file") or ""))
+                if os.path.dirname(path) == os.path.realpath(MOCK_DIR) and os.path.isfile(path):
+                    os.remove(path)
             self.save_cfg(cfg)
         elif op == "add":
             r = dict(a["rule"])
@@ -1341,6 +1579,8 @@ class ProxyPanel:
                 if r.get("action") == "map_local" and matches and r.get("method") in (None, "", f.request.method):
                     if not self._servable_mock(r):   # an example/template rule whose file is missing or outside
                         continue                     # the project would be switched on and serve nothing
+                    if r.get("draft"):               # an unsaved draft stays off until it is saved
+                        return {"name": r["name"], "draft": True}
                     r["enabled"] = True
                     self.save_cfg(cfg)
                     return {"name": r["name"], "existing": True}
@@ -1354,15 +1594,21 @@ class ProxyPanel:
             except (ValueError, RecursionError):
                 pass
             atomic_write_bytes(path, body)
-            r = {"name": name, "enabled": True, "match": self.flow_regex(f), "method": f.request.method,
+            # From the panel the new mock is a draft until its first Save, as in Proxyman: opening the editor and going
+            # Back used to leave an active mock answering the next calls (overnight QA r1 B-03). The API default and
+            # `rivis mock` stay "on at once".
+            draft = a.get("draft") is True
+            r = {"name": name, "enabled": not draft, "match": self.flow_regex(f), "method": f.request.method,
                  "action": "map_local", "file": path, "status": f.response.status_code if f.response else 200,
                  "note": f"from {f.request.method} {f.request.pretty_url[:120]}"}
+            if draft:
+                r["draft"] = True
             if f.response:
                 unsafe = {"content-length", "transfer-encoding", "content-encoding"}
                 r["headers"] = [[k, v] for k, v in f.response.headers.items(multi=True) if k.lower() not in unsafe]
             cfg["rules"].append(r)
             self.save_cfg(cfg)
-            return {"name": name}
+            return {"name": name, "draft": draft}
         elif op == "quick":         # force status / block / delay on the selected call's endpoint
             f = self.flow(a["flow_id"])
             kind = a["kind"]
@@ -1487,12 +1733,7 @@ class ProxyPanel:
                         if e.get("body") is not None and e["body"] != (f.response.get_text(strict=False) or ""):
                             f.response.text = e["body"]
                     else:
-                        if e.get("method"):
-                            f.request.method = e["method"].upper()
-                        if e.get("url"):
-                            f.request.url = e["url"]
-                        if "headers" in e:
-                            f.request.headers = hdr(e["headers"])
+                        self._edit_request(f.request, e, hdr)
                         if e.get("body") is not None and e["body"] != (f.request.get_text(strict=False) or ""):
                             f.request.text = e["body"]
                     after = (getattr(msg, "status_code", None), f.request.method, f.request.url,
@@ -1549,7 +1790,8 @@ class ProxyPanel:
             atomic_write_text(path, a.get("body") or "{}\n")
             r = {"name": name, "enabled": True, "match": match,
                  "action": "map_local", "file": path, "status": http_status(200 if a.get("status") in (None, "") else a["status"]),
-                 "headers": {"Content-Type": "application/json"},
+                 # R4B-03: browser module/style MIME checks use the URL extension, not the generated mock filename.
+                 "headers": {"Content-Type": mimetypes.guess_type(urlsplit(a.get("path") or a.get("host") or "/").path)[0] or "application/json"},
                  "note": f"manual: {a.get('host')}{a.get('path') or '/'}"}
             if method:
                 r["method"] = method
@@ -1562,6 +1804,10 @@ class ProxyPanel:
                 project_profile(a["project"])  # validate before changing the view
                 self.view_project = a["project"]
             self.project_only = bool(a.get("project_only"))
+            if not self.project_only:
+                # R9-02: "All traffic" kept the last project as the view, so the header, status bar and empty state
+                # went on saying "NEO" until a restart. Showing everything is the started project's view again.
+                self.view_project = self.active_project
             self.show_dns = bool(a.get("show_dns"))
             self._write_view_filter()
         elif op == "filter_check":     # the list filter is evaluated here: an invalid one closes mitmweb's websocket, so the panel asks first
@@ -1583,7 +1829,7 @@ class ProxyPanel:
         elif op == "export":           # Copy URL / Copy cURL
             f = self.flow(a["flow_id"])
             if a.get("fmt") == "url":
-                return {"text": f.request.pretty_url}
+                return {"text": request_url(f.request)}
             # mask secrets unless the panel explicitly unticked "Mask secrets" (bank policy: no shared tokens)
             return {"text": generate(self._flow_request(f), "curl", a.get("mask", True) is not False)}
         elif op == "retry":            # Edit & Retry: copy the call, apply edits, send it again
@@ -1595,12 +1841,8 @@ class ProxyPanel:
             nf.response = None
             nf.error = None
             e = a.get("edits") or {}
-            if e.get("method"):
-                nf.request.method = e["method"].upper()
-            if e.get("url"):
-                nf.request.url = e["url"]
-            if "headers" in e:
-                nf.request.headers = mhttp.Headers([(str(k).encode(), str(v).encode()) for k, v in e["headers"] if str(k).strip()])
+            self._edit_request(nf.request, e, lambda rows: mhttp.Headers(
+                [(str(k).encode(), str(v).encode()) for k, v in rows if str(k).strip()]))
             if e.get("body") is not None and e["body"] != (f.request.get_text(strict=False) or ""):
                 nf.request.text = e["body"]
             same = (nf.request.method, nf.request.url, tuple(nf.request.headers.fields), nf.request.raw_content or b"") == \
@@ -1635,6 +1877,10 @@ class ProxyPanel:
                 raise
             except Exception as e:   # flow construction depends on mitmproxy internals — report, don't 500
                 raise PanelError("cannot send: %s: %s" % (type(e).__name__, e))
+        elif op == "flow_result":      # R2A-03: mitmweb 12.2.3 answers GET /flows/<id> with 405, so the CLI asks here
+            f = self.flow(a["id"])
+            return {"status": f.response.status_code if f.response else None,
+                    "error": (f.error.msg if f.error else None)}
         elif op == "compose_save":
             self.composer().save(a.get("name"), self._clean_spec(a.get("spec")), overwrite=a.get("overwrite") is True)
             return {"name": a["name"]}
@@ -1678,10 +1924,29 @@ class ProxyPanel:
             fpath, mpath = self.sess_paths(name)
             if (os.path.exists(fpath) or os.path.exists(mpath)) and a.get("overwrite") is not True:
                 raise PanelError("a session named '%s' already exists" % name)
-            flows = [f for f in self.all_flows() if not getattr(f, "intercepted", False)]
+            # Keep the same call types as the list: TLS "all" hides tunnel rows, and the
+            # normal view hides DNS/UDP. Otherwise the saved count disagrees with the list
+            # and with HAR (which can export HTTP calls only).
+            flows = [f for f in self.all_flows() if not getattr(f, "intercepted", False) and
+                     (self.show_dns or isinstance(f, http.HTTPFlow) or
+                      (self._tls_tunnels and getattr(f, "type", "") == "tcp"))]
             if a.get("visible_only"):
-                vis = {f.id for f in ctx.master.view}
-                flows = [f for f in flows if f.id in vis]
+                from mitmproxy import flowfilter
+                search = a.get("search_filter", "")
+                if not isinstance(search, str):
+                    raise PanelError("current filter must be text")
+                view = ctx.options.view_filter or ""
+                try:
+                    if search:
+                        flowfilter.parse(search)
+                    flows = [f for f in flows if (not view or flowfilter.match(view, f)) and
+                             (not search or flowfilter.match(search, f))]
+                except ValueError as exc:
+                    raise PanelError("current filter is invalid: %s" % exc)
+                # R7A-05: iterating ctx.master.view ignored the browser's Search filter, including a zero-result
+                # search; saving that view disclosed hidden calls in the session and its HAR.
+                if not flows:
+                    raise PanelError("no calls match the current filter; nothing was saved")
             os.makedirs(SESS_DIR, exist_ok=True)
             fd, tmp = tempfile.mkstemp(dir=SESS_DIR, prefix=".sess-")
             with os.fdopen(fd, "wb") as fh:
@@ -1696,12 +1961,14 @@ class ProxyPanel:
             atomic_json(mpath, meta)
             return {"count": len(flows)}
         elif op == "sess_load":
-            from mitmproxy import io as mio
-            fpath, _ = self.sess_paths(a["name"])
-            with open(fpath, "rb") as fh:
-                flows = list(mio.FlowReader(fh).stream())
+            flows = self.read_session(a["name"])
             if a.get("replace"):
-                ctx.master.view.clear()
+                # keep calls paused at a breakpoint: view.clear() dropped them too, the sheet closed and the app's
+                # call hung until its own timeout with nothing left to Continue (QA-03)
+                view = ctx.master.view
+                gone = [f for f in list(view) if not getattr(f, "intercepted", False)]
+                if gone:
+                    view.remove(gone)
             known = {f.id for f in self.all_flows()}
             new = [f for f in flows if f.id not in known]
             ctx.master.view.add(new)
@@ -1721,12 +1988,16 @@ class ProxyPanel:
             # timings, and calls without a response were dropped. A session is a capture of evidence, so it is
             # exported from the complete saved flows by mitmproxy's own HAR writer (request headers and body, real
             # port and timings, failed calls with their error), then redacted like every HAR unless secrets are asked for.
-            from mitmproxy import io as mio
             from mitmproxy.addons.savehar import SaveHar
-            fpath, _ = self.sess_paths(a["name"])
-            with open(fpath, "rb") as fh:
-                flows = [f for f in mio.FlowReader(fh).stream() if isinstance(f, http.HTTPFlow)]
-            return self._har_reply(SaveHar().make_har(flows), a)
+            flows = [f for f in self.read_session(a["name"]) if isinstance(f, http.HTTPFlow)]
+            har = SaveHar().make_har(flows)
+            entries = har.get("log", {}).get("entries", [])
+            if len(entries) == len(flows):    # HAR allows custom fields with a leading "_": which device / app sent it
+                for e, f in zip(entries, flows):
+                    src = f.metadata.get("rivis_source")
+                    if isinstance(src, dict):
+                        e["_rivisSource"] = {k: src.get(k, "") for k in ("kind", "device", "app", "id")}
+            return self._har_reply(har, a)
         # ── collections ──
         elif op == "coll_record":
             name = (a.get("name") or "").strip()
@@ -1758,6 +2029,11 @@ class ProxyPanel:
             self.save_cfg(cfg)
         elif op == "coll_strict":
             cfg.setdefault("collections", {})["strict"] = bool(a.get("strict"))
+            self.save_cfg(cfg)
+        elif op == "coll_match":
+            pattern = a.get("record_match") or "."
+            user_regex(pattern)
+            cfg.setdefault("collections", {})["record_match"] = pattern  # R3A-04: imported HARs need an editable strict scope
             self.save_cfg(cfg)
         elif op == "coll_delete":
             path = self.coll_file(a["name"])
@@ -1797,12 +2073,13 @@ class ProxyPanel:
             if os.path.exists(path) and a.get("overwrite") is not True:
                 raise PanelError("a collection named '%s' already exists" % name)
             har = a.get("har") or {}
-            entries = self.from_har(har)
+            skipped = []
+            entries = self.from_har(har, skipped)
             if not entries:
                 raise PanelError("no usable entries in that HAR")
             self.flush_collection(name, forget=True)
             self._write_coll({"name": name, "created": __import__("time").time(), "entries": entries})
-            return {"count": len(entries)}
+            return {"count": len(entries), "skipped": skipped[:20], "skipped_count": len(skipped)}
         elif op == "mockfile_get":
             r = self.find(cfg, a["name"])
             if r.get("action") != "map_local":
@@ -1811,9 +2088,17 @@ class ProxyPanel:
             if os.path.dirname(path) != os.path.realpath(MOCK_DIR):
                 raise PanelError("only mocks in the active project's state directory can be opened in the panel")
             with open(path, "rb") as fh:
+                raw = fh.read()
                 headers = r.get("headers") or {}
                 header_rows = list(headers.items()) if isinstance(headers, dict) else headers
-                return {"content": fh.read().decode("utf-8", "replace"), "status": r.get("status", 200),
+                try:
+                    raw.decode("utf-8")
+                    binary = False
+                except UnicodeDecodeError:
+                    binary = True          # an image, protobuf…: shown as text, but Save keeps the bytes unless edited
+                return {"content": raw.decode("utf-8", "replace"), "status": r.get("status", 200), "binary": binary,
+                        "draft": r.get("draft") is True,
+                        "size": len(raw),
                         "headers": [[k, v] for k, v in header_rows],
                         "match": r.get("match"), "method": r.get("method"),
                         "file": path, "editable": os.path.dirname(path) == os.path.realpath(MOCK_DIR)}
@@ -1825,11 +2110,23 @@ class ProxyPanel:
             if os.path.dirname(path) != os.path.realpath(MOCK_DIR):
                 raise PanelError("only files in the active project's state directory can be edited here")
             self.mock_path(os.path.basename(path)[:-5])   # name check
-            atomic_write_text(path, a["content"])
+            # R6B-09: the panel leaves "content" out when the body is unchanged (re-sending 20 MB on every Save froze
+            # it); then only status / headers / on change and the file is not even read.
+            if "content" in a:
+                if not isinstance(a["content"], str):
+                    raise PanelError("content must be text")
+                with open(path, "rb") as fh:
+                    raw = fh.read()
+                # a binary mock comes back from the editor as its replacement-character text: writing that turned every
+                # non-UTF-8 byte into U+FFFD (QA-08). Unchanged text = keep the file's bytes, change only status/headers.
+                if a["content"] != raw.decode("utf-8", "replace"):
+                    atomic_write_text(path, a["content"])
             if str(a.get("status", "")).strip():
                 r["status"] = http_status(a["status"])
             if isinstance(a.get("headers"), list):
                 r["headers"] = [[str(k), str(v)] for k, v in a["headers"] if str(k).strip()]
+            if r.pop("draft", None):
+                r["enabled"] = True          # the first Save turns a new Map Local on
             self.save_cfg(cfg)
         else:
             raise PanelError(f"unknown op {op}")
@@ -1859,7 +2156,10 @@ class ProxyPanel:
                 "startedDateTime": datetime.datetime.fromtimestamp(e.get("recorded_at", 0), datetime.timezone.utc).isoformat(),
                 "time": 0,
                 "request": {"method": e["method"], "url": f"{e.get('scheme', 'https')}://{e['host']}{e['path']}{q}",
-                            "httpVersion": "HTTP/1.1", "headers": [], "queryString": [], "cookies": [], "headersSize": -1, "bodySize": -1},
+                            "httpVersion": "HTTP/1.1", "headers": [], "queryString": [], "cookies": [], "headersSize": -1, "bodySize": -1,
+                            # collections keep only a fingerprint of the request body (not the body): carry it, so an
+                            # exported collection imported elsewhere still replays each POST by its body
+                            **({"_rivisRequestBodyHash": e["req_body"]} if e.get("req_body") else {})},
                 "response": {"status": e["status"], "statusText": "", "httpVersion": "HTTP/1.1",
                              "headers": [{"name": k, "value": v} for k, v in e["headers"]], "cookies": [],
                              "content": content, "redirectURL": "", "headersSize": -1, "bodySize": -1},
@@ -1867,20 +2167,34 @@ class ProxyPanel:
         return {"log": {"version": "1.2", "creator": {"name": PRODUCT["name"], "version": "1"}, "entries": out}}
 
     @staticmethod
-    def from_har(har):
+    def from_har(har, skipped=None):
         import base64
         import time as _t
         from urllib.parse import parse_qsl, urlencode, urlsplit
+        from proxy_collections import body_hash
         out = []
         for e in ((har or {}).get("log") or {}).get("entries", [])[:10000]:
             try:
                 req, resp = e["request"], e["response"]
                 u = urlsplit(req["url"])
                 c = resp.get("content") or {}
+                # R2A-05: keep the request body (hashed like a live recording) so calls differing only by body replay apart
+                post = req.get("postData") or {}
+                if post.get("text") is not None:
+                    raw = base64.b64decode(post["text"]) if post.get("encoding") == "base64" else str(post["text"]).encode("utf-8")
+                elif post.get("params"):
+                    raw = urlencode([(p["name"], p.get("value", "")) for p in post["params"]]).encode("utf-8")
+                else:
+                    raw = None
+                hashed = req.get("_rivisRequestBodyHash")
+                if raw is None and isinstance(hashed, str) and re.fullmatch(r"[0-9a-f]{16}", hashed):
+                    req_body = hashed                     # a Rivis collection export: the body's fingerprint, not the body
+                else:
+                    req_body = body_hash(raw or b"")
                 ent = {"method": req["method"].upper(), "scheme": u.scheme or "https", "host": u.hostname or "",
                        "path": u.path or "/",
                        "query": urlencode(sorted(parse_qsl(u.query, keep_blank_values=True))),
-                       "req_body": "", "status": int(resp["status"]),
+                       "req_body": req_body, "status": int(resp["status"]),
                        "headers": [[h["name"], h["value"]] for h in resp.get("headers", [])
                                    if h["name"].lower() not in ("content-encoding", "content-length", "transfer-encoding", "connection")
                                    and not h["name"].startswith(":")],
@@ -1890,8 +2204,15 @@ class ProxyPanel:
                     base64.b64decode(ent["b64"])
                 else:
                     ent["text"] = c.get("text", "")
-                if ent["host"] and ent["status"] > 0:
+                if not ent["host"] or ent["status"] <= 0:
+                    why = "failed call (status 0)"
+                elif ent["status"] == 101:
+                    why = "WebSocket upgrade (101 cannot be replayed)"
+                else:
                     out.append(ent)
+                    continue
+                if skipped is not None:       # R2A-10: say what was left out instead of dropping it silently
+                    skipped.append("%s %s: %s" % (ent["method"], ent["path"][:60], why))
             except (KeyError, ValueError, TypeError):
                 continue
         return out
@@ -1973,8 +2294,11 @@ class ProxyPanel:
             self.project_only = bool(pf and pf in vf)
             m = re.search(r"~d '\^([^']*)\$'", vf)
             self.focused_host = m.group(1).replace("\\", "") if m else None
+            self.source = self.source_from_filter(vf)        # a hot reload keeps the chosen device / app
             self._register()
             self._show_start_time_column()
+            from mitmproxy import contentviews
+            contentviews.add(Utf8TextView())        # by name: a hot reload replaces it
         except Exception as e:   # never take mitmweb down
             ctx.log.warn(f"proxy_panel: not available ({type(e).__name__}: {e})")
 
@@ -2040,6 +2364,18 @@ class ProxyPanel:
                 self.set_header("Cache-Control", "no-store")
                 self.write(patch_mitmweb_js(source, ctx.log.warn))
 
+        class ClippedContentView(webapp.FlowContentView):
+            """mitmweb's own view endpoint, with clip_view applied (R6B-07)."""
+
+            def message_to_json(self, view_name, message, flow, *args, **kw):
+                raw = getattr(message, "raw_content", None)
+                preview = preview_message(message)          # R10-01: never render a huge body on the event loop
+                result = super().message_to_json(view_name, preview or message, flow, *args, **kw)
+                # R6-06: panel-side protobuf decoding needs the complete built-in view; ordinary UI views stay clipped.
+                if self.get_query_argument("full", "") == "1" and preview is None:
+                    return result
+                return clip_view(result, len(raw) if isinstance(raw, (bytes, bytearray)) else None, preview is not None)
+
         class MitmwebExport(webapp.RequestHandler):
             """mitmweb's own toolbar menu Export ▾ (Copy as cURL / HTTPie / raw) copied tokens and cookies in clear text,
             next to our masked Copy as. Same masking here; unmasked copies stay a deliberate choice in Copy as."""
@@ -2059,6 +2395,35 @@ class ProxyPanel:
                     self.write({"value": text})
                 except (PanelError, ValueError, KeyError, TypeError) as e:
                     self.write({"error": str(e)})
+
+        class SafeDumpFlows(webapp.DumpFlows):
+            """R9-05: mitmweb's File → Open (POST /flows/dump) clears the list before it parses the file, so a broken
+            HAR wiped every captured call and answered a bare 500. Parse the whole file first; if it cannot be read,
+            answer 400 with a readable reason and leave the current calls alone. A readable file goes to the stock
+            handler unchanged."""
+
+            async def post(self):
+                from io import BytesIO
+                from mitmproxy import io as mio
+                files = self.request.files
+                data = next(iter(files.values()))[0].body if files else self.request.body
+                name = next(iter(files.values()))[0].get("filename", "") if files else ""
+                problem = None
+                try:
+                    count = sum(1 for _ in mio.FlowReader(BytesIO(data)).stream())
+                    if not count:
+                        problem = "it contains no calls"
+                except Exception as e:      # noqa: BLE001 - any reader failure means "cannot open this file"
+                    problem = str(e).strip().splitlines()[0][:200] if str(e).strip() else type(e).__name__
+                if problem:
+                    looks_har = data.lstrip()[:1] == b"{" or str(name).lower().endswith(".har")
+                    kind = "Not a valid HAR (JSON) file" if looks_har else "Not a HAR or mitmproxy flow file"
+                    self.set_status(400)
+                    self.set_header("Content-Type", "text/plain; charset=utf-8")
+                    self.finish("Could not open %s: %s (%s). Your current calls were kept."
+                                % (name or "the file", kind, problem))
+                    return
+                return await super().post()
 
         class ThemeCSS(webapp.RequestHandler):
             def get(self):
@@ -2138,7 +2503,8 @@ class ProxyPanel:
                     except ValueError:
                         raise tornado.web.HTTPError(400, "invalid Content-Length")
                     if declared > MAX_PANEL_REQUEST_BYTES or len(self.request.body or b"") > MAX_PANEL_REQUEST_BYTES:
-                        raise tornado.web.HTTPError(413, "panel request exceeds the 8 MiB limit")
+                        raise tornado.web.HTTPError(413, "panel request exceeds the %d MiB limit"
+                                                    % (MAX_PANEL_REQUEST_BYTES // (1024 * 1024)))
                     refused = self._refuse_cross_site()
                     if refused:
                         raise tornado.web.HTTPError(403, refused)
@@ -2178,6 +2544,9 @@ class ProxyPanel:
             (r"/proxy/panel\.js", PanelJS),
             (r"/proxy/theme\.css", ThemeCSS),
             (r"/commands/export", MitmwebExport),
+            (r"/flows/dump", SafeDumpFlows),
+            (r"/flows/(?P<flow_id>[0-9a-f\-]+)/(?P<message>request|response|messages)/content/(?P<content_view>[0-9a-zA-Z\-\_%]+)(?:\.json)?",
+             ClippedContentView),
             (r"/static/(index-[A-Za-z0-9_-]+\.js)", MitmwebIndexJS),
             (r"/proxy/boot\.js", BootJS),
             (r"/proxy/bootstrap/([0-9a-f]{32})", Bootstrap),
