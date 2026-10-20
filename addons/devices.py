@@ -234,9 +234,12 @@ class Jobs:
             if not self.job:
                 return None
             j = self.job
+            step = next((line for line in reversed(j["lines"]) if re.search(r"step [1-5]/5:", line)), "")
+            error = next((line for line in reversed(j["lines"]) if "ERROR — Settings setup timed out" in line), "")
             return {"id": j["id"], "label": j["label"], "running": j["rc"] is None, "rc": j["rc"],
                     "platform": j.get("platform"), "target": j.get("target"),
-                    "lines": list(j["lines"][-60:]), "started": j["started"], "ended": j["ended"]}
+                    "lines": list(j["lines"][-60:]), "step": step, "error": error,
+                    "started": j["started"], "ended": j["ended"]}
 
     def start(self, argv, label, platform=None, target=None, env=None):
         with self.lock:

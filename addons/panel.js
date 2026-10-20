@@ -987,13 +987,16 @@
       || (devStarting && devStarting.platform === platform && (devStarting.target === "all" || devStarting.target === id));
     const row = (platform, d) => {
       const settingUp = !d.ready && mine(platform, d.id);
-      const detail = settingUp ? (d.play && !d.ca_ok ? "Setting up… about a minute — the emulator restarts once, hands off" : "Setting up…")
+      const failedHere = !settingUp && job && job.rc !== null && job.rc !== 0 && job.error &&
+        job.platform === platform && (job.target === "all" || job.target === d.id);
+      const detail = settingUp ? (job && job.step ? job.step : "Setting up…")
+        : failedHere ? job.error
         : platform === "ios" ? (d.ready ? "Trusts the Rivis certificate" : "Certificate not trusted yet")
         : !d.ca_ok ? (d.play ? "Google Play image — certificate not installed yet" : "Certificate not installed yet")
         : !d.proxy_ok ? "Certificate OK — proxy not pointing at Rivis" : "Certificate and proxy set";
-      return `<div class="row"><div class="n">${esc(d.name)} <span class="sub">${esc(d.os)}</span><div class="sub">${detail}</div></div>
+      return `<div class="row"><div class="n">${esc(d.name)} <span class="sub">${esc(d.os)}</span><div class="sub"${failedHere ? ' role="alert"' : ''}>${esc(detail)}</div></div>
         ${d.ready ? `<span class="ok" title="Ready">${ico("check")}</span>`
-          : settingUp ? `<button class="b" disabled aria-busy="true">Setting up…</button>`
+          : settingUp ? `<button class="b" disabled aria-busy="true">${esc(job && job.step ? job.step : "Setting up…")}</button>`
           : `<button class="b p" data-dsetup="${platform}" data-id="${esc(d.id)}" data-name="${esc(d.name)}" data-play="${d.play && !d.ca_ok ? 1 : ""}" ${busy ? "disabled" : ""}>Set up</button>`}</div>`;
     };
     const section = (platform, title, list, none) => {
@@ -1011,7 +1014,7 @@
           that temporary boot until its next normal start (or <code>rivis android off</code>). Nothing else gets root, and the
           SDK image and AVD settings are not changed.`
           : `Google Play images refuse adb root. This copy of Rivis has no Magisk, so it will drive the emulator's Settings screens
-          to install the certificate instead — about a minute; hands off the emulator while it runs.`}
+          to install the certificate instead — up to four minutes; hands off the emulator while it runs.`}
           Use test emulators only (no personal Google account).</div>
         <div class="btns"><button class="b p" id="dyes">Continue</button><button class="b" id="dno">Cancel</button></div>
       </div>` : "";
