@@ -1596,7 +1596,15 @@ class ProxyPanel:
             name = self.unique(cfg, a.get("name") or self.default_name(f, "mock"))
             path = self.mock_path(name)
             os.makedirs(MOCK_DIR, exist_ok=True)
-            created_mock = not os.path.exists(path)
+            # Rules may have been reset while their mock files remain. Do not overwrite one:
+            # a fresh draft needs its own file so its creation can be recorded and discarded.
+            base, suffix = name, 2
+            names = {r.get("name") for r in cfg["rules"]}
+            while name in names or os.path.lexists(path):
+                tail = f"-{suffix}"
+                name = base[:64 - len(tail)].rstrip(".") + tail
+                path = self.mock_path(name)
+                suffix += 1
             # a call that never got an answer (server down, unreachable) is mocked from an empty JSON template
             body = (f.response.get_content(strict=False) or b"") if f.response else b"{}\n"
             try:   # pretty-print JSON so it is easy to edit
@@ -1612,8 +1620,7 @@ class ProxyPanel:
                  "action": "map_local", "file": path,
                  "status": f.response.status_code if f.response else 200,
                  "note": f"from {f.request.method} {f.request.pretty_url[:120]}"}
-            if created_mock:
-                r["rivis_created_mock"] = os.path.realpath(path)
+            r["rivis_created_mock"] = os.path.realpath(path)
             if draft:
                 r["draft"] = True
             if f.response:

@@ -252,6 +252,21 @@ class Ops(LiveCase):
         self.assertNotIn("draft", rule)
         self.assertFalse(self.panel.ok("mockfile_get", {"name": name})["draft"])
 
+    def test_draft_mock_uses_a_fresh_file_when_an_old_mock_has_its_default_name(self):
+        path = "/json/small?old-mock=1"
+        self.fetch(path)
+        old = self.inst.path("mocks", "mock-get-small.json")
+        with open(old, "w") as fh:
+            fh.write("user mock")
+        name = self.panel.ok("mock", {"flow_id": self.flow_id(path), "draft": True})["name"]
+        rule = next(r for r in self.rules() if r["name"] == name)
+        self.assertNotEqual(rule["file"], old)
+        self.assertEqual(rule["rivis_created_mock"], os.path.realpath(rule["file"]))
+        self.panel.ok("delete", {"name": name})
+        self.assertFalse(os.path.exists(rule["file"]))
+        with open(old) as fh:
+            self.assertEqual(fh.read(), "user mock")
+
     def test_delete_keeps_mock_when_body_file_still_reads_it(self):
         path = os.path.join(self.inst.path("mocks"), "shared.json")
         with open(path, "w") as fh:
