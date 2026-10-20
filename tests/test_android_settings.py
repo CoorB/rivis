@@ -57,6 +57,18 @@ class SettingsRoute(unittest.TestCase):
         self.assertEqual(self.proxy(), ':0')
         self.assertNotIn('settings put global http_proxy 10.0.2.2', open(os.path.join(self.emu, 'log')).read())
 
+    def test_timeout_after_bundled_magisk_failure_points_to_failure(self):
+        magisk = os.path.join(self.home, 'bundled-magisk')
+        os.makedirs(magisk)
+        self.env['RIVIS_MAGISK_DIR'] = magisk
+        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '0.2'
+        result = self.run_cli('-s', 'emulator-5554')
+        self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
+        self.assertIn('emulator binary not found', result.stdout + result.stderr)
+        self.assertIn('Magisk was found at ' + magisk, result.stdout)
+        self.assertIn('Fix that failure', result.stdout)
+        self.assertNotIn('install Rivis from the release zip', result.stdout)
+
     def test_panel_job_reports_current_step_and_timeout_error(self):
         self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '0.5'
         jobs = devices.Jobs()

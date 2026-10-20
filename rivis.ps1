@@ -978,11 +978,12 @@ switch ($Command) {
     $mockDir = Join-Path $ProjectState "mocks"
     New-Item -ItemType Directory -Force -Path $mockDir | Out-Null
     $file = Join-Path $mockDir "$Action.json"
+    $createdMock = if (Test-Path $file) { 0 } else { 1 }
     try { Invoke-WebRequest -Uri "http://127.0.0.1:$WebPort/flows/$id/response/content.data?token=$token" -OutFile $file -UseBasicParsing }
     catch { Die "could not read the response body" }
     try { Get-Content -Raw $file | ConvertFrom-Json | Out-Null }
-    catch { $textFile = [IO.Path]::ChangeExtension($file, ".txt"); Move-Item -Force $file $textFile; $file = $textFile }
-    & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath rules mock-set $Action "match=$Name" action=map_local "file=$file" "status=$status" "method=$method" "headers=$headers" | Out-Null
+    catch { $textFile = [IO.Path]::ChangeExtension($file, ".txt"); $createdMock = if (Test-Path $textFile) { 0 } else { 1 }; Move-Item -Force $file $textFile; $file = $textFile }
+    & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath rules mock-set $Action "match=$Name" action=map_local "file=$file" "status=$status" "method=$method" "headers=$headers" "created_mock=$createdMock" | Out-Null
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Info "saved the real $method response ($status) to $file"
     Info "map_local rule '$Action' is ON - edit that file; every save applies to the next call"

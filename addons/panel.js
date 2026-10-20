@@ -2062,7 +2062,7 @@
       run("toggle", { name: state.rules[c.dataset.i].name, enabled: c.checked }, c.checked ? "Rule on" : "Rule off")));
     m.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => {
       const n = state.rules[b.dataset.del].name;
-      if (confirm("Delete rule '" + n + "'?")) run("delete", { name: n }, "Deleted " + n);
+      if (confirm("Delete rule '" + n + "'?")) run("delete", { name: n }, (r) => r.message || "Deleted " + n);
     }));
     m.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openEditor(state.rules[b.dataset.edit].name)));
   }
@@ -2113,12 +2113,12 @@
       const changed = ta.value !== e.original.content || $("st").value !== e.original.status || JSON.stringify(readHeaders("hd")) !== e.original.headers;
       if (changed) { $("discard").style.display = ""; $("keep").focus(); return; }
       // a new Map Local that was never saved is discarded, so it never answers a call (r1 B-03)
-      if (e.draft) { try { await api("delete", { name: e.name }); toast("Map Local '" + e.name + "' discarded (not saved)"); } catch (x) { toast(x.message, true); return; } }
+      if (e.draft) { try { const r = await api("delete", { name: e.name }); toast(r.message || "Map Local '" + e.name + "' discarded (not saved)"); } catch (x) { toast(x.message, true); return; } }
       leave();
     };
     $("keep").onclick = () => { $("discard").style.display = "none"; $("back").focus(); };
     $("discard-yes").onclick = async () => {
-      if (e.draft) { try { await api("delete", { name: e.name }); } catch (x) { toast(x.message, true); return; } }
+      if (e.draft) { try { const r = await api("delete", { name: e.name }); if (r.message) toast(r.message); } catch (x) { toast(x.message, true); return; } }
       leave();
     };
     $("fmt").onclick = () => { try { ta.value = JSON.stringify(JSON.parse(ta.value), null, 2) + "\n"; ta.oninput(); } catch (x) { toast("Not JSON — cannot format", true); } };

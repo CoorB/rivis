@@ -105,6 +105,26 @@ class Urls(unittest.TestCase):
 
 
 class Contract(unittest.TestCase):
+    def test_oauth_code_and_secret_values_are_absent_from_serialized_har(self):
+        e = entry(url="https://app.test/cb?code=SECRET&access_token=TOKEN-SECRET&safe=ok",
+                  req_headers=[("Location", "https://app.test/cb?code=HEADER-SECRET")],
+                  resp_headers=[("Location", "https://app.test/cb?code=REDIRECT-SECRET")],
+                  post=("application/x-www-form-urlencoded", "code=FORM-SECRET&password=PASSWORD-SECRET&safe=ok"))
+        e["request"]["queryString"] = [{"name": "code", "value": "SECRET"},
+                                         {"name": "access_token", "value": "TOKEN-SECRET"},
+                                         {"name": "safe", "value": "ok"}]
+        e["request"]["postData"]["params"] = [{"name": "code", "value": "FORM-SECRET"},
+                                                 {"name": "password", "value": "PASSWORD-SECRET"},
+                                                 {"name": "safe", "value": "ok"}]
+        e["request"]["cookies"] = [{"name": "sid", "value": "COOKIE-SECRET"}]
+        e["response"]["cookies"] = [{"name": "sid", "value": "RESPONSE-SECRET"}]
+        e["response"]["redirectURL"] = "https://app.test/cb?code=URL-SECRET"
+        output = json.dumps(R.har(har([e])))
+        for secret in ("SECRET", "TOKEN-SECRET", "FORM-SECRET", "PASSWORD-SECRET", "HEADER-SECRET",
+                       "REDIRECT-SECRET", "COOKIE-SECRET", "RESPONSE-SECRET", "URL-SECRET"):
+            self.assertNotIn(secret, output)
+        self.assertIn('"value": "ok"', output)
+
     def test_input_is_not_modified_and_doc_is_marked(self):
         src = har([entry(req_headers=[("Authorization", "x")])])
         before = json.dumps(src, sort_keys=True)

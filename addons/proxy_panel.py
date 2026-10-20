@@ -1560,10 +1560,12 @@ class ProxyPanel:
         elif op == "delete":
             r = self.find(cfg, a["name"])
             cfg["rules"].remove(r)
-            mock = owned_mock_file(r, cfg["rules"], MOCK_DIR)
             self.save_cfg(cfg)
+            mock = owned_mock_file(r, cfg["rules"], MOCK_DIR)
             if mock:
                 os.remove(mock)
+            if r.get("action") == "map_local" and isinstance(r.get("file"), str) and not mock and os.path.isfile(os.path.expanduser(r["file"])):
+                return {"message": "mock file kept: " + r["file"]}
         elif op == "add":
             r = dict(a["rule"])
             if "file" in r or "body_file" in r:
@@ -1594,6 +1596,7 @@ class ProxyPanel:
             name = self.unique(cfg, a.get("name") or self.default_name(f, "mock"))
             path = self.mock_path(name)
             os.makedirs(MOCK_DIR, exist_ok=True)
+            created_mock = not os.path.exists(path)
             # a call that never got an answer (server down, unreachable) is mocked from an empty JSON template
             body = (f.response.get_content(strict=False) or b"") if f.response else b"{}\n"
             try:   # pretty-print JSON so it is easy to edit
@@ -1606,8 +1609,11 @@ class ProxyPanel:
             # `rivis mock` stay "on at once".
             draft = a.get("draft") is True
             r = {"name": name, "enabled": not draft, "match": self.flow_regex(f), "method": f.request.method,
-                 "action": "map_local", "file": path, "status": f.response.status_code if f.response else 200,
+                 "action": "map_local", "file": path,
+                 "status": f.response.status_code if f.response else 200,
                  "note": f"from {f.request.method} {f.request.pretty_url[:120]}"}
+            if created_mock:
+                r["rivis_created_mock"] = os.path.realpath(path)
             if draft:
                 r["draft"] = True
             if f.response:
@@ -1797,12 +1803,16 @@ class ProxyPanel:
             name = self.unique(cfg, base_name)
             os.makedirs(MOCK_DIR, exist_ok=True)
             path = self.mock_path(name)
+            created_mock = not os.path.exists(path)
             atomic_write_text(path, a.get("body") or "{}\n")
             r = {"name": name, "enabled": True, "match": match,
-                 "action": "map_local", "file": path, "status": http_status(200 if a.get("status") in (None, "") else a["status"]),
+                 "action": "map_local", "file": path,
+                 "status": http_status(200 if a.get("status") in (None, "") else a["status"]),
                  # R4B-03: browser module/style MIME checks use the URL extension, not the generated mock filename.
                  "headers": {"Content-Type": mimetypes.guess_type(urlsplit(a.get("path") or a.get("host") or "/").path)[0] or "application/json"},
                  "note": f"manual: {a.get('host')}{a.get('path') or '/'}"}
+            if created_mock:
+                r["rivis_created_mock"] = os.path.realpath(path)
             if method:
                 r["method"] = method
             self.validate(r)

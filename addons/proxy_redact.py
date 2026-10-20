@@ -203,6 +203,16 @@ def query(qs):
     return urlencode([(k, REDACTED if (secret_key(k) or k.lower() == "code") and v else _JWT.sub(REDACTED, v)) for k, v in pairs])
 
 
+def _parameter_value(row):
+    """Mask a HAR query or form parameter with the same policy as URL/form text."""
+    value = row.get("value")
+    if not isinstance(value, str) or not value:
+        return value
+    if secret_key(row.get("name")) or str(row.get("name", "")).lower() == "code":
+        return REDACTED
+    return _JWT.sub(REDACTED, value)
+
+
 def url(u):
     parts = urlsplit(u)
     netloc = parts.netloc.rsplit("@", 1)[-1] if "@" in parts.netloc else parts.netloc   # user:pass@host
@@ -255,13 +265,13 @@ def har(doc):
         for part in (req, resp):
             part["headers"] = _headers(part.get("headers"))
             part["cookies"] = [{**c, "value": REDACTED} for c in part.get("cookies") or []]
-        req["queryString"] = [{**q, "value": REDACTED if secret_key(q.get("name")) else q.get("value")}
+        req["queryString"] = [{**q, "value": _parameter_value(q)}
                               for q in req.get("queryString") or []]
         post = req.get("postData")
         if post and post.get("text"):
             post["text"] = text(post["text"], post.get("mimeType", ""))
         if post and post.get("params"):              # form fields, as mitmproxy's HAR writer lists them
-            post["params"] = [{**p, "value": REDACTED if secret_key(p.get("name")) else p.get("value")}
+            post["params"] = [{**p, "value": _parameter_value(p)}
                               for p in post["params"] if isinstance(p, dict)]
         if resp.get("redirectURL"):
             resp["redirectURL"] = url(resp["redirectURL"])

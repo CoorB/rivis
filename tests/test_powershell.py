@@ -78,6 +78,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertIn('$id,$status,$method,$headers = $pick', mock)
         self.assertIn('rules mock-set $Action', mock)
         self.assertIn('"headers=$headers"', mock)
+        self.assertIn('"created_mock=$createdMock"', mock)
 
     def test_stop_waits_for_both_ports_and_has_a_forced_bounded_fallback(self):
         stop = self.src[self.src.index('  "stop" {'):self.src.index('  "ui" {')]
@@ -277,9 +278,10 @@ class Commands(unittest.TestCase):
         mocks = os.path.join(self.state, "projects", "default", "mocks")
         own = os.path.join(mocks, "own.json")
         shared = os.path.join(mocks, "shared.json")
-        for path in (own, shared):
+        for path in (shared,):
             open(path, "w").write("{}")
-        self.bash("rules", "add", "own", "match=/own", "action=map_local", "file=" + own)
+        self.bash("rules", "add", "own", "match=/own", "action=map_local", "body={}")
+        own = next(r["file"] for r in self.cfg()["rules"] if r["name"] == "own")
         self.bash("rules", "add", "shared", "match=/shared", "action=map_local", "file=" + shared)
         cfg = self.cfg()
         cfg["rules"].append({"name": "reader", "action": "respond", "match": "/read", "body_file": shared})

@@ -104,19 +104,21 @@ class Matrix(unittest.TestCase):
                     user = os.path.join(self.home, "outside.json")
                     paths = {key: os.path.join(root, key + ".json") for key in ("owned", "file", "body")}
                     paths["user"] = user
-                    for path in paths.values():
+                    for key, path in paths.items():
+                        if key == "owned": continue
                         with open(path, "w") as fh: fh.write("{}")
                     for name, key in (("owned", "owned"), ("file-owner", "file"),
                                       ("file-reader", "file"), ("body-owner", "body"), ("user", "user")):
                         self.run_cli("bash", project, "rules", "add", name, "match=/" + name,
-                                     "action=map_local", "file=" + paths[key])
+                                     "action=map_local", "body={}" if key == "owned" else "file=" + paths[key])
+                    paths["owned"] = next(r["file"] for r in self.cfg(project)["rules"] if r["name"] == "owned")
                     cfg = self.cfg(project)
                     cfg["rules"].append({"name": "body-reader", "action": "respond", "match": "/reader",
                                          "body_file": paths["body"]})
                     rules = os.path.join(self.home, ".rivis", "projects", project, "rules.json")
                     with open(rules, "w") as fh: json.dump(cfg, fh)
                     for name, remains in (("owned", False), ("file-owner", True), ("body-owner", True),
-                                          ("user", True), ("file-reader", False)):
+                                          ("user", True), ("file-reader", True)):
                         self.run_cli(surface, project, "rules", "rm", name)
                         self.assertNotIn(name, [r["name"] for r in self.cfg(project)["rules"]])
                         key = {"file-owner": "file", "file-reader": "file", "body-owner": "body"}.get(name, name)

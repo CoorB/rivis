@@ -262,6 +262,26 @@ class Ops(LiveCase):
         self.assertTrue(os.path.isfile(path))
         self.assertEqual([r["name"] for r in self.rules()], ["reader"])
 
+    def test_delete_keeps_unmarked_mock_and_removes_panel_created_mock(self):
+        user = os.path.join(self.inst.path("mocks"), "user.json")
+        with open(user, "w") as fh: fh.write("{}")
+        self.reset_state(rules=[self.rule("user", "map_local", "/user", file=user)])
+        result = self.panel.ok("delete", {"name": "user"})
+        self.assertIn("mock file kept: " + user, result["message"])
+        self.assertTrue(os.path.isfile(user))
+        made = self.panel.ok("maplocal_add", {"name": "owned", "host": "example.test", "path": "/owned", "body": "{}"})
+        owned = next(r for r in self.rules() if r["name"] == made["name"])
+        self.assertEqual(owned["rivis_created_mock"], os.path.realpath(owned["file"]))
+        self.panel.ok("delete", {"name": made["name"]})
+        self.assertFalse(os.path.exists(owned["file"]))
+        preexisting = os.path.join(self.inst.path("mocks"), "preexisting.json")
+        with open(preexisting, "w") as fh: fh.write("user data")
+        self.panel.ok("maplocal_add", {"name": "preexisting", "host": "example.test", "path": "/preexisting", "body": "{}"})
+        rule = next(r for r in self.rules() if r["name"] == "preexisting")
+        self.assertNotIn("rivis_created_mock", rule)
+        self.assertIn("mock file kept:", self.panel.ok("delete", {"name": "preexisting"})["message"])
+        self.assertTrue(os.path.exists(preexisting))
+
     def test_delete_does_not_remove_mock_when_rules_save_fails(self):
         path = os.path.join(self.inst.path("mocks"), "owned.json")
         with open(path, "w") as fh:

@@ -217,6 +217,33 @@ class Projects(CliBase):
 
 
 class Rules(CliBase):
+    def test_rules_rm_keeps_user_and_legacy_mocks_and_cross_project_reader(self):
+        self.ok("projects", "use", "neo")
+        self.ok("rules", "list")
+        self.ok("projects", "use", "default")
+        self.ok("rules", "list")
+        self.ok("projects", "use", "neo")
+        mocks = os.path.join(self.state, "projects", "neo", "mocks")
+        paths = {"mine": os.path.join(mocks, "my-response.json"),
+                 "legacy": os.path.join(mocks, "legacy.json")}
+        for path in paths.values():
+            with open(path, "w") as fh: fh.write("{}")
+        self.ok("rules", "add", "mine", "match=/x", "action=map_local", "file=" + paths["mine"])
+        neo = self.cfg("neo")
+        neo["rules"].append({"name": "legacy", "enabled": True, "match": "/legacy",
+                             "action": "map_local", "file": paths["legacy"]})
+        with open(self.rules_file("neo"), "w") as fh: json.dump(neo, fh)
+        self.ok("rules", "add", "shared", "match=/shared", "action=map_local", "body={}")
+        paths["shared"] = next(r["file"] for r in self.cfg("neo")["rules"] if r["name"] == "shared")
+        default = self.cfg("default")
+        default["rules"].append({"name": "reader", "action": "respond", "match": "/read",
+                                 "body_file": paths["shared"]})
+        with open(self.rules_file("default"), "w") as fh: json.dump(default, fh)
+        for name in ("mine", "legacy", "shared"):
+            output = self.ok("rules", "rm", name).stdout
+            self.assertIn("mock file kept: " + paths[name], output)
+            self.assertTrue(os.path.isfile(paths[name]))
+
     def test_mock_set_preserves_other_methods_on_same_match(self):
         mock_file = os.path.join(self.home, "mock.json")
         with open(mock_file, "w") as fh:
@@ -354,9 +381,10 @@ class Rules(CliBase):
         os.makedirs(mocks, exist_ok=True)
         own, shared, user = (os.path.join(mocks, "own.json"), os.path.join(mocks, "shared.json"),
                              os.path.join(self.home, "mine.json"))
-        for f in (own, shared, user):
+        for f in (shared, user):
             open(f, "w").write("{}")
-        self.ok("rules", "add", "own", "match=/own", "action=map_local", "file=" + own)
+        self.ok("rules", "add", "own", "match=/own", "action=map_local", "body={}")
+        own = next(r["file"] for r in self.cfg()["rules"] if r["name"] == "own")
         self.ok("rules", "add", "sh1", "match=/sh1", "action=map_local", "file=" + shared)
         self.ok("rules", "add", "sh2", "match=/sh2", "action=map_local", "file=" + shared)
         self.ok("rules", "add", "user", "match=/user", "action=map_local", "file=" + user)
@@ -365,8 +393,8 @@ class Rules(CliBase):
         self.ok("rules", "rm", "sh1")
         self.assertTrue(os.path.exists(shared))              # sh2 still serves it
         self.ok("rules", "rm", "sh2")
-        self.assertFalse(os.path.exists(shared))
-        self.assertNotIn("mock file", self.ok("rules", "rm", "user").stdout)
+        self.assertTrue(os.path.exists(shared))
+        self.assertIn("mock file kept:", self.ok("rules", "rm", "user").stdout)
         self.assertTrue(os.path.exists(user))
 
     def test_mock_file_shared_by_body_file_survives_cli_delete(self):
@@ -394,8 +422,9 @@ class Rules(CliBase):
         mocks = os.path.join(self.state, "projects", "neo", "mocks")
         os.makedirs(mocks, exist_ok=True)
         path = os.path.join(mocks, "owned.json")
-        open(path, "w").write("{}")
-        self.ok("rules", "add", "owned", "match=/a", "action=map_local", "file=" + path, "--project", "neo")
+        self.ok("rules", "add", "owned", "match=/a", "action=map_local", "body={}", "--project", "neo")
+        with open(self.env["RIVIS_RULES"]) as fh:
+            path = next(r["file"] for r in json.load(fh)["rules"] if r["name"] == "owned")
         self.ok("rules", "rm", "owned", "--project", "neo")
         self.assertFalse(os.path.exists(path))
 

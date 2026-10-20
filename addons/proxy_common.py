@@ -219,22 +219,42 @@ def project_state(project_id):
 
 
 def owned_mock_file(removed, remaining_rules, mocks_dir):
-    """Return a removed Map Local rule's private mock only when no remaining rule reads it."""
+    """Return a Rivis-created mock only when no project still reads it. Fail closed."""
     if not isinstance(removed, dict) or removed.get("action") != "map_local" or not isinstance(removed.get("file"), str):
         return None
     value = removed["file"]
     if not value:
         return None
     real = os.path.realpath(os.path.expanduser(value))
+    if removed.get("rivis_created_mock") != real:
+        return None
     if os.path.dirname(real) != os.path.realpath(mocks_dir) or not os.path.isfile(real):
         return None
-    for rule in remaining_rules:
-        if not isinstance(rule, dict):
-            continue
-        for key in ("file", "body_file"):
-            ref = rule.get(key)
-            if isinstance(ref, str) and ref and os.path.realpath(os.path.expanduser(ref)) == real:
+    def references(rules):
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            for key in ("file", "body_file"):
+                ref = rule.get(key)
+                if isinstance(ref, str) and ref and os.path.realpath(os.path.expanduser(ref)) == real:
+                    return True
+        return False
+    if references(remaining_rules):
+        return None
+    projects = os.path.join(STATE_ROOT, "projects")
+    try:
+        for project in os.scandir(projects):
+            if not project.is_dir():
+                continue
+            path = os.path.join(project.path, "rules.json")
+            if not os.path.exists(path):
+                continue
+            with open(path) as fh:
+                rules = json.load(fh).get("rules")
+            if not isinstance(rules, list) or references(rules):
                 return None
+    except (OSError, ValueError, AttributeError):
+        return None
     return real
 
 

@@ -873,9 +873,11 @@ cmd_mock() {
   fi
   /usr/bin/python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$body_tmp" 2>/dev/null \
     || file="${file%.json}.txt"
+  local created_mock=1
+  [ -e "$file" ] && created_mock=0
   mv -f "$body_tmp" "$file" || { rm -f "$body_tmp"; die "could not save the response body: project folder is not writable"; }
   RIVIS_RULE_CONFDIR="$CONFDIR" /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" rules mock-set "$1" "match=$2" action=map_local \
-    "file=$file" "status=$status" "method=$method" "headers=$headers" || exit 1
+    "file=$file" "status=$status" "method=$method" "headers=$headers" "created_mock=$created_mock" || exit 1
   info "saved the real $method response ($status) to $file"
   info "map_local rule '$1' is ON — edit that file; every save applies to the next call"
   info "turn off: $CLI rules off $1"
@@ -984,7 +986,7 @@ ui_install_ca() {
   ui_tap "$s" "proxy-ca.crt" || { ui_tap "$s" "Show roots" && ui_tap "$s" "Downloads?" && ui_tap "$s" "proxy-ca.crt"; }
 }
 android_settings_route() {
-  local s="$1" limit="${RIVIS_ANDROID_SETUP_TIMEOUT:-240}" before after rc prior now
+  local s="$1" magisk_dir="${2:-}" limit="${RIVIS_ANDROID_SETUP_TIMEOUT:-240}" before after rc prior now
   [[ "$limit" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk "BEGIN {exit !($limit > 0)}" \
     || die "RIVIS_ANDROID_SETUP_TIMEOUT must be a positive number of seconds"
   prior=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') || die "$s: could not read the proxy before Settings setup"
@@ -1001,7 +1003,11 @@ android_settings_route() {
     fi
     info "$s: ERROR — Settings setup timed out after ${limit} s. Proxy now: $now (before: $prior)."
     info "$s: proxy-ca.crt remains in Downloads; the CA may have been selected but trust was not verified. Check Settings > Security > Trusted credentials > User."
-    info "  Next: install $PRODUCT_NAME from the release zip for Magisk one-click setup, or finish the CA install by hand in Settings."
+    if [ -n "$magisk_dir" ]; then
+      info "  Next: Magisk was found at $magisk_dir but one-click setup failed above. Fix that failure (if the console token is unreadable, use ~/.emulator_console_auth_token from the emulator's user; if the emulator binary is missing, set ANDROID_SDK_ROOT), then retry; or finish the CA install by hand in Settings."
+    else
+      info "  Next: install $PRODUCT_NAME from the release zip for Magisk one-click setup, or finish the CA install by hand in Settings."
+    fi
     exit 124
   fi
   return "$rc"
@@ -1155,7 +1161,7 @@ cmd_android() {
             && ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent $strict; then
           android_record "$s"; ca_ok=1   # one-click Play-image path (Proxyman's Magisk approach); it verifies and reports
         elif [ "$auto_ui" = 1 ] && info "$s: Google Play image — installing the CA through Settings (hands off the emulator)" \
-            && android_settings_route "$s"; then
+            && android_settings_route "$s" "$magisk_dir"; then
           info "$s: CA installed in user store via Settings (verified by fingerprint)"; android_record "$s"; ca_ok=1
         else
           [ "$auto_ui" = 0 ] && info "$s is a Google Play image (no adb root) — the CA goes in through Settings once."

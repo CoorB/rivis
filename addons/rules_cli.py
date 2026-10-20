@@ -97,7 +97,7 @@ def find(cfg, name):
 
 
 def describe(r, status=None):
-    extra = {k: v for k, v in r.items() if k not in ("name", "enabled", "match", "action", "method", "note")}
+    extra = {k: v for k, v in r.items() if k not in ("name", "enabled", "match", "action", "method", "note", "rivis_created_mock")}
     bits = " ".join("%s=%s" % (k, json.dumps(v, ensure_ascii=False)) for k, v in extra.items())
     return "%-3s %-24s %-10s %s%s  %s" % (
         status or ("ON" if r.get("enabled", True) else "off"), r.get("name", "?"), r.get("action", "?"),
@@ -342,7 +342,10 @@ def rules_cmd(path, args):
                 return
             print("removed %s and its mock file %s" % (name, mock))
             return
-        print("removed " + name)
+        if r.get("action") == "map_local" and isinstance(r.get("file"), str) and os.path.isfile(os.path.expanduser(r["file"])):
+            print("removed %s; mock file kept: %s" % (name, r["file"]))
+        else:
+            print("removed " + name)
     elif cmd in ("add", "mock-set"):
         if not SAFE_NAME.fullmatch(name) or name.startswith("."):      # F-17: same rule as the panel
             die("rule name '%s': letters, digits, . _ - only (max 64, not starting with .)" % name)
@@ -355,10 +358,31 @@ def rules_cmd(path, args):
             if "=" not in kv:
                 die("expected key=value, got '%s'" % kv)
             k, v = kv.split("=", 1)
+            if k == "rivis_created_mock":
+                die("rivis_created_mock is managed by Rivis")
             r[k] = value(v) if k not in ("match", "replace", "with", "file", "header", "body") else v
+        created = r.pop("created_mock", None)
+        if created is not None and (cmd != "mock-set" or created not in (0, 1)):
+            die("created_mock is only for mock capture")
+        if cmd == "add" and r.get("action") == "map_local" and "body" in r and "file" not in r:
+            mock_dir = os.path.join(project_state(active_project(path)), "mocks")
+            os.makedirs(mock_dir, exist_ok=True)
+            mock_path = os.path.join(mock_dir, name + ".txt")
+            if os.path.exists(mock_path):
+                die("mock file exists: %s" % mock_path)
+            from proxy_common import atomic_write_text
+            atomic_write_text(mock_path, r.pop("body"))
+            r["file"] = mock_path
+            created = 1
         r.setdefault("match", ".")
         if r.get("action") == "map_local" and isinstance(r.get("file"), str):
             r["file"] = os.path.abspath(os.path.expanduser(r["file"]))  # R3A-08: proxy cwd differs from CLI cwd
+        if created == 1:
+            real = os.path.realpath(r.get("file", ""))
+            if r.get("action") != "map_local" or os.path.dirname(real) != os.path.realpath(
+                    os.path.join(project_state(active_project(path)), "mocks")):
+                die("created mock must be inside this project's mocks folder")
+            r["rivis_created_mock"] = real
         if "method" in r and not str(r["method"] or "").strip():     # method= (empty) means any method
             del r["method"]
         validate(r)
