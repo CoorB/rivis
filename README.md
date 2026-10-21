@@ -82,6 +82,8 @@ using the updated features. `rivis status` also reports a running version that d
 
 ```bash
 rivis start --background   # start (keeps running after you close Terminal)
+rivis start --upstream http://proxy.company:3128  # forward calls through an HTTP proxy; saved for later starts
+rivis start --upstream direct  # return to a direct connection
 rivis ui                   # reopen the browser tab
 rivis browser URL          # web apps: open a separate Chrome/Edge window that goes through Rivis
 rivis browser --current    # the same, for the page open in your browser's front tab
@@ -92,6 +94,8 @@ rivis --version            # which version you have
 ```
 
 Everything else is in the browser panel. The full command list is in [docs/REFERENCE.md](docs/REFERENCE.md).
+`rivis status` and `rivis doctor` show the saved upstream setting. On Windows, use
+`.\rivis.ps1 start -Upstream http://proxy.company:3128` (or `-Upstream direct`).
 
 To run two projects at once, give each instance its own `RIVIS_PORT` and `RIVIS_WEB_PORT`. Use the matching
 `RIVIS_WEB_PORT` with `rivis ui` to reopen each panel; each web port keeps its own login. Uninstall stops every

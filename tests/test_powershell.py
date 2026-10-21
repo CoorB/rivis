@@ -218,6 +218,23 @@ class Commands(unittest.TestCase):
         with open(token) as fh:
             self.assertEqual(fh.read().strip(), "ps-secret-0123456789abcdef")
 
+    def test_upstream_setting_matches_bash_start_and_status(self):
+        log = os.path.join(self.suite.shimlog, "mitm-argv.log")
+        open(log, "w").close()
+        env = dict(self.env, SHIM_DRYRUN="1")
+        cmd = [PWSH, "-NoProfile", "-NonInteractive", "-File", os.path.join(harness.REPO, "rivis.ps1")]
+        url = "http://127.0.0.1:3128"
+        first = self.suite.run(cmd + ["start", "-NoOpen", "-Upstream", url], home=self.home, env=env, timeout=120)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertIn("upstream:" + url + "@" + env["RIVIS_PORT"], self.suite.shim_log("mitm-argv.log"))
+        status = self.suite.run(cmd + ["status"], home=self.home, env=env, timeout=120)
+        self.assertIn("upstream proxy: " + url, status.stdout)
+        doctor = self.suite.run(cmd + ["doctor", "-NoNet"], home=self.home, env=env, timeout=120)
+        self.assertIn("upstream proxy: " + url, doctor.stdout)
+        direct = self.suite.run(cmd + ["start", "-NoOpen", "-Upstream", "direct"], home=self.home, env=env, timeout=120)
+        self.assertEqual(direct.returncode, 0, direct.stdout + direct.stderr)
+        self.assertIn("regular@" + env["RIVIS_PORT"], self.suite.shim_log("mitm-argv.log"))
+
     def bash(self, *args):
         if not harness.BASH_CLI_READY:
             self.skipTest(NO_BASH_CLI)

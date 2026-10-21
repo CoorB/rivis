@@ -1091,6 +1091,18 @@ class StartArgv(CliBase):
         self.assertEqual(len(lines), 1, "rivis start did not run mitmweb once: %s %s" % (r.stdout, r.stderr))
         return lines[0], r
 
+    def test_upstream_setting_is_saved_and_direct_can_be_restored(self):
+        url = "http://127.0.0.1:3128"
+        line, _ = self.start_argv("--no-ios", "--upstream", url)
+        self.assertIn("--mode upstream:%s@%s" % (url, self.env["RIVIS_PORT"]), line)
+        self.assertIn("upstream proxy: " + url, self.stopped_status().stdout)
+        line, _ = self.start_argv("--no-ios")
+        self.assertIn("--mode upstream:%s@%s" % (url, self.env["RIVIS_PORT"]), line)
+        line, _ = self.start_argv("--no-ios", "--upstream", "direct")
+        self.assertIn("--mode regular@%s" % self.env["RIVIS_PORT"], line)
+        self.assertIn("upstream proxy: direct", self.stopped_status().stdout)
+        self.refused("start", "--upstream", "http://user:pass@host:3128", msg="without credentials")
+
     def test_without_an_approved_redirector_start_leaves_ios_capture_off_and_says_how(self):
         # Night QA A15: an Android-only tester skips the Redirector in the installer, then `rivis start` asked for
         # local capture anyway (macOS prompts / errors). Unknown states (no listing) keep the old behaviour.

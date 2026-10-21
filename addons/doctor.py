@@ -1217,6 +1217,7 @@ def main(argv):
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--web-port", type=int, default=8083)
     ap.add_argument("--script-dir", default="")
+    ap.add_argument("--upstream", default="direct")
     ap.add_argument("--adb", default="")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--no-net", action="store_true")
@@ -1226,6 +1227,7 @@ def main(argv):
     args = ap.parse_args(argv)
 
     rep = Report()
+    rep.add("Proxy", INFO, "upstream proxy: %s" % args.upstream)
     check_mitmproxy_node(rep)
     check_python(rep)
     check_ca(rep, args.confdir)

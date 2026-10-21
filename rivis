@@ -171,6 +171,7 @@ for p in "$PORT" "$WEB_PORT"; do [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ] && [ "
 # R4A-05: a second web port must not rotate the first instance's login or one-time bootstrap.
 if [ "$WEB_PORT" = 8083 ]; then TOKEN_FILE="$STATE_ROOT/web-token"; BOOTSTRAP_FILE="$STATE_ROOT/web-bootstrap"; START_FILE="$STATE_ROOT/last-start"
 else TOKEN_FILE="$STATE_ROOT/web-token-$WEB_PORT"; BOOTSTRAP_FILE="$STATE_ROOT/web-bootstrap-$WEB_PORT"; START_FILE="$STATE_ROOT/last-start-$WEB_PORT"; fi
+UPSTREAM_FILE="$STATE_ROOT/upstream-$WEB_PORT"
 MAX_FLOWS="$(env_value MAX_FLOWS 5000)"
 [[ "$MAX_FLOWS" =~ ^[0-9]+$ ]] && [ "$MAX_FLOWS" -ge 1 ] && [ "$MAX_FLOWS" -le 1000000 ] || \
   { echo "$CLI: ${ENV_PREFIX}_MAX_FLOWS must be an integer from 1 to 1000000" >&2; exit 1; }
@@ -423,7 +424,7 @@ check_capture_filter() {
 }
 
 cmd_start() {
-  local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0 private_hosts="" bg=0 fwd=()
+  local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0 private_hosts="" upstream="" upstream_set=0 bg=0 fwd=()
   local start_explicit="${RIVIS_START_PROJECT_EXPLICIT:-0}"
   [ -n "${RIVIS_START_PROJECT_EXPLICIT+x}" ] || { [ "$PROJECT_SOURCE" != argument ] || [ -n "${RIVIS_START_PROJECT_SOURCE:-}" ] || start_explicit=1; }
   local a; for a in "$@"; do [ "$a" = --background ] || fwd+=("$a"); done
@@ -431,11 +432,19 @@ cmd_start() {
     --background) bg=1 ;;
     --insecure|--dev) insecure=1 ;; --no-ios) ios=0 ;; --ios-filter) [ $# -ge 2 ] || die "--ios-filter needs a value"; filter="$2"; shift ;;
     --allow-private-hosts) [ $# -ge 2 ] || die "--allow-private-hosts needs a regex"; private_hosts="$2"; shift ;;
+    --upstream) [ $# -ge 2 ] || die "--upstream needs an http://host:port URL"; upstream="$2"; upstream_set=1; shift ;;
     --project-only|--neo-only) project_only=1 ;; --no-open) open_ui=0 ;; --all) show_all=1 ;;
     *) die "start: unknown option $1" ;; esac; shift; done
   [ "$ios" = 1 ] && check_capture_filter "$filter"
   [ -z "$private_hosts" ] || /usr/bin/python3 -I -c 'import re,sys; re.compile(sys.argv[1])' "$private_hosts" 2>/dev/null \
     || die "--allow-private-hosts needs a valid regex"
+  [ "$upstream_set" = 1 ] || upstream=$(cat "$UPSTREAM_FILE" 2>/dev/null || echo direct)
+  if [ -n "$upstream" ] && [ "$upstream" != direct ]; then
+    /usr/bin/python3 -I -c 'import sys,urllib.parse
+try:
+ u=urllib.parse.urlsplit(sys.argv[1]); assert u.scheme=="http" and u.hostname and u.port and not u.username and not u.password and not u.path and not u.query and not u.fragment
+except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream needs an http://host:port URL without credentials or path"
+  fi
   # Android-only testers skip the Redirector in the installer; capturing the Simulator without it only brings up macOS
   # prompts. Start without it and say how to turn it on. (An unreadable extension list changes nothing.)
   if [ "$ios" = 1 ] && [ "$(uname)" = Darwin ]; then
@@ -471,6 +480,7 @@ cmd_start() {
   local o free_hint="quit it, or start on free ports: ${ENV_PREFIX}_PORT=18080 ${ENV_PREFIX}_WEB_PORT=18083 $CLI start"
   o=$(port_owner "$PORT"); { [ -n "$o" ] || port_accepts "$PORT"; } && die "port $PORT already taken by another program: ${o:-listener not visible to this account} — $free_hint"
   o=$(port_owner "$WEB_PORT"); { [ -n "$o" ] || port_accepts "$WEB_PORT"; } && die "UI port $WEB_PORT already taken by another program: ${o:-listener not visible to this account} — $free_hint"
+  [ "$upstream_set" = 0 ] || atomic_private_text "$UPSTREAM_FILE" "$upstream" || die "could not save upstream proxy setting"
   # how this instance was started, so an in-app update can restart it the same way (addons/update_install.sh)
   if [ -z "${RIVIS_START_INTERNAL:-}" ]; then
   { printf 'START_PORT=%q\nSTART_WEB_PORT=%q\nSTART_PROJECT_SOURCE=%q\nSTART_PROJECT_EXPLICIT=%q\nSTART_ARGS=(' "$PORT" "$WEB_PORT" "${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}" "$start_explicit"
@@ -499,7 +509,9 @@ cmd_start() {
   atomic_private_text "$BOOTSTRAP_FILE" "$bootstrap" || die "could not save one-time UI login"
   local url="http://127.0.0.1:$WEB_PORT/"
   local bootstrap_url="http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap"
-  local args=(--listen-host 127.0.0.1 --mode "regular@$PORT"
+  local mode="regular@$PORT"
+  [ -z "$upstream" ] || [ "$upstream" = direct ] || mode="upstream:$upstream@$PORT"
+  local args=(--listen-host 127.0.0.1 --mode "$mode"
               --set web_host=127.0.0.1 --set "web_port=$WEB_PORT" --set web_open_browser=false
               --set confdir="$CONFDIR" --set connection_strategy=lazy
               # HTTP/1.1 to the app lets one app connection retain one reusable upstream connection. With HTTP/2,
@@ -558,6 +570,7 @@ cmd_start() {
   fi
   [ "$ios" = 1 ] && info "iOS    local capture of processes matching '$filter' (no system proxy)"
   [ "$insecure" = 1 ] && info "TLS    upstream verification OFF"
+  info "upstream proxy: ${upstream:-direct}"
   if [ "$show_all" = 1 ]; then info "view   everything (incl. DNS/UDP)"
   elif [ "$project_only" = 1 ]; then info "view   $PROJECT_LABEL HTTP calls only — everything else still proxied, just hidden"
   else info "view   HTTP(S) requests only (DNS lookups hidden; --all to show them)"; fi
@@ -1484,6 +1497,9 @@ cmd_net_reset() {   # [--dry-run | --auto]  --auto reports changes and unproven 
 }
 
 # ───────────────────────── status ─────────────────────────
+saved_upstream() {
+  [ -f "$UPSTREAM_FILE" ] && cat "$UPSTREAM_FILE" || echo direct
+}
 cmd_status() {
   ensure_rules
   local o; o=$(port_owner "$PORT"); echo "proxy :$PORT     ${o:-not listening}"
@@ -1510,6 +1526,7 @@ cmd_status() {
     echo "project: ${running_project:-$PROJECT} ($PROJECT_LABEL)"
   fi
   warn_running_project
+  echo "upstream proxy: $(saved_upstream)"
   [ -z "$state_json" ] || printf '%s' "$state_json" | /usr/bin/python3 -I -c 'import json,sys; s=[x for x in (json.load(sys.stdin).get("skipped_rules") or []) if isinstance(x, dict)]; s and print("WARNING: %d rule(s) skipped, not applied: %s. Details: %s rules list" % (len(s), "; ".join("%s (%s)" % (x.get("name", "?"), x.get("error", "invalid")) for x in s), sys.argv[1]))' "$CLI" 2>/dev/null # review 0.9.7 #11
   /usr/bin/python3 -I -c 'import json,sys; sys.path.insert(0,sys.argv[1]); from proxy_common import tls_config
 t=tls_config(json.load(open(sys.argv[2]))); n=len(t[t["mode"]]) if t["mode"]!="all" else 0
@@ -1560,7 +1577,7 @@ cmd_doctor() {
   /usr/bin/python3 -I "$SCRIPT_DIR/addons/doctor.py" \
     --project "$PROJECT" --rules "$RULES" --confdir "$CONFDIR" \
     --port "$PORT" --web-port "$WEB_PORT" --script-dir "$PROJECT_STATE/scripts" \
-    --adb "$ADB" "$@"
+    --adb "$ADB" --upstream "$(saved_upstream)" "$@"
 }
 
 cmd_bug_report() {

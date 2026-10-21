@@ -50,6 +50,7 @@ param(
   [string]$Label = "",
   [string]$Hosts = "",
   [string]$Output = "",
+  [string]$Upstream = "",
   [ValidateSet("chrome","edge","chromium","brave")][string]$Browser = "",
   [Alias("-method")][string]$Method = "",
   [ValidateSet("py","js")][string]$Lang = "",
@@ -132,6 +133,19 @@ $RulesPath = Config-Env "RULES" (Join-Path $ProjectState "rules.json")
 $PortSuffix = if ("$WebPort" -eq "8083") { "" } else { "-$WebPort" }
 $TokenPath = Join-Path $StateRoot "web-token$PortSuffix"
 $BootstrapPath = Join-Path $StateRoot "web-bootstrap$PortSuffix"
+$UpstreamPath = Join-Path $StateRoot "upstream-$WebPort"
+function Get-Upstream {
+  if ($Upstream) { return $Upstream }
+  if (Test-Path $UpstreamPath) { return (Get-Content $UpstreamPath -TotalCount 1).Trim() }
+  return "direct"
+}
+function Test-Upstream([string]$value) {
+  if ($value -eq "direct") { return }
+  $uri = $null
+  if (-not [Uri]::TryCreate($value, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne "http" -or
+      -not $uri.Host -or $uri.Port -lt 1 -or $uri.Port -gt 65535 -or $value -notmatch '^http://[^/]+:[0-9]+$' -or
+      $uri.UserInfo -or $uri.Query -or $uri.Fragment) { Die "-Upstream needs an http://host:port URL without credentials or path" }
+}
 
 function Write-PrivateFile([string]$path, [string]$text) {
   # Write a private sibling and rename it into place: readers see the old or new complete file, never a partial one.
@@ -619,6 +633,8 @@ switch ($Command) {
     } else { Die "usage: projects list|use ID|show [ID]|new ID -Label LABEL -Hosts REGEX" }
   }
   "start" {
+    $chosenUpstream = Get-Upstream
+    Test-Upstream $chosenUpstream
     $startMutex = [System.Threading.Mutex]::new($false, ("RivisStart-" + ($TokenPath -replace '[^A-Za-z0-9]','_')))
     if (-not $startMutex.WaitOne(0)) { $startMutex.Dispose(); Die "start already in progress on UI port $WebPort; retry after it finishes" }
     try {
@@ -627,6 +643,7 @@ switch ($Command) {
     Ensure-Rules
     $o = Port-Owner $Port; if ($o) { Die "port $Port already taken: $o" }
     $o = Port-Owner $WebPort; if ($o) { Die "UI port $WebPort already taken: $o" }
+    if ($Upstream) { Write-PrivateFile $UpstreamPath $chosenUpstream }
     New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
     $token = Config-Env "WEB_PASSWORD" ""
     if (-not $token) {
@@ -640,7 +657,8 @@ switch ($Command) {
     Write-PrivateFile $TokenPath $token
     $url = "http://127.0.0.1:$WebPort/"
     $bootstrapUrl = New-UiBootstrap
-    $margs = @("--listen-host","127.0.0.1","--mode","regular@$Port",
+    $proxyMode = if ($chosenUpstream -eq "direct") { "regular@$Port" } else { "upstream:$chosenUpstream@$Port" }
+    $margs = @("--listen-host","127.0.0.1","--mode",$proxyMode,
               "--set","web_host=127.0.0.1","--set","web_port=$WebPort","--set","web_open_browser=false",
               "-s",(Join-Path $PSScriptRoot "addons\proxy_auth.py"),
               "--set","proxy_auth_token_file=$TokenPath","--set","proxy_bootstrap_file=$BootstrapPath",
@@ -655,6 +673,7 @@ switch ($Command) {
     }
     else { $margs += @("--set","view_filter=~http") }
     Info "proxy  127.0.0.1:$Port   (Android emulator: 10.0.2.2:$Port)"
+    Info "upstream proxy: $chosenUpstream"
     Info "project $Project ($($ProjectConfig.label))"
     Info "rules  $RulesPath  (${Cli}.ps1 rules list)"
     Info "UI     $url (opens signed in; the password is never printed)"
@@ -1150,7 +1169,8 @@ switch ($Command) {
     if ($pythonExe -and (Test-Path $doctorPy)) {
       $adbPath = (Get-Command adb -ErrorAction SilentlyContinue).Source
       $argv = @($doctorPy, "--project", $Project, "--rules", $RulesPath, "--confdir", $ConfDir,
-                "--port", $Port, "--web-port", $WebPort, "--script-dir", (Join-Path $ProjectState "scripts"))
+                "--port", $Port, "--web-port", $WebPort, "--script-dir", (Join-Path $ProjectState "scripts"),
+                "--upstream", (Get-Upstream))
       if ($adbPath) { $argv += @("--adb", $adbPath) }
       if ($Json)    { $argv += "--json" }
       if ($NoNet)   { $argv += "--no-net" }
@@ -1215,6 +1235,7 @@ switch ($Command) {
   "status" {
     Ensure-Rules
     Write-Host "project: $Project ($($ProjectConfig.label))"
+    Write-Host "upstream proxy: $(Get-Upstream)"
     $statusCfg = Read-RulesConfig
     $statusTls = Get-Tls $statusCfg
     Write-Host ("TLS decryption: {0}{1}" -f $statusTls.mode, $(if ($statusTls.mode -eq "all") { " (every host)" } else { " ($(@($statusTls[$statusTls.mode]).Count) host pattern(s))" }))
