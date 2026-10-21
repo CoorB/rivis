@@ -2076,6 +2076,10 @@
       original: { content: r.content, status: String(r.status), headers: JSON.stringify(r.headers) } }; render(); }  // R3A-10
     catch (e) { returnTo.editor = null; toast(e.message, true); }
   }
+  const mockEditorChanged = (e) => {      // read from the live fields; true when they are gone (cannot tell: keep the draft)
+    const ta = $("body"), st = $("st");
+    return !ta || !st || ta.value !== e.original.content || st.value !== e.original.status || JSON.stringify(readHeaders("hd")) !== e.original.headers;
+  };
   const BIG_BODY = 1024 * 1024;         // above this, JSON is checked after typing pauses, not on every key (R6B-09)
   function renderEditor(m) {
     const e = editing;
@@ -2110,7 +2114,7 @@
     const leave = () => { clearTimeout(editorCheckT); editing = null; drawerTypingDirty = false; render().then(() => giveBack("editor")); }; // R6-05
     $("back").onclick = async () => {
       // R3A-10: Back may delete a draft or discard an edit; require an in-panel choice only after a change.
-      const changed = ta.value !== e.original.content || $("st").value !== e.original.status || JSON.stringify(readHeaders("hd")) !== e.original.headers;
+      const changed = mockEditorChanged(e);
       if (changed) { $("discard").style.display = ""; $("keep").focus(); return; }
       // a new Map Local that was never saved is discarded, so it never answers a call (r1 B-03)
       if (e.draft) { try { const r = await api("delete", { name: e.name }); toast(r.message || "Map Local '" + e.name + "' discarded (not saved)"); } catch (x) { toast(x.message, true); return; } }
@@ -2308,7 +2312,10 @@
       missed = 0; lostSince = 0; showLost(false);
       state = s; badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow();
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
-      await refreshFlows(); tagCells(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
+      // the call list (megabytes at a few thousand calls) is for the Tools drawer's own tabs: skip it while the drawer is
+      // closed or the page is hidden (row tags come from mitmweb's own rows), and flowsById() fetches on demand
+      if ($("drawer").classList.contains("open") && !document.hidden) await refreshFlows();
+      tagCells(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
       if (!pausedOpen && waiting.length && !$("pause").classList.contains("open")) openPaused(waiting[0].id, true);
       if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) { pausedOpen = null; closeSheet("pause"); }
@@ -2356,7 +2363,13 @@
   $("source").onchange = () => { const v = $("source").value; $("source").blur();
     if (v === "__devices") { $("source").value = (state && state.source) || ""; openDrawer("dev"); return; }   // the "not set up" hint
     setSource(v); };
-  root.querySelectorAll("nav button").forEach((b) => (b.onclick = () => { clearTimeout(editorCheckT); tab = b.dataset.t; editing = null; render(); })); // R6-05
+  root.querySelectorAll("nav button").forEach((b) => (b.onclick = async () => {
+    clearTimeout(editorCheckT);
+    const draft = editing && editing.kind !== "script" && editing.draft && !mockEditorChanged(editing) ? editing.name : null;
+    tab = b.dataset.t; editing = null; render();   // R6-05
+    // m10: a new Map Local left unchanged is discarded on a tab switch too, as Back does, so no disabled rule or mock file stays behind
+    if (draft) { try { await api("delete", { name: draft }); toast("Map Local '" + draft + "' discarded (not saved)"); } catch (x) { /* it stays a draft: Rules lists it */ } }
+  }));
   // R6-03: remember typing across a redraw or tab switch; Esc must not silently drop a Tools draft.
   $("drawer").addEventListener("input", (e) => { if (e.target.matches("input:not([type=checkbox]), textarea")) drawerTypingDirty = true; });
   // mitmweb changes the selection with history.replaceState, which fires no "hashchange" —
