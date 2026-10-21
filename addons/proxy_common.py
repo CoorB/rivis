@@ -176,6 +176,57 @@ def redact_diagnostic(value):
     return _SECRET.sub(lambda m: m.group(1) + m.group(2) + "[REDACTED]", text)
 
 
+def rotate_file(path, max_bytes=2 * 1024 * 1024, backups=3, copytruncate=False, incoming=0):
+    """Rotate a file when its size (+ incoming) exceeds max_bytes, keeping `backups` old files.
+    If copytruncate=True, copy to .1 and truncate the original file so open file descriptors
+    continue appending to it.
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    if size + incoming <= max_bytes:
+        return False
+    if backups < 1:
+        try:
+            if copytruncate:
+                with open(path, "r+", encoding="utf-8", errors="replace") as f:
+                    f.truncate(0)
+            else:
+                os.unlink(path)
+        except OSError:
+            pass
+        return True
+    oldest = "%s.%d" % (path, backups)
+    try:
+        os.unlink(oldest)
+    except OSError:
+        pass
+    for index in range(backups - 1, 0, -1):
+        source = "%s.%d" % (path, index)
+        if os.path.exists(source):
+            try:
+                os.replace(source, "%s.%d" % (path, index + 1))
+            except OSError:
+                pass
+    if os.path.exists(path):
+        if copytruncate:
+            import shutil
+            try:
+                shutil.copyfile(path, path + ".1")
+                with open(path, "r+", encoding="utf-8", errors="replace") as f:
+                    f.truncate(0)
+            except OSError:
+                pass
+        else:
+            try:
+                os.replace(path, path + ".1")
+            except OSError:
+                pass
+    return True
+
+
 class RotatingTextLog:
     """Small dependency-free rotating log, suitable inside mitmproxy's packaged runtime."""
     def __init__(self, path, max_bytes=2 * 1024 * 1024, backups=3):
@@ -185,29 +236,7 @@ class RotatingTextLog:
         self._lock = threading.Lock()
 
     def _rotate(self, incoming):
-        try:
-            size = os.path.getsize(self.path)
-        except OSError:
-            size = 0
-        if size + incoming <= self.max_bytes:
-            return
-        if self.backups < 1:
-            try:
-                os.unlink(self.path)
-            except FileNotFoundError:
-                pass
-            return
-        oldest = "%s.%d" % (self.path, self.backups)
-        try:
-            os.unlink(oldest)
-        except FileNotFoundError:
-            pass
-        for index in range(self.backups - 1, 0, -1):
-            source = "%s.%d" % (self.path, index)
-            if os.path.exists(source):
-                os.replace(source, "%s.%d" % (self.path, index + 1))
-        if os.path.exists(self.path):
-            os.replace(self.path, self.path + ".1")
+        rotate_file(self.path, max_bytes=self.max_bytes, backups=self.backups, incoming=incoming)
 
     def append(self, level, message):
         directory = os.path.dirname(self.path)

@@ -1,4 +1,5 @@
 """Rotating, redacted Rivis diagnostics independent of mitmweb's in-memory event log."""
+import asyncio
 import importlib
 import logging
 import os
@@ -11,7 +12,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
-from proxy_common import RotatingTextLog, STATE_ROOT
+from proxy_common import RotatingTextLog, STATE_ROOT, rotate_file
 
 
 class _LogHandler(logging.Handler):
@@ -39,6 +40,7 @@ def _detach():
 class ProxyOperability:
     def __init__(self):
         self.writer = None
+        self._rotate_task = None
 
     def load(self, loader):
         loader.add_option("proxy_log_dir", str, os.path.join(STATE_ROOT, "logs"), "directory for rotating Rivis logs")
@@ -53,8 +55,31 @@ class ProxyOperability:
 
     def running(self):
         self.writer.append("info", "Rivis started")
+        self._check_mitmweb_log()
+        try:
+            loop = asyncio.get_running_loop()
+            self._rotate_task = loop.create_task(self._rotate_loop())
+        except RuntimeError:
+            pass
+
+    async def _rotate_loop(self):
+        while True:
+            await asyncio.sleep(15)
+            self._check_mitmweb_log()
+
+    def _check_mitmweb_log(self):
+        try:
+            log_dir = os.path.expanduser(ctx.options.proxy_log_dir)
+            mitm_log = os.path.join(log_dir, "mitmweb.log")
+            if os.path.isfile(mitm_log) and os.path.getsize(mitm_log) >= ctx.options.proxy_log_max_bytes:
+                rotate_file(mitm_log, max_bytes=ctx.options.proxy_log_max_bytes, backups=3, copytruncate=True)
+        except Exception:
+            pass
 
     def done(self):
+        if self._rotate_task is not None:
+            self._rotate_task.cancel()
+        self._check_mitmweb_log()
         if self.writer is not None:
             self.writer.append("info", "Rivis stopped")
         _detach()

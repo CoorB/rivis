@@ -13,7 +13,7 @@ ADDONS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ADDONS)
 import bug_report
 from proxy_common import (COLLECTION_SCHEMA_VERSION, RULES_SCHEMA_VERSION, RotatingTextLog,
-                          atomic_write_text, migrate_collection, migrate_rules)
+                          atomic_write_text, migrate_collection, migrate_rules, rotate_file)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import LiveCase, wait_for
 
@@ -68,6 +68,43 @@ class LogsAndReports(unittest.TestCase):
                                for name in os.listdir(os.path.dirname(path)))
             self.assertNotIn("top-secret-value", all_text)
             self.assertIn("[REDACTED]", all_text)
+
+    def test_rotate_file_copytruncate(self):
+        # n2: copytruncate rotates the content to .1/.2 and resets current file size to 0
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "test.log")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("a" * 100)
+            rotated = rotate_file(path, max_bytes=50, backups=2, copytruncate=True)
+            self.assertTrue(rotated)
+            self.assertTrue(os.path.isfile(path))
+            self.assertEqual(os.path.getsize(path), 0)
+            self.assertTrue(os.path.isfile(path + ".1"))
+            self.assertEqual(os.path.getsize(path + ".1"), 100)
+            # Second rotation
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("b" * 100)
+            rotate_file(path, max_bytes=50, backups=2, copytruncate=True)
+            self.assertEqual(os.path.getsize(path), 0)
+            self.assertEqual(open(path + ".1", encoding="utf-8").read(), "b" * 100)
+            self.assertEqual(open(path + ".2", encoding="utf-8").read(), "a" * 100)
+
+    def test_background_log_rotation_on_start(self):
+        # n2: background start rotates previous mitmweb.log
+        import subprocess
+        with tempfile.TemporaryDirectory() as root:
+            logs = os.path.join(root, "logs")
+            os.makedirs(logs, exist_ok=True)
+            log = os.path.join(logs, "mitmweb.log")
+            for i in range(1, 4):
+                with open(log, "w", encoding="utf-8") as f:
+                    f.write("run %d\n" % i)
+                subprocess.run(["bash", "-c", 'eval "$(sed -n "/^rotate_log()/,/^}/p" ./rivis)"; rotate_log "$1"', "_", log],
+                               check=True, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            self.assertFalse(os.path.exists(log))
+            self.assertEqual(open(log + ".1", encoding="utf-8").read(), "run 3\n")
+            self.assertEqual(open(log + ".2", encoding="utf-8").read(), "run 2\n")
+            self.assertEqual(open(log + ".3", encoding="utf-8").read(), "run 1\n")
 
     def test_bug_report_contains_only_redacted_diagnostics(self):
         with tempfile.TemporaryDirectory() as root:
