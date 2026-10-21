@@ -69,7 +69,7 @@ gone() {   # adb has lost it AND its process has exited (a new boot on the same 
   local i; for i in $(seq 1 60); do "$ADB" -s "$SERIAL" get-state >/dev/null 2>&1 || break; sleep 1; done
   [ "$i" -lt 60 ] || return 1
   for i in $(seq 1 30); do ps -ax -o args= 2>/dev/null | grep -v "grep " | grep -F -- "-avd $AVD " | grep -qF -- "-port $PORT" || return 0; sleep 1; done
-  return 0                                         # still exiting after 30 s: carry on, the emulator reports a busy port
+  return 1                                         # old process still owns the port; do not race a new boot
 }
 booted() { local i; for i in $(seq 1 300); do [ "$(sh_ getprop sys.boot_completed)" = 1 ] && return 0; sleep 1; done; return 1; }
 start_avd() {   # start_avd LOG [extra emulator args]
@@ -78,7 +78,7 @@ start_avd() {   # start_avd LOG [extra emulator args]
   disown $! 2>/dev/null || true
 }
 restore_stock() {
-  "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1; gone
+  "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1; gone || die "the old emulator process still owns port $PORT; refusing to restart"
   start_avd "$CACHE/stock.log"
   booted && info "'$AVD' restarted normally" || info "'$AVD' did not come back by itself — Cold Boot it from Android Studio's Device Manager"
 }

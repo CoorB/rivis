@@ -59,6 +59,43 @@ class AndroidEmulator(unittest.TestCase):
         self.assertTrue(any(level == "error" and "nothing listens" in title for _, level, title, _, _ in rep.items), rep.items)
         self.assertFalse(any(level == "ok" and "http_proxy" in title for _, level, title, _, _ in rep.items))
 
+    def test_emulator_loopback_points_into_emulator(self):
+        rep, _ = self.check("127.0.0.1:50141")
+        self.assertTrue(any(level == "error" and "back into the emulator" in title for _, level, title, _, _ in rep.items), rep.items)
+
+    def test_external_proxy_is_not_reported_healthy(self):
+        rep, _ = self.check("192.168.17.81:9090")
+        self.assertTrue(any(level == "warn" and "external proxy" in title for _, level, title, _, _ in rep.items), rep.items)
+        self.assertFalse(any(level == "ok" and "http_proxy" in title for _, level, title, _, _ in rep.items))
+
+    def test_rooted_emulator_requires_current_ca_fingerprint(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as confdir:
+            ca = os.path.join(confdir, "mitmproxy-ca-cert.pem")
+            key = os.path.join(confdir, "key.pem")
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key,
+                            "-out", ca, "-days", "1", "-subj", "/CN=Test"], check=True, capture_output=True)
+            current = open(ca).read()
+            def check(installed):
+                def adb_run(argv, **_):
+                    cmd = " ".join(argv[1:])
+                    if cmd == "devices": return 0, "List of devices attached\nemulator-5554\tdevice\n", ""
+                    if "settings get global http_proxy" in cmd: return 0, ":0", ""
+                    if "pm list packages" in cmd: return 0, "", ""
+                    if "shell id -u" in cmd: return 0, "0", ""
+                    if "shell ls /data/misc/user/0/cacerts-added" in cmd: return 0, "12345678.0", ""
+                    if "shell cat /data/misc/user/0/cacerts-added" in cmd: return 0, installed, ""
+                    return 0, "", ""
+                rep = Report()
+                with mock.patch("doctor.run", side_effect=adb_run), mock.patch("doctor.os.path.exists", return_value=True):
+                    doctor.check_android(rep, "/fake/adb", confdir=confdir)
+                return rep.items
+            self.assertTrue(any(level == "warn" and "current CA not found" in title for _, level, title, _, _ in check("old certificate")))
+            self.assertTrue(any(level == "ok" and "fingerprint matches" in title for _, level, title, _, _ in check(current)))
+            with open(ca, "w") as fh:
+                fh.write("invalid certificate")
+            self.assertTrue(any(level == "warn" and "current CA not found" in title for _, level, title, _, _ in check(current)))
+
     def test_a_recorded_install_is_confirmed_on_a_play_image(self):
         # R5B-02: no root to read the store, but `android on` verified and recorded this CA for this AVD
         with mock.patch("devices.ca_sha256", return_value="AB" * 32), mock.patch("os.path.isfile", return_value=True), \

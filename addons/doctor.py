@@ -110,12 +110,20 @@ def is_loopback(host):
     return str(host or "").strip().lower() in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
 
 
+def tcp_accepts(port):
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.5):
+            return True
+    except (OSError, ValueError):
+        return False
+
+
 def classify_system_proxy(server, port, port_listening):
     """A system proxy is a stale local leftover, an active local proxy, or a corporate one."""
     if is_loopback(server):
         if port_listening:
             return "local_active"      # another local tool owns it (Proxyman/FRTMProxy/…)
-        return "local_stale"           # loopback host, nothing listening → net-reset is safe
+        return "local_stale"           # loopback host, nothing answering; origin still needs proof before clearing
     return "corporate"                 # non-loopback → never touch
 
 
@@ -499,19 +507,19 @@ def check_system_proxy(rep):
                 continue
             flagged = True
             try:
-                listening = bool(port_owner(int(info["port"]))) if info["port"].isdigit() else False
+                listening = (bool(port_owner(int(info["port"]))) or
+                             (info["server"] in ("127.0.0.1", "localhost") and tcp_accepts(info["port"]))) \
+                    if info["port"].isdigit() and is_loopback(info["server"]) else False
             except ValueError:
                 listening = False
             kind = classify_system_proxy(info["server"], info["port"], listening)
             where = "%s %s=%s:%s" % (svc, label, info["server"], info["port"])
             if kind == "local_stale":
-                rep.add(sec, ERR, "stale localhost proxy — Mac apps have no network", where,
-                        "`%s net-reset` (safe: only clears dead loopback proxies)" % PRODUCT["cli"],
-                        )
-                rep.fixes.append(("clear stale localhost system proxy (%s)" % where, _fix_net_reset))
+                rep.add(sec, ERR, "localhost proxy does not answer — Mac apps may have no network", where,
+                        "inspect System Settings → Network → Proxies; `%s net-reset` clears only a previously observed Rivis/Proxyman listener" % PRODUCT["cli"])
             elif kind == "local_active":
-                rep.add(sec, WARN, "a local proxy owns the system proxy — it steals simulator traffic", where,
-                        "quit that tool (Proxyman/FRTMProxy); iOS Simulator traffic goes there, not to %s" % PRODUCT["name"])
+                rep.add(sec, WARN, "a local proxy owns the system proxy — it routes simulator traffic", where,
+                        "iOS Simulator traffic goes there; inspect or change the proxy setting if capture should use %s" % PRODUCT["name"])
             else:
                 rep.add(sec, WARN, "a corporate/non-local system proxy is set", where,
                         "left alone (never touched); it may intercept simulator TLS — expect SAN mismatches")
@@ -563,8 +571,8 @@ def check_other_tools(rep):
         rep.add(sec, OK, "no Proxyman / FRTMProxy running")
     else:
         rep.add(sec, WARN, "%s running" % " and ".join(found),
-                "these set the system proxy and capture simulator traffic instead of %s" % PRODUCT["name"],
-                "quit %s before iOS testing" % " / ".join(found))
+                "these tools may set the system proxy; check the active setting before iOS capture",
+                "if Simulator traffic should use %s, turn off the other proxy setting first" % PRODUCT["name"])
 
 
 def _sim_truststores(udid):
@@ -688,7 +696,10 @@ def check_android(rep, adb, port=None, confdir=None):
             # a proxy on the Mac (10.0.2.2 = the Mac from the emulator) with nothing listening = no network at all on
             # the emulator: doctor called that healthy (overnight QA r1 B-02)
             host, _, pport = prox.rpartition(":")
-            if host in ("10.0.2.2", "127.0.0.1", "localhost") and pport.isdigit():
+            if host in ("127.0.0.1", "localhost", "::1"):
+                rep.add(sec, ERR, "%s: http_proxy=%s points back into the emulator" % (s, prox),
+                        "emulator loopback is not the Mac", "`%s android on` sets 10.0.2.2" % PRODUCT["cli"])
+            elif host == "10.0.2.2" and pport.isdigit():
                 owners = port_owner(int(pport))
                 if not owners:
                     rep.add(sec, ERR, "%s: http_proxy=%s but nothing listens on :%s" % (s, prox, pport),
@@ -703,19 +714,39 @@ def check_android(rep, adb, port=None, confdir=None):
                 else:
                     rep.add(sec, OK, "%s: http_proxy=%s" % (s, prox), "")
             else:
-                rep.add(sec, OK, "%s: http_proxy=%s" % (s, prox), "")
+                rep.add(sec, WARN, "%s: http_proxy=%s is an external proxy" % (s, prox),
+                        "traffic may be routed through Proxyman or another service",
+                        "`%s android on` points it at this %s" % (PRODUCT["cli"], PRODUCT["name"]))
         # image type
         rc, pkg, _ = run([adb, "-s", s, "shell", "pm", "list", "packages", "com.android.vending"])
         is_play = bool(rc == 0 and "com.android.vending" in (pkg or ""))
         # CA presence (only verifiable with root / non-Play images)
         rc, uid, _ = run([adb, "-s", s, "shell", "id", "-u"])
         if rc == 0 and (uid or "").strip() == "0":
+            import hashlib
+            ca = os.path.join(confdir or "", "mitmproxy-ca-cert.pem")
+            try:
+                want = _pem_sha256(ca) if os.path.isfile(ca) else ""
+            except (OSError, ValueError):
+                want = ""
             rc, ls, _ = run([adb, "-s", s, "shell", "ls", "/data/misc/user/0/cacerts-added"])
-            n = len([x for x in (ls or "").split() if x.strip()]) if rc == 0 else 0
-            if n:
-                rep.add(sec, OK, "%s: %d user-store CA(s) present" % (s, n), "")
-            else:
-                rep.add(sec, WARN, "%s: no user-store CA" % s, "", "`%s android on`" % PRODUCT["cli"])
+            found = False
+            for name in (ls or "").split() if rc == 0 else ():
+                if not re.fullmatch(r"[0-9a-fA-F]{8}\.\d+", name):
+                    continue
+                rc_cert, cert, _ = run([adb, "-s", s, "shell", "cat", "/data/misc/user/0/cacerts-added/" + name])
+                if rc_cert != 0:
+                    continue
+                try:
+                    der = ssl.PEM_cert_to_DER_cert(cert) if "-----BEGIN CERTIFICATE-----" in cert else cert.encode("latin1")
+                    found = bool(want) and hashlib.sha256(der).hexdigest().upper() == want
+                except (ValueError, UnicodeError):
+                    pass
+                if found:
+                    break
+            rep.add(sec, OK if found else WARN,
+                    "%s: current CA fingerprint matches" % s if found else "%s: current CA not found in user store" % s,
+                    "", "" if found else "`%s android on`" % PRODUCT["cli"])
         elif _android_ca_recorded(adb, s, confdir):
             # R5B-02: a Play image has no root to read the store, but `android on` verified and recorded this CA
             rep.add(sec, OK, "%s: CA installed by `%s android on` (fingerprint matches)" % (s, PRODUCT["cli"]), "")

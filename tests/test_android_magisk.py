@@ -253,5 +253,16 @@ class MagiskRestarts(MagiskFixture):
         self.assertNotIn("-ramdisk", starts[0])
 
 
+class ShutdownRace(unittest.TestCase):
+    def test_gone_refuses_to_reuse_a_port_while_old_process_remains(self):
+        source = open(SCRIPT).read()
+        body = source[source.index("gone() {"):source.index("\n}", source.index("gone() {")) + 2]
+        shell = ("set -u\nSERIAL=emulator-5554; AVD=Test; PORT=5554; ADB=false\n"
+                 "seq() { printf '1\\n2\\n'; }\nsleep() { :; }\n"
+                 "ps() { echo 'emulator -avd Test -port 5554 '; }\n" + body + "\ngone\n")
+        result = subprocess.run(["/bin/bash", "-c", shell], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
