@@ -334,13 +334,17 @@ def rules_cmd(path, args):
     elif cmd == "rm":
         r = find(cfg, name)
         cfg["rules"].remove(r)
-        save(path, cfg)
-        mock = owned_mock_file(r, cfg.get("rules", []), os.path.join(project_state(active_project(path)), "mocks"))
+        mock = owned_mock_file(r, cfg.get("rules", []), os.path.join(project_state(active_project(path)), "mocks"), path)
+        undeleted = None
         if mock:
             try:
-                os.remove(mock)
+                os.remove(mock)          # before the save, as the panel does: no reader sees the rule gone with its mock still there
             except OSError as e:
-                print("removed %s (its mock file %s could not be deleted: %s)" % (name, mock, e.strerror))
+                undeleted = e
+        save(path, cfg)
+        if mock:
+            if undeleted:
+                print("removed %s (its mock file %s could not be deleted: %s)" % (name, mock, undeleted.strerror))
                 return
             print("removed %s and its mock file %s" % (name, mock))
             return

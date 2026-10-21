@@ -928,6 +928,13 @@ class LeftoverSystemProxy(CliBase):
     Mac app lost the network until `rivis net-reset` (a tester's Mac, 2026-10-16). Fake networksetup: Wi-Fi web+https
     proxy on PORT; every change is logged, nothing real is touched."""
 
+    def dead_port(self):
+        # held bound (not listening) for the whole test: a port merely released could be taken by another process, or
+        # handed out again as this test's own RIVIS_PORT, and then "nothing listens there" no longer holds
+        port, holder = harness.reserve_dead_port()
+        self.addCleanup(holder.close)
+        return port
+
     def fake(self, host, port, deny=False):
         d = os.path.join(self.home, "fakenet")
         os.makedirs(d, exist_ok=True)
@@ -949,7 +956,7 @@ exit 0
         return open(log).read().split("\n")[:-1] if os.path.exists(log) else []
 
     def test_auto_clears_a_dead_loopback_proxy_and_says_so(self):
-        env, log = self.fake("127.0.0.1", harness.free_port())
+        env, log = self.fake("127.0.0.1", self.dead_port())
         r = self.ok("net-reset", "--auto", env=env)
         self.assertEqual(sorted(self.changes(log)), ["-setsecurewebproxystate Wi-Fi off", "-setwebproxystate Wi-Fi off"])
         self.assertIn("fixed:", r.stdout)
@@ -966,7 +973,7 @@ exit 0
             self.assertEqual(r.stdout.strip(), "", "--auto must stay silent when it changes nothing")
 
     def test_start_clears_the_leftover_before_capturing(self):
-        env, log = self.fake("127.0.0.1", harness.free_port())
+        env, log = self.fake("127.0.0.1", self.dead_port())
         env["SHIM_DRYRUN"] = "1"
         r = self.suite.rivis("start", "--no-open", "--no-ios", home=self.home, env=env)
         self.assertIn("-setsecurewebproxystate Wi-Fi off", self.changes(log), r.stdout + r.stderr)
@@ -975,7 +982,7 @@ exit 0
     def test_start_still_starts_when_this_account_may_not_change_network_settings(self):
         # Night QA A4: a standard (non-admin) account behind a Proxyman leftover — `start` died on the
         # refused networksetup call, so Rivis never started at all. Now it says how to clear it and starts.
-        env, log = self.fake("127.0.0.1", harness.free_port(), deny=True)
+        env, log = self.fake("127.0.0.1", self.dead_port(), deny=True)
         env["SHIM_DRYRUN"] = "1"
         open(os.path.join(self.suite.shimlog, "mitm-argv.log"), "w").close()
         r = self.suite.rivis("start", "--no-open", "--no-ios", home=self.home, env=env)

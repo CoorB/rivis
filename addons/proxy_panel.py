@@ -1560,10 +1560,10 @@ class ProxyPanel:
         elif op == "delete":
             r = self.find(cfg, a["name"])
             cfg["rules"].remove(r)
-            self.save_cfg(cfg)
-            mock = owned_mock_file(r, cfg["rules"], MOCK_DIR)
+            mock = owned_mock_file(r, cfg["rules"], MOCK_DIR, self.rules_path)
             if mock:
-                os.remove(mock)
+                os.remove(mock)              # before the save: whoever sees the rule gone never finds its mock still on disk
+            self.save_cfg(cfg)
             if r.get("action") == "map_local" and isinstance(r.get("file"), str) and not mock and os.path.isfile(os.path.expanduser(r["file"])):
                 return {"message": "mock file kept: " + r["file"]}
         elif op == "add":

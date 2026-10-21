@@ -218,8 +218,12 @@ def project_state(project_id):
     return os.path.join(STATE_ROOT, "projects", project_id)
 
 
-def owned_mock_file(removed, remaining_rules, mocks_dir):
-    """Return a Rivis-created mock only when no project still reads it. Fail closed."""
+def owned_mock_file(removed, remaining_rules, mocks_dir, current_rules_file=None):
+    """Return a Rivis-created mock only when no project still reads it. Fail closed.
+
+    `current_rules_file` is the rules.json of the project the rule is being removed from: `remaining_rules` already
+    says what it will still read, so its on-disk copy (which may not be saved yet) is not consulted. That lets a caller
+    delete the mock BEFORE saving, so nobody sees the rule gone while its mock file is still there."""
     if not isinstance(removed, dict) or removed.get("action") != "map_local" or not isinstance(removed.get("file"), str):
         return None
     value = removed["file"]
@@ -248,6 +252,8 @@ def owned_mock_file(removed, remaining_rules, mocks_dir):
                 continue
             path = os.path.join(project.path, "rules.json")
             if not os.path.exists(path):
+                continue
+            if current_rules_file and os.path.realpath(path) == os.path.realpath(current_rules_file):
                 continue
             with open(path) as fh:
                 rules = json.load(fh).get("rules")

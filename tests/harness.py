@@ -44,14 +44,34 @@ def run_prefix():
     return "rivis-t-%s-" % run if re.fullmatch(r"[A-Za-z0-9]{1,32}", run) else "rivis-t-"
 
 
+_ISSUED_PORTS = set()
+
+
 def free_port():
+    # never hand the same port out twice in one run: a released ephemeral port is the first one the kernel offers again,
+    # so two callers (a test's "dead" proxy port and the product's own RIVIS_PORT) could end up on the same number
     for _ in range(50):
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
         s.close()
-        if port not in FORBIDDEN_PORTS:
+        if port not in FORBIDDEN_PORTS and port not in _ISSUED_PORTS:
+            _ISSUED_PORTS.add(port)
             return port
+    raise RuntimeError("no free port")
+
+
+def reserve_dead_port():
+    """A port nothing listens on that nothing else can take either: bound but never listening. Returns (port, holder);
+    close the holder when done."""
+    for _ in range(50):
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        if port not in FORBIDDEN_PORTS and port not in _ISSUED_PORTS:
+            _ISSUED_PORTS.add(port)
+            return port, s
+        s.close()
     raise RuntimeError("no free port")
 
 
