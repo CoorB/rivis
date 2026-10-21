@@ -21,6 +21,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import uuid
 import zlib
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
@@ -2529,7 +2530,8 @@ class ProxyPanel:
             """R9-05: mitmweb's File → Open (POST /flows/dump) clears the list before it parses the file, so a broken
             HAR wiped every captured call and answered a bare 500. Parse the whole file first; if it cannot be read,
             answer 400 with a readable reason and leave the current calls alone. A readable file goes to the stock
-            handler unchanged."""
+            handler unchanged. F1: when calls are already captured, the file is added to them (see below) unless the
+            request says mode=replace."""
 
             async def post(self):
                 from io import BytesIO
@@ -2552,7 +2554,22 @@ class ProxyPanel:
                     self.finish("Could not open %s: %s (%s). Your current calls were kept."
                                 % (name or "the file", kind, problem))
                     return
-                return await super().post()
+                existing = len(getattr(self.view, "_store", None) or ())
+                if existing == 0 or self.get_query_argument("mode", "") == "replace":
+                    return await super().post()      # nothing to lose, or the panel's dialog asked for a replacement
+                # F1: File → Open replaced the whole live capture without asking. Without an explicit mode=replace the
+                # file's calls are added next to the captured ones, marked as imported, with fresh ids (a dump of this
+                # very capture would otherwise collide with itself).
+                label = "imported from %s" % (os.path.basename(str(name)) or "a file")
+                added = 0
+                for f in mio.FlowReader(BytesIO(data)).stream():
+                    f.id = str(uuid.uuid4())
+                    f.comment = (f.comment + " | " if f.comment else "") + label
+                    f.marked = ":large_blue_circle:"
+                    await self.master.load_flow(f)
+                    added += 1
+                self.set_header("Content-Type", "application/json")
+                self.finish(json.dumps({"added": added, "kept": existing}))
 
         class ThemeCSS(webapp.RequestHandler):
             def get(self):

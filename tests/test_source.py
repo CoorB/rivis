@@ -424,14 +424,14 @@ class Live(LiveCase):
         self.panel.set_option("view_filter", "~http")            # the user replaced the filter in mitmweb's own box
         self.assertIsNone(self.state()["source"])
 
-    def open_file(self, name, data):
+    def open_file(self, name, data, query=""):
         """mitmweb's File → Open… upload (multipart field "file"), as the browser sends it."""
         import urllib.request
         boundary = "rivis%s" % os.urandom(6).hex()
         body = (("--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
                  "Content-Type: application/octet-stream\r\n\r\n") % (boundary, name)).encode() + data + \
                ("\r\n--%s--\r\n" % boundary).encode()
-        req = urllib.request.Request(self.panel.base + "/flows/dump", data=body, method="POST",
+        req = urllib.request.Request(self.panel.base + "/flows/dump" + query, data=body, method="POST",
                                      headers={"Content-Type": "multipart/form-data; boundary=" + boundary,
                                               "X-XSRFToken": self.panel.xsrf})
         return self.panel._do(req, 30)
@@ -458,6 +458,71 @@ class Live(LiveCase):
         self.assertNotEqual(keys["/json/small?harsrc=python"], "mac|This Mac|curl")
         self.panel.ok("sess_delete", {"name": "har-src"})
 
+    def clear_calls(self):
+        import urllib.request
+        req = urllib.request.Request(self.panel.base + "/clear", data=b"", method="POST",
+                                     headers={"X-XSRFToken": self.panel.xsrf})
+        self.assertEqual(self.panel._do(req, 30)[0], 200)
+        wait_for(lambda: not self.inst.flows(), 10, 0.2, "list cleared")
+
+    def har_of_two_calls(self, tag):
+        self.fetch("/json/small?%s=1" % tag)
+        self.fetch("/json/small?%s=2" % tag)
+        wait_for(lambda: sum(1 for f in self.inst.flows() if tag + "=" in f["request"]["path"]) >= 2, 10, 0.2, "2 calls")
+        self.panel.ok("sess_save", {"name": tag, "overwrite": True})
+        self.addCleanup(lambda: self.panel.ok("sess_delete", {"name": tag}))
+        har = self.panel.ok("sess_har", {"name": tag})
+        har = har.get("har", har)
+        return json.dumps(har).encode(), len(har["log"]["entries"])
+
+    def test_file_open_without_a_choice_keeps_the_captured_calls_and_adds_the_file(self):
+        # F1 (data loss): File → Open replaced the whole live capture, silently. The safe default keeps it and adds the
+        # file's calls, marked as imported, with fresh ids so a dump of this very capture does not collide with itself.
+        self.clear_calls()                                             # an earlier test's thousands of calls would hit the retention cap
+        data, n_file = self.har_of_two_calls("f1keep")
+        for i in range(3):
+            self.fetch("/json/small?f1live=%d" % i)
+        wait_for(lambda: sum(1 for f in self.inst.flows() if "f1live=" in f["request"]["path"]) >= 3, 10, 0.2, "3 live calls")
+        before = self.inst.flows()
+        code, raw = self.open_file("two.har", data)
+        self.assertEqual(code, 200, raw[:300])
+        wait_for(lambda: len(self.inst.flows()) >= len(before) + n_file, 10, 0.2, "the file's calls added")
+        after = self.inst.flows()
+        self.assertEqual(len(after), len(before) + n_file, "nothing lost, nothing duplicated beyond the file's own calls")
+        ids = [f["id"] for f in after]
+        self.assertEqual(len(set(ids)), len(ids))
+        self.assertTrue({f["id"] for f in before} <= set(ids), "every captured call is still there")
+        added = [f for f in after if f["id"] not in {b["id"] for b in before}]
+        self.assertTrue(all("imported" in (f.get("comment") or "") for f in added), [f.get("comment") for f in added])
+        self.assertEqual(json.loads(raw)["added"], n_file)               # the answer says how many calls were added
+        # a native dump of the whole capture, opened again, adds copies instead of overwriting by id
+        code, dump = self.panel.get("/flows/dump")
+        self.assertEqual(code, 200)
+        now = len(self.inst.flows())
+        code, raw = self.open_file("calls.mitm", dump)
+        self.assertEqual(code, 200, raw[:300])
+        wait_for(lambda: len(self.inst.flows()) >= now * 2, 10, 0.2, "the dump's calls added next to the originals")
+        flows = self.inst.flows()                                      # (>=: a late call from an earlier test may land too)
+        self.assertEqual(len({f["id"] for f in flows}), len(flows))
+
+    def test_file_open_with_replace_replaces_the_list_like_before(self):
+        data, n_file = self.har_of_two_calls("f1rep")
+        for i in range(3):
+            self.fetch("/json/small?f1gone=%d" % i)
+        wait_for(lambda: sum(1 for f in self.inst.flows() if "f1gone=" in f["request"]["path"]) >= 3, 10, 0.2, "3 live calls")
+        code, raw = self.open_file("two.har", data, "?mode=replace")
+        self.assertEqual(code, 200, raw[:300])
+        wait_for(lambda: len(self.inst.flows()) == n_file, 10, 0.2, "only the file's calls left")
+        self.assertFalse([f for f in self.inst.flows() if "f1gone=" in f["request"]["path"]])
+
+    def test_file_open_into_an_empty_list_just_loads_the_file(self):
+        data, n_file = self.har_of_two_calls("f1empty")
+        self.clear_calls()
+        code, raw = self.open_file("two.har", data)
+        self.assertEqual(code, 200, raw[:300])
+        wait_for(lambda: len(self.inst.flows()) == n_file, 10, 0.2, "the file's calls")
+        self.assertFalse(any("imported" in (f.get("comment") or "") for f in self.inst.flows()), "nothing was kept, so nothing is 'imported'")
+
     def test_a_file_that_cannot_be_read_keeps_the_calls_and_says_why(self):
         # R9-05: a truncated HAR made mitmweb clear the list, then fail with a bare 500 — every captured call was lost
         for i in range(3):
@@ -473,7 +538,7 @@ class Live(LiveCase):
             self.assertIn(kind, text)
             self.assertIn("current calls were kept", text)
             self.assertEqual(len(self.inst.flows()), before, "the list must not be cleared by a file that cannot be read")
-        # a native mitmproxy dump still opens as before (and replaces the list, as the stock File → Open does)
+        # a native mitmproxy dump still opens (F1: next to the calls already captured)
         code, dump = self.panel.get("/flows/dump")
         self.assertEqual(code, 200)
         code, raw = self.open_file("calls.mitm", dump)

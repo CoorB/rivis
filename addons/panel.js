@@ -445,6 +445,7 @@
   <div class="pause" id="pause"><div class="sheet" id="sheet"></div></div>
   <div class="pause" id="help"><div class="sheet" id="hsheet"></div></div>
   <div class="welcome" id="welcome" role="dialog" aria-label="Coming from Proxyman?"></div><div class="wscrim" id="wscrim"></div>
+  <div class="welcome" id="opendlg" role="alertdialog" aria-label="Open a file"></div><div class="wscrim" id="opscrim"></div>
   <div class="emptylist" id="emptylist"></div>
   <div class="toast" id="toast"></div>
   <div class="lostbar" id="lostbar" role="alert"></div>
@@ -488,7 +489,7 @@
     if (!(auto && typing) && !$(id).contains(root.activeElement)) focusInto($(id).querySelector(".sheet") || $(id), prefer);
   };
   const closeSheet = (id) => { const was = $(id).classList.contains("open"); $(id).classList.remove("open"); if (was) giveBack(id); else returnTo[id] = null; };
-  const topSheet = () => ["help", "pause", "welcome"].map($).find((x) => x.classList.contains("open")) || null;
+  const topSheet = () => ["help", "pause", "welcome", "opendlg"].map($).find((x) => x.classList.contains("open")) || null;
   const trapTab = (e, box) => {      // Tab / Shift+Tab move through box's controls only, wrapping at either end
     const list = focusables(box); if (!list.length) return;
     const i = list.indexOf(deepActive()), n = list.length;
@@ -511,20 +512,58 @@
   };
   // R9-05: mitmweb's File → Open posts to /flows/dump and ignores the answer. The server now refuses a file it cannot
   // read with a 400 and a readable reason (keeping the current calls); show that reason instead of nothing.
+  // F1: File → Open used to replace the whole live capture without asking. With calls captured, ask first: keep them and add
+  // the file's (the default; the server marks them imported), replace them, or cancel. The server keeps by default too.
+  let openAsk = null;                       // resolves the open question: "keep" | "replace" | null (cancelled)
+  const askOpenMode = async () => {
+    let n = Number((state && state.flow_count) || 0);
+    try { n = Number((await api("state", undefined, 4000)).flow_count || 0); } catch (e) { /* the polled count will do */ }
+    if (!n) return "keep";                  // nothing captured: nothing to lose, nothing to ask
+    return new Promise((resolve) => {
+      const done = (mode) => { openAsk = null; closeSheet("opendlg"); resolve(mode); };
+      openAsk = () => done(null);
+      $("opendlg").innerHTML = `
+        <h3>Open this file?</h3>
+        <div class="wbody"><p>You have <b>${n} captured call${n === 1 ? "" : "s"}</b>. <b>Keep</b> them and add the file's calls (marked <i>imported</i>),
+          or <b>replace</b> them: replacing loses all ${n} call${n === 1 ? "" : "s"} unless you saved a session first.</p></div>
+        <div class="btns wfoot" style="justify-content:flex-end"><button class="b" id="od-cancel">Cancel</button>
+          <button class="b" id="od-replace">Replace (lose ${n})</button><button class="b p" id="od-keep">Keep my calls and add the file's</button></div>`;
+      openSheet("opendlg", "#od-keep");
+      $("od-keep").onclick = () => done("keep");
+      $("od-replace").onclick = () => done("replace");
+      $("od-cancel").onclick = () => done(null);
+    });
+  };
+  $("opscrim").onclick = () => { if (openAsk) openAsk(); };
   if (window.fetch && !window.fetch._rivisOpen) {
     const origFetch = window.fetch;
     const wrapped = function (input, init) {
-      const p = origFetch.apply(this, arguments);
+      let url = "", method = "GET";
       try {
-        const url = typeof input === "string" ? input : (input && input.url) || "";
-        const method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
-        if (method === "POST" && /\/flows\/dump(?:[?#]|$)/.test(url)) {
-          p.then((r) => {
-            if (r.ok) return;
-            r.clone().text().then((t) => toast((t || "").trim() || `Could not open the file (HTTP ${r.status}). Your current calls were kept.`, true),
-                                  () => toast(`Could not open the file (HTTP ${r.status}).`, true));
-          }, () => {});
-        }
+        url = typeof input === "string" ? input : (input && input.url) || "";
+        method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
+      } catch (e) { /* never break mitmweb's own request */ }
+      if (method === "POST" && /\/flows\/dump(?:[?#]|$)/.test(url) && typeof input === "string" && !/[?&]mode=/.test(url)) {
+        return askOpenMode().then((mode) => {
+          if (!mode) return new Response("", { status: 200 });          // cancelled: nothing opened, nothing lost
+          const args = Array.prototype.slice.call(arguments);
+          args[0] = url + (url.indexOf("?") < 0 ? "?" : "&") + "mode=" + mode;
+          return reportOpen(origFetch.apply(this, args));
+        });
+      }
+      const p = origFetch.apply(this, arguments);
+      return method === "POST" && /\/flows\/dump(?:[?#]|$)/.test(url) ? reportOpen(p) : p;
+    };
+    const reportOpen = (p) => {
+      try {
+        p.then((r) => {
+          if (r.ok) {
+            r.clone().json().then((j) => { if (j && j.added !== undefined) toast(`Added ${j.added} call${j.added === 1 ? "" : "s"} from the file (marked imported). Your ${j.kept} captured call${j.kept === 1 ? " was" : "s were"} kept.`); }, () => {});
+            return;
+          }
+          r.clone().text().then((t) => toast((t || "").trim() || `Could not open the file (HTTP ${r.status}). Your current calls were kept.`, true),
+                                () => toast(`Could not open the file (HTTP ${r.status}).`, true));
+        }, () => {});
       } catch (e) { /* never break mitmweb's own request */ }
       return p;
     };
@@ -2940,6 +2979,7 @@
     if (e.key.toLowerCase() === "r" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !typing && !inPanel && !topSheet()) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
     if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey && !typing) { e.preventDefault(); e.stopPropagation(); openHelp("keys"); return; }
     if (e.key === "Escape" && $("help").classList.contains("open")) { e.stopPropagation(); closeHelp(); }
+    else if (e.key === "Escape" && $("opendlg").classList.contains("open")) { e.stopPropagation(); if (openAsk) openAsk(); }
     else if (e.key === "Escape" && $("welcome").classList.contains("open")) { e.stopPropagation(); closeWelcome(); }
   }, true);
   setInterval(() => { try { drawEmptyList(); } catch (err) { /* cosmetic */ } }, 1500);

@@ -73,6 +73,8 @@ class ViewLabelsUi(UiBase):
         page.get_by_text("File", exact=True).first.click()
         page.locator("input[type=file]").first.set_input_files(
             files=[{"name": "broken.har", "mimeType": "application/json", "buffer": b'{"log": {"entries": ['}])
+        self.P("#opendlg.open").wait_for(timeout=10000)      # F1: with calls captured, File → Open asks first; keep is the safe answer
+        self.P("#od-keep").click()
         toast = self.P("#toast")
         wait_for(lambda: toast.is_visible() and "Could not open broken.har" in toast.text_content(), 10, 0.2,
                  "a toast saying the file could not be opened")
