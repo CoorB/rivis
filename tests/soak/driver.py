@@ -82,8 +82,13 @@ class Ui:
         box = None
         for _ in range(5):                      # a re-render can swap the node between "visible" and "measured"
             loc.first.wait_for(state="visible", timeout=timeout)
-            loc.first.scroll_into_view_if_needed(timeout=timeout)     # a person scrolls the drawer to a chip below the fold first
-            box = loc.first.bounding_box()
+            try:
+                loc.first.scroll_into_view_if_needed(timeout=timeout)     # a person scrolls the drawer to a chip below the fold first
+                box = loc.first.bounding_box()
+            except Exception as e:              # noqa: BLE001 — only "the node was replaced while measuring"; nothing is clicked here
+                if "not attached" not in str(e):
+                    raise
+                box = None
             if box:
                 break
             self.page.wait_for_timeout(200)

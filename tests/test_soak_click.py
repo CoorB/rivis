@@ -51,6 +51,29 @@ class SoakClickTests(unittest.TestCase):
         with self.assertRaises(SoakFail):
             ClickUi().centre(FakeLoc(901, scrolls=False))
 
+    def test_a_node_replaced_while_measuring_is_measured_again(self):
+        class Replaced(FakeLoc):
+            def __init__(self):
+                super().__init__(901, scrolls=True)
+                self.calls = 0
+
+            def scroll_into_view_if_needed(self, **kw):
+                self.calls += 1
+                if self.calls == 1:                    # the panel redrew the tab: the node it had found is gone
+                    raise Exception("Locator.scroll_into_view_if_needed: Element is not attached to the DOM")
+                super().scroll_into_view_if_needed(**kw)
+        loc = Replaced()
+        x, y = ClickUi().centre(loc)
+        self.assertEqual(loc.calls, 2)
+        self.assertLess(y, 837)
+
+    def test_other_errors_while_measuring_are_not_swallowed(self):
+        class Broken(FakeLoc):
+            def scroll_into_view_if_needed(self, **kw):
+                raise Exception("Timeout 8000ms exceeded")
+        with self.assertRaises(Exception):
+            ClickUi().centre(Broken(901, scrolls=True))
+
 
 if __name__ == "__main__":
     unittest.main()
