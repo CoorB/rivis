@@ -82,11 +82,16 @@ class Ui:
         box = None
         for _ in range(5):                      # a re-render can swap the node between "visible" and "measured"
             loc.first.wait_for(state="visible", timeout=timeout)
+            loc.first.scroll_into_view_if_needed(timeout=timeout)     # a person scrolls the drawer to a chip below the fold first
             box = loc.first.bounding_box()
             if box:
                 break
             self.page.wait_for_timeout(200)
         check(box is not None, "element has no box: %s" % loc)
+        vp = self.page.viewport_size
+        check(not vp or (box["y"] + box["height"] / 2 < vp["height"] and box["x"] + box["width"] / 2 < vp["width"]
+                         and box["y"] + box["height"] / 2 > 0 and box["x"] + box["width"] / 2 > 0),
+              "element is outside the %sx%s window, nobody could click it: %s at %s" % (vp["width"], vp["height"], loc, box))
         jx, jy = self.rng.uniform(-0.2, 0.2) * box["width"], self.rng.uniform(-0.2, 0.2) * box["height"]
         return box["x"] + box["width"] / 2 + jx, box["y"] + box["height"] / 2 + jy
 
