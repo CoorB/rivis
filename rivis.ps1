@@ -13,7 +13,8 @@ system proxy, one CA per workstation, removed again with `off`.
                                             system proxy and the certificate store are not touched
   .\<cli>.ps1 projects list|use|show|new
   .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
-                                            manage hot-reloaded interception rules
+  .\<cli>.ps1 rules add NAME match=REGEX action=ACTION [key=value ...]
+                                            manage hot-reloaded interception rules (json_patch: set='path=value' or set='{"path":value}')
   .\<cli>.ps1 scripts list|new NAME -Lang py|js [-Match REGEX]|on NAME|off NAME|edit NAME|rm NAME
   .\<cli>.ps1 throttle [off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]]
                          [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]

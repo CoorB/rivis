@@ -34,7 +34,7 @@
 #                                 respond | map_local | status | json_patch | delay |
 #                                 set_header | map_remote | block   (see rules.example.json)
 #                                 set_header: header=NAME value=TEXT [side=request|response];
-#                                 json_patch: set='{"path":value}'; map_remote: replace=REGEX with=URL
+#                                 json_patch: set='path=value' (or set='{"path":value}'); map_remote: replace=REGEX with=URL
 #   <cli> scripts list|new NAME --lang py|js [--match REGEX]|on NAME|off NAME|edit NAME|rm NAME
 #   <cli> throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]
 #                 [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]

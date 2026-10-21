@@ -77,6 +77,40 @@ def value(v):
         return v
 
 
+def _parse_json_patch_set(v):
+    """Parse a json_patch set argument into a dict of {path: value}.
+    Accepts:
+      - JSON object string: '{"user.name": "PATCHED"}'
+      - path=value: 'user.name=PATCHED'
+      - comma-separated pairs: 'user.name=PATCHED,user.age=25'
+    If parsing as path=value fails (e.g. no '='), returns the raw value for normal validation.
+    """
+    if isinstance(v, dict):
+        return v
+    if not isinstance(v, str):
+        return v
+    s = v.strip()
+    if s.startswith("{") and s.endswith("}"):
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, dict):
+                return parsed
+        except ValueError:
+            pass
+    if "=" in s:
+        if "," in s:
+            parts = [p.strip() for p in s.split(",")]
+            if all("=" in p for p in parts):
+                out = {}
+                for p in parts:
+                    path, val = p.split("=", 1)
+                    out[path.strip()] = value(val.strip())
+                return out
+        path, val = s.split("=", 1)
+        return {path.strip(): value(val.strip())}
+    return v
+
+
 def throttle_number(text, name):
     try:
         number = float(text)
@@ -366,7 +400,23 @@ def rules_cmd(path, args):
             k, v = kv.split("=", 1)
             if k == "rivis_created_mock":
                 die("rivis_created_mock is managed by Rivis")
-            r[k] = value(v) if k not in ("match", "replace", "with", "file", "header", "body") else v
+            if k == "set":
+                parsed = _parse_json_patch_set(v)
+                if isinstance(parsed, dict):
+                    if isinstance(r.get("set"), dict):
+                        r["set"].update(parsed)
+                    else:
+                        r["set"] = parsed
+                else:
+                    r["set"] = parsed
+            elif k.startswith("set."):
+                path_part = k[4:].strip()
+                if path_part:
+                    if not isinstance(r.get("set"), dict):
+                        r["set"] = {}
+                    r["set"][path_part] = value(v)
+            else:
+                r[k] = value(v) if k not in ("match", "replace", "with", "file", "header", "body") else v
         created = r.pop("created_mock", None)
         if created is not None and (cmd != "mock-set" or created not in (0, 1)):
             die("created_mock is only for mock capture")

@@ -138,6 +138,14 @@ rivis rules add move-echo match='/echo' action=map_remote replace='^http://127\.
 The `replace` pattern must match the full URL, not just the path shown in the call list. `rules add`, `rules list`
 and the Rules tab warn when a simple `match` example would leave the URL unchanged.
 
+For `json_patch`, `set` defines fields to modify in the JSON response body using dot and index notation.
+The CLI accepts `set='path=value'`, multiple `set='path=value'` flags, comma-separated `path=val` pairs,
+dot-prefixed `set.path=value`, or a JSON object `set='{"path": value}'`:
+
+```bash
+rivis rules add patch-user match='/user$' action=json_patch set='user.name=PATCHED' set='user.age=25'
+```
+
 `android on` turns the emulator's proxy on only once the CA is verified on it; otherwise it prints the steps and
 exits with status 2 (not done), so no emulator is left with a proxy it cannot use. After installing the CA by
 hand where Rivis cannot read the emulator's Settings, `--proxy-only` turns the proxy on anyway. `android off`

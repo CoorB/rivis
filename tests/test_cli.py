@@ -540,6 +540,18 @@ class Rules(CliBase):
         self.assertEqual(rules["r-patch"]["set"], {"a.b[0]": 1})
         self.assertEqual(rules["r-block"]["method"], "POST")
 
+    def test_b3_json_patch_cli_syntax(self):
+        # B3: json_patch set accepts path=value, multiple set flags, comma pairs, and JSON objects
+        self.ok("rules", "add", "p1", "match=/json$", "action=json_patch", "set=user.name=PATCHED")
+        self.ok("rules", "add", "p2", "match=/json$", "action=json_patch", "set=user.name=PATCHED", "set=user.age=25")
+        self.ok("rules", "add", "p3", "match=/json$", "action=json_patch", "set=user.name=PATCHED,user.role=admin")
+        self.ok("rules", "add", "p4", "match=/json$", "action=json_patch", "set.user.active=true")
+        rules = {r["name"]: r for r in self.cfg()["rules"]}
+        self.assertEqual(rules["p1"]["set"], {"user.name": "PATCHED"})
+        self.assertEqual(rules["p2"]["set"], {"user.name": "PATCHED", "user.age": 25})
+        self.assertEqual(rules["p3"]["set"], {"user.name": "PATCHED", "user.role": "admin"})
+        self.assertEqual(rules["p4"]["set"], {"user.active": True})
+
     def test_required_fields_and_bad_input_are_refused(self):
         self.refused("rules", "add", "a", "action=map_local", msg="needs: file")
         self.refused("rules", "add", "a", "action=status", msg="needs: status")
