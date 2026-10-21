@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 
 HOSTS = ["backbase-edge-sit.localhost", "backbase-identity-sit.localhost", "lifestyle-api-sit.localhost"]
 PAUSE_PATH = "/api/soak-pause/client-api/v1/ping"        # only this path is ever paused by a breakpoint
@@ -70,6 +71,26 @@ class Traffic:
         via_curl = self.rng.random() < 0.05
         body = json.dumps({"amount": self.rng.randint(1, 5000), "to": "SA%020d" % i, "ref": "r%d" % i}).encode() if method == "POST" else None
         return {"i": i, "path": "%s?%s" % (path, q), "method": method, "host": host, "tls": tls, "curl": via_curl, "body": body, "kind": kind or "plain"}
+
+    def app_calls_again(self, url):
+        """The app triggers the call the tester just put a breakpoint on: the same scheme, host, port and path as `url`
+        (a breakpoint made from a call matches exactly that endpoint, so the random mix only hits it now and then)."""
+        u = urlsplit(url)
+        with self.lock:
+            self.n += 1
+            i = self.n
+        call = {"i": i, "path": "%s?i=%d" % (u.path, i), "method": "GET", "host": u.hostname, "tls": u.scheme == "https",
+                "curl": False, "body": None, "kind": "plain"}
+
+        def go():
+            conns = {}
+            try:
+                self.execute(conns, call)
+            finally:
+                for c in conns.values():
+                    c.close()
+        threading.Thread(target=go, daemon=True).start()
+        return call
 
     def execute(self, conns, call):
         t = self.m.now()

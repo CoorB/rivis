@@ -96,6 +96,9 @@ class Scenarios:
         ui.wait_toast(r"Breakpoint on", t0)
         check(any(PAUSE_PATH in b["match"].replace("\\", "") or "soak-pause" in b["match"] for b in self.panel.state()["breakpoints"]),
               "no breakpoint for the soak-pause path was added: %s" % self.panel.state()["breakpoints"])
+        # "pauses the NEXT matching call": the breakpoint is for this call's own scheme, host, port and path, so the app makes
+        # that call again, as the tester would, instead of waiting for the random mix to come round to it
+        self.s.traffic.app_calls_again(info["url"])
         ui.wait(lambda: self.panel.state()["paused"], 20, "a matching call to be held at the breakpoint")
         ui.wait(lambda: ui.sheet_open("pause"), self.cfg.action_deadline, "the paused-call sheet to open by itself")
         ui.pause()
