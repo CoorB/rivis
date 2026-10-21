@@ -914,6 +914,16 @@ class SearchBarFilterDetection(unittest.TestCase):
                                      capture_output=True, text=True, timeout=30)
         self.assertEqual(json.loads(out.stdout), [False, False, True, True, True, True, False, False], out.stderr)
 
+    @harness.skip_unless(harness.node_ok(), "node not installed")
+    def test_b5_filter_tilde_paren_is_flagged_invalid_expression(self):
+        # B5: ~( is an unbalanced/invalid filter expression, not plain text
+        src = open(os.path.join(harness.REPO, "addons", "panel.js")).read()
+        a = src.index("const isExpr")
+        code = src[a:src.index("const toFilter", a)]
+        out = harness.subprocess.run([harness.NODE, "-e", code + "console.log(isExpr('~('))"],
+                                     capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.stdout.strip(), "true", out.stderr)
+
 
 class Confinement(LiveCase):
     """Names with ../, absolute paths and symlink tricks never leave the project's state dir."""

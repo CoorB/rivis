@@ -1550,7 +1550,7 @@
   // stock box does.  An INVALID filter makes the server close the websocket, so every filter is checked with the
   // server's own parser first (op filter_check). Plain words match URLs or TCP destinations (host-only tunnels).
   const reFilter = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\/g, "\\\\").replace(/'/g, "\\'");   // regex-escape, then the filter parser's own un-escaping (HANDOVER §6 #3)
-  const isExpr = (t) => t === "~" || /(^|[\s(!&|])~[A-Za-z]+(\s|$)/.test(t) ||   // R7A-03: bare ~ is an incomplete filter; R2A-13: embedded ~ is URL text
+  const isExpr = (t) => t === "~" || /(^|[\s(!&|])~([A-Za-z]+(\s|$)|[(])/.test(t) ||   // R7A-03: bare ~ is an incomplete filter; R2A-13: embedded ~ is URL text
      /^[!(]/.test(t) || /\s[&|]\s/.test(t);
   const toFilter = (text) => {
     const t = text.trim();
