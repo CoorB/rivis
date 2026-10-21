@@ -7,7 +7,9 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
@@ -379,6 +381,57 @@ class Commands(unittest.TestCase):
         self.bad("scripts", "new", "../x", "-Lang", "py")
         self.bad("scripts", "new", "jsone", "-Lang", "js")             # already exists
         self.assertIn("jsone", self.bash("scripts", "list"))
+
+    def fake_proxy(self, active):
+        """A stand-in for the proxy UI: serves the login page and /proxy/api/state for the project it 'runs'."""
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps({"active_project": active}).encode() if self.path.startswith("/proxy/api/state") else b"ok"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        self.env["RIVIS_WEB_PORT"] = str(port)
+        os.makedirs(self.state, exist_ok=True)
+        with open(os.path.join(self.state, "web-token-%d" % port), "w") as fh:
+            fh.write("tok-0123456789")
+
+    def test_running_project_mismatch_warns_without_failing(self):
+        self.fake_proxy("neo")
+        warn = "running proxy serves project 'neo', not 'default'"
+        for args in (("rules", "list"), ("scripts", "list"), ("throttle",), ("nocache", "status"), ("tls", "list"), ("breakpoint", "list")):
+            cp = self.ps(*args)
+            self.assertEqual(cp.returncode, 0, (args, cp.stdout, cp.stderr))
+            self.assertIn(warn, cp.stderr, args)
+            self.assertIn("stop, then start", cp.stderr, args)
+            self.assertNotIn(warn, cp.stdout, args)
+
+    def test_running_project_match_is_silent(self):
+        self.fake_proxy("default")
+        for args in (("rules", "list"), ("throttle",), ("nocache", "status"), ("tls", "list")):
+            cp = self.ps(*args)
+            self.assertEqual(cp.returncode, 0, (args, cp.stdout, cp.stderr))
+            self.assertNotIn("running proxy", cp.stdout + cp.stderr, args)
+
+    def test_proxy_not_running_or_token_missing_is_silent(self):
+        for args in (("rules", "list"), ("nocache", "status")):
+            cp = self.ps(*args)                                   # no token file at all
+            self.assertEqual(cp.returncode, 0, (args, cp.stdout, cp.stderr))
+            self.assertNotIn("running proxy", cp.stdout + cp.stderr, args)
+        os.makedirs(self.state, exist_ok=True)
+        with open(os.path.join(self.state, "web-token"), "w") as fh:   # token present but nothing listening
+            fh.write("tok-0123456789")
+        cp = self.ps("rules", "list")
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertNotIn("running proxy", cp.stdout + cp.stderr)
 
     def test_compose_list_and_errors_offline(self):
         self.assertIn("no saved requests", self.ok("compose", "list"))

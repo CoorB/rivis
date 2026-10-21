@@ -324,6 +324,22 @@ function Ensure-Rules {
   Info "created $RulesPath from project '$Project' (all rules off)"
 }
 
+# Rules and scripts load for the running project, which may differ from the selected project. Non-fatal; silent when the proxy is not running.
+function Warn-RunningProject {
+  if (-not (Test-Path $TokenPath)) { return }
+  try {
+    $token = (Get-Content -Raw $TokenPath).Trim()
+    if (-not $token) { return }
+    [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
+    $base = "http://127.0.0.1:$WebPort"
+    Invoke-WebRequest -Uri "$base/?token=$([uri]::EscapeDataString($token))" -SessionVariable web -UseBasicParsing -TimeoutSec 3 | Out-Null
+    $running = (Invoke-RestMethod -Uri "$base/proxy/api/state" -WebSession $web -UseBasicParsing -TimeoutSec 3).active_project
+  } catch { return }
+  if ($running -and $running -ne $Project) {
+    [Console]::Error.WriteLine("${Cli}.ps1: warning: the running proxy serves project '$running', not '$Project' - changes to '$Project' apply only after: ${Cli}.ps1 -Project $Project stop, then start")
+  }
+}
+
 function Migrate-Legacy {
   $old = Join-Path $HOME ".neo-mitm"
   $parent = Join-Path $StateRoot "projects"
@@ -679,6 +695,7 @@ switch ($Command) {
   }
   "rules" {
     Ensure-Rules
+    Warn-RunningProject
     $cfg = Read-RulesConfig
     $subcommand = if ($Action) { $Action.ToLowerInvariant() } else { "list" }
     if ($subcommand -eq "list") {
@@ -775,6 +792,7 @@ switch ($Command) {
   }
   "scripts" {
     Ensure-Rules
+    Warn-RunningProject
     $cfg = Read-RulesConfig
     if ($null -eq $cfg.scripts) { $cfg | Add-Member -NotePropertyName scripts -NotePropertyValue @() -Force }
     else { $cfg.scripts = @($cfg.scripts) }
@@ -821,6 +839,7 @@ switch ($Command) {
   }
   "throttle" {
     Ensure-Rules
+    Warn-RunningProject
     $cfg = Read-RulesConfig
     $extras = @(); if ($Name) { $extras += $Name }; $extras += @($Rest)
     if (-not $Action) { Show-Throttle $cfg; break }
@@ -853,6 +872,7 @@ switch ($Command) {
   }
   "nocache" {
     Ensure-Rules
+    Warn-RunningProject
     $cfg = Read-RulesConfig
     $sub = if ($Action) { $Action.ToLowerInvariant() } else { "status" }
     if ($Name -or $sub -notin @("on","off","status")) { Die "nocache: on | off | status" }
@@ -864,6 +884,7 @@ switch ($Command) {
   }
   "tls" {
     Ensure-Rules
+    Warn-RunningProject
     $cfg = Read-RulesConfig
     $tls = Get-Tls $cfg
     $sub = if ($Action) { $Action.ToLowerInvariant() } else { "list" }
@@ -948,6 +969,7 @@ switch ($Command) {
   }
   "breakpoint" {
     Ensure-Rules
+    Warn-RunningProject
     $arguments = @()
     if ($Action -and $Action.ToLowerInvariant() -ne "list") { $arguments += $Action }
     if ($Name) { $arguments += $Name }
