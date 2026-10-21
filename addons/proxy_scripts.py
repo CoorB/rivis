@@ -442,6 +442,7 @@ class ProxyScripts:
         self.node_start_lock = asyncio.Lock()
         self.reload_lock = asyncio.Lock()
         self.script_locks = {}
+        self.python_hosts = {}
 
     def configure(self, updated):
         if "proxy_rules_file" in updated or "proxy_project" in updated:
@@ -502,14 +503,8 @@ class ProxyScripts:
             for item in candidates:
                 try:
                     if item["file"].endswith(".py"):
-                        try:
-                            (outcome, namespace), _ = await _in_worker(self._load_python, (item,))
-                        except asyncio.TimeoutError as exc:
-                            raise ScriptFailure("top-level execution timed out after 2 s and was stopped") from exc
-                        ok, value, short_traceback = outcome
-                        if not ok:
-                            raise ScriptFailure(f"{type(value).__name__}: {value}", short_traceback)
-                        modules[item["file"]] = namespace
+                        await self._stop_python_host(item["file"])
+                        await self._start_python_host(item)
                     else:
                         with open(item["path"], encoding="utf-8") as fh: item["code"] = fh.read()
                     item["_re"] = user_regex(item.get("match") or ".")
@@ -525,6 +520,9 @@ class ProxyScripts:
             live = {x["file"] for x in candidates}
             self.contexts = {k: v for k, v in self.contexts.items() if k in live}
             self.script_locks = {k: v for k, v in self.script_locks.items() if k in live}
+            for filename in list(self.python_hosts):
+                if filename not in live:
+                    await self._stop_python_host(filename)
             self.last_errors = {k: v for k, v in self.last_errors.items() if k in live}
             ctx.log.info("proxy_scripts: loaded " + (", ".join(x["file"] for x in scripts) or "no enabled scripts"))
         except Exception as exc:
@@ -628,40 +626,60 @@ class ProxyScripts:
         if response: flow.metadata["proxy_modified"] = True
 
     async def _python(self, item, hook, context, url, request, response=None):
-        ns = self.modules[item["file"]]
-        fn = ns.get(hook) or ns.get("onRequest" if hook == "on_request" else "onResponse")
-        if not fn: return NO_HOOK
-        args = (context, url, request) if response is None else (context, url, request, response)
-        if inspect.iscoroutinefunction(fn):
-            ok, value, short_traceback = await asyncio.wait_for(
-                _capture_user_awaitable(fn(*args)), PYTHON_TIMEOUT)
-            if not ok:
-                raise ScriptFailure(f"{type(value).__name__}: {value}", short_traceback)
-            result = value
-        else:
+        filename = item["file"]
+        async with self.script_locks.setdefault(filename, asyncio.Lock()):
+            if filename not in self.python_hosts:
+                await self._start_python_host(item)
             try:
-                (ok, value, short_traceback), _ = await _in_worker(_capture_user_call, (fn, args))
+                msg = await self._python_exchange(filename, {"op": "call", "hook": hook, "context": context,
+                                                    "url": url, "request": request, "response": response})
             except asyncio.TimeoutError as exc:
-                busy = bool(exc.args) and exc.args[0] == "busy"
-                stopped = busy or bool(exc.args and exc.args[0])
-                if busy:
-                    raise ScriptFailure("skipped: other scripts kept every script worker busy for 2 s") from exc
-                if not stopped:
-                    item["_stopped"] = True      # cannot be interrupted: stop calling it until the file is saved again
-                raise ScriptFailure(
-                    "timed out after 2 s and was stopped; the call went on unchanged" if stopped else
-                    "timed out after 2 s and is still running: Rivis no longer calls this script until you save it again"
-                ) from exc
-            if not ok:
-                raise ScriptFailure(f"{type(value).__name__}: {value}", short_traceback)
-            result = value
-            if inspect.isawaitable(result):
-                ok, value, short_traceback = await asyncio.wait_for(
-                    _capture_user_awaitable(result), PYTHON_TIMEOUT)
-                if not ok:
-                    raise ScriptFailure(f"{type(value).__name__}: {value}", short_traceback)
-                result = value
-        return result
+                await self._stop_python_host(filename)
+                raise ScriptFailure("timed out after 2 s and was stopped; the call went on unchanged") from exc
+        for line in msg.get("logs", []): ctx.log.info(f"script:{item['name']}: {line}")
+        if not msg.get("ok"):
+            raise ScriptFailure(msg.get("error", "Python host failed"), msg.get("traceback", ""))
+        if not msg.get("invoked", True): return NO_HOOK
+        context.clear(); context.update(msg.get("context") or {})
+        return msg.get("result")
+
+    async def _python_exchange(self, filename, payload):
+        proc = self.python_hosts[filename]
+        proc.stdin.write((json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode())
+        await asyncio.wait_for(proc.stdin.drain(), PYTHON_TIMEOUT)
+        line = await asyncio.wait_for(proc.stdout.readline(), PYTHON_TIMEOUT)
+        if not line:
+            raise ScriptFailure("Python host exited unexpectedly")
+        return json.loads(line)
+
+    async def _start_python_host(self, item):
+        filename = item["file"]
+        python = sys.executable if os.path.basename(sys.executable).lower().startswith("python") else (
+            shutil.which("python3") or shutil.which("python") or ("/usr/bin/python3" if sys.platform == "darwin" else None))
+        if not python:
+            raise ScriptFailure("Python interpreter not found for script host")
+        proc = await asyncio.create_subprocess_exec(python, "-u", os.path.join(HERE, "python_host.py"),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL, limit=NODE_PIPE_LIMIT)
+        self.python_hosts[filename] = proc
+        try:
+            msg = await self._python_exchange(filename, {"op": "load", "name": item["name"], "path": item["path"]})
+            if not msg.get("ok"):
+                raise ScriptFailure(msg["error"], msg.get("traceback", ""))
+            for line in msg.get("logs", []): ctx.log.info(f"script:{item['name']}: {line}")
+        except asyncio.TimeoutError as exc:
+            await self._stop_python_host(filename)
+            raise ScriptFailure("top-level execution timed out after 2 s and was stopped") from exc
+        except BaseException:
+            await self._stop_python_host(filename)
+            raise
+
+    async def _stop_python_host(self, filename):
+        proc = self.python_hosts.pop(filename, None)
+        if proc and proc.returncode is None:
+            proc.kill()
+            try: await asyncio.wait_for(proc.wait(), 2)
+            except Exception: pass
 
     async def _start_node(self):
         async with self.node_start_lock:

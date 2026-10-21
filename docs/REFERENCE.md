@@ -443,9 +443,9 @@ headers, and body; responses include `statusCode`, headers, and body. JSON bodie
 and binary bodies are base64 with `body_is_base64: true`. Returning nothing leaves the message unchanged.
 Both languages receive `log`, `sleep`, and request-side `mock` helpers. A changed flow is tagged
 `script:<name>`; locally answered calls are marked so collections skip them.
-Synchronous Python hooks and Python top-level reload code run in worker threads with a two-second wait, keeping the
-capture loop responsive. Python cannot safely kill a running thread: after a timeout its result is ignored and the
-flow stays unchanged, but blocking user code in that abandoned worker may continue in the background.
+Python scripts run in separate, persistent host processes, one per enabled script. A hook or top-level load that
+exceeds two seconds is killed; the call continues unchanged and the host starts again on its next call. The Scripts
+tab and log name the script and show the timeout.
 
 ## Rules
 

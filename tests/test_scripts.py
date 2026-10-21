@@ -49,6 +49,30 @@ class ScriptCase(LiveCase):
 
 
 class PythonScripts(ScriptCase):
+    def test_log_helper_works_at_load_and_in_hook(self):
+        self.install("logger.py", 'log("loaded")\ndef on_request(context, url, request):\n    log("called")\n    return request\n', match="/echo")
+        import subprocess
+        host = os.path.join(harness.REPO, "addons", "python_host.py")
+        calls = [dict(op="load", name="logger", path=self.inst.path("scripts", "logger.py")),
+                 dict(op="call", hook="on_request", context={}, url="http://example.test/echo", request={}, response=None)]
+        result = subprocess.run([sys.executable, host], input="\n".join(json.dumps(x) for x in calls) + "\n",
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        replies = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([r["logs"] for r in replies], [["loaded"], ["called"]])
+
+    def test_c_regex_timeout_keeps_other_traffic_and_panel_responsive(self):
+        self.install("regex.py", 'import re\ndef on_response(context, url, request, response):\n    re.match(r"(a+)+$", "a" * 40 + "b")\n    response["headers"]["X-Late"] = "1"\n    return response\n', match="/echo\\?regex")
+        slow = Background(self.fetch, "/echo?regex", timeout=15)
+        time.sleep(0.3)
+        t = time.monotonic()
+        self.assertEqual(self.fetch("/json/small", timeout=5).status, 200)
+        self.assertIn("script_status", self.panel.state())
+        self.assertLess(time.monotonic() - t, 4)
+        self.assertIsNone(slow.result(15).header("x-late"))
+        self.assertIn("timed out after 2 s", self.errors()["regex.py"]["message"])
+        self.assertEqual(self.fetch("/echo?regex", timeout=10).status, 200)
+
     def test_request_edits_header_query_body_and_method(self):
         self.install("edit.py", '''
 def on_request(context, url, request):
