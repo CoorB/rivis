@@ -13,6 +13,12 @@ import devices
 import android_picker
 
 
+# RIVIS_ANDROID_SETUP_TIMEOUT is a per-step budget. Steps 1-3 each carry ~3 s of fixed settles plus a dozen adb/grep
+# process spawns; measured 5-6 s per step at load average ~15 (identical on fix/review-a-099), so a 6 s budget kills
+# step 1-3 before the stall at step 4 is reached. 20 s leaves >3x headroom and only the stalled step waits it out.
+STEP_BUDGET = '20'
+
+
 class Api36PickerFixture(unittest.TestCase):
     def test_recents_never_selects_certificate(self):
         base = os.path.join(harness.REPO, 'tests', 'fixtures')
@@ -66,8 +72,8 @@ class SettingsRoute(unittest.TestCase):
 
     def test_serial_timeout_is_nonzero_and_proxy_remains_off(self):
         open(os.path.join(self.emu, 'stall'), 'w').write('select')
-        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '6'
-        result = self.run_cli('-s', 'emulator-5554')
+        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = STEP_BUDGET
+        result = self.run_cli('-s', 'emulator-5554', timeout=150)
         self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
         self.assertIn('step 4/5:', result.stdout)
         self.assertIn('Settings setup timed out', result.stdout)
@@ -92,12 +98,12 @@ class SettingsRoute(unittest.TestCase):
 
     def test_panel_job_reports_current_step_and_timeout_error(self):
         open(os.path.join(self.emu, 'stall'), 'w').write('select')
-        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '6'
+        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = STEP_BUDGET
         jobs = devices.Jobs()
         jobs.start(['/bin/bash', harness.RIVIS, 'android', 'on', '-s', 'emulator-5554'],
                    'Android Test_Play', 'android', 'emulator-5554', env=self.env)
         seen = False
-        deadline = time.time() + 40
+        deadline = time.time() + 150
         while time.time() < deadline:
             status = jobs.summary()
             if status['running'] and status['step']:
