@@ -86,6 +86,9 @@ class Recorder:
         self.stats = {}                 # name -> {"pass","fail","skip"}
         self.failures = []
         self.nfail = 0
+        self.timeline = []              # (start_s, end_s, key) of every scenario run: says what ran when a long task started
+        self.slow_runs = []             # runs a long task (>= LONGTASK_EVIDENCE_MS) landed in: {scenario, t, screenshot, trace}
+        self.nslow = 0
 
     def run(self, name, fn, pos=None):
         s = self.s
@@ -110,14 +113,46 @@ class Recorder:
             err = exc
             self.capture(key, t_rel, exc)
         finally:
+            self.timeline.append((round(t_rel, 2), round(s.metrics.now(), 2), key))
+            slow = self.keep_slow(key, t_rel)
             if s.cfg.trace and not (err and err != "skip"):
                 try:
-                    s.ctx.tracing.stop_chunk()
+                    s.ctx.tracing.stop_chunk(path=slow["trace_abs"] if slow and slow["trace_abs"] else None)
                 except Exception:                           # noqa: BLE001
-                    pass
+                    if slow:
+                        slow["trace"] = ""
+            elif slow:
+                slow["trace"] = "(this run also failed: see its failure trace)"
         if err and err != "skip":
             s.normalize(hard=True)
         return err is None
+
+    def keep_slow(self, key, t_rel):
+        """A long task >= 1 s that ended inside this run: keep its screenshot and the run's trace (normally dropped when the run
+        passed). Evidence only: the 4000 ms budget does not look at it."""
+        s = self.s
+        try:
+            s.ui.drain()
+        except Exception:                                   # noqa: BLE001
+            return None
+        events = [e for e in list(s.metrics.longtask_events) if e["end"] >= t_rel]
+        if not events:
+            return None
+        self.nslow += 1
+        stem = "%03d-longtask-%s" % (self.nslow, key.replace("@", "-at-").replace(".", "_"))
+        d = os.path.join(s.out, "failures")
+        os.makedirs(d, exist_ok=True)
+        shot = os.path.join(d, stem + ".png")
+        trace = os.path.join(d, stem + "-trace.zip")
+        try:
+            s.page.screenshot(path=shot, timeout=8000)
+        except Exception:                                   # noqa: BLE001
+            shot = ""
+        rec = {"scenario": key, "t": round(t_rel, 1), "events": events, "screenshot": os.path.relpath(shot, s.out) if shot else "",
+               "trace": os.path.relpath(trace, s.out) if s.cfg.trace else "", "trace_abs": trace if s.cfg.trace else ""}
+        self.slow_runs.append(rec)
+        print("  LONG TASK %-30s t=%5.0fs  %s" % (key, t_rel, ", ".join("%d ms (started %.0fs)" % (e["ms"], e["start"]) for e in events)), flush=True)
+        return rec
 
     def capture(self, key, t_rel, exc):
         s = self.s

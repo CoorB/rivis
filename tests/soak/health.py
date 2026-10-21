@@ -30,7 +30,7 @@ INIT_JS = r"""
     return p;
   };
   addEventListener("unhandledrejection", (e) => S.rej.push({ t: Date.now(), text: String(e.reason && (e.reason.stack || e.reason)).slice(0, 400) }));
-  try { new PerformanceObserver((l) => l.getEntries().forEach((e) => S.longtasks.push({ t: Date.now(), ms: Math.round(e.duration) }))).observe({ entryTypes: ["longtask"] }); } catch (e) { /* not supported */ }
+  try { new PerformanceObserver((l) => l.getEntries().forEach((e) => S.longtasks.push({ t: Date.now(), ms: Math.round(e.duration), start: Math.round(Date.now() - (performance.now() - e.startTime)) }))).observe({ entryTypes: ["longtask"] }); } catch (e) { /* not supported */ }
 })();
 """
 
@@ -52,6 +52,9 @@ DRAIN_JS = """
   const out = { api: S.api, flows: S.flows, rej: S.rej, longtasks: S.longtasks, peak: S.maxInflight };
   S.api = []; S.flows = []; S.rej = []; S.longtasks = []; S.maxInflight = S.inflight; return out; }
 """
+
+
+LONGTASK_EVIDENCE_MS = 1000    # a long task this long is reported with its start time, the scenario running then and (when kept) a trace
 
 
 def pct(values, q):
@@ -85,7 +88,8 @@ class Metrics:
         self.probe = []                  # (t, direct_ms, proxy_ms)
         self.samples = []                # per-minute dicts: rss, heap, dom, flow_count, calls
         self.errors = []                 # (t, kind, text)
-        self.longtasks = []              # (t, ms)
+        self.longtasks = []              # (t_end, ms)
+        self.longtask_events = []        # {start, end, ms} in run seconds, every long task >= LONGTASK_EVIDENCE_MS (evidence only)
         self.max_peak = []               # (t, peak in-flight panel requests)
         self.ws = []                     # (t, ok, frames)
         self.dropped = 0

@@ -82,6 +82,25 @@ def build_report(s, crashed=False):
     errs_by_min = collections.Counter(m.minute(t) for t, k, x in list(m.errors) if not m.in_fault(t))
     calls_by_min = collections.Counter(m.minute(r[0]) for r in list(m.app))
 
+    # -- long tasks >= 1 s: when each started and what was running (evidence; the budget below is unchanged) ---------------------
+    def running_at(t):
+        for a, b, key in rec.timeline:
+            if a <= t <= b:
+                return key
+        before = [x for x in rec.timeline if x[1] < t]
+        after = [x for x in rec.timeline if x[0] > t]
+        if m.in_fault(t):
+            where = "a fault window"
+        else:
+            where = "between %s and %s" % (before[-1][2] if before else "the start", after[0][2] if after else "the end")
+        return where + " (no scenario running)"
+    long_events = []
+    for e in sorted(m.longtask_events, key=lambda x: x["start"]):
+        run = next((r for r in rec.slow_runs if any(x["start"] == e["start"] and x["ms"] == e["ms"] for x in r["events"])), None)
+        long_events.append({"start_s": e["start"], "end_s": e["end"], "duration_ms": e["ms"], "scenario": running_at(e["start"]),
+                            "in_fault_window": m.in_fault(e["end"]), "counted_by_budget": not m.in_fault(e["end"]),
+                            "screenshot": run["screenshot"] if run else "", "trace": run["trace"] if run else ""})
+
     # -- health budgets -----------------------------------------------------------------------------------------------
     quiet_errors = [(t, k, x) for t, k, x in list(m.errors) if not m.in_fault(t) and k != "http-status"]
     http_status = [(t, k, x) for t, k, x in list(m.errors) if not m.in_fault(t) and k == "http-status"]
@@ -120,7 +139,10 @@ def build_report(s, crashed=False):
     else:
         add("browser JS heap growth", False, "fewer than two heap samples")
     ltmax = max(lt.values(), default=0)
-    add("no UI freeze longer than %.0f ms (long tasks)" % cfg.longtask_ms, ltmax <= cfg.longtask_ms, "longest long task %d ms outside fault windows" % ltmax)
+    worst_ev = max((e for e in long_events if e["counted_by_budget"]), key=lambda e: e["duration_ms"], default=None)
+    add("no UI freeze longer than %.0f ms (long tasks)" % cfg.longtask_ms, ltmax <= cfg.longtask_ms,
+        "longest long task %d ms outside fault windows" % ltmax +
+        ("; it started at t=%.0fs while %s" % (worst_ev["start_s"], worst_ev["scenario"]) if worst_ev and worst_ev["duration_ms"] == ltmax and ltmax > cfg.longtask_ms else ""))
     quiet_app = [r for r in m.app if not m.in_fault(r[0])]
     failed_app = [r for r in quiet_app if r[2] == 0]
     add("app calls through the proxy succeed (status 0 <= 1%)", not quiet_app or len(failed_app) <= 0.01 * len(quiet_app),
@@ -188,6 +210,12 @@ def build_report(s, crashed=False):
             L.append("- panel at the time: lost-banner=%s, menu open=%s, last toasts=%s\n" % (f["lost_bar"], f["menu_open"], f["toasts"]))
     else:
         L.append("\n## Failures\n\nnone")
+    if long_events:
+        L.append("\n## Long tasks of 1 s or more (browser main thread blocked)\n")
+        L.append("The start is end minus duration. 'budget' = counted by the %.0f ms budget (outside fault windows and their recovery grace).\n" % cfg.longtask_ms)
+        L.append(table(["started t s", "ms", "ended t s", "scenario running at the start", "budget", "screenshot", "trace"],
+                       [(e["start_s"], e["duration_ms"], e["end_s"], e["scenario"], "yes" if e["counted_by_budget"] else "no (fault)", e["screenshot"] or "–", e["trace"] or "–")
+                        for e in long_events]))
 
     mins = list(range(minutes))
     L.append("\n## Per minute (fault windows excluded from latency columns)\n")
@@ -234,7 +262,8 @@ def build_report(s, crashed=False):
         fh.write(md)
     doc = {"verdict": verdict, "duration_s": round(dur, 1), "config": {k: v for k, v in vars(cfg).items()}, "calls_sent": total_calls,
            "checks": [{"name": n, "ok": o, "detail": d} for n, o, d in checks], "scenarios": {k: v for k, v in rec.stats.items()},
-           "failures": rec.failures, "faults": s.faults_done, "fault_windows": list(m.fault_windows),
+           "failures": rec.failures, "long_tasks": long_events, "scenario_timeline": [{"start_s": a, "end_s": b, "scenario": k} for a, b, k in rec.timeline],
+           "faults": s.faults_done, "fault_windows": list(m.fault_windows),
            "probes": [{"start_s": round(t, 3), "direct_ms": round(d, 2), "proxied_ms": round(p, 2)} for t, d, p in m.probe],
            "panel_requests": [{"start_s": round(t, 3), "op": op, "ms": ms} for t, op, ms, _status, _peak in m.panel],
            "samples": list(m.samples), "skips": s.skips, "harness_notes": s.harness_notes,

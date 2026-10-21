@@ -301,4 +301,7 @@ class Ui:
             self.m.add("errors", ((r["t"] - self.s.t0_ms) / 1000.0, "unhandledrejection", r["text"]))
         for r in d["longtasks"]:
             self.m.add("longtasks", ((r["t"] - self.s.t0_ms) / 1000.0, r["ms"]))
+            if r["ms"] >= health.LONGTASK_EVIDENCE_MS:        # stamped at its end: the start is what says which scenario was running
+                self.m.add("longtask_events", {"start": round((r.get("start", r["t"] - r["ms"]) - self.s.t0_ms) / 1000.0, 2),
+                                               "end": round((r["t"] - self.s.t0_ms) / 1000.0, 2), "ms": r["ms"]})
         self.m.add("max_peak", (self.m.now(), d["peak"]))
