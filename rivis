@@ -1163,7 +1163,11 @@ ui_has_current_ca() {   # does the user store hold THIS CA? (an older "mitmproxy
   # quick "not there at all": the user list is a few rows — one screen and one scroll tell. ui_tap would scroll up to 12
   # times (~3 s each) before giving up, which made a fresh Play-emulator setup spend ~50 s here (2026-10-16).
   ui_list_mentions "$s" "mitmproxy" || return 1
-  for n in 1 2 3 4 5; do
+  # only the entries that list shows: asking ui_tap for one more scrolled 12 times (~60 s), past the 45 s limit (A07)
+  local total; total=$("$ADB" -s "$s" shell cat /sdcard/proxy-ui.xml 2>/dev/null | tr '>' '\n' | grep -cE '(text|content-desc)="mitmproxy"')
+  [ "$total" -ge 1 ] 2>/dev/null || total=1
+  [ "$total" -le 5 ] || total=5
+  for n in $(seq 1 "$total"); do
     ui_tap "$s" "mitmproxy" "$n" || return 1          # no Nth entry: not found
     if ui_screen_has "$s" "$fp"; then ui_tap "$s" "OK"; return 0; fi
     ui_tap "$s" "OK" || "$ADB" -s "$s" shell input keyevent KEYCODE_BACK

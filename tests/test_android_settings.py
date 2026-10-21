@@ -142,6 +142,21 @@ class SettingsRoute(unittest.TestCase):
         self.assertNotIn('step 1/5', result.stdout)
         self.assertEqual(self.proxy(), ':0')
 
+    def test_another_mitmproxy_ca_on_the_emulator_does_not_stall_the_trust_check(self):
+        # A07: the user store held one "mitmproxy" CA that was not ours (a reinstall, another workstation). The check
+        # opened it, then looked for a 2nd entry with ui_tap, which scrolls 12 times (~60 s on an emulator) when there
+        # is none: the 45 s limit hit and Android on stopped with the proxy off.
+        open(os.path.join(self.emu, 'other'), 'w').write('yes')
+        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = STEP_BUDGET
+        result = self.run_cli(timeout=200)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('timed out', result.stdout)
+        log = open(os.path.join(self.emu, 'log')).read()
+        check = log.split('SECURITY_SETTINGS')[0]                   # step 0, before Settings opens for the install
+        self.assertNotIn('input swipe', check, 'the trust check searched for a CA entry that is not on screen')
+        self.assertIn('step 5/5', result.stdout)
+        self.assertEqual(self.proxy(), '10.0.2.2:' + self.env['RIVIS_PORT'])
+
 
 if __name__ == '__main__':
     unittest.main()

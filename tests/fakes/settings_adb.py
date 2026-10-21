@@ -48,10 +48,10 @@ elif cmd == 'shell dumpsys window':
     print('mCurrentFocus=com.android.settings/.SecuritySettings')
 elif cmd == 'shell cat /sdcard/proxy-ui.xml':
     screen = read('screen', 'initial')
-    if screen == 'trusted':
-        labels = ['User'] + (['mitmproxy'] if read('installed') else [])
+    if screen == 'trusted':           # 'other': another workstation's mitmproxy CA, listed first
+        labels = ['User'] + (['mitmproxy'] if read('other') else []) + (['mitmproxy'] if read('installed') else [])
     elif screen == 'fingerprint':
-        labels = ['User', 'mitmproxy', read('fingerprint'), 'OK']
+        labels = ['User', 'mitmproxy', read('shown', read('fingerprint')), 'OK']
     elif screen == 'recents':
         print('<hierarchy><node resource-id="com.android.documentsui:id/toolbar" text="Recents" bounds="[0,0][1080,100]"><node content-desc="Show roots" bounds="[0,0][100,100]" /></node><node resource-id="com.android.documentsui:id/filename" text="proxy-ca.crt" bounds="[0,300][1000,400]" /></hierarchy>')
         sys.exit(0)
@@ -94,6 +94,8 @@ elif cmd.startswith('shell input tap'):
         open(os.path.join(root, 'installed'), 'w').write('yes')
         set_screen('trusted')
     elif screen == 'trusted' and y > 200:
+        # rows sit at y 290, 440…: with 'other' present the first row is that CA, the second ours
+        open(os.path.join(root, 'shown'), 'w').write('11:22:33' if read('other') and y < 400 else read('fingerprint'))
         set_screen('fingerprint')
     elif screen == 'fingerprint':
         set_screen('trusted')
