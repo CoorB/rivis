@@ -17,7 +17,7 @@ class ReviewBUi(UiBase):
 
     def watch(self):
         self.polls, self.lists = [], []
-        self.page.on("request", lambda r: self.lists.append(r.url) if r.url.split("?")[0].endswith("/flows") else
+        self.page.on("request", lambda r: self.lists.append(r.url) if r.url.split("?")[0].endswith(("/flows", "/proxy/api/flows_since")) else
                      self.polls.append(r.url) if r.url.split("?")[0].endswith("/proxy/api/state") else None)
 
     def window(self, ms):

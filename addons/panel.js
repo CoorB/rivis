@@ -626,12 +626,23 @@
     .map((r) => [...r.querySelectorAll("input")].map((i) => i.value)).filter(([k]) => k.trim());
   const jsonCheck = (ta, out) => { try { JSON.parse(ta.value); out.textContent = ta.value.trim() ? "Valid JSON" : ""; return true; } catch (x) { out.textContent = ta.value.trim() ? "Not JSON — sent as plain text" : ""; out.title = x.message; return !ta.value.trim(); } };
 
-  const flowCache = { at: 0, byId: new Map(), pending: null };
+  // F2: the call list is fetched incrementally (only what is new or changed since the last answer, plus the ids that left the
+  // list), with a full download when there is no cursor yet, the proxy says so (list cleared or rebuilt) and every
+  // FULL_RESYNC_MS as a safety net for a change that sent no signal. One poll at a time, 10 s deadline, as before.
+  const flowCache = { at: 0, byId: new Map(), pending: null, epoch: null, cursor: 0, fullAt: 0 };
+  const FULL_RESYNC_MS = Number(LS.get("rivis-flow-resync-ms", "")) || 30000;
   async function refreshFlows() {
-    if (!flowCache.pending) flowCache.pending = fetchT("./flows", { credentials: "same-origin" }, 10000, "call list")
-      .then((r) => r.json()).then((all) => {
-        flowCache.byId = new Map(all.map((f) => [f.id, f])); flowCache.at = Date.now();
-      }).finally(() => { flowCache.pending = null; });
+    if (!flowCache.pending) {
+      const full = flowCache.epoch === null || Date.now() - flowCache.fullAt >= FULL_RESYNC_MS;
+      const q = full ? "" : `?epoch=${encodeURIComponent(flowCache.epoch)}&cursor=${flowCache.cursor}`;
+      flowCache.pending = fetchT("./proxy/api/flows_since" + q, { credentials: "same-origin" }, 10000, "call list")
+        .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }).then((d) => {
+          if (d.full) { flowCache.byId = new Map(); flowCache.fullAt = Date.now(); }
+          d.flows.forEach((f) => flowCache.byId.set(f.id, f));
+          d.removed.forEach((id) => flowCache.byId.delete(id));
+          flowCache.epoch = d.epoch; flowCache.cursor = d.cursor; flowCache.at = Date.now();
+        }).finally(() => { flowCache.pending = null; });
+    }
     await flowCache.pending;
   }
   async function flowsById(id, strict) {

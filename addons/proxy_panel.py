@@ -294,6 +294,51 @@ def clip_view(result, total=None, partial=False):
     return out
 
 
+class FlowFeed:
+    """F2: what changed in the flow view since a cursor, so the panel's poll with the Tools drawer open does not download the
+    whole call list every second. It listens to the same signals mitmweb's own websocket does (a call added to, changed in or
+    removed from the list; the list refreshed or cleared). `epoch` changes whenever the list is rebuilt (clear, filter change):
+    a client holding another epoch, or a cursor older than the removals still remembered, is given the whole list."""
+    MAX_REMOVED = 4096
+
+    def __init__(self, view):
+        self.view = view
+        self._reset()
+        view.sig_view_add.connect(self._touch)
+        view.sig_view_update.connect(self._touch)
+        view.sig_view_remove.connect(self._gone)
+        view.sig_view_refresh.connect(self._reset)
+
+    def _reset(self, *args, **kw):
+        self.epoch = uuid.uuid4().hex[:12]
+        self.seq = self.floor = 0
+        self.touched = {}           # id of a call in the list -> sequence number of its last add / change
+        self.removed = {}           # id of a call that left the list -> sequence number of its removal (oldest first)
+
+    def _touch(self, flow, *args, **kw):
+        self.seq += 1
+        self.touched[flow.id] = self.seq
+        self.removed.pop(flow.id, None)
+
+    def _gone(self, flow, *args, **kw):
+        self.seq += 1
+        self.touched.pop(flow.id, None)
+        self.removed[flow.id] = self.seq
+        while len(self.removed) > self.MAX_REMOVED:
+            self.floor = max(self.floor, self.removed.pop(next(iter(self.removed))))
+
+    def since(self, epoch, cursor):
+        """(full, flows, removed_ids) for a client at (epoch, cursor)."""
+        try:
+            cursor = int(cursor)
+        except (TypeError, ValueError):
+            cursor = -1
+        if epoch != self.epoch or cursor < self.floor or cursor > self.seq:
+            return True, list(self.view), []
+        flows = [f for f in (self.view.get_by_id(i) for i, n in self.touched.items() if n > cursor) if f is not None]
+        return False, flows, [i for i, n in self.removed.items() if n > cursor]
+
+
 class ProxyPanel:
     def __init__(self):
         self._device_jobs = devices.Jobs()
@@ -1190,6 +1235,18 @@ class ProxyPanel:
     def all_flows():
         v = ctx.master.view
         return list(getattr(v, "_store", {}).values()) or list(v)
+
+    def flows_since(self, epoch, cursor):
+        """The call list as the panel's poll needs it: only what is new or changed since (epoch, cursor), the ids that left
+        the list, and a new cursor; the whole list when the client has none or the proxy cannot serve its cursor."""
+        from mitmproxy.tools.web.app import flow_to_json
+        view = ctx.master.view
+        feed = getattr(view, "_rivis_feed", None)
+        if feed is None:
+            feed = view._rivis_feed = FlowFeed(view)
+        full, flows, removed = feed.since(epoch, cursor)
+        return {"epoch": feed.epoch, "cursor": feed.seq, "full": full, "removed": removed,
+                "flows": [flow_to_json(f) for f in flows]}
 
     def paused(self):
         out = []
@@ -2651,10 +2708,14 @@ class ProxyPanel:
                     await asyncio.sleep(wait)
 
             async def get(self, op):
-                if op != "state":
+                if op not in ("state", "flows_since"):
                     raise webapp.APIError(404, "unknown")
                 await self._test_hold(op)
                 self.set_header("Content-Type", "application/json")
+                if op == "flows_since":
+                    self.write(json.dumps(impl(self).flows_since(self.get_query_argument("epoch", ""),
+                                                                 self.get_query_argument("cursor", ""))))
+                    return
                 self.write(json.dumps(impl(self).state()))
 
             def prepare(self):
