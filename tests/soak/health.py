@@ -1,6 +1,7 @@
 """Measurements: in-page instrumentation (panel request timings, in-flight count, long tasks, unhandled rejections),
 process memory, percentile maths and the per-minute buckets the report is built from."""
 import math
+import os
 import subprocess
 import threading
 import time
@@ -54,7 +55,7 @@ DRAIN_JS = """
 """
 
 
-LONGTASK_EVIDENCE_MS = 1000    # a long task this long is reported with its start time, the scenario running then and (when kept) a trace
+LONGTASK_EVIDENCE_MS = float(os.environ.get("SOAK_LONGTASK_EVIDENCE_MS", "1000"))    # SOAK_LONGTASK_EVIDENCE_MS lowers it to prove the report path; a long task this long is reported with its start time, the scenario running then and (when kept) a trace
 
 
 def pct(values, q):

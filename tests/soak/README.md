@@ -95,6 +95,11 @@ Before choosing an item the scenario waits at least 1.2 s and until a new call h
 | session grows past 3,000 calls (runs of 15 minutes or more) | yes | |
 | nothing left behind (processes, ports, temp dirs, Chromium, `$HOME`, system proxy) | clean | |
 
+Long tasks of 1 s or more are listed in the report ("Long tasks of 1 s or more") and in `report.json` (`long_tasks`, `scenario_timeline`)
+with their start (end minus duration), duration and the scenario running at that moment, or the two it fell between. A run one
+landed in keeps its screenshot and Playwright trace (`failures/NNN-longtask-<scenario>*`) even when it passed. This is evidence
+only: the budget above is unchanged. `SOAK_LONGTASK_EVIDENCE_MS` lowers the 1000 ms threshold (to prove the report path).
+
 Documented timeouts: an action must complete or show an error within **10 s** of the click (`SOAK_ACTION_DEADLINE`); the
 "can't reach" banner within **15 s** of the proxy freezing (`SOAK_LOST_DEADLINE`); recovery within **20 s** of a fault ending
 (`SOAK_RECOVER_DEADLINE`).
