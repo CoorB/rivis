@@ -1769,8 +1769,9 @@
   async function openCallMenu(x, y, tr) {
     const mf = flowOf(tr); if (!mf) return;
     if (!tr.classList.contains("selected")) tr.click();                  // select it first, exactly like a left click
-    let f;
-    try { f = await flowsById(mf.id, true); } catch (e) { toast(e.message, true); return; }   // not a wrong "host-only" menu when the list did not load
+    // The row already carries everything the menu shows (type, method, host, path, connection): open it at once from that, so a proxy
+    // that is not answering cannot hold the menu back. The panel's own cache is only a fresher copy of the same call.
+    const f = flowCache.byId.get(mf.id) || mf;
     const m = $("cmenu"), mod = KMOD;
     const isHttp = !!f && f.type === "http", address = (f && f.server_conn && f.server_conn.address) || [],
       tunnelHost = (f && ((f.client_conn || {}).sni || (f.server_conn || {}).sni)) || address[0] || "",

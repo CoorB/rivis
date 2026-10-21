@@ -94,6 +94,21 @@ class PanelSilence(UiBase):
         hold()                                             # answers resume → the bar clears by itself
         wait_for(lambda: not self.bar(), 15, 0.25, "banner clears when the proxy answers")
 
+    def test_menu_opens_at_once_while_the_call_list_is_not_answering(self):
+        """Soak F3: the right-click menu waited for the call-list download (10 s) before it drew anything, so with a stuck proxy it
+        looked dead. Everything it shows is on the row, so it opens straight away."""
+        self.open()
+        self.P("#fab").click()                             # the drawer's poll now fetches the call list
+        wait_for(lambda: self.P("#drawer.open").count() > 0, 5, 0.1, "drawer open")
+        hold(flows_since=19)
+        self.page.wait_for_timeout(2600)                   # a poll is now in flight and will not be answered for 19 s
+        t0 = time.time()
+        self.page.locator(".flow-table tbody tr", has_text="a=1").first.click(button="right")
+        wait_for(lambda: self.P("#cmenu.open").count() > 0, 2, 0.05, "the menu opens while the call list is stuck")
+        self.assertLess(time.time() - t0, 2)
+        self.assertIn("Copy URL", self.P("#cmenu").inner_text())
+        self.assertIn("/echo", self.P("#cmenu .hd").inner_text())
+
 
 if __name__ == "__main__":
     unittest.main()
