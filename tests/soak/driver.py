@@ -207,6 +207,12 @@ class Ui:
     def sheet_open(self, which="pause"):
         return self.page.evaluate("(id) => %s.querySelector('#' + id).classList.contains('open')" % ROOT, which)
 
+    def sheet_phase(self):
+        """'request' or 'response' as the paused-call sheet's title says it ('Paused at response'), else None."""
+        txt = self.page.evaluate("() => { const h = %s.querySelector('#sheet header'); return h ? h.textContent : ''; }" % ROOT)
+        m = re.search(r"Paused at (request|response)", txt)
+        return m.group(1) if m else None
+
     def lost_bar(self):
         return self.page.evaluate("() => %s.querySelector('#lostbar').classList.contains('open')" % ROOT)
 

@@ -208,6 +208,27 @@ class Workflows(UiBase):
         t1.join(20); t2.join(20)
         self.assertEqual((b1["r"].status, b2["r"].status), (200, 200))
 
+    def test_request_and_response_breakpoint_hold_one_call_twice_and_the_sheet_follows(self):
+        """Soak F2: with a breakpoint on both request and response, Continue at the request hands the SAME sheet the response hold; it
+        only closes after the second Continue. Not a sheet stuck open."""
+        self.fetch("/text?wfh=1")
+        self.open()
+        self.breakpoint_from_call("wfh=1")
+        self.P("button[data-ph=response]").click()
+        wait_for(lambda: any(b.get("response") and b.get("request") for b in self.panel.state()["breakpoints"]), 5, 0.1, "both phases on")
+        self.page.wait_for_timeout(1200)
+        t, box = self.in_background("/text?wfh=1")
+        self.sheet()
+        self.assertIn("Paused at request", self.P("#sheet header").inner_text())
+        self.P("#pcont").click()
+        wait_for(lambda: "Paused at response" in self.P("#sheet header").inner_text(), 10, 0.1, "the same sheet now showing the response hold")
+        self.assertTrue(self.P("#pause.open").count())
+        self.assertEqual([p["phase"] for p in self.panel.state()["paused"]], ["response"])     # held again, so a sheet that is still open is right
+        self.P("#pcont").click()
+        wait_for(lambda: not self.P("#pause.open").count() and not self.panel.state()["paused"], 10, 0.1, "the sheet to close after the second Continue")
+        t.join(20)
+        self.assertEqual(box["r"].status, 200)
+
     def test_pause_shows_even_when_a_filter_hides_the_call_and_the_drawer_is_closed(self):
         self.fetch("/text?wff=1")
         page = self.open()

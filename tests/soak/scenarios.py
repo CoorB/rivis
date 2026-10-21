@@ -319,12 +319,20 @@ class Scenarios:
                 ui.wait(lambda: self.panel.state()["paused"] or not call._t.is_alive(), 15, "the call to be held")
                 if not call._t.is_alive():
                     break
-                ui.wait(lambda: ui.sheet_open("pause"), self.cfg.action_deadline, "the paused-call sheet")
+                held = self.panel.state()["paused"][0]
+                ui.wait(lambda: ui.sheet_open("pause") and ui.sheet_phase() == held["phase"], self.cfg.action_deadline,
+                        "the paused-call sheet showing the hold at the %s" % held["phase"])
                 ui.pause()
                 t1 = ui.now_ms()
                 ui.click(ui.P("#" + how))
                 ui.wait_toast(r"Continued|Aborted", t1)
-                ui.wait(lambda: not self.panel.state()["paused"] or not ui.sheet_open("pause"), 8, "the sheet to close")
+                # this hold is over: either nothing is held and the sheet closes, or the call goes on to its response hold and the
+                # same sheet now shows that one (what a person sees with a breakpoint on request AND response)
+                ui.wait(lambda: not any(p["id"] == held["id"] and p["phase"] == held["phase"] for p in self.panel.state()["paused"]), 8,
+                        "the %s hold to be released" % held["phase"])
+                if not self.panel.state()["paused"]:
+                    ui.wait(lambda: not ui.sheet_open("pause"), 8, "the sheet to close when nothing is held")
+                    break
                 if how == "pabort":
                     break
                 ui.pause(200, 800)
