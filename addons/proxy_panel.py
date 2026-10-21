@@ -648,8 +648,9 @@ class ProxyPanel:
     def script_status(self):
         for addon in self._addons():
             if addon.__class__.__name__ == "ProxyScripts":
+                from proxy_scripts import node_missing_message
                 return {"node": bool(getattr(addon, "node", None)),
-                        "node_message": None if getattr(addon, "node", None) else "Node.js not installed — JS scripts disabled",
+                        "node_message": None if getattr(addon, "node", None) else node_missing_message(),
                         "errors": dict(getattr(addon, "last_errors", {}))}
         return {"node": False, "node_message": "Scripting add-on is not loaded", "errors": {}}
 

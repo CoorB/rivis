@@ -10,6 +10,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from proxy_common import SAFE_NAME, atomic_json, atomic_write_text, migrate_rules, user_regex
+from proxy_scripts import find_node, node_missing_message
 
 TEMPLATES = {
     "py": {
@@ -75,6 +76,9 @@ def main(argv):
             message = str(err.get("message", "") if isinstance(err, dict) else err or "").splitlines()[0] if err else ""
             print(f"  {state} {item.get('name','?'):<24} {item.get('lang','?'):<2} {item.get('method') or 'ANY':<6} {item.get('match') or '.'}  {item.get('file','?')}" +
                   ("  ERROR: " + message if message else ""))
+        has_js = any(x.get("lang") == "js" for x in cfg.get("scripts", []))
+        if has_js and not find_node():
+            print("  ! " + node_missing_message())
         if not cfg["scripts"]: print("  (none)")
         return
     if not rest: raise SystemExit(f"scripts {command}: NAME required")
@@ -98,12 +102,16 @@ def main(argv):
         cfg["scripts"].append({"name": a.name, "file": filename, "lang": a.lang, "enabled": True,
                                "match": a.match, "method": a.method.upper() or None})
         save(rules, cfg); print(f"created {path}")
+        if a.lang == "js" and not find_node():
+            print("note: " + node_missing_message(), file=sys.stderr)
         return
     item = find(cfg, name); filename = item["file"]
     if os.path.basename(filename) != filename: raise SystemExit("unsafe script filename")
     path = os.path.join(script_dir, filename)
     if command in ("on", "off"):
         item["enabled"] = command == "on"; save(rules, cfg); print(f"{item['name']} -> {command.upper()}")
+        if command == "on" and item.get("lang") == "js" and not find_node():
+            print("note: " + node_missing_message(), file=sys.stderr)
     elif command == "rm":
         cfg["scripts"].remove(item); save(rules, cfg)
         if os.path.exists(path): os.unlink(path)

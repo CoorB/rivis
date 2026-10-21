@@ -278,6 +278,8 @@ def load_script_files(script_dir, cfg):
 def find_node():
     prefix = str(PRODUCT.get("env_prefix", "RIVIS"))
     override = os.environ.get(prefix + "_NODE")
+    if override and override.lower() in ("none", "off", "disabled", "0"):
+        return None
     candidates = ([override] if override else []) + [shutil.which("node")] + list(NODE_CANDIDATES)
     candidates += sorted(glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/node")), reverse=True)
     if os.environ.get("NVM_HOME"):
@@ -286,6 +288,18 @@ def find_node():
         if path and os.path.isfile(path) and os.access(path, os.X_OK):
             return path
     return None
+
+
+def node_install_hint():
+    if sys.platform == "darwin":
+        return "brew install node"
+    if sys.platform == "win32":
+        return "winget install OpenJS.NodeJS"
+    return "install via your package manager"
+
+
+def node_missing_message():
+    return f"Node.js not installed (install via '{node_install_hint()}' or https://nodejs.org) — JS scripts disabled"
 
 
 class ScriptContext(dict):
@@ -772,7 +786,7 @@ class ProxyScripts:
         async with script_lock:
             generation = await self._start_node()
             if not generation:
-                raise RuntimeError("Node.js not installed — JS scripts disabled")
+                raise RuntimeError(node_missing_message())
             proc = self.proc
             pending = self.node_pending[generation]
             write_lock = self.node_write_locks[generation]

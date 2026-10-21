@@ -449,6 +449,7 @@ class NodeMissing(LiveCase):
         st = self.panel.state()["script_status"]
         self.assertFalse(st["node"])
         self.assertIn("Node.js not installed", st["node_message"])
+        self.assertIn("https://nodejs.org", st["node_message"])
         self.write_script("p.py", 'def on_request(context, url, request):\n    request["headers"]["X-Py"] = "ok"\n    return request\n', "/echo")
         self.write_script("j.js", 'function onRequest(c,u,r){ r.headers["X-Js"]="x"; return r; }\n', "/echo")
         doc = self.fetch("/echo").json()
@@ -457,6 +458,7 @@ class NodeMissing(LiveCase):
         self.assertNotIn("x-js", names)
         err = wait_for(lambda: self.panel.state()["script_status"]["errors"].get("j.js"), 5, 0.2, "js error")
         self.assertIn("Node.js not installed", err["message"])
+        self.assertIn("https://nodejs.org", err["message"])
 
     def test_find_node_honours_override_then_falls_back(self):
         sys.path.insert(0, os.path.join(harness.REPO, "addons"))

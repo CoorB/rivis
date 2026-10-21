@@ -849,6 +849,16 @@ class Scripts(CliBase):
         env = dict(self.env, EDITOR="/usr/bin/false")
         self.refused("scripts", "edit", "ed", env=env)
 
+    def test_node_missing_shows_install_message(self):
+        # G7: clear message with install instructions when Node.js is missing
+        env = dict(self.env, RIVIS_NODE="none")
+        out = self.ok("scripts", "new", "test-js", "--lang", "js", env=env)
+        self.assertIn("Node.js not installed", out.stderr)
+        self.assertIn("https://nodejs.org", out.stderr)
+        list_out = self.ok("scripts", "list", env=env).stdout
+        self.assertIn("Node.js not installed", list_out)
+        self.assertIn("https://nodejs.org", list_out)
+
 
 class Tls(CliBase):
     def test_default_and_modes(self):

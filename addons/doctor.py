@@ -282,9 +282,10 @@ def check_mitmproxy_node(rep):
 
     node = find_node()
     if not node:
+        hint = "brew install node" if sys.platform == "darwin" else "winget install OpenJS.NodeJS" if sys.platform == "win32" else "via package manager"
         rep.add(sec, INFO, "Node.js not installed",
                 "JavaScript scripts are disabled (Python scripts still work)",
-                "install Node.js only if you need JS scripting rules")
+                "install Node.js (%s or https://nodejs.org) only if you need JS scripting rules" % hint)
     else:
         safe, reason = executable_is_safe(node)
         if not safe:

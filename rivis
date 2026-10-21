@@ -1577,7 +1577,7 @@ if sel:
   if /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" --script-dir "$PROJECT_STATE/scripts" list 2>/dev/null | grep -qE '^  (ON |off) .* js '; then
     local node_path
     node_path=$(/usr/bin/python3 -I -c 'import runpy,sys; d=runpy.run_path(sys.argv[1]); print(d["find_node"]() or "")' "$SCRIPT_DIR/addons/proxy_scripts.py")
-    [ -n "$node_path" ] || echo "scripts: Node.js not installed — JS scripts disabled (Python scripts still work)"
+    [ -n "$node_path" ] || echo "scripts: Node.js not installed (brew install node or https://nodejs.org) — JS scripts disabled (Python scripts still work)"
   fi
   # exit status answers "is it running?" for scripts and CI (QA-11): 0 running, 3 not running (the LSB status code)
   [ -n "$(our_listeners)" ] && [ -n "$o" ] && [ -n "$w" ] || return 3

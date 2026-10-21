@@ -1280,7 +1280,7 @@ switch ($Command) {
       if ($env:NVM_HOME) { $nodeCandidates += (Join-Path $env:NVM_HOME "node.exe") }
       $nodeFound = Get-Command node.exe -ErrorAction SilentlyContinue
       if (-not $nodeFound -and -not ($nodeCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1)) {
-        Write-Host "scripts: Node.js not installed - JS scripts disabled (Python scripts still work)"
+        Write-Host "scripts: Node.js not installed (winget install OpenJS.NodeJS or https://nodejs.org) - JS scripts disabled (Python scripts still work)"
       }
     }
   }
