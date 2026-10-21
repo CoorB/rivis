@@ -350,7 +350,7 @@ class Cli(UpdaterBase):
         self.assertEqual(stat.S_IMODE(os.stat(f).st_mode), 0o600)
         text = open(f).read()
         self.assertIn("START_PORT=%s" % env["RIVIS_PORT"], text)
-        self.assertIn("--project neo start --background --no-open --no-open --no-ios", text)
+        self.assertIn("--project neo start --background --no-open --no-ios", text)
 
     def test_a_source_checkout_refuses_to_update_itself(self):
         self.sign_in(); self.publish()
