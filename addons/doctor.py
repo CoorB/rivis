@@ -43,7 +43,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
 from proxy_common import (  # noqa: E402
-    PRODUCT, STATE_ROOT, project_profile, project_state, tls_config, tls_covering,
+    PRODUCT, STATE_ROOT, describe_connection, project_profile, project_state, tls_config, tls_covering,
 )
 
 REPO_ROOT = os.path.dirname(HERE)
@@ -978,10 +978,16 @@ def check_network(rep, project, no_net, allow_profile_network=False):
         if insecure and decrypted and cat in CERT_CATEGORIES:
             lvl, fix = INFO, ""
             detail = "the running %s skips upstream verification (--insecure), so its traffic is not affected" % PRODUCT["name"]
+        if cat in CERT_CATEGORIES:
+            detail = " ".join(x for x in (detail, describe_connection(str(host), PROBE_IP.get(host))) if x)
         rep.add(sec, lvl, "%s: %s" % (host, msg), detail, fix)
 
 
+PROBE_IP = {}      # host -> the address the last probe of it actually connected to (for the certificate messages)
+
+
 def _probe_host(host, port=443):
+    PROBE_IP.pop(host, None)
     # DNS
     try:
         socket.setdefaulttimeout(NET_TIMEOUT)
@@ -1001,6 +1007,7 @@ def _probe_host(host, port=443):
         try:
             s.connect(sockaddr)
             sock = s
+            PROBE_IP[host] = sockaddr[0]
             break
         except (socket.timeout, ConnectionRefusedError, OSError) as e:
             err = e

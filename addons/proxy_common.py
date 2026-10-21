@@ -1,4 +1,5 @@
 """Shared, stdlib-only constants and product/profile helpers."""
+import ipaddress
 import json
 import os
 import re
@@ -18,6 +19,60 @@ TLS_MODES = ("all", "allow", "ignore")
 NEVER_MATCH = "(?!)"
 RULES_SCHEMA_VERSION = 1
 COLLECTION_SCHEMA_VERSION = 1
+
+
+def hosts_file_path():
+    """The hosts file the OS resolver reads. RIVIS_HOSTS_FILE replaces it (tests; never set it in normal use)."""
+    path = os.environ.get("RIVIS_HOSTS_FILE")
+    if path:
+        return path
+    if os.name == "nt":
+        return os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "drivers", "etc", "hosts")
+    return "/etc/hosts"
+
+
+def _same_ip(a, b):
+    try:
+        return ipaddress.ip_address(str(a).split("%")[0]) == ipaddress.ip_address(str(b).split("%")[0])
+    except ValueError:
+        return str(a) == str(b)
+
+
+def hosts_entry(host, ip=None):
+    """The hosts-file line that gives `host` an address, as {path, line, ip, text}; None if there is none. When several
+    lines name the host, the one with `ip` (the address actually connected to) wins, else the first."""
+    path = hosts_file_path()
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read(1 << 20).splitlines()
+    except OSError:
+        return None
+    want, first = str(host).lower().rstrip("."), None
+    for number, line in enumerate(lines, 1):
+        parts = line.split("#", 1)[0].split()
+        if len(parts) < 2 or want not in (p.lower().rstrip(".") for p in parts[1:]):
+            continue
+        found = {"path": path, "line": number, "ip": parts[0], "text": " ".join(parts)}
+        if ip is None or _same_ip(parts[0], ip):
+            return found
+        first = first or found
+    return first
+
+
+def describe_connection(host, ip):
+    """One or two sentences for a certificate error: the address actually connected to and, if the hosts file has a line
+    for the host, whether that line is where the address came from. "" when no connection was made."""
+    if not ip:
+        return ""
+    text = "Connected to %s." % ip
+    entry = hosts_entry(host, ip)
+    if entry and _same_ip(entry["ip"], ip):
+        text += (" That address comes from your hosts file, %s line %d: \"%s\". It is used instead of DNS: if it is an "
+                 "old or wrong server, fix or remove that line." % (entry["path"], entry["line"], entry["text"]))
+    elif entry:
+        text += (" Your hosts file (%s line %d) lists %s for this host, but that is not the address that answered."
+                 % (entry["path"], entry["line"], entry["ip"]))
+    return text
 
 
 def _fsync_directory(path):

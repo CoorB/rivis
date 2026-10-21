@@ -19,6 +19,8 @@ def _flip(host, port, *args, **kwargs):
         if _seen[name] == 1:
             raise socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known")
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", int(port or 0)))]
+    if name.endswith(".hostsfile.rivis-test"):         # a name the test's hosts file points at loopback
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", int(port or 0)))]
     if not name.endswith(".rebind.rivis-test"):
         return _orig(host, port, *args, **kwargs)
     _seen[name] = _seen.get(name, 0) + 1

@@ -312,14 +312,16 @@ _TLS_REASONS = (
 )
 
 
-def upstream_tls_text(message, host, cli="rivis"):
+def upstream_tls_text(message, host, cli="rivis", ip=None):
     """The explanation for a failed upstream certificate check, or None for any other error."""
     if not isinstance(message, str) or not message.startswith("Certificate verify failed"):
         return None
     detail = message.split(":", 1)[1].strip() if ":" in message else message
     why = next((text for key, text in _TLS_REASONS if key in detail.lower()),
                "The server's certificate could not be verified.")
-    return ("Rivis could not verify the HTTPS certificate of %(host)s (%(detail)s).\n%(why)s\n\n"
+    where = proxy_common.describe_connection(host, ip)
+    where = where + "\n" if where else ""
+    return ("Rivis could not verify the HTTPS certificate of %(host)s (%(detail)s).\n%(why)s\n%(where)s\n"
             "The app was answered 502 by Rivis; the server was not asked.\n\n"
             "To fix it:\n"
             "  - Pass this host through without decrypting it (its calls are then not captured or changed):\n"
@@ -327,7 +329,7 @@ def upstream_tls_text(message, host, cli="rivis"):
             "  - A dev or test server you trust: start with   %(cli)s start --insecure   (no upstream certificate"
             " checks).\n"
             "  - Your company inspects HTTPS: install IT's root certificate in Keychain Access, or start with"
-            " RIVIS_EXTRA_TRUST=/path/root.pem.\n" % {"host": host, "detail": detail, "why": why, "cli": cli})
+            " RIVIS_EXTRA_TRUST=/path/root.pem.\n" % {"host": host, "detail": detail, "why": why, "where": where, "cli": cli})
 
 
 _install_interim_drop()
@@ -348,6 +350,7 @@ class ProxyRules:
         self.failed_rules = {}      # R2A-02: rules whose file could not be read at request time {name: error}
         self.last_good_cfg = {"rules": []}
         self._bp_filter = _UNSET
+        self._failed_peers = {}     # (client id, server address) -> IP a failed TLS handshake was made to (for the 502 text)
         self._held_bps = []         # the breakpoints of the last rules load, to release calls paused by a removed one
         self._intercept_set = _UNSET
         self.tls = tls_config({})
@@ -503,6 +506,15 @@ class ProxyRules:
                 freed.append(f)
         if freed:
             ctx.master.view.update(freed)
+
+    def tls_failed_server(self, data):
+        """Remember the IP a failed upstream handshake was made to: the flow's server connection no longer has it by the
+        time the error is reported."""
+        peer = getattr(data.conn, "peername", None)
+        if peer:
+            if len(self._failed_peers) > 256:
+                self._failed_peers.clear()
+            self._failed_peers[(data.context.client.id, tuple(data.conn.address or ()))] = peer[0]
 
     def _abandon_paused(self, client):
         """A call paused at a breakpoint whose client has gone (the app timed out, `curl -m`) can never be answered: end
@@ -1040,7 +1052,8 @@ class ProxyRules:
 
     def error(self, flow: http.HTTPFlow):
         msg = flow.error.msg if flow.error else None
-        text = upstream_tls_text(msg, flow.request.pretty_host if flow.request else "?", PRODUCT["cli"])
+        text = upstream_tls_text(msg, flow.request.pretty_host if flow.request else "?", PRODUCT["cli"],
+                                 self._failed_peers.pop((flow.client_conn.id, tuple(flow.server_conn.address or ())), None))
         if text:
             table = _error_texts()
             if len(table) > 256:              # never grows: an entry is taken back as soon as its 502 page is built
