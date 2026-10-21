@@ -1728,10 +1728,17 @@
     e.preventDefault(); openCallMenu(e.clientX, e.clientY, tr);
   }, true);
   // selecting the row scrolls / re-lays-out the list for a moment: only outside clicks, a real scroll later, or leaving the window close the menu
+  // A press that starts inside the menu must finish as a click: Safari and macOS WebKit do not focus a button on mousedown, so focus
+  // drops from the menu's button to the page (a blur) in the middle of the press, and a scroll / resize from the streaming list can land
+  // there too. Closing then hid the button before mouseup and the click never fired — every item "just closed the menu".
+  let pressInMenu = false;
   ["mousedown", "scroll", "blur", "resize"].forEach((t) => window.addEventListener(t, (e) => {
-    if (t === "mousedown" ? e.composedPath().includes($("cmenu")) : Date.now() - openCallMenu.at < 700) return;
+    const inMenu = e.composedPath().includes($("cmenu"));
+    if (t === "mousedown") { pressInMenu = inMenu; if (inMenu) return; }
+    else if (pressInMenu || (t === "blur" && inMenu) || Date.now() - openCallMenu.at < 700) return;
     closeCallMenu();
   }, true));
+  ["mouseup", "dragend", "contextmenu"].forEach((t) => window.addEventListener(t, () => setTimeout(() => (pressInMenu = false), 0), true));
   $("cmenu").addEventListener("keydown", (e) => {
     const bs = [...$("cmenu").querySelectorAll("button:not(:disabled)")], i = bs.indexOf(root.activeElement);
     if (e.key === "Escape") { closeCallMenu(); e.preventDefault(); }
