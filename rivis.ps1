@@ -1262,8 +1262,25 @@ switch ($Command) {
     Ensure-Ca
     $spki = Get-CaSpki
     if ($Fresh) {
-      $browserProfile = Join-Path ([IO.Path]::GetTempPath()) ("$Cli-browser." + [IO.Path]::GetRandomFileName())
+      # under the state root (private), not %TEMP%; leftovers of earlier runs go now, except one a browser still runs on
+      $browserRoot = Join-Path $StateRoot "browser"
+      New-Item -ItemType Directory -Force -Path $browserRoot | Out-Null
+      if (-not $IsWindows -and $PSVersionTable.PSEdition -ne "Desktop") { & chmod 700 $browserRoot }
+      $running = ""
+      if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+        $running = (@(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.CommandLine }) -join "`n")
+      } else {
+        $running = (@(& ps -axo command= 2>$null) -join "`n")
+      }
+      $leftovers = @(Get-ChildItem -LiteralPath $browserRoot -Directory -Filter "tmp-*" -ErrorAction SilentlyContinue) +
+                   @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter "$Cli-browser.*" -ErrorAction SilentlyContinue)
+      foreach ($old in $leftovers) {
+        if ($running.Contains("--user-data-dir=$($old.FullName)")) { continue }
+        Remove-Item -LiteralPath $old.FullName -Recurse -Force -ErrorAction SilentlyContinue
+      }
+      $browserProfile = Join-Path $browserRoot ("tmp-" + [IO.Path]::GetRandomFileName().Replace(".", ""))
       New-Item -ItemType Directory -Force -Path $browserProfile | Out-Null
+      if (-not $IsWindows -and $PSVersionTable.PSEdition -ne "Desktop") { & chmod 700 $browserProfile }
     } else {
       $browserProfile = Join-Path (Join-Path $StateRoot "browser") $id
       New-Item -ItemType Directory -Force -Path $browserProfile | Out-Null     # under the state root, private (Protect-StateRoot)

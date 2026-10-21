@@ -528,7 +528,7 @@ def breakpoint_cmd(path, args):
             cfg["breakpoints"] = []
         save(path, cfg)
         print("breakpoints off" + (" (" + args[1] + ")" if len(args) > 1 else " (all)") +
-              " — calls already paused stay paused until you Continue them in the UI")
+              " — calls already paused are sent on unchanged within a second (when the proxy is running)")
         return
     rx, req, resp, method, i = args[0], False, False, None, 1
     while i < len(args):

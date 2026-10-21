@@ -783,6 +783,16 @@ current_tab() {   # prints "<app>\t<url>" of the front tab of the first running 
   done
   die "browser: --current needs Chrome, Edge, Brave, Chromium or Safari running with a page open"
 }
+# Delete leftover --fresh profiles, except one a browser is still running on (its --user-data-dir shows in ps).
+browser_sweep_fresh() {
+  local d running; running=$(ps -axo command= 2>/dev/null)
+  for d in "$@"; do
+    [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || continue
+    printf '%s\n' "$running" | grep -qF -- "--user-data-dir=$d" && continue
+    rm -rf "$d"
+  done
+}
+
 cmd_browser() {
   local id="" url="about:blank" fresh=0 list=0 current=0 bin profile spki pid
   while [ $# -gt 0 ]; do
@@ -828,7 +838,10 @@ cmd_browser() {
   spki=$(openssl x509 -in "$CA_PEM" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64) \
     && [ -n "$spki" ] || die "browser: could not read the CA's public key"
   if [ "$fresh" = 1 ]; then
-    profile=$(mktemp -d "${TMPDIR:-/tmp}/$CLI-browser.XXXXXX") || die "browser: could not create a temporary profile"
+    (umask 077; mkdir -p "$STATE_ROOT/browser") || die "browser: could not create $STATE_ROOT/browser"
+    chmod 700 "$STATE_ROOT/browser" 2>/dev/null || true
+    browser_sweep_fresh "$STATE_ROOT/browser"/tmp-* "${TMPDIR:-/tmp}/$CLI-browser."*   # earlier --fresh profiles (cookies, logins)
+    profile=$(umask 077; mktemp -d "$STATE_ROOT/browser/tmp-XXXXXX") || die "browser: could not create a temporary profile"
   else
     profile="$STATE_ROOT/browser/$id"
     (umask 077; mkdir -p "$profile") || die "browser: could not create $profile"

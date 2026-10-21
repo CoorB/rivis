@@ -176,9 +176,48 @@ class Browser(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         argv = self.logged_argv()
         profile = [a.split("=", 1)[1] for a in argv if a.startswith("--user-data-dir=")][0]
-        self.assertNotIn(os.path.join(".rivis", "browser"), profile)
-        self.assertTrue(os.path.basename(profile).startswith("rivis-browser."), profile)
         self.assertEqual(argv[-1], "http://localhost:3000/")
+        self.assertIn("(temporary)", r.stdout + r.stderr)
+
+    def fresh_profile(self):
+        r = self.cli("--fresh", "http://localhost:3000/")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = self.logged_argv()
+        os.remove(self.argv_log)
+        return [a.split("=", 1)[1] for a in argv if a.startswith("--user-data-dir=")][0]
+
+    def test_fresh_profile_lives_under_the_private_state_dir_not_tmp(self):
+        """Review m11: the temporary profile (cookies, logins) sat in $TMPDIR for good."""
+        self.logging_app()
+        profile = self.fresh_profile()
+        root = os.path.join(self.inst.home, ".rivis", "browser")
+        self.assertEqual(os.path.dirname(profile), root)
+        self.assertTrue(os.path.basename(profile).startswith("tmp-"), profile)
+        self.assertEqual(os.stat(profile).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(root).st_mode & 0o777, 0o700)
+
+    def test_next_fresh_run_deletes_old_fresh_profiles_but_not_one_in_use(self):
+        self.logging_app()
+        root = os.path.join(self.inst.home, ".rivis", "browser")
+        stale, busy, normal = (os.path.join(root, n) for n in ("tmp-stale1", "tmp-busy01", "chrome"))
+        legacy = os.path.join(self.env.get("TMPDIR") or "/tmp", "rivis-browser.old001")
+        for d in (stale, busy, normal, legacy):
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "Cookies"), "w") as fh:
+                fh.write("secret")
+        # a browser still running on a profile: its --user-data-dir is on the command line
+        running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "--user-data-dir=" + busy])
+        try:
+            fresh = self.fresh_profile()
+        finally:
+            running.kill()
+            running.wait()
+            shutil.rmtree(legacy, ignore_errors=True)
+        self.assertFalse(os.path.exists(stale), "an old --fresh profile must be deleted at the next run")
+        self.assertFalse(os.path.exists(legacy))
+        self.assertTrue(os.path.exists(busy), "never a profile a running browser is using")
+        self.assertTrue(os.path.exists(normal), "the persistent per-browser profile is not a --fresh leftover")
+        self.assertTrue(os.path.isdir(fresh))
 
     def test_list_shows_only_installed_browsers(self):
         self.logging_app("Microsoft Edge")

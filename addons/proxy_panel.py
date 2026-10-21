@@ -1691,8 +1691,9 @@ class ProxyPanel:
                     for k in ("enabled", "request", "response"):
                         if k in a:
                             b[k] = bool(a[k])
+                    resumed = self.release_held(cfg, [before])     # before the save: the reload it triggers would free them uncounted
                     self.save_cfg(cfg)
-                    return {"resumed": self.release_held(cfg, [before])}
+                    return {"resumed": resumed}
             else:
                 if a["name"] == "legacy":
                     cfg.pop("breakpoint", None)
@@ -1704,8 +1705,9 @@ class ProxyPanel:
                 cfg.pop("breakpoint", None)
             gone = [b for b in cfg.get("breakpoints") or [] if b.get("name") == a.get("name")]
             cfg["breakpoints"] = [b for b in cfg.get("breakpoints") or [] if b.get("name") != a.get("name")]
+            resumed = self.release_held(cfg, gone)
             self.save_cfg(cfg)
-            return {"resumed": self.release_held(cfg, gone)}
+            return {"resumed": resumed}
         elif op == "paused_get":
             f = self.flow(a["id"])
             if not f.intercepted:

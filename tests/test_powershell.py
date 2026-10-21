@@ -37,6 +37,15 @@ class PowerShellSource(unittest.TestCase):
         for command in ("stop", "breakpoint", "mock", "setup"):
             self.assertRegex(self.src, r'(?m)^  "' + command + r'" \{', command)
 
+    def test_fresh_browser_profile_is_private_and_swept_like_bash(self):
+        """Review m11 parity: -Fresh keeps its profile under the state root and deletes leftovers, sparing one still in use."""
+        block = self.src[self.src.index("if ($Fresh) {"):self.src.index("Web apps on localhost go through Rivis")]
+        self.assertIn('Join-Path $StateRoot "browser"', block)
+        self.assertIn('"tmp-"', block)
+        self.assertNotRegex(block, r'GetTempPath\(\)\)\s*\("\$Cli-browser')
+        self.assertIn('--user-data-dir=$($old.FullName)', block)
+        self.assertRegex(block, r'Remove-Item -LiteralPath \$old\.FullName -Recurse')
+
     def test_help_guard_precedes_dispatch_and_recognises_all_spellings(self):
         guard = self.src.index("$helpRequested =")
         dispatch = self.src.index("switch ($Command)")

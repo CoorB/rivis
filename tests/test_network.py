@@ -390,6 +390,30 @@ class Breakpoints(LiveCase):
         self.assertEqual(other.result().status, 200)
         self.assertEqual(self.panel.state()["paused"], [])
 
+    def test_breakpoint_off_in_the_cli_releases_calls_already_paused(self):
+        """Review m9: `rivis breakpoint off` left paused calls hanging (the app stayed frozen); the panel's delete resumed them."""
+        self.reset_state(breakpoints=[bp("a", "/echo"), bp("b", "/json")])
+        held, other = self.bg("/echo?cli=1"), self.bg("/json/small?cli=2")
+        self.paused(2)
+        rules_cli = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "addons", "rules_cli.py")
+        r = self.suite.run(["/usr/bin/python3", "-I", rules_cli, self.inst.rules_path, "breakpoint", "off", "a"], home=self.inst.home)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("stay paused", r.stdout)
+        self.assertEqual(held.result(15).status, 200)
+        self.assertEqual(len(self.panel.state()["paused"]), 1, "the other breakpoint still holds its own call")
+        r = self.suite.run(["/usr/bin/python3", "-I", rules_cli, self.inst.rules_path, "breakpoint", "off"], home=self.inst.home)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(other.result(15).status, 200)
+        self.assertEqual(self.panel.state()["paused"], [])
+
+    def test_editing_rules_json_by_hand_releases_calls_of_a_removed_breakpoint(self):
+        self.reset_state(breakpoints=[bp("a", "/echo")])
+        held = self.bg("/echo?hand=1")
+        self.paused()
+        self.reset_state(breakpoints=[bp("a", "/echo", enabled=False)])
+        self.assertEqual(held.result(15).status, 200)
+        self.assertEqual(self.panel.state()["paused"], [])
+
     def test_method_filter_and_disabled(self):
         self.reset_state(breakpoints=[bp(method="DELETE"), bp("off", "/json", enabled=False)])
         self.assertEqual(self.fetch("/echo").status, 200)             # GET, not paused

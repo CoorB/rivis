@@ -348,6 +348,7 @@ class ProxyRules:
         self.failed_rules = {}      # R2A-02: rules whose file could not be read at request time {name: error}
         self.last_good_cfg = {"rules": []}
         self._bp_filter = _UNSET
+        self._held_bps = []         # the breakpoints of the last rules load, to release calls paused by a removed one
         self._intercept_set = _UNSET
         self.tls = tls_config({})
         self._tls_set = _UNSET
@@ -409,6 +410,7 @@ class ProxyRules:
             if self.rules or self.throttle:
                 ctx.log.warn(f"proxy_rules: {self.path} gone — all rules off")
             self._set_breakpoints(None)
+            self._release_held([])
             self._set_tls({})
             self.rules, self.throttle, self.loss, self.mtime = [], None, 0, None
             self.no_cache = False
@@ -449,6 +451,7 @@ class ProxyRules:
             loss = float(cfg.get("loss", 0) or 0) or (throttle[4] if throttle else 0)
             tls = tls_config(cfg)
             self._set_breakpoints(bp_filter or None)
+            self._release_held(breakpoints(cfg))
             self._set_tls(cfg)
             self.rules, self.throttle = rules, throttle
             self.failed_rules = {n: e for n, e in self.failed_rules.items() if n in {r["name"] for r in rules}}  # R3A-01
@@ -466,6 +469,40 @@ class ProxyRules:
         except Exception as e:   # keep the previous good rules on a bad edit
             ctx.log.warn(f"proxy_rules: cannot load {self.path}: {e} — keeping previous rules")
             self.mtime = mtime
+
+    def _release_held(self, bps):
+        """Calls paused by a breakpoint that this load removed or switched off are sent on unchanged — whoever edited
+        the rules (CLI, panel, by hand), the app must not stay frozen. A call another breakpoint still holds stays paused."""
+        old, self._held_bps = self._held_bps, [b for b in bps if isinstance(b, dict)]
+        def hits(group, f, phase):
+            for b in group:
+                if b.get("enabled", True) is False or not b.get(phase) or not b.get("match") \
+                        or (b.get("method") and b["method"].upper() != f.request.method):
+                    continue
+                try:
+                    if user_regex(b["match"]).search(f.request.pretty_url):
+                        return True
+                except re.error:
+                    continue
+            return False
+        if not old:
+            return
+        try:
+            view = ctx.master.view
+            flows = list(getattr(view, "_store", {}).values()) or list(view)
+        except Exception:      # no flow view (unit tests, startup): nothing can be paused yet
+            return
+        freed = []
+        for f in flows:
+            if not getattr(f, "intercepted", False) or not getattr(f, "request", None):
+                continue
+            phase = "response" if f.response else "request"
+            if hits(old, f, phase) and not hits(self._held_bps, f, phase):
+                f.comment = (f.comment + " | " if f.comment else "") + "breakpoint removed: sent unchanged"
+                f.resume()
+                freed.append(f)
+        if freed:
+            ctx.master.view.update(freed)
 
     def _set_tls(self, cfg):
         """Apply allow/ignore to NEW connections. mitmproxy's next_layer reads ctx.options per
