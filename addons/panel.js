@@ -2586,6 +2586,10 @@
     }
     render().then(() => { if (again) { const el = $("main").querySelector(again); if (el) el.focus({ preventScroll: true }); } });
   }
+  let pointerHeld = false;                 // a mouse button is down somewhere in the panel (see poll)
+  root.addEventListener("pointerdown", () => { pointerHeld = true; }, true);
+  for (const ev of ["pointerup", "pointercancel"]) window.addEventListener(ev, () => { pointerHeld = false; }, true);
+  window.addEventListener("blur", (e) => { if (e.target === window) pointerHeld = false; });   // the window, not a field losing focus
   async function poll() {
     try {
       const s = await api("state", undefined, 4000);   // aborted at 4 s, so a hung proxy never holds a connection
@@ -2599,12 +2603,14 @@
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
       if (!pausedOpen && waiting.length && !$("pause").classList.contains("open")) openPaused(waiting[0].id, true);
       if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) { pausedOpen = null; closeSheet("pause"); }
-      if ($("drawer").classList.contains("open") && tab === "net" && !editing) {
+      // Never redraw a tab under a held mouse button: the press and the release would land on different elements and the browser
+      // drops the click. The next poll catches up.
+      if ($("drawer").classList.contains("open") && tab === "net" && !editing && !pointerHeld) {
         const field = root.activeElement;
         if (!(field && field.closest && field.closest("#main") && /^(INPUT|SELECT|TEXTAREA)$/.test(field.tagName))) render();
       }
-      if ($("drawer").classList.contains("open") && tab === "coll" && !editing && !root.activeElement && s.collections.recording) render();
-      if ($("drawer").classList.contains("open") && !editing && (tab === "bp" || tab === "rules" || tab === "map" || tab === "scripts")) refreshOpenTab(s);
+      if ($("drawer").classList.contains("open") && tab === "coll" && !editing && !pointerHeld && !root.activeElement && s.collections.recording) render();
+      if ($("drawer").classList.contains("open") && !editing && !pointerHeld && (tab === "bp" || tab === "rules" || tab === "map" || tab === "scripts")) refreshOpenTab(s);
     } catch (e) {          // mitmweb restarting, stopped or frozen: say so after two misses, keep trying
       if (!lostSince) lostSince = Date.now();
       if (++missed >= 2) showLost(true);

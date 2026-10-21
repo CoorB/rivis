@@ -37,6 +37,29 @@ class TlsChipRemoval(UiBase):
         self.panel.ok("tls_set", {"mode": "all"})
         self.panel.ok("tls_update", {"list": "ignore", "action": "remove", "pattern": "two.example.test"})
 
+    def test_a_slow_click_survives_the_tab_redrawing_under_it(self):
+        """The Network tab redraws on every poll. A press that is still held when it redraws must not lose the click (soak:
+        "Removed" toast never came)."""
+        self.panel.ok("tls_set", {"mode": "ignore"})
+        self.panel.ok("tls_update", {"list": "ignore", "action": "add", "pattern": "slow.example.test"})
+        self.open()
+        self.P("#fab").click()
+        self.P("#drawer nav button[data-t=net]").click()
+        chip = self.P("[data-tlsrm][data-p='slow.example.test']")
+        wait_for(lambda: chip.count() == 1, 8, 0.1, "the chip")
+        chip.scroll_into_view_if_needed()
+        b = chip.bounding_box()
+        self.page.evaluate("""() => { const sr = document.querySelector('#proxy-panel-host').shadowRoot;
+            window.__redraws = 0; new MutationObserver(() => window.__redraws++).observe(sr.querySelector('#main'), { childList: true, subtree: true }); }""")
+        self.page.mouse.move(b["x"] + b["width"] / 2, b["y"] + b["height"] / 2)
+        self.page.mouse.down()
+        self.page.wait_for_timeout(3000)                     # longer than a poll: the tab would redraw while the button is held
+        self.page.mouse.up()
+        wait_for(lambda: "Removed slow.example.test" in self.toast(), 5, 0.1, "the Removed toast after a slow click")
+        self.assertEqual(self.panel.state()["tls"]["ignore"], [])
+        self.assertEqual(self.errors, [])
+        self.panel.ok("tls_set", {"mode": "all"})
+
 
 if __name__ == "__main__":
     unittest.main()
