@@ -45,10 +45,14 @@ class CtxMenuFollow(UiBase):
             self.fetch("/echo?seed=%d" % i)
         self.open()
         stop = threading.Event()
+        self.hold = threading.Event()                    # set: the app sends no new call for a moment
 
         def pump():
             n = 0
             while not stop.is_set():
+                if self.hold.is_set():
+                    time.sleep(0.05)
+                    continue
                 try:
                     self.fetch("/echo?live=%d" % n)
                 except Exception:                          # noqa: BLE001
@@ -117,13 +121,29 @@ class CtxMenuFollow(UiBase):
     def test_list_in_the_middle_3s(self):
         self.run_case("middle", 3000)
 
+    def selected_id(self):
+        h = self.page.evaluate("location.hash").replace("#/", "").split("?")[0].split("/")
+        return h[1] if len(h) > 1 and h[0] == "flows" else None
+
     def test_menu_targets_its_own_call_after_selection_moves(self):
         self.prepare("end")
-        self.open_menu(1500)
+        # Know exactly which call is right-clicked: no new call may shift the rows between reading a row and clicking it. The app
+        # sends calls again while the menu is open, so rows keep re-rendering under it.
+        self.hold.set()
+        self.page.wait_for_timeout(700)
+        self.open_menu(0)
+        target = self.url.split("\t")[2].strip()
+        self.hold.clear()
+        self.page.wait_for_timeout(1500)
+        self.assertTrue(self.menu_open(), "menu closed by itself while the list followed new calls")
         want = self.page.evaluate("""() => { const sr = document.querySelector('#proxy-panel-host').shadowRoot;
             return sr.querySelector('#cmenu .hd').innerText; }""")
-        self.page.evaluate("""() => { const rows = [...document.querySelectorAll('.flow-table tbody tr')];
-            rows[0].click(); }""")                         # the selection moves to another row; the menu stays
+        self.assertIn(target.split("://")[-1].split("/", 1)[1].split("?")[0], want)      # the menu header names the clicked call
+        before = self.selected_id()
+        self.page.evaluate("""(target) => { const rows = [...document.querySelectorAll('.flow-table tbody tr')]
+                .filter((r) => r.querySelector('td.col-path') && !r.innerText.includes(target));
+            rows[0].click(); }""", target)                   # mitmweb selects on click: the selection moves to another call
+        wait_for(lambda: self.selected_id() not in (None, before), 3, 0.05, "the selection to move to another call")
         self.page.wait_for_timeout(500)
         self.assertTrue(self.menu_open())
         self.click_item("url")
@@ -132,9 +152,7 @@ class CtxMenuFollow(UiBase):
             clip = self.page.evaluate("navigator.clipboard.readText()")
         except Exception:                                  # noqa: BLE001
             self.skipTest("no clipboard read")
-        path = want.split(" ", 1)[1]
-        self.assertTrue(self.url.split("\t")[2].strip() in clip or path.split("?")[0] in clip, "Copy URL used another call than the menu was opened on")
-        self.assertIn(self.url.split("\t")[2].strip().split("?")[-1], clip)
+        self.assertEqual(clip.strip(), target, "Copy URL used another call than the menu was opened on")
 
     def test_real_wheel_scroll_still_closes_the_menu(self):
         self.prepare("end")
