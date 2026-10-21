@@ -97,7 +97,8 @@ def build_report(s, crashed=False):
     add("concurrent in-flight panel requests <= %d" % cfg.max_inflight, pk <= cfg.max_inflight, "peak %d outside fault windows" % pk)
     all_added = [x for v in probe_added.values() for x in v]
     worst_add = max(((pct(v, 95), k) for k, v in probe_added.items() if v), default=(None, None))
-    add("proxy-added latency p95 <= %.0f ms in every minute" % cfg.added_p95_ms, worst_add[0] is None or worst_add[0] <= cfg.added_p95_ms,
+    add("proxy-added latency p95 <= %.0f ms in every minute" % cfg.added_p95_ms,
+        len(all_added) >= max(1, int(dur / 8)) and worst_add[0] is not None and worst_add[0] <= cfg.added_p95_ms,
         "overall p50 %s / p95 %s ms over %d probes (proxied ping minus direct ping); worst minute %s p95 %s ms"
         % (fmt(pct(all_added, 50), 1), fmt(pct(all_added, 95), 1), len(all_added), worst_add[1], fmt(worst_add[0], 1)))
     ordered = [samples[k] for k in sorted(samples)]
@@ -233,7 +234,10 @@ def build_report(s, crashed=False):
         fh.write(md)
     doc = {"verdict": verdict, "duration_s": round(dur, 1), "config": {k: v for k, v in vars(cfg).items()}, "calls_sent": total_calls,
            "checks": [{"name": n, "ok": o, "detail": d} for n, o, d in checks], "scenarios": {k: v for k, v in rec.stats.items()},
-           "failures": rec.failures, "faults": s.faults_done, "samples": list(m.samples), "skips": s.skips, "harness_notes": s.harness_notes,
+           "failures": rec.failures, "faults": s.faults_done, "fault_windows": list(m.fault_windows),
+           "probes": [{"start_s": round(t, 3), "direct_ms": round(d, 2), "proxied_ms": round(p, 2)} for t, d, p in m.probe],
+           "panel_requests": [{"start_s": round(t, 3), "op": op, "ms": ms} for t, op, ms, _status, _peak in m.panel],
+           "samples": list(m.samples), "skips": s.skips, "harness_notes": s.harness_notes,
            "per_minute": {"panel_p95": {k: pct(v, 95) for k, v in panel_ms.items()}, "added_p95": {k: pct(v, 95) for k, v in probe_added.items()},
                           "flow_downloads": dict(flows_n), "peak_inflight": dict(peaks)}}
     with open(os.path.join(s.out, "report.json"), "w") as fh:

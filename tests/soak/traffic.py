@@ -13,6 +13,7 @@ import random
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 
@@ -46,6 +47,8 @@ class Traffic:
         self.ctx = ssl.create_default_context(cafile=inst.suite.ca_pem)
         self.ctx.check_hostname = False
         self.lock = threading.Lock()
+        self.probe_proc = None
+        self.probe_reader = None
 
     # -- one call -----------------------------------------------------------------------------------------------------
     def make_call(self):
@@ -137,27 +140,13 @@ class Traffic:
             self.enqueue(self.make_call())
             self.stop_ev.wait(self.rng.expovariate(rate))
 
-    # -- latency probe: the same ping straight to the upstream and through the proxy --------------------------------
-    def prober(self):
-        direct = http.client.HTTPConnection("127.0.0.1", self.up.http_port, timeout=30)
-        via = http.client.HTTPConnection("127.0.0.1", self.inst.proxy_port, timeout=30)
-        url = "http://127.0.0.1:%d/neo/ping" % self.up.http_port
-        while not self.stop_ev.wait(3.0):
+    # -- latency probe: isolated from the UI driver's Python GIL and Playwright trace processing -------------------
+    def read_probes(self):
+        for line in self.probe_proc.stdout:
             try:
-                t = self.m.now()
-                a = time.perf_counter()
-                direct.request("GET", "/neo/ping")
-                direct.getresponse().read()
-                b = time.perf_counter()
-                via.request("GET", url)
-                via.getresponse().read()
-                c = time.perf_counter()
-                self.m.add("probe", (t, (b - a) * 1000.0, (c - b) * 1000.0))
-            except Exception:                               # noqa: BLE001
-                direct.close()
-                via.close()
-                direct = http.client.HTTPConnection("127.0.0.1", self.up.http_port, timeout=30)
-                via = http.client.HTTPConnection("127.0.0.1", self.inst.proxy_port, timeout=30)
+                self.m.add("probe", tuple(json.loads(line)))
+            except (ValueError, TypeError):
+                pass
 
     def websocket_once(self):
         t = self.m.now()
@@ -210,12 +199,26 @@ class Traffic:
     def start(self):
         for _ in range(self.cfg.workers):
             self.threads.append(threading.Thread(target=self.worker, daemon=True))
-        for fn in (self.scheduler, self.prober, self.ws_loop):
+        for fn in (self.scheduler, self.ws_loop):
             self.threads.append(threading.Thread(target=fn, daemon=True))
+        self.probe_proc = subprocess.Popen(
+            [sys.executable, "-u", os.path.join(os.path.dirname(__file__), "prober.py"),
+             str(self.up.http_port), str(self.inst.proxy_port), str(self.m.t0)],
+            stdout=subprocess.PIPE, text=True)
+        self.probe_reader = threading.Thread(target=self.read_probes, daemon=True)
+        self.probe_reader.start()
         for t in self.threads:
             t.start()
 
     def stop(self):
         self.stop_ev.set()
+        if self.probe_proc is not None:
+            self.probe_proc.terminate()
+            try:
+                self.probe_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.probe_proc.kill()
+                self.probe_proc.wait(timeout=5)
+            self.probe_reader.join(timeout=5)
         for t in self.threads:
             t.join(timeout=45)
