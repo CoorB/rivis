@@ -380,8 +380,8 @@ rm -rf "$TMP/tool-x"; mkdir "$TMP/tool-x"
 if [ -n "$TOOL_TARBALL" ]; then
   tar -xzf "$VERIFIED_TOOL_TARBALL" -C "$TMP/tool-x" --strip-components=1 || die "cannot extract tool tarball"
 elif [ -f "$SRC_ROOT/$CLI" ]; then
-  # running from our own checkout: copy it, leaving out state and snapshots
-  ( cd "$SRC_ROOT" && tar -cf - --exclude './install' --exclude '.DS_Store' --exclude '*.pyc' --exclude '__pycache__' . ) | tar -xf - -C "$TMP/tool-x"
+  # running from our own checkout: copy it, leaving out state, snapshots and test output (soak traces run to gigabytes)
+  ( cd "$SRC_ROOT" && tar -cf - --exclude './install' --exclude './tests/.artifacts' --exclude '.DS_Store' --exclude '*.pyc' --exclude '__pycache__' . ) | tar -xf - -C "$TMP/tool-x"
 else
   fetch "$MIRROR/$CLI/$CLI-$TOOL_VERSION.tar.gz" "$TMP/tool.tar.gz"
   verify "$TMP/tool.tar.gz" "$T_SHA" "tool tarball (TOOL_SHA256)"

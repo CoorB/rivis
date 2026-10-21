@@ -245,6 +245,8 @@ try {
     Get-ChildItem $SrcRoot -Force | Where-Object { $_.Name -notin @("install", ".DS_Store") } | ForEach-Object {
       Copy-Item $_.FullName -Destination $tx -Recurse -Force
     }
+    $artifacts = Join-Path $tx "tests\.artifacts"                         # test output (soak traces run to gigabytes)
+    if (Test-Path $artifacts) { Remove-Item $artifacts -Recurse -Force }
   } else {
     $tt = Join-Path $Tmp "tool.tar.gz"; Fetch "$Mirror/$Cli/$Cli-$ToolVersion.tar.gz" $tt
     Verify $tt $TSha "tool tarball"

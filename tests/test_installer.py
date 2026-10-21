@@ -919,3 +919,20 @@ class WindowsInstallerSource(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class SourceInstallLeavesOutTestArtifacts(InstallerBase):
+    def test_checkout_install_does_not_copy_test_artifacts(self):
+        """A checkout install copied tests/.artifacts (soak traces, ~1 GB) into every install: the suite filled the disk."""
+        stage = os.path.join(self.suite.root, "artifacts-stage", "next")
+        shutil.copytree(harness.REPO, stage, ignore=shutil.ignore_patterns(".git", "__pycache__", ".artifacts"))
+        os.makedirs(os.path.join(stage, "tests", ".artifacts", "soak", "run"))
+        with open(os.path.join(stage, "tests", ".artifacts", "soak", "run", "trace.zip"), "wb") as fh:
+            fh.write(b"x" * 1024)
+        self.ok("--yes", "--skip-local-capture", "--no-rc", bin=os.path.join(stage, "install", "install.sh"))
+        tools = [d for d in os.listdir(os.path.join(self.home, ".local", "rivis")) if d.startswith("tool-")]
+        self.assertTrue(tools)
+        for d in tools:
+            root = os.path.join(self.home, ".local", "rivis", d)
+            self.assertTrue(os.path.isfile(os.path.join(root, "rivis")), d)
+            self.assertFalse(os.path.exists(os.path.join(root, "tests", ".artifacts")), d)
