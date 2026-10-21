@@ -100,6 +100,26 @@ class MagiskGuards(MagiskFixture):
         self.assertIn("not a Google Play AVD", r.stderr)
         self.assertFalse(self.touched_emulator())
 
+    def test_studio_embedded_api_36_1_is_refused_before_restart(self):
+        self.write_config('PlayStore.enabled=true\nimage.sysdir.1=system-images/android-36.1/google_apis_playstore/arm64-v8a/\n')
+        image = os.path.join(self.root, 'sdk', 'system-images', 'android-36.1', 'google_apis_playstore', 'arm64-v8a')
+        os.makedirs(image)
+        open(os.path.join(image, 'ramdisk.img'), 'wb').write(b'API 36.1 stock')
+        fake_bin = os.path.join(self.root, 'fake-bin')
+        os.makedirs(fake_bin)
+        ps = os.path.join(fake_bin, 'ps')
+        open(ps, 'w').write('#!/bin/sh\necho "qemu-system-aarch64 -avd Test_Play -qt-hide-window -grpc-use-token -port 5554"\n')
+        os.chmod(ps, 0o755)
+        env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, 'sdk'),
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, HOME=self.root,
+                   PATH=fake_bin + os.pathsep + os.environ.get('PATH', ''))
+        r = subprocess.run(['/bin/bash', SCRIPT, 'emulator-5554', self.ca, 'c8750f0d.0', self.magisk, self.state, '--yes'],
+                           capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=30)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('running embedded in Android Studio', r.stderr)
+        self.assertIn('cannot safely restart', r.stderr)
+        self.assertFalse(self.touched_emulator())
+
     def test_only_emulator_serials_and_safe_ca_names(self):
         env = dict(os.environ, ADB=self.adb, FAKE_LOG=self.log)
         for serial, name, msg in (("R58M123", "c8750f0d.0", "not an Android Studio emulator"),

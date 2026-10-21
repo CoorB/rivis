@@ -9,8 +9,8 @@ import time
 
 
 def main():
-    limit, cli, serial = sys.argv[1:]
-    proc = subprocess.Popen(["/bin/bash", cli, "__android_settings", serial], stdout=subprocess.PIPE,
+    limit, cli, serial, step = sys.argv[1:]
+    proc = subprocess.Popen(["/bin/bash", cli, "__android_settings", serial, step], stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
     selector = selectors.DefaultSelector()
     selector.register(proc.stdout, selectors.EVENT_READ)

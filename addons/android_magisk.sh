@@ -55,9 +55,16 @@ STOCK="$SDK/${SYSDIR%/}/ramdisk.img"
 [ -r "$STOCK" ] || die "$AVD: no ramdisk.img in $SDK/$SYSDIR (this image type is not supported)"
 API=$(sh_ getprop ro.build.version.sdk)
 ABI=$(sh_ getprop ro.product.cpu.abi)
+# Android Studio owns embedded emulator windows through private gRPC flags. Relaunching one
+# as a standalone process loses that ownership; refuse before patching or stopping it.
+if ps -ax -o args= 2>/dev/null | grep -F -- "-avd $AVD " | grep -q -- '-qt-hide-window'; then
+  die "$AVD is running embedded in Android Studio (-qt-hide-window); Rivis cannot safely restart that Studio-owned emulator with -ramdisk. Start the AVD as a standalone emulator, then retry one-click setup; using Settings now"
+fi
 
 # ---- boot helpers -------------------------------------------------------------------------------------------------
 CACHE="$STATE_DIR/android-ramdisk"; mkdir -p -m 700 "$CACHE"
+free_kb=$(df -Pk "$CACHE" | awk 'END {print $4}')
+[[ "$free_kb" =~ ^[0-9]+$ ]] && [ "$free_kb" -ge 2097152 ] || die "less than 2 GiB free for the emulator restart and ramdisk cache ($CACHE); free disk space, then retry"
 gone() {   # adb has lost it AND its process has exited (a new boot on the same port must not race the old one)
   local i; for i in $(seq 1 60); do "$ADB" -s "$SERIAL" get-state >/dev/null 2>&1 || break; sleep 1; done
   [ "$i" -lt 60 ] || return 1

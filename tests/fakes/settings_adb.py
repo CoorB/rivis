@@ -50,6 +50,15 @@ elif cmd == 'shell cat /sdcard/proxy-ui.xml':
         labels = ['User'] + (['mitmproxy'] if read('installed') else [])
     elif screen == 'fingerprint':
         labels = ['User', 'mitmproxy', read('fingerprint'), 'OK']
+    elif screen == 'recents':
+        print('<hierarchy><node resource-id="com.android.documentsui:id/toolbar" text="Recents" bounds="[0,0][1080,100]"><node content-desc="Show roots" bounds="[0,0][100,100]" /></node><node resource-id="com.android.documentsui:id/filename" text="proxy-ca.crt" bounds="[0,300][1000,400]" /></hierarchy>')
+        sys.exit(0)
+    elif screen == 'roots':
+        print('<hierarchy><node resource-id="com.android.documentsui:id/roots_list" bounds="[0,0][1080,1000]"><node resource-id="com.android.documentsui:id/root" text="Downloads" bounds="[0,200][1000,300]" /></node></hierarchy>')
+        sys.exit(0)
+    elif screen == 'downloads':
+        print('<hierarchy><node resource-id="com.android.documentsui:id/toolbar" text="Downloads" bounds="[0,0][1080,100]" /><node resource-id="com.android.documentsui:id/filename" text="proxy-ca.crt" bounds="[0,300][1000,400]" /></hierarchy>')
+        sys.exit(0)
     else:
         labels = {
             'security': ['More security settings'],
@@ -72,6 +81,10 @@ elif cmd.startswith('shell input tap'):
     elif screen == 'install':
         set_screen('warning')
     elif screen == 'warning':
+        set_screen('recents')
+    elif screen == 'recents':
+        set_screen('roots')
+    elif screen == 'roots':
         set_screen('downloads')
     elif screen == 'downloads':
         if read('stall') == 'select':

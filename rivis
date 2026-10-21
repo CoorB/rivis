@@ -974,26 +974,49 @@ open_credentials() {   # Settings → Security → More security → Encryption 
   sleep 1
   ui_tap "$1" "More security.*" && ui_tap "$1" "Encryption.*credentials"
 }
-ui_install_ca() {
-  local s="$1"
-  open_credentials "$s" || return 1
-  info "$s: step 2/5: choosing Install a certificate…"
-  ui_tap "$s" "Install a certificate" && ui_tap "$s" "CA certificate" || return 1
-  info "$s: step 3/5: accepting the CA warning…"
-  ui_tap "$s" "INSTALL ANYWAY|Install anyway" || return 1
-  sleep 2
-  info "$s: step 4/5: selecting proxy-ca.crt from Downloads…"
-  ui_tap "$s" "proxy-ca.crt" || { ui_tap "$s" "Show roots" && ui_tap "$s" "Downloads?" && ui_tap "$s" "proxy-ca.crt"; }
+ui_picker_action() {
+  local s="$1" action="$2" xml point i
+  for i in 1 2 3 4 5; do
+    "$ADB" -s "$s" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1
+    xml=$("$ADB" -s "$s" shell cat /sdcard/proxy-ui.xml 2>/dev/null)
+    point=$(printf '%s' "$xml" | /usr/bin/python3 -I "$SCRIPT_DIR/addons/android_picker.py" "$action" 2>/dev/null)
+    if [ "$point" = OPEN ]; then return 0; fi
+    if [[ "$point" =~ ^[0-9]+\ [0-9]+$ ]]; then
+      "$ADB" -s "$s" shell input tap $point >/dev/null && return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+ui_install_ca_step() {
+  local s="$1" step="$2"
+  case "$step" in
+    1) open_credentials "$s" ;;
+    2) ui_tap "$s" "Install a certificate" && ui_tap "$s" "CA certificate" ;;
+    3) ui_tap "$s" "INSTALL ANYWAY|Install anyway" ;;
+    4) ui_picker_action "$s" drawer && ui_picker_action "$s" downloads && ui_picker_action "$s" file ;;
+    5) ui_has_current_ca "$s" ;;
+  esac
 }
 android_settings_route() {
-  local s="$1" magisk_dir="${2:-}" limit="${RIVIS_ANDROID_SETUP_TIMEOUT:-240}" before after rc prior now
+  local s="$1" magisk_dir="${2:-}" limit="${RIVIS_ANDROID_SETUP_TIMEOUT:-45}" before after rc prior now step label
   [[ "$limit" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk "BEGIN {exit !($limit > 0)}" \
     || die "RIVIS_ANDROID_SETUP_TIMEOUT must be a positive number of seconds"
   prior=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') || die "$s: could not read the proxy before Settings setup"
   before=$(date +%s)
-  info "$s: step 1/5: opening Settings > Security…"
-  /usr/bin/python3 -I "$SCRIPT_DIR/addons/android_settings_timeout.py" "$limit" "$SCRIPT_DIR/rivis" "$s"
-  rc=$?; after=$(date +%s)
+  rc=0
+  for step in 1 2 3 4 5; do
+    case "$step" in
+      1) label='opening Settings > Security' ;; 2) label='choosing Install a certificate' ;;
+      3) label='accepting the CA warning' ;; 4) label='opening Downloads and selecting proxy-ca.crt' ;;
+      5) label='verifying the CA fingerprint' ;;
+    esac
+    info "$s: step $step/5: ${label}…"
+    /usr/bin/python3 -I "$SCRIPT_DIR/addons/android_settings_timeout.py" "$limit" "$SCRIPT_DIR/rivis" "$s" "$step"
+    rc=$?
+    [ "$rc" = 0 ] || { info "$s: step $step/5 failed: $label (exit $rc)"; break; }
+  done
+  after=$(date +%s)
   info "$s: Settings route finished in $((after-before)) s"
   if [ "$rc" = 124 ]; then
     now=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') || now="unreadable"
@@ -1001,7 +1024,7 @@ android_settings_route() {
       "$ADB" -s "$s" shell settings put global http_proxy "$prior" >/dev/null 2>&1 || true
       now=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') || now="unreadable"
     fi
-    info "$s: ERROR — Settings setup timed out after ${limit} s. Proxy now: $now (before: $prior)."
+    info "$s: ERROR — Settings setup timed out at step $step/5 ($label) after ${limit} s. Proxy now: $now (before: $prior)."
     info "$s: proxy-ca.crt remains in Downloads; the CA may have been selected but trust was not verified. Check Settings > Security > Trusted credentials > User."
     if [ -n "$magisk_dir" ]; then
       info "  Next: Magisk was found at $magisk_dir but one-click setup failed above. Fix that failure (if the console token is unreadable, use ~/.emulator_console_auth_token from the emulator's user; if the emulator binary is missing, set ANDROID_SDK_ROOT), then retry; or finish the CA install by hand in Settings."
@@ -1134,6 +1157,7 @@ cmd_android() {
     on)
       local ca_ok=0                    # set only once the CA is verified on the emulator (review R7)
       if have_root "$s"; then
+        info "$s: choosing adb-root path (root shell available)"
         "$ADB" -s "$s" push "$CA_PEM" "/data/local/tmp/$h.0" >/dev/null 2>&1 || die "push failed"
         "$ADB" -s "$s" shell "mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/$h.0 $dst \
           && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0" || die "install failed"
@@ -1141,6 +1165,7 @@ cmd_android() {
         info "$s: CA installed in user store ($h.0)"; android_record "$s"; ca_ok=1
       else
         # Google Play images refuse `adb root`. The CA has to go in through Settings once.
+        info "$s: root shell unavailable; checking the current CA and Magisk path"
         ca_history_add
         "$ADB" -s "$s" push "$CONFDIR/mitmproxy-ca-cert.cer" /sdcard/Download/proxy-ca.crt >/dev/null 2>&1 \
           || die "could not push the CA to the emulator — proxy NOT enabled"
@@ -1158,9 +1183,10 @@ cmd_android() {
           info "$s: already trusts this CA — nothing to install"; android_record "$s"; ca_ok=1
           "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
         elif [ "$auto_ui" = 1 ] && [ -n "$magisk_dir" ] \
+            && info "$s: choosing one-click Magisk path ($magisk_dir)" \
             && ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent $strict; then
           android_record "$s"; ca_ok=1   # one-click Play-image path (Proxyman's Magisk approach); it verifies and reports
-        elif [ "$auto_ui" = 1 ] && info "$s: Google Play image — installing the CA through Settings (hands off the emulator)" \
+        elif [ "$auto_ui" = 1 ] && info "$s: one-click Magisk setup unavailable or failed (see reason above); choosing Settings route" \
             && android_settings_route "$s" "$magisk_dir"; then
           info "$s: CA installed in user store via Settings (verified by fingerprint)"; android_record "$s"; ca_ok=1
         else
@@ -1239,10 +1265,21 @@ cmd_setup() {   # every booted simulator + every running emulator; each skips wh
   local did=0
   if xcrun simctl list devices booted 2>/dev/null | grep -q Booted; then cmd_ios on --all; did=1
   else info "iOS: no booted simulator (boot one, then run '$CLI setup' again)"; fi
-  if [ -x "$ADB" ] && "$ADB" devices 2>/dev/null | grep -qE '^emulator-[0-9]+[[:space:]]device$'; then cmd_android on --all; did=1
+  if [ -x "$ADB" ] && "$ADB" devices 2>/dev/null | grep -qE '^emulator-[0-9]+[[:space:]]device$'; then cmd_android_logged on --all; did=1
   elif [ -x "$ADB" ]; then info "Android: no running emulator"
   else info "Android: adb not found (install the Android SDK platform-tools)"; fi
   [ "$did" = 1 ] || die "nothing to set up: no booted simulator or running emulator"
+}
+cmd_android_logged() {
+  local log="$STATE_ROOT/logs/android-setup.log" rc
+  mkdir -p -m 700 "$STATE_ROOT/logs"
+  {
+    trap 'rc=$?; printf "Android setup finished: exit=%s\n" "$rc"' EXIT
+    printf 'Android setup run: action=%s flags=%s\n' "${1:-}" "${*:2}"
+    cmd_android "$@"
+    return "$?"
+  } 2>&1 | /usr/bin/python3 -I "$SCRIPT_DIR/addons/android_setup_log.py" "$log"
+  return "${PIPESTATUS[0]}"
 }
 
 # ───────────────────────── ios ─────────────────────────
@@ -1446,8 +1483,8 @@ case "${1:-}" in -h|--help|help|""|cert|doctor|bug-report) ;; *) migrate_legacy 
 case "${1:-}" in
   projects)  shift; cmd_projects "$@" ;;
   start)     shift; cmd_start "$@" ;;
-  android)   shift; cmd_android "$@" ;;
-  __android_settings) shift; ui_install_ca "$1" && { info "$1: step 5/5: verifying the CA fingerprint…"; ui_has_current_ca "$1"; } ;;
+  android)   shift; cmd_android_logged "$@" ;;
+  __android_settings) shift; ui_install_ca_step "$1" "$2" ;;
   setup)     shift; cmd_setup "$@" ;;
   ios)       shift; cmd_ios "$@" ;;
   net-reset) shift; cmd_net_reset "$@" ;;

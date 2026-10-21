@@ -79,6 +79,8 @@ class LogsAndReports(unittest.TestCase):
             home = os.path.expanduser("~")
             with open(os.path.join(logs, "rivis.log"), "w", encoding="utf-8") as fh:
                 fh.write('token=%s Authorization: Bearer %s home=%s\n' % (secret, jwt, home))
+            with open(os.path.join(logs, "android-setup.log"), "w", encoding="utf-8") as fh:
+                fh.write('step 4/5: Downloads; token=%s\n' % secret)
             os.makedirs(os.path.join(state, "projects", "default", "sessions"), exist_ok=True)
             with open(os.path.join(state, "web-token"), "w") as fh:
                 fh.write("must-never-be-read")
@@ -92,11 +94,12 @@ class LogsAndReports(unittest.TestCase):
                                  "--port", "32001", "--web-port", "32002", "--script-dir", os.path.join(state, "scripts"),
                                  "--output", output])
             with zipfile.ZipFile(output) as archive:
-                self.assertEqual(set(archive.namelist()), {"manifest.json", "versions.txt", "doctor.txt", "logs.txt", "README.txt"})
+                self.assertEqual(set(archive.namelist()), {"manifest.json", "versions.txt", "doctor.txt", "logs.txt", "android-setup.log", "README.txt"})
                 data = b"\n".join(archive.read(name) for name in archive.namelist()).decode("utf-8")
             for forbidden in (secret, jwt, "must-never-be-read", "must-never-be-read-flow", home):
                 self.assertNotIn(forbidden, data)
             self.assertIn("[REDACTED]", data)
+            self.assertIn('step 4/5: Downloads', data)
 
 
     def test_bundle_masks_the_har_redactors_field_names_and_device_names(self):

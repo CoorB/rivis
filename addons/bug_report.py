@@ -79,6 +79,14 @@ def last_logs(log_dir):
     return "\n".join(chunks)[-MAX_LOG_BYTES:]
 
 
+def last_android_setup(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()[-MAX_LOG_BYTES:].decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-root", required=True)
@@ -120,7 +128,7 @@ def main(argv=None):
         "product_version": product_version,
         "project": args.project,
         "doctor_exit": doctor_rc,
-        "contents": ["manifest.json", "versions.txt", "doctor.txt", "logs.txt", "README.txt"],
+        "contents": ["manifest.json", "versions.txt", "doctor.txt", "logs.txt", "android-setup.log", "README.txt"],
         "excluded": ["captured flows", "web-token", "web-bootstrap", "composer variables", "request/response bodies",
                      "simulator and emulator names"],
     }
@@ -136,6 +144,7 @@ def main(argv=None):
         "versions.txt": versions,
         "doctor.txt": doctor_output + "\n",
         "logs.txt": last_logs(os.path.join(args.state_root, "logs")) + "\n",
+        "android-setup.log": last_android_setup(os.path.join(args.state_root, "logs", "android-setup.log")),
         "README.txt": "Redacted Rivis diagnostics. This bundle intentionally contains no captured flows or tokens.\n",
     }
 
