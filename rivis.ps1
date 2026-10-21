@@ -581,6 +581,7 @@ if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report"
   if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif (@($Rest).Count -and $Command -ne "throttle" -and
           -not ($Command -eq "tls" -and $Action -in @("allow","ignore")) -and
+          -not ($Command -eq "rules" -and $Action -eq "add") -and
           -not ($Command -eq "rules" -and $Action -eq "test" -and @($Rest).Count -eq 1)) {
   $unexpected += @($Rest)
 }
@@ -758,7 +759,24 @@ switch ($Command) {
       & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath rules test @testArgs
       if ($LASTEXITCODE) { exit $LASTEXITCODE }
     } elseif ($subcommand -eq "add") {
-      Write-Host "use: .\${Cli}.ps1 rules edit (see the project rules.example.json for every action)"
+      $ruleName = if ($Name) { $Name } elseif ($args.Count -gt 0) { [string]$args[0] } else { "" }
+      if (-not $ruleName) { Die "usage: rules add NAME match=REGEX action=ACTION [key=value ...]" }
+      $python = Get-PythonCommand
+      $addArgs = @($ruleName)
+      if ($Match -and -not (@($Rest) -match '^match=')) { $addArgs += "match=$Match" }
+      if ($Method -and -not (@($Rest) -match '^method=')) { $addArgs += "method=$Method" }
+      if (@($Rest).Count) { $addArgs += @($Rest) }
+      $previousProject = [Environment]::GetEnvironmentVariable("RIVIS_ACTIVE_PROJECT")
+      $previousConf = [Environment]::GetEnvironmentVariable("RIVIS_RULE_CONFDIR")
+      try {
+        $env:RIVIS_ACTIVE_PROJECT = $Project
+        $env:RIVIS_RULE_CONFDIR = $ConfDir
+        & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath rules add @addArgs
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      } finally {
+        [Environment]::SetEnvironmentVariable("RIVIS_ACTIVE_PROJECT", $previousProject)
+        [Environment]::SetEnvironmentVariable("RIVIS_RULE_CONFDIR", $previousConf)
+      }
     } elseif ($subcommand -in @("allow-file","disallow-file","trusted-files")) {
       # Map Local / body_file outside the project: only files trusted here, in a list rules.json cannot write (F-09).
       $trustPath = Join-Path (Split-Path -Parent $RulesPath) "trusted-files.json"

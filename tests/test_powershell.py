@@ -357,6 +357,17 @@ class Commands(unittest.TestCase):
         self.assertEqual(cfg["throttle_match"], "neo\\.sa")
         self.assertEqual(cfg["loss"], 0)
 
+    def test_rules_add_parity_with_bash_cli(self):
+        # n4: rivis.ps1 rules add parity with bash CLI
+        self.ok("rules", "add", "b-rule", "match=/api/block", "action=block")
+        self.ok("rules", "add", "s-rule", "-Match", "/api/status", "action=status", "status=500")
+        self.ok("rules", "add", "patch-rule", "match=/api/user", "action=json_patch", "set=user.name=PATCHED")
+        rules = {r["name"]: r for r in self.cfg()["rules"]}
+        self.assertEqual(rules["b-rule"]["action"], "block")
+        self.assertEqual(rules["s-rule"]["status"], 500)
+        self.assertEqual(rules["patch-rule"]["set"], {"user.name": "PATCHED"})
+        self.bad("rules", "add", msg="usage: rules add NAME")
+
     def test_rules_test_explains_like_the_bash_cli(self):
         self.bash("rules", "add", "post-500", "match=/api/pay", "action=status", "status=500", "method=POST")
         out = self.ok("rules", "test", "https://api.example.test/api/pay", "POST")
