@@ -19,7 +19,7 @@ CHECKS = {"url": lambda t, d: "URL copied" in t, "map": lambda t, d: d, "bp": la
 
 @unittest.skipIf(PW_REASON, PW_REASON or "")
 class CtxMenuStreaming(UiBase):
-    ITEMS = ("url", "host", "bp", "map")
+    ITEMS = ("url", "host", "map", "bp")
 
     def setUp(self):
         super().setUp()
@@ -27,6 +27,14 @@ class CtxMenuStreaming(UiBase):
             self.context.grant_permissions(["clipboard-read", "clipboard-write"], origin="http://127.0.0.1:%d" % self.inst.web_port)
         except Exception:                                  # noqa: BLE001 - WebKit has no clipboard permission
             pass
+
+    def tearDown(self):
+        try:                                               # the Rivis is shared by the class: no breakpoint or host filter may leak on
+            for b in self.panel.state().get("breakpoints") or []:
+                self.panel.ok("bp_delete", {"name": b["name"]})
+            self.panel.ok("focus_host", {"host": None})
+        finally:
+            super().tearDown()
 
     def P(self, sel):
         return self.page.locator("#proxy-panel-host").locator(sel)
@@ -51,20 +59,14 @@ class CtxMenuStreaming(UiBase):
         self.addCleanup(lambda: (stop.set(), t.join(5)))
 
     def menu_on(self):
-        for _ in range(4):                     # a streamed row can scroll the list and close the menu after its grace: open it again
-            self.page.locator(".flow-table tbody tr", has_text="a=1").first.click(button="right")
-            wait_for(lambda: self.P("#cmenu.open").count() > 0, 5, 0.1, "menu open")
-            self.page.wait_for_timeout(1200)   # past the 700 ms grace; several polls and new rows
-            if self.P("#cmenu.open").count():
-                return
+        self.page.locator(".flow-table tbody tr", has_text="small?stream=").nth(2).click(button="right")
+        wait_for(lambda: self.P("#cmenu.open").count() > 0, 5, 0.1, "menu open")
+        self.page.wait_for_timeout(1200)       # past the 700 ms grace; several polls and new rows
+        self.assertTrue(self.P("#cmenu.open").count(), "menu closed by itself while calls stream in")
 
     def pointer_press(self, k, between=None):
         b = self.P("#cmenu button[data-k=%s]" % k).bounding_box()
-        for _ in range(3):
-            if b:
-                break
-            self.menu_on()                     # closed by a streamed row's scroll since menu_on returned
-            b = self.P("#cmenu button[data-k=%s]" % k).bounding_box()
+        self.assertTrue(b, "menu closed by itself before the press")
         self.page.mouse.move(b["x"] + 30, b["y"] + 8, steps=6)
         self.page.mouse.down()
         if between:
@@ -112,8 +114,9 @@ class CtxMenuStreaming(UiBase):
     def test_outside_scroll_and_blur_still_close_the_menu(self):
         self.open()
         self.menu_on()
-        self.page.evaluate("window.dispatchEvent(new Event('scroll'))")
-        wait_for(lambda: not self.P("#cmenu.open").count(), 3, 0.1, "scroll closes")
+        self.page.mouse.move(400, 300)
+        self.page.mouse.wheel(0, 200)
+        wait_for(lambda: not self.P("#cmenu.open").count(), 3, 0.1, "wheel scroll closes")
         self.menu_on()
         self.page.mouse.click(5, 300)
         wait_for(lambda: not self.P("#cmenu.open").count(), 3, 0.1, "outside click closes")
@@ -137,4 +140,4 @@ class CtxMenuWebKit(UiBase):
     P, toast, stream, menu_on, pointer_press, assert_acts = (CtxMenuStreaming.P, CtxMenuStreaming.toast, CtxMenuStreaming.stream,
                                                              CtxMenuStreaming.menu_on, CtxMenuStreaming.pointer_press,
                                                              CtxMenuStreaming.assert_acts)
-    ITEMS = ("host", "bp", "map")
+    ITEMS = ("host", "map", "bp")

@@ -1736,7 +1736,7 @@
         `<hr>` + item("host", focused ? "Show all hosts again" : "Show only this host", "search") + (src ? item("src", srcOn ? "Show every source again" : `Show only ${esc(src.app || deviceName(src))}`, "phone") : "") + item("tls", "Stop decrypting this host", "lock")
       : `<div class="hd">${esc(hostName || "Host-only row")} — not decrypted</div>` + item("tlson", "Decrypt this host", "unlock")) +
       `<hr>` + item("del", "Delete this call", "trash", "", "d");
-    m.classList.add("open"); openCallMenu.at = Date.now();
+    m.classList.add("open"); openCallMenu.at = Date.now(); openCallMenu.size = [window.innerWidth, window.innerHeight];
     const w = m.offsetWidth, h = m.offsetHeight;
     m.style.left = Math.max(6, Math.min(x, window.innerWidth - w - 6)) + "px"; m.style.top = Math.max(6, Math.min(y, window.innerHeight - h - 6)) + "px";
     const first = m.querySelector("button:not(:disabled)"); if (first) first.focus();
@@ -1763,17 +1763,30 @@
     if (!tr || !flowOf(tr)) { closeCallMenu(); return; }
     e.preventDefault(); openCallMenu(e.clientX, e.clientY, tr);
   }, true);
-  // selecting the row scrolls / re-lays-out the list for a moment: only outside clicks, a real scroll later, or leaving the window close the menu
+  // The menu closes on USER intent only: a press outside it (a scrollbar drag starts with one), the wheel, touch-drag, a scroll key,
+  // Escape, the window losing focus, or a window whose size really changed. A `scroll` event is never a reason: the call list scrolls
+  // itself whenever a new call arrives while it follows the end (and when a row is selected / re-anchored), so closing on it made the
+  // menu vanish under the pointer on a live list, at any scroll position.
   // A press that starts inside the menu must finish as a click: Safari and macOS WebKit do not focus a button on mousedown, so focus
-  // drops from the menu's button to the page (a blur) in the middle of the press, and a scroll / resize from the streaming list can land
-  // there too. Closing then hid the button before mouseup and the click never fired — every item "just closed the menu".
+  // drops from the menu's button to the page (a blur) in the middle of the press. Closing then hid the button before mouseup.
   let pressInMenu = false;
-  ["mousedown", "scroll", "blur", "resize"].forEach((t) => window.addEventListener(t, (e) => {
-    const inMenu = e.composedPath().includes($("cmenu"));
-    if (t === "mousedown") { pressInMenu = inMenu; if (inMenu) return; }
-    else if (pressInMenu || (t === "blur" && inMenu) || Date.now() - openCallMenu.at < 700) return;
-    closeCallMenu();
-  }, true));
+  const menuOpen = () => $("cmenu").classList.contains("open");
+  const menuSettled = () => Date.now() - openCallMenu.at >= 700;     // inertia of the gesture that opened it must not close it
+  const SCROLL_KEYS = ["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown", " "];
+  window.addEventListener("mousedown", (e) => {
+    pressInMenu = e.composedPath().includes($("cmenu"));
+    if (!pressInMenu) closeCallMenu();
+  }, true);
+  ["wheel", "touchmove"].forEach((t) => window.addEventListener(t, () => { if (menuOpen() && menuSettled()) closeCallMenu(); }, { capture: true, passive: true }));
+  window.addEventListener("keydown", (e) => {
+    if (menuOpen() && menuSettled() && SCROLL_KEYS.includes(e.key) && !e.composedPath().includes($("cmenu"))) closeCallMenu();
+    else if (menuOpen() && ["PageUp", "PageDown", "Home", "End"].includes(e.key)) closeCallMenu();
+  }, true);
+  window.addEventListener("blur", (e) => { if (e.target === window && !pressInMenu && menuSettled()) closeCallMenu(); }, true);
+  window.addEventListener("resize", (e) => {
+    if (e.target !== window || pressInMenu) return;
+    if (openCallMenu.size && (openCallMenu.size[0] !== window.innerWidth || openCallMenu.size[1] !== window.innerHeight)) closeCallMenu();
+  }, true);
   ["mouseup", "dragend", "contextmenu"].forEach((t) => window.addEventListener(t, () => setTimeout(() => (pressInMenu = false), 0), true));
   $("cmenu").addEventListener("keydown", (e) => {
     const bs = [...$("cmenu").querySelectorAll("button:not(:disabled)")], i = bs.indexOf(root.activeElement);
