@@ -666,10 +666,11 @@
   }
 
   let renderSeq = 0, editorCheckT = 0;
+  let pollState = null;                   // poll()'s state request while it is in flight: render() shares it
   async function render() {
     const seq = ++renderSeq;
     clearTimeout(editorCheckT);  // R6-05: any redraw detaches the old editor and its JSON result node.
-    if (!state) state = await api("state").catch(() => null);
+    if (!state) state = await (pollState || api("state")).catch(() => null);   // share a poll already asking, never a second request
     if (seq !== renderSeq) return;
     if (!state) { $("main").innerHTML = '<p class="muted">Cannot reach the panel API.</p>'; return; }
     openTabSig = tabSig(state);              // B15: what this tab now shows; the poll redraws only when it changes
@@ -2592,7 +2593,8 @@
   window.addEventListener("blur", (e) => { if (e.target === window) pointerHeld = false; });   // the window, not a field losing focus
   async function poll() {
     try {
-      const s = await api("state", undefined, 4000);   // aborted at 4 s, so a hung proxy never holds a connection
+      pollState = api("state", undefined, 4000);       // aborted at 4 s, so a hung proxy never holds a connection
+      const s = await pollState.finally(() => { pollState = null; });
       missed = 0; lostSince = 0; showLost(false);
       state = s; badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow();
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();

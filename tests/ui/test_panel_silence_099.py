@@ -109,6 +109,25 @@ class PanelSilence(UiBase):
         self.assertIn("Copy URL", self.P("#cmenu").inner_text())
         self.assertIn("/echo", self.P("#cmenu .hd").inner_text())
 
+    def test_opening_the_drawer_shares_the_poll_state_request(self):
+        """Opening the Tools drawer while a poll is waiting for state used to send a second state request (soak: 4 panel requests
+        in flight). The drawer's first draw now waits on the poll's own request."""
+        hold(state=1.5)                                    # every state answer takes 1.5 s, so a poll is in flight most of the time
+        self.page.add_init_script("""(() => { const f = window.fetch; window.__st = { now: 0, peak: 0 };
+            window.fetch = function (u) {
+              if (!String(u).includes('proxy/api/state')) return f.apply(this, arguments);
+              const st = window.__st; st.now++; st.peak = Math.max(st.peak, st.now);
+              return f.apply(this, arguments).finally(() => { st.now--; });
+            }; })()""")
+        self.open()
+        for _ in range(4):
+            wait_for(lambda: self.page.evaluate("window.__st.now") == 1, 10, 0.02, "a poll waiting for state")
+            self.P("#fab").click()                         # open the drawer: its first draw needs state
+            self.page.wait_for_timeout(400)
+            self.P("#fab").click()                         # and close it again
+            self.page.wait_for_timeout(200)
+        self.assertEqual(self.page.evaluate("window.__st.peak"), 1, "two state requests were in flight at once")
+        self.assertEqual(self.errors, [])
 
 if __name__ == "__main__":
     unittest.main()
