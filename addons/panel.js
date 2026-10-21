@@ -1809,6 +1809,25 @@
       }
     }));
   }
+  // A left click on a call must select it even when a new call is drawn above it between the press and the release. The browser then
+  // sends the click to the nearest common ancestor of the two targets (the table body, not a row), so mitmweb's row handler never
+  // runs and the click does nothing. Remember the row the press started on and finish the click there, as the user meant.
+  let rowPress = null;
+  window.addEventListener("mousedown", (e) => {
+    const tr = e.button === 0 && e.target.closest && e.target.closest(".flow-table tbody tr");
+    const f = tr && flowOf(tr);
+    rowPress = f ? { id: f.id, at: Date.now(), x: e.clientX, y: e.clientY } : null;
+  }, true);
+  window.addEventListener("click", (e) => {
+    const press = rowPress; rowPress = null;
+    if (!press || e.button !== 0 || Date.now() - press.at > 2000 || Math.hypot(e.clientX - press.x, e.clientY - press.y) > 5) return;   // a drag is not a click
+    if (e.target.closest && e.target.closest(".flow-table tbody tr")) return;          // delivered to a row: mitmweb handles it
+    if (!e.target.closest || !e.target.closest(".flow-table")) return;
+    for (const tr of document.querySelectorAll(".flow-table tbody tr")) {
+      const f = flowOf(tr);
+      if (f && f.id === press.id) { tr.click(); return; }
+    }
+  }, true);
   document.addEventListener("contextmenu", (e) => {
     const tr = e.target.closest && e.target.closest(".flow-table tbody tr");
     if (!tr || !flowOf(tr)) { closeCallMenu(); return; }
