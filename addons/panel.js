@@ -3039,7 +3039,9 @@
     a.innerHTML = `<b>${esc(m[1])}</b> · <a href="${esc(url)}" download>Download</a> · <a href="${esc(url)}" target="_blank" rel="noopener">Open raw</a>`;
   });
   let exportCheck = 0;     // the call list mutates constantly under traffic: check at most once per frame
-  new MutationObserver(() => { if (!exportCheck) exportCheck = requestAnimationFrame(() => { exportCheck = 0; hideNativeExport(); try { linkClipped(); } catch (e) { /* cosmetic */ } }); })
+  // Hide the native Export group in the same turn mitmweb draws it (a few header nodes), so no click, script or paint ever
+  // sees it; the clipped-body link is cosmetic and stays once per frame.
+  new MutationObserver(() => { hideNativeExport(); if (!exportCheck) exportCheck = requestAnimationFrame(() => { exportCheck = 0; try { linkClipped(); } catch (e) { /* cosmetic */ } }); })
     .observe(document.body, { childList: true, subtree: true });
   hideNativeExport();
 

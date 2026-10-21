@@ -186,6 +186,25 @@ class UiSmoke(UiBase):
         self.assertTrue(groups.first.evaluate("e => e.hidden && e.getAttribute('aria-hidden') === 'true'"))
         self.assertEqual(self.errors, [])
 
+    def test_native_export_group_is_never_visible_even_for_a_moment(self):
+        """Hidden in the same turn mitmweb draws it, not a frame later: a watcher that runs right after each redraw never finds
+        the unredacted Export group shown, while selecting calls makes mitmweb redraw the header again and again."""
+        page = self.open()
+        rows = page.locator(".flow-table tbody tr:has(td.col-path)")
+        wait_for(lambda: rows.count() >= 2, 10, 0.2, "calls listed")
+        page.evaluate("""() => { window.__shown = 0; new MutationObserver(() => {
+            document.querySelectorAll('#container > header .menu-group').forEach((g) => {
+              const l = g.querySelector('.menu-legend');
+              if (l && l.textContent.trim().toLowerCase() === 'export' && !g.hidden) window.__shown++; });
+          }).observe(document.body, { childList: true, subtree: true }); }""")
+        for i in range(6):
+            rows.nth(i % 2).click()
+            page.wait_for_timeout(150)
+            page.keyboard.press("Escape")                    # deselect: the flow menu groups go away and come back
+            page.wait_for_timeout(150)
+        self.assertEqual(page.evaluate("window.__shown"), 0, "the unredacted Export group was shown between redraws")
+        self.assertEqual(self.errors, [])
+
     def test_tunnel_context_decrypt_keeps_explicit_port(self):
         self.reset_state(tls={"mode": "allow", "allow": []})
         self.panel.state()                 # include host-only TCP rows in mitmweb's current view
