@@ -626,7 +626,7 @@
     badges();
     root.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.t === tab));
     const m = $("main");
-    if (editing) return editing.kind === "script" ? renderScriptEditor(m) : renderEditor(m);
+    if (editing) return editing.kind === "script" ? renderScriptEditor(m) : editing.kind === "rule" ? renderRuleForm(m) : renderEditor(m);
     if (tab === "call") return renderCall(m, seq);
     if (tab === "compose") return renderCompose(m);
     if (tab === "map") return renderMap(m);
@@ -1268,7 +1268,7 @@
   }
 
   async function openScript(file) {
-    try { const r = await api("script_get", { file }); editing = { kind:"script", ...r }; render(); }
+    try { const r = await api("script_get", { file }); editing = { kind:"script", from: tab, ...r }; render(); }
     catch (e) { toast(e.message, true); }
   }
   function renderScriptEditor(m) {
@@ -1279,7 +1279,7 @@
     $("sback").onclick = () => { editing = null; render(); };
     $("sesave").onclick = async () => {
       const r = await run("script_put", { file:s.file, match:$("sematch").value, method:$("semethod").value, content:$("sebody").value }, (x) => x.syntax_error ? "Saved, but it has a syntax error — " + x.syntax_error : "Script saved — hot reloads within 1 s");
-      if (r) { editing = null; tab = "scripts"; drawerTypingDirty = false; render(); }
+      if (r) { editing = null; tab = e.from || "scripts"; drawerTypingDirty = false; render(); }
     };
   }
 
@@ -2100,18 +2100,167 @@
     };
   }
   function renderRules(m) {
-    const skipped = state.skipped_rules || [];
-    if (!state.rules.length && !skipped.length) { m.innerHTML = emptyState("rules", "No rules yet", "Select a call and use <b>This call</b> — Map Local, a forced status, a block or a delay all become rules here."); return; }
-    m.innerHTML = (state.rules_error ? `<div class="banner bad"><b>${ico("warn", "sm")} rules.json has an error:</b> ${esc(state.rules_error)}</div>` : "") + (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") + ruleTestHTML() + state.rules.map((r, i) => `
+    const skipped = state.skipped_rules || [], outside = state.rules_outside || [];
+    const bps = state.breakpoints || [], scripts = state.scripts || [], status = state.script_status || {};
+    const net = state.throttle !== "off" || Number(state.loss || 0) > 0;
+    const prof = (state.profiles.find((p) => p.id === state.throttle) || {}).name || state.throttle;
+    const section = (title, n) => `<h4>${title} (${n})</h4>`;
+    m.innerHTML = (state.rules_error ? `<div class="banner bad"><b>${ico("warn", "sm")} rules.json has an error:</b> ${esc(state.rules_error)}</div>` : "") + (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") +
+      `<h4>New rule</h4><div class="btns" style="margin-top:0"><select id="rtype" aria-label="Rule type">${RULE_TYPES.map(([id, label]) => `<option value="${id}">${esc(label)}</option>`).join("")}</select>
+        <button class="b p" id="rnew">New</button>${info("Every kind of rule lives here: replies, status, JSON edits, delays, headers, Map Remote, blocks, Map Local, breakpoints, scripts and network conditions.")}</div>` +
+      ruleTestHTML() + section("Rules", state.rules.length) + (state.rules.length ? state.rules.map((r, i) => `
       <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
-        <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(ACTION_NAME[r.action] || r.action)}</span>${(state.rules_outside || []).includes(r.name) ? `<span class="tag" title="Reads a file outside the project. Allowed only for files you trusted on this machine (${esc(state.product.cli)} rules trusted-files). Edit it in your own editor.">external file</span>` : ""}</div>
+        <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(ACTION_NAME[r.action] || r.action)}</span>${outside.includes(r.name) ? `<span class="tag" title="Reads a file outside the project. Allowed only for files you trusted on this machine (${esc(state.product.cli)} rules trusted-files). Edit it in your own editor.">external file</span>` : ""}</div>
           <div class="sub">${esc(r.method ? r.method + " " : "")}${esc(pretty(r))} — ${esc(describe(r))}</div>
           ${(state.rule_warnings || {})[r.name] ? `<div class="sub rule-hits warn" role="alert">${ico("warn", "sm")} ${esc(state.rule_warnings[r.name])}</div>` : ""}${hitHTML(r)}</div>
-        ${r.action === "map_local" && !(state.rules_outside || []).includes(r.name) ? `<button class="b" data-edit="${i}">Edit</button>` : ""}
-        <button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") +
+        ${outside.includes(r.name) ? "" : `<button class="b" data-edit="${i}">Edit</button>`}
+        <button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
+        : emptyState("rules", "No rules yet", "Pick a type above and click <b>New</b>, or select a call and use <b>This call</b> — Map Local, a forced status, a block or a delay all become rules here.")) +
+      section("Breakpoints", bps.length) + (bps.length ? bps.map((b, i) => `
+      <div class="row">${sw(`data-rbi="${i}"`, b.enabled !== false)}
+        <div class="n"><div><b>${esc(b.name)}</b><span class="tag">Breakpoint</span></div>
+          <div class="sub">${esc(b.method ? b.method + " " : "")}${esc(pretty(b))} — pauses at ${esc([b.request && "request", b.response && "response"].filter(Boolean).join(" and "))}</div></div>
+        <button class="b" data-rbedit="${i}">Edit</button><button class="b d" data-rbdel="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") : '<p class="sub">None.</p>') +
+      section("Scripts", scripts.length) + (scripts.length ? scripts.map((x, i) => `
+      <div class="row">${sw(`data-rsi="${i}"`, x.enabled !== false)}
+        <div class="n"><div><b>${esc(x.name)}</b><span class="tag">Script · ${esc(x.lang)}</span></div>
+          <div class="sub">${esc(x.method || "ANY")} · ${esc(x.match || ".")}${x.exists ? "" : " · FILE MISSING"}${status.errors && status.errors[x.file] ? ` · <span class="tag err">ERROR</span> ${esc((status.errors[x.file].message || status.errors[x.file]))}` : ""}</div></div>
+        <button class="b" data-rsedit="${i}">Edit</button><button class="b d" data-rsdel="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") : '<p class="sub">None.</p>') +
+      `<h4>Network</h4>` + (net ? `
+      <div class="row"><div class="n"><div><b>${esc(prof)}</b><span class="tag">Network throttle</span></div>
+        <div class="sub">${state.throttle_match ? "URLs matching " + esc(state.throttle_match) : "every call"}${Number(state.loss || 0) ? " · " + esc(state.loss) + "% extra loss" : ""}</div></div>
+        <button class="b" id="rnetedit">Edit</button><button class="b d" id="rnetoff" title="Switch off" aria-label="Switch off">${ico("x", "sm")}</button></div>` : '<p class="sub">No throttle.</p>') +
+      (state.no_cache ? `<div class="row">${sw('id="rnocache"', true)}<div class="n"><div><b>No caching</b><span class="tag">Network</span></div><div class="sub">strips conditional request headers, forces fresh responses</div></div></div>` : "") +
       `<p class="sub">Saved in ${esc(tilde(state.rules_file))} — also editable with <code>${esc(state.product.cli)} rules</code>.</p>`;
     wireRuleRows(m);
     wireRuleTest(m);
+    $("rnew").onclick = () => openRuleForm($("rtype").value);
+    m.querySelectorAll("input[data-rbi]").forEach((c) => (c.onchange = async () => {
+      const done = await run("bp_update", { name: bps[c.dataset.rbi].name, enabled: c.checked }, c.checked ? null : "Breakpoint off");
+      if (done && c.checked) breakpointOn();
+    }));
+    m.querySelectorAll("[data-rbedit]").forEach((b) => (b.onclick = () => openRuleForm("bp", bps[b.dataset.rbedit])));
+    m.querySelectorAll("[data-rbdel]").forEach((b) => (b.onclick = () => { const n = bps[b.dataset.rbdel].name; if (confirm("Delete breakpoint '" + n + "'?")) run("bp_delete", { name: n }, "Breakpoint removed"); }));
+    m.querySelectorAll("input[data-rsi]").forEach((c) => (c.onchange = () => run("script_toggle", { file: scripts[c.dataset.rsi].file, enabled: c.checked }, c.checked ? "Script on" : "Script off")));
+    m.querySelectorAll("[data-rsedit]").forEach((b) => (b.onclick = () => openScript(scripts[b.dataset.rsedit].file)));
+    m.querySelectorAll("[data-rsdel]").forEach((b) => (b.onclick = () => { const x = scripts[b.dataset.rsdel]; if (confirm("Delete script '" + x.name + "' and its source file?")) run("script_delete", { file: x.file }, "Deleted " + x.file); }));
+    if ($("rnetedit")) { $("rnetedit").onclick = () => openRuleForm("throttle"); $("rnetoff").onclick = () => run("profile", { id: "off" }, "Network throttle off"); }
+    if ($("rnocache")) $("rnocache").onchange = () => run("nocache", { on: $("rnocache").checked }, "No caching " + ($("rnocache").checked ? "on" : "off"));
+  }
+  // ───────────── Rules tab: the New / Edit form for every type ─────────────
+  const RULE_TYPES = [["respond", "Fixed reply"], ["status", "Force status"], ["json_patch", "Edit JSON"], ["delay", "Delay"], ["set_header", "Header"],
+    ["map_remote", "Map Remote"], ["block", "Block"], ["map_local", "Map Local"], ["bp", "Breakpoint"], ["script", "Script"], ["throttle", "Network throttle"], ["nocache", "No caching"]];
+  const RULE_KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"], set_header: ["side", "header", "value"], map_remote: ["replace", "with"], block: [] };
+  function openRuleForm(type, item) {
+    if (type === "map_local") { tab = "map"; editing = null; render(); return; }          // Map Local keeps its own tab and editor
+    noteReturn("editor");
+    editing = { kind: "rule", type, item: item || null };
+    if (item && item.action && item.action !== "map_local") editing.type = item.action;
+    render();
+  }
+  function renderRuleForm(m) {
+    const e = editing, it = e.item, t = e.type, v = it || {};
+    const fld = (id, label, inner) => `<div class="btns"><label class="sub" for="rf-${id}" style="min-width:90px">${label}</label>${inner}</div>`;
+    const txt = (id, val, ph = "", extra = "") => `<input type="text" id="rf-${id}" class="grow" value="${esc(val ?? "")}" placeholder="${esc(ph)}" ${extra}>`;
+    const method = (val) => `<select id="rf-method"><option value="">ANY</option>${METHODS.map((x) => `<option ${x === (val || "").toUpperCase() ? "selected" : ""}>${x}</option>`).join("")}</select>`;
+    const label = (RULE_TYPES.find((x) => x[0] === t) || [])[1] || t;
+    const isRule = t in RULE_KEYS;
+    let body = "";
+    if (isRule || t === "bp" || t === "script") {
+      if (!it && t !== "bp") body += fld("name", "Name", txt("name", "", "letters, digits . _ -"));
+      if (it && isRule) body += `<div class="sub"><b>${esc(it.name)}</b></div>`;
+      if (t !== "script" || !it) body += fld("match", "URL pattern", txt("match", v.match, "regex, e.g. /api/login — . = every call"));
+      if (t !== "script" || !it) body += fld("method", "Method", method(v.method));
+    }
+    if (t === "respond") {
+      body += fld("status", "Status", `<input type="number" id="rf-status" value="${esc(v.status ?? 200)}" style="width:80px">`);
+      body += v.body_file ? `<div class="sub">The body is read from ${esc(tilde(v.body_file))} (change it with ${esc(state.product.cli)} rules edit).</div>`
+        : fld("body", "Body", `<textarea id="rf-body" class="grow" rows="5" spellcheck="false" placeholder='{"ok": true}'>${esc(typeof v.body === "object" && v.body !== null ? JSON.stringify(v.body, null, 2) : v.body ?? "")}</textarea>`);
+    } else if (t === "status") {
+      body += fld("status", "Status", `<input type="number" id="rf-status" value="${esc(v.status ?? 503)}" style="width:80px">`);
+    } else if (t === "json_patch") {
+      body += fld("set", "Set fields", `<textarea id="rf-set" class="grow" rows="4" spellcheck="false" placeholder='{"user.name": "QA", "items[0].price": 1}'>${esc(it ? JSON.stringify(v.set, null, 2) : "")}</textarea>`);
+    } else if (t === "delay") {
+      body += fld("ms", "Delay (ms)", `<input type="number" id="rf-ms" value="${esc(v.ms ?? 1000)}" style="width:100px">`);
+    } else if (t === "set_header") {
+      body += fld("side", "Change", `<select id="rf-side"><option value="request" ${v.side !== "response" ? "selected" : ""}>the request</option><option value="response" ${v.side === "response" ? "selected" : ""}>the response</option></select>`);
+      body += fld("header", "Header", txt("header", v.header, "X-QA"));
+      body += fld("value", "Value", txt("value", v.value, "", v.value == null && it ? "disabled" : ""));
+      body += fld("remove", "Remove it", `<input type="checkbox" id="rf-remove" ${it && v.value == null ? "checked" : ""} aria-label="Remove the header">`);
+    } else if (t === "map_remote") {
+      body += fld("replace", "Replace (URL regex)", txt("replace", v.replace, "https://api.example.com/v1"));
+      body += fld("with", "With", txt("with", v.with, "https://staging.example.com/v1"));
+    } else if (t === "bp") {
+      body += fld("pause", "Pause at", `<label><input type="checkbox" id="rf-req" ${!it || v.request ? "checked" : ""}> Request</label> <label><input type="checkbox" id="rf-resp" ${!it || v.response ? "checked" : ""}> Response</label>`);
+    } else if (t === "script") {
+      if (!it) {
+        body += fld("lang", "Language", `<select id="rf-lang"><option value="js">JavaScript</option><option value="py">Python</option></select>`);
+        body += fld("template", "Template", `<select id="rf-template"><option value="header">Request header</option><option value="json">JSON response field</option><option value="mock">Local mock</option><option value="latency">Endpoint latency</option><option value="token">Log token refresh</option></select>`);
+        body += fld("smethod", "Method", method(""));
+      }
+    } else if (t === "throttle") {
+      body += fld("profile", "Profile", `<select id="rf-profile">${state.profiles.filter((p) => p.id !== "manual" && p.id !== "off").map((p) => `<option value="${p.id}" ${p.id === state.throttle ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>`);
+      body += fld("tmatch", "Only URLs like", txt("tmatch", state.throttle_match, "regex — empty = every call"));
+      body += `<div class="sub">Your own numbers (manual profile) are on the Network tab. There is one throttle per project: saving replaces the current one.</div>`;
+    } else if (t === "nocache") {
+      body += `<div class="sub">Strips If-None-Match / If-Modified-Since from requests and marks responses no-store, so the app always gets fresh content.</div>`;
+    }
+    m.innerHTML = `
+      <div class="btns" style="margin-top:0"><button class="b" id="back">${ico("back", "sm")}Back</button>
+        <b style="flex:1;align-self:center">${it ? "Edit" : "New"} — ${esc(label)}</b></div>
+      ${body}
+      <div class="btns"><button class="b p" id="rsave">${it ? "Save" : "Add"}</button></div>
+      <div class="sub" id="rerr" role="alert" style="color:var(--rv-warn)"></div>`;
+    const val = (id) => ($("rf-" + id) || {}).value || "";
+    const leave = () => { editing = null; drawerTypingDirty = false; render().then(() => giveBack("editor")); };
+    $("back").onclick = leave;
+    if ($("rf-remove")) $("rf-remove").onchange = () => { $("rf-value").disabled = $("rf-remove").checked; };
+    $("rsave").onclick = async () => {
+      let op, args, ok;
+      try {
+        if (isRule) {
+          const rule = { match: val("match").trim(), method: val("method") };
+          if (t === "respond") {
+            rule.status = Number(val("status"));
+            if (!v.body_file) { const b = val("body"); if (/^\s*[\[{]/.test(b)) { try { rule.body = JSON.parse(b); } catch (x) { rule.body = b; } } else rule.body = b; }
+          } else if (t === "status") rule.status = Number(val("status"));
+          else if (t === "json_patch") {
+            let o; try { o = JSON.parse(val("set")); } catch (x) { throw new Error("Set fields must be a JSON object, e.g. {\"user.name\": \"QA\"}"); }
+            if (!o || typeof o !== "object" || Array.isArray(o) || !Object.keys(o).length) throw new Error("Set fields must be a JSON object with at least one path");
+            rule.set = o;
+          } else if (t === "delay") rule.ms = Number(val("ms"));
+          else if (t === "set_header") { rule.side = val("side"); rule.header = val("header").trim(); rule.value = $("rf-remove").checked ? null : val("value"); }
+          else if (t === "map_remote") { rule.replace = val("replace"); rule.with = val("with"); }
+          if (it) { op = "update"; args = { name: it.name, rule, keys: ["match", "method", ...RULE_KEYS[t]] }; ok = "Rule '" + it.name + "' saved"; }
+          else {
+            const name = val("name").trim();
+            op = "add"; args = { rule: { name, enabled: true, action: t, ...rule } }; ok = "Rule '" + name + "' is on";
+          }
+        } else if (t === "bp") {
+          const request = $("rf-req").checked, response = $("rf-resp").checked;
+          if (!request && !response) throw new Error("Pick Request, Response or both");
+          const match = val("match").trim();
+          if (!match) throw new Error("URL pattern is required");
+          if (it) { op = "bp_update"; args = { name: it.name, match, method: val("method"), request, response }; ok = "Breakpoint saved"; }
+          else { op = "bp_add"; args = { match, method: val("method"), request, response }; ok = null; }
+        } else if (t === "script") {
+          if (it) return openScript(it.file);
+          op = "script_new"; args = { name: val("name").trim(), lang: val("lang"), template: val("template"), match: val("match").trim() || ".", method: val("smethod") }; ok = (x) => "Created " + x.file;
+        } else if (t === "throttle") {
+          op = "profile"; args = { id: val("profile"), match: val("tmatch") }; ok = "Network: throttle on";
+        } else if (t === "nocache") { op = "nocache"; args = { on: true }; ok = "No caching on"; }
+      } catch (x) { $("rerr").textContent = x.message; return; }
+      try {
+        const r = await api(op, args);
+        if (r.state) state = r.state;
+        if (ok) toast(typeof ok === "function" ? ok(r) : ok);
+        if (t === "bp" && !it) breakpointOn();
+        if (t === "script" && !it) { return openScript(r.file); }
+        leave();
+      } catch (x) { $("rerr").textContent = x.message; toast(x.message, true); }
+    };
+    const first = m.querySelector("input[type=text], textarea, select");
+    if (first) first.focus();
   }
   function wireRuleRows(m) {
     m.querySelectorAll("input[data-i]").forEach((c) => (c.onchange = () =>
@@ -2120,7 +2269,10 @@
       const n = state.rules[b.dataset.del].name;
       if (confirm("Delete rule '" + n + "'?")) run("delete", { name: n }, (r) => r.message || "Deleted " + n);
     }));
-    m.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openEditor(state.rules[b.dataset.edit].name)));
+    m.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => {
+      const r = state.rules[b.dataset.edit];
+      if (r.action === "map_local") openEditor(r.name); else openRuleForm(r.action, r);
+    }));
   }
 
   // ───────────── Map Local editor (Body / Headers, like FRTMProxy) ─────────────
@@ -2346,7 +2498,9 @@
   let openTabSig = "";
   const hitSig = (s) => Object.entries((s.rule_hits || {}).rules || {}).map(([n, h]) => [n, h.count, h.noop, h.calls_since >= NEVER_MATCHED_AFTER]);
   function tabSig(s) {
-    if (tab === "rules" || tab === "map") return JSON.stringify([tab, s.rules, s.skipped_rules, s.rule_warnings, s.rules_outside, s.rules_error, hitSig(s)]);
+    if (tab === "rules") return JSON.stringify([tab, s.rules, s.skipped_rules, s.rule_warnings, s.rules_outside, s.rules_error, hitSig(s),
+      s.breakpoints, s.scripts, s.script_status, s.throttle, s.throttle_match, s.loss, s.no_cache]);
+    if (tab === "map") return JSON.stringify([tab, s.rules, s.skipped_rules, s.rule_warnings, s.rules_outside, s.rules_error, hitSig(s)]);
     if (tab === "bp") return JSON.stringify([tab, s.breakpoints]);
     return JSON.stringify([tab, s.scripts, s.script_status]);
   }

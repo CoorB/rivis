@@ -61,7 +61,7 @@ import proxy_redact
 import devices
 importlib.reload(devices)
 from proxy_compose import ComposerStore, normalize_request, normalize_url
-from proxy_rule_validation import explain_rules, map_remote_warning
+from proxy_rule_validation import compile_rule, explain_rules, map_remote_warning
 from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, find_jwts)
 import proxy_source        # helpers only (summaries, the list-filter clause); the add-on itself is loaded by the CLI
 importlib.reload(proxy_source)
@@ -478,6 +478,18 @@ class ProxyPanel:
             raise PanelError("set must be an object of path: value")
         if r["action"] == "map_remote" and not isinstance(r["with"], str):
             raise PanelError("with must be text")
+
+    def engine_check(self, r):
+        """The proxy skips a rule its loader refuses; refuse it here too, so "saved" never means "silently inert"."""
+        try:
+            confdir = os.path.expanduser(ctx.options.confdir)
+        except (AttributeError, KeyError):
+            confdir = None
+        state_dir = os.path.dirname(os.path.abspath(os.path.expanduser(self.rules_path)))
+        try:
+            compile_rule(dict(r), state_dir, r.get("name"), confdir)
+        except (KeyError, TypeError, ValueError, re.error) as e:
+            raise PanelError("the proxy would skip this rule: %s" % e)
 
     # ── mock files: only ever <active-project>/mocks/<safe-name>.json ──────────
     @staticmethod
@@ -1596,7 +1608,25 @@ class ProxyPanel:
                 raise PanelError("match is required (a regex on the URL; '.' means every call)")
             if any(x.get("name") == r["name"] for x in cfg["rules"]):
                 raise PanelError("a rule with that name exists")
+            self.engine_check(r)
             cfg["rules"].append(r)
+            self.save_cfg(cfg)
+        elif op == "update":        # Rules tab: edit one rule in place (same name, action and list position; its files stay)
+            old = self.find(cfg, a["name"])
+            new = dict(a["rule"])
+            if "file" in new or "body_file" in new:
+                raise PanelError("a rule's file is changed with Map Local in the panel, or with the product CLI")
+            if a["name"] in self._rules_outside(cfg):
+                raise PanelError("this rule reads a file outside the project: edit it in your own editor")
+            merged = {k: v for k, v in old.items() if k not in a.get("keys", ())}
+            merged.update(new, name=old["name"], action=old["action"])
+            merged.pop("draft", None)                # saved by hand: no longer a discardable draft
+            self.validate(merged)
+            if not str(merged.get("match", "")).strip():
+                raise PanelError("match is required (a regex on the URL; '.' means every call)")
+            self.engine_check(merged)
+            old.clear()
+            old.update(merged)
             self.save_cfg(cfg)
         elif op == "mock":          # Map Local from the selected call
             f = self.flow(a["flow_id"])
@@ -1681,6 +1711,15 @@ class ProxyPanel:
                 match, method = self.flow_regex(f), f.request.method
                 same = {match, self.flow_regex_before_r6(f)}
                 label = f.request.pretty_host + f.request.path.split("?")[0]
+            elif a.get("match"):          # Rules tab: a regex on the URL, as in rules.json
+                match = a["match"]
+                try:
+                    user_regex(match)
+                except re.error as e:
+                    raise PanelError(f"bad regex in match: {e}")
+                same = {match}
+                method = (a.get("method") or "").upper() or None
+                label = match
             else:
                 match = wildcard_regex(a.get("host"), a.get("path"))
                 same = {match}
@@ -1711,6 +1750,16 @@ class ProxyPanel:
                     for k in ("enabled", "request", "response"):
                         if k in a:
                             b[k] = bool(a[k])
+                    if "match" in a:             # Rules tab: edit what the breakpoint catches
+                        if not str(a["match"]).strip():
+                            raise PanelError("match is required (a regex on the URL)")
+                        try:
+                            user_regex(a["match"])
+                        except re.error as e:
+                            raise PanelError(f"bad regex in match: {e}")
+                        b["match"], b["label"] = a["match"], a["match"]
+                    if "method" in a:
+                        b["method"] = (a["method"] or "").upper() or None
                     resumed = self.release_held(cfg, [before])     # before the save: the reload it triggers would free them uncounted
                     self.save_cfg(cfg)
                     return {"resumed": resumed}

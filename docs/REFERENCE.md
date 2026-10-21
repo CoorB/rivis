@@ -451,7 +451,9 @@ flow stays unchanged, but blocking user code in that abandoned worker may contin
 
 Supported actions are `respond`, `map_local`, `status`, `json_patch`, `delay`, `set_header`, `map_remote`, and
 `block`. CLI-added rules append in file order; quick panel errors are inserted first so they can override an
-older local response. Breakpoints pause requests/responses in mitmweb for editing and continuation.
+older local response. The panel's **Rules** tab lists, creates, edits, switches on/off and deletes every one of them, plus
+breakpoints, scripts and the network throttle / No caching (**New** → pick a type; a rule's name and type stay fixed when
+you edit it, and a Map Local rule opens its own editor). Breakpoints pause requests/responses in mitmweb for editing and continuation.
 `text/event-stream` responses stream events to the client as they arrive. Their calls appear in the panel without a
 body; response rules and response breakpoints cannot edit streamed events.
 Other HTTP responses are buffered before Rivis forwards their headers and body. A slow download can therefore deliver
