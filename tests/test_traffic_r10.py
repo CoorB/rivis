@@ -83,6 +83,10 @@ class TrafficR10(LiveCase):
         doc = json.loads(raw)
         self.assertIn("showing first", doc["text"])                # clipped, with the Download / Open raw note
         self.assertTrue(doc["text"].startswith('{"data":"aaaa') or "aaaa" in doc["text"][:200], doc["text"][:200])
+        # B4: truncated big JSON says truncated (size shown/limit), not "failed to parse"
+        self.assertIn("truncated", doc.get("description", "").lower())
+        self.assertNotIn("failed to parse", doc.get("description", "").lower())
+        self.assertIn("256 KB/4.0 MB", doc.get("description", ""))
 
     def test_r10_01_small_bodies_view_exactly_as_before(self):
         self.fetch("/json/small?r10small=1")

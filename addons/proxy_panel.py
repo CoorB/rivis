@@ -286,7 +286,10 @@ def clip_view(result, total=None, partial=False):
     note = "showing first %s of %s" % (_size(cut), _size(max(total or 0, len(text))))
     out = dict(result)
     out["text"] = text[:cut] + "\n\n… [%s — Download or Open raw for the whole body]" % note
-    out["description"] = ((result.get("description") or "") + " (" + note + ")").strip()
+    desc = result.get("description") or ""
+    if partial and "failed to parse" in desc.lower():
+        desc = re.sub(r"\[?failed to parse[^\]]*\]?", "[truncated (%s/%s)]" % (_size(cut), _size(VIEW_SOURCE_LIMIT)), desc, flags=re.I)
+    out["description"] = ((desc + " (" + note + ")") if desc else ("(" + note + ")")).strip()
     return out
 
 
