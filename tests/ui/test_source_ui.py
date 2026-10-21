@@ -6,6 +6,7 @@ the panel path is the same, only proxy_source's process classification differs (
 import os
 import socket
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -139,6 +140,76 @@ class SourceChooser(UiBase):
         self.assertEqual(sel.evaluate("s => s.value"), "")
         fake["android"][0].update(ready=True, ca_ok=True, proxy_ok=True)
         wait_for(lambda: hints() == [], 15, 0.2, "hint gone once the emulator is ready")
+        self.assertEqual(self.errors, [])
+
+    def test_reopen_source_menu_lists_new_sources_while_focused(self):
+        """Bug pilot/0.9.8: In Chromium, <select> keeps focus after its dropdown closes.
+        Opening and closing the Source menu (or picking All sources) while no sources exist
+        must not prevent sources that arrive later from appearing when the menu is opened again."""
+        self.page.add_init_script("try { localStorage.setItem('rivis-welcome', 'done') } catch (e) {}")
+        self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))
+        self.page.wait_for_selector("#fab", timeout=20000)
+        self.page.evaluate("""async () => {
+            const xsrf = (document.cookie.match(/(?:^|;\s*)_mitmproxy_xsrf=([^;]+)/) || [])[1] || '';
+            await fetch('./clear', { method: 'POST', credentials: 'same-origin', headers: { 'X-XSRFToken': xsrf } });
+        }""")
+        self.page.locator("#fab").click()
+        sel = self.P("#source")
+        wait_for(lambda: sel.evaluate("s => [...s.options].map(o => o.textContent)") == ["All sources"],
+                 10, 0.2, "only All sources when no sources exist")
+
+        # Open the Source menu and close it while no sources exist, keeping focus on it
+        sel.click()
+        self.page.keyboard.press("Escape")
+        active = self.page.evaluate("() => document.querySelector('#proxy-panel-host').shadowRoot.activeElement?.id")
+        self.assertEqual(active, "source", "select retains focus after dropdown close")
+
+        # Stream calls from two sources
+        self.fetch("/text?from=curl")
+        self.raw_get("/text?from=python")
+        wait_for(lambda: len(self.panel.state()["sources"]["list"]) >= 2, 10, 0.2, "two sources captured")
+
+        # Focus is still on the Source select
+        active = self.page.evaluate("() => document.querySelector('#proxy-panel-host').shadowRoot.activeElement?.id")
+        self.assertEqual(active, "source", "select still has focus while calls arrive")
+
+        # Open the menu again: both sources must be listed
+        sel.click()
+        wait_for(lambda: len(sel.evaluate("s => [...s.options]")) > 1, 8, 0.2, "menu options updated")
+        labels = sel.evaluate("s => [...s.options].map(o => o.textContent)")
+        self.assertTrue(any("curl (" in t for t in labels), labels)
+        self.assertTrue(any("python" in t.lower() for t in labels), labels)
+        self.assertEqual(self.errors, [])
+
+    def test_open_source_dropdown_is_not_closed_by_background_poll(self):
+        """Periodic background polls must not tear down or close an open Source dropdown."""
+        page = self.open()
+        wait_for(lambda: any(CURL == k["key"] for k in self.panel.state()["sources"]["list"]), 10, 0.2, "curl source")
+        page.locator("#fab").click()
+        sel = self.P("#source")
+        wait_for(lambda: len(sel.evaluate("s => [...s.options]")) > 1, 10, 0.2, "initial sources rendered")
+
+        # Start dropdown interaction (mousedown rebuilds and marks _rvDropOpen)
+        sel.dispatch_event("mousedown")
+        self.assertTrue(sel.evaluate("s => s._rvDropOpen"), "dropdown marked open")
+
+        # Tag the current option DOM node to verify innerHTML is not wiped during poll
+        sel.evaluate("s => { s.options[0]._preserved = 101; }")
+        self.assertEqual(sel.evaluate("s => s.options[0]._preserved"), 101)
+
+        # Arriving calls update source counts, which would normally trigger an innerHTML rebuild
+        self.fetch("/text?from=curl2")
+        time.sleep(2.5)  # allow multiple poll cycles to execute
+
+        # Open dropdown DOM must remain intact across polls
+        self.assertEqual(sel.evaluate("s => s.options[0]._preserved"), 101,
+                         "option DOM node was preserved; background poll did not rebuild innerHTML while open")
+
+        # Closing the dropdown clears the flag and allows normal poll rebuilds
+        sel.dispatch_event("blur")
+        self.assertFalse(sel.evaluate("s => s._rvDropOpen"), "flag cleared on blur")
+        wait_for(lambda: sel.evaluate("s => s.options[0]._preserved") is None, 10, 0.2,
+                 "options rebuilt after dropdown closed")
         self.assertEqual(self.errors, [])
 
 

@@ -668,10 +668,12 @@
     $("fab").title = active ? "Tools — rules, breakpoints or network conditions are switched on (Alt+Shift+P)" : "Tools — Map Local, breakpoints, network conditions, scripts (Alt+Shift+P)";
   }
 
-  function sourceOptions() {
-    // grouped by device: "All apps on <device>" first, then each app, with call counts. Not rebuilt while the menu has
-    // focus (a rebuild closes an open dropdown, and counts change on every poll).
-    const sel = $("source"); if (root.activeElement === sel) return;
+  function sourceOptions(force) {
+    // grouped by device: "All apps on <device>" first, then each app, with call counts. Not rebuilt while the native
+    // dropdown is open (a rebuild closes it). Rebuilt eagerly on mousedown/focus/keydown — before the dropdown appears —
+    // so new sources always show. The old activeElement guard blocked rebuilds whenever the <select> had focus, which in
+    // Chromium persists after the dropdown closes, so sources arriving while the menu was focused never appeared.
+    const sel = $("source"); if (!force && sel._rvDropOpen) return;
     const groups = new Map();
     for (const r of sourceRows()) { const k = deviceKey(r); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
     const cur = (state && state.source) || "";
@@ -2404,6 +2406,53 @@
   $("source").onchange = () => { const v = $("source").value; $("source").blur();
     if (v === "__devices") { $("source").value = (state && state.source) || ""; openDrawer("dev"); return; }   // the "not set up" hint
     setSource(v); };
+  // Track whether the Source <select>'s native dropdown is actually open. Rebuilding the options while the dropdown
+  // is open would close it (the browser tears it down when innerHTML changes). But rebuilding while the <select>
+  // merely has focus is fine — and necessary, because Chromium keeps focus on a <select> after the dropdown closes.
+  // mousedown / keydown that opens the popup: rebuild FIRST (so the user sees current sources), then mark open.
+  // change / blur / Escape: the dropdown closed. A safety timeout clears the flag if the browser swallows events.
+  {
+    const sel = $("source");
+    let safetyT = 0, openedAt = 0;
+    const markOpen = () => {
+      sel._rvDropOpen = true;
+      openedAt = Date.now();
+      clearTimeout(safetyT);
+      safetyT = setTimeout(() => { sel._rvDropOpen = false; }, 4000);
+    };
+    const markClosed = () => {
+      sel._rvDropOpen = false;
+      openedAt = 0;
+      clearTimeout(safetyT);
+    };
+    sel.addEventListener("mousedown", () => {
+      if (sel._rvDropOpen && Date.now() - openedAt > 200) {
+        markClosed();
+        return;
+      }
+      sourceOptions(true);
+      markOpen();
+    });
+    sel.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" || e.key === "Tab") {
+        markClosed();
+        return;
+      }
+      if ([" ", "Enter", "ArrowDown", "ArrowUp"].includes(e.key)) {
+        if (sel._rvDropOpen && (e.key === "Enter" || e.key === " ")) {
+          markClosed();
+          return;
+        }
+        sourceOptions(true);
+        markOpen();
+      }
+    });
+    sel.addEventListener("focus", () => {
+      if (!sel._rvDropOpen) sourceOptions(true);
+    });
+    sel.addEventListener("change", markClosed);
+    sel.addEventListener("blur", markClosed);
+  }
   root.querySelectorAll("nav button").forEach((b) => (b.onclick = async () => {
     clearTimeout(editorCheckT);
     const draft = editing && editing.kind !== "script" && editing.draft && !mockEditorChanged(editing) ? editing.name : null;
@@ -2703,6 +2752,11 @@
         e.preventDefault(); e.stopPropagation();
         if (sheetDirty()) return;  // R6-02: the explicit buttons remain available for a deliberate discard.
         if ($("rcancel")) $("rcancel").click(); else if (pausedOpen) dismissPaused(); else closeSheet("pause");
+        return;
+      }
+      if ($("source") && $("source")._rvDropOpen) {
+        $("source")._rvDropOpen = false;
+        e.preventDefault(); e.stopPropagation();
         return;
       }
       if (inDrawer && !$("welcome").classList.contains("open") && $("drawer").classList.contains("open")) {
