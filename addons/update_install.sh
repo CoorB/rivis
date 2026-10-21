@@ -39,6 +39,7 @@ START_PORT=""; START_WEB_PORT=""; START_PROJECT_SOURCE=""; START_PROJECT_EXPLICI
 P=$(product env_prefix RIVIS); WV="${P}_WEB_PORT"; WPORT="${!WV:-8083}"; SF="$STATE/last-start"; [ "$WPORT" = 8083 ] || SF="$STATE/last-start-$WPORT"
 [ -f "$SF" ] && . "$SF"
 [ ${#START_ARGS[@]} -gt 0 ] || START_ARGS=(start --background --no-open)
+case " ${START_ARGS[*]} " in *" --background "*) ;; *) START_ARGS+=(--background); say "foreground instance continues in the background after this detached update" ;; esac
 say "restarting"
 P=$(product env_prefix RIVIS); envs=()
 [ -n "$START_PORT" ] && envs+=("${P}_PORT=$START_PORT")

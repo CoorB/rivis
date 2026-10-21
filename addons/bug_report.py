@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create a redacted Rivis support bundle without traffic, credentials, or UI tokens."""
 import argparse
+import ipaddress
 import json
 import os
 import platform
@@ -24,6 +25,8 @@ QUOTED_SECRET = re.compile(
     r'(?i)(["\'](?:authorization|access_token|refresh_token|token|password|secret|api[_-]?key)["\']\s*:\s*["\'])(.*?)(["\'])')
 QUERY_SECRET = re.compile(r'(?i)([?&](?:access_token|refresh_token|token|password|secret|api[_-]?key)=)([^&\s]+)')
 BEARER = re.compile(r'(?i)(bearer\s+)([^\s,;]+)')
+IPV4 = re.compile(r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])')
+IPV6 = re.compile(r'(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f:%]+(?![\w:])')
 
 
 def device_names():
@@ -53,6 +56,14 @@ def redact(text, home, devices=()):
     text = QUOTED_SECRET.sub(r"\1[REDACTED]\3", text)
     text = QUERY_SECRET.sub(r"\1[REDACTED]", text)
     text = BEARER.sub(r"\1[REDACTED]", text)
+    def hide_lan(match):
+        try:
+            address = ipaddress.ip_address(match.group())
+            return "<private-ip>" if address.is_private and not address.is_loopback else match.group()
+        except ValueError:
+            return match.group()
+    text = IPV4.sub(hide_lan, text)
+    text = IPV6.sub(hide_lan, text)
     if home:
         text = text.replace(os.path.realpath(home), "~").replace(home, "~")
     return text

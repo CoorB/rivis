@@ -159,6 +159,29 @@ class DryRun(InstallerBase):
 
 
 class RealInstall(InstallerBase):
+    def test_uninstall_keeps_an_unowned_launcher(self):
+        link = os.path.join(self.home, ".local", "bin", "rivis")
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        with open(link, "w") as fh:
+            fh.write("#!/bin/sh\necho user-owned\n")
+        self.ok("--uninstall", "--yes")
+        self.assertEqual(open(link).read(), "#!/bin/sh\necho user-owned\n")
+
+    def test_installed_path_with_spaces_is_detected_on_uninstall(self):
+        self.home = self.suite.new_home("installer path with spaces")
+        self.ok("--yes", "--skip-local-capture")
+        link = os.path.join(self.home, ".local", "bin", "rivis")
+        port, web = harness.free_port(), harness.free_port()
+        env = self.suite.env(self.home, extra={"RIVIS_PORT": str(port), "RIVIS_WEB_PORT": str(web)})
+        try:
+            result = self.suite.run([link, "start", "--background", "--no-open", "--no-ios"], home=self.home, env=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(harness.port_open(web))
+            self.ok("--uninstall", "--yes", env=env)
+            self.assertFalse(harness.port_open(web))
+        finally:
+            if harness.port_open(web):
+                self.suite.rivis("stop", home=self.home, env=env)
     def test_review_m4_interactive_default_start_removes_temp_dir(self):
         stage = os.path.join(self.home, "release")
         shutil.copytree(harness.REPO, stage, ignore=shutil.ignore_patterns(".git", "tests", "__pycache__", ".artifacts"))
