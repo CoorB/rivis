@@ -228,7 +228,9 @@ class Scenarios:
         ui.open_tools("compose")
         url = "http://backbase-edge-sit.localhost:%d/api/user-manager/client-api/v2/users/me?compose=%d" % (self.up.http_port, n)
         ui.click(ui.P("#cu"))
+        ui.key("ControlOrMeta+a")                  # the form keeps the last URL: replace it the way a person does, not insert inside it
         ui.type(url)
+        check(ui.P("#cu").input_value() == url, "the Compose URL field holds %r, not what was typed" % ui.P("#cu").input_value())
         ui.pause()
         t0 = ui.now_ms()
         ui.click(ui.P("#csend"))
