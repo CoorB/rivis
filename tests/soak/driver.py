@@ -148,7 +148,16 @@ class Ui:
 
     def go_position(self, pos):
         """Bring the list to the top (newest, following), the middle, or the end using the real wheel."""
-        for _ in range(60):
+        initial = self.list_state()
+        span = max(1, initial["height"] - initial["view"])
+        distance = (initial["top"] if pos == "top" else
+                    span - initial["top"] if pos == "bottom" else
+                    abs(span / 2 - initial["top"]))
+        # Each batch is two 700px wheel events (one 380px event near the middle).
+        # Allow for rendering and new calls, while scaling with the actual distance.
+        deadline = time.monotonic() + 8 + distance / 1400 * 0.6
+        stalled = 0
+        while time.monotonic() < deadline:
             st = self.list_state()
             span = max(1, st["height"] - st["view"])
             if pos == "top" and st["top"] <= 1:
@@ -158,9 +167,18 @@ class Ui:
             if pos == "middle" and 0.35 * span <= st["top"] <= 0.65 * span:
                 break
             if pos == "middle":
-                self.wheel(-380 if st["top"] > 0.65 * span else 380, 1)
+                direction = -1 if st["top"] > 0.65 * span else 1
+                remaining = abs(span / 2 - st["top"])
+                self.wheel(direction * (700 if remaining > 2000 else 380), 2 if remaining > 2000 else 1)
             else:
                 self.wheel(-700 if pos == "top" else 700, 2)
+            after = self.list_state()
+            progress = (st["top"] - after["top"] if pos == "top" else
+                        after["top"] - st["top"] if pos == "bottom" else
+                        abs(st["top"] - span / 2) - abs(after["top"] - max(1, after["height"] - after["view"]) / 2))
+            stalled = stalled + 1 if progress < 8 else 0
+            if stalled >= 4:
+                raise SoakFail("wheel was pushed back or stopped before reaching %s: before=%s after=%s" % (pos, st, after))
         self.page.wait_for_timeout(250)
         st = self.list_state()
         span = max(1, st["height"] - st["view"])
