@@ -41,7 +41,7 @@ failure; open with `python3 -m playwright show-trace <zip>`).
 - **Traffic** (`traffic.py`): from minute 0 to the end, 2 to 5 calls/s (a slow sine wave around SOAK_RATE) with a burst of 12-35
   calls every 25 to 70 s, over pooled keep-alive connections from 14 worker threads (a slow call never delays the rest),
   20% over HTTPS (decrypted), 5% through the curl binary so the Source menu has a second sender. Seeded. A latency probe sends
-  the same ping directly to the upstream and through the proxy every 3 s: the difference is the proxy's added latency.
+  the same ping directly to the upstream and through the proxy every second: the difference is the proxy's added latency.
   A websocket session runs every 40 s.
 - **A browser** (Playwright Chromium, 1512x837) driving the panel with **real input only**: mouse moves with 6-14 steps,
   `mouse.down/up` clicks with a short dwell, `mouse.wheel`, `keyboard.type` with per-key delays, human pauses of 200-2000 ms

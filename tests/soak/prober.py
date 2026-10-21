@@ -10,7 +10,7 @@ def run(upstream_port, proxy_port, t0):
     via = http.client.HTTPConnection("127.0.0.1", proxy_port, timeout=30)
     url = "http://127.0.0.1:%d/neo/ping" % upstream_port
     while True:
-        time.sleep(3)
+        time.sleep(1)                           # 60 a minute: a minute cut short by a fault window still has enough samples for a real p95
         try:
             t = time.time() - t0
             a = time.perf_counter()
