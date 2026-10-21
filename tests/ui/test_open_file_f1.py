@@ -39,8 +39,11 @@ class OpenFileAsks(UiBase):
         for _ in range(4):
             if not self.page.locator("input[type=file]").count():      # the File menu may still be open from before
                 self.page.get_by_text("File", exact=True).first.click()
-            self.page.locator("input[type=file]").first.set_input_files(
-                files=[{"name": name, "mimeType": "application/json", "buffer": data}])
+            try:                                                       # a menu closing after Escape still counts once: open it again
+                self.page.locator("input[type=file]").first.set_input_files(
+                    files=[{"name": name, "mimeType": "application/json", "buffer": data}], timeout=5000)
+            except Exception:
+                continue
             try:
                 wait_for(lambda: self.P("#opendlg.open").count() or (sent or []), 3, 0.1, "the file was taken")
                 return
