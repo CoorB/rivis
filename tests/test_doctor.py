@@ -89,6 +89,17 @@ class AndroidEmulator(unittest.TestCase):
         self.assertIn("android on", advice)
         self.assertNotIn("manual Settings step", advice)
 
+    def test_review_n3_play_setup_time_reflects_magisk_availability(self):
+        with mock.patch("doctor._magisk_available", return_value=False):
+            rep, _ = self.check(":0")
+        advice = " ".join(detail for _, _, title, detail, _ in rep.items if "Google Play image" in title)
+        self.assertIn("Settings route", advice)
+        self.assertNotIn("30–40 s", advice)
+        with mock.patch("doctor._magisk_available", return_value=True):
+            rep, _ = self.check(":0")
+        advice = " ".join(detail for _, _, title, detail, _ in rep.items if "Google Play image" in title)
+        self.assertIn("30–40 s", advice)
+
 
 class Netstat(unittest.TestCase):
     def test_parses_only_the_requested_windows_listener(self):

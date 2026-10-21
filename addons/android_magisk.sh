@@ -111,7 +111,7 @@ EOF
 if [ "$YES" != --yes ]; then
   # from the terminal itself: adb calls read stdin and would swallow a piped answer
   printf 'Continue? [y/N] '; { read -r ans < /dev/tty; } 2>/dev/null || ans=n
-  case "$ans" in y|Y|yes|YES) ;; *) die "cancelled — nothing changed. '$CLI_NAME android on --manual' prints the Settings steps instead" ;; esac
+  case "$ans" in y|Y|yes|YES) ;; *) echo "android: cancelled — nothing changed. '$CLI_NAME android on --manual' prints the Settings steps instead" >&2; exit 3 ;; esac
 fi
 
 # ---- 1+2. patched ramdisk (cached) --------------------------------------------------------------------------------

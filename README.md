@@ -59,6 +59,8 @@ Mac with Apple Silicon. No admin password, nothing else to download. Apple's Com
 4. At the end, press Enter to start Rivis; it opens in your browser. Go to **Tools → Devices** and click **Set up**
    for your simulator or emulator. (Later, from a new Terminal window: `rivis start --background`.)
 
+To upgrade, download the new release zip from the latest release page and run its `install.sh`.
+`rivis update` remains available for signed in-app updates when that feature is configured; otherwise it points to the release zip.
 Installing an update restarts a running instance on the new version when its saved start settings are available. If
 the installer reports an instance still running on an older version, use the shown ports with `rivis restart` before
 using the updated features. `rivis status` also reports a running version that differs from the installed version.

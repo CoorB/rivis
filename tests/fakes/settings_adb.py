@@ -38,6 +38,8 @@ elif cmd == 'shell settings get global http_proxy':
 elif cmd.startswith('shell settings put global http_proxy'):
     open(os.path.join(root, 'proxy'), 'w').write(a[-1])
 elif 'TRUSTED_CREDENTIALS_USER' in cmd:
+    if read('stall') == 'trust':
+        time.sleep(30)
     set_screen('trusted')
     print('Status: ok')
 elif cmd.startswith('shell am start') and 'SECURITY_SETTINGS' in cmd:

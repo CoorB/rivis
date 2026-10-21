@@ -62,6 +62,31 @@ class CliBase(unittest.TestCase):
 
 
 class Help(CliBase):
+    def test_review_m7_invalid_port_has_one_usage_error(self):
+        env = dict(self.env, RIVIS_PORT="abc")
+        r = self.cli("start", env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("proxy and web ports must be integers", r.stderr)
+        self.assertNotIn("command not found", r.stderr)
+
+    def test_review_m8_missing_option_values_have_usage_errors(self):
+        for args in (("start", "--ios-filter"), ("android", "on", "-s"), ("ios", "on", "--udid")):
+            with self.subTest(args=args):
+                r = self.cli(*args)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("needs", r.stdout + r.stderr)
+                self.assertNotIn("unbound variable", r.stdout + r.stderr)
+
+    def test_review_m14_update_points_to_release_zip(self):
+        r = self.refused("update")
+        self.assertIn("release zip", r.stderr)
+        self.assertIn("install.sh", r.stderr)
+
+    def test_review_n1_uninstall_points_to_zip_installer(self):
+        r = self.refused("uninstall")
+        self.assertIn("install.sh --uninstall", r.stderr)
+        self.assertIn("release zip", r.stderr)
+
     def test_version_prints_the_release(self):
         # pilot support: "which version are you on?" (the repo copy reads install/VERSION)
         want = open(os.path.join(harness.REPO, "install", "VERSION")).read().strip()
@@ -80,6 +105,71 @@ class Help(CliBase):
     def test_works_under_bash_3_2(self):
         r = self.suite.run(["/bin/bash", "--version"], env=self.env)
         self.assertIn("version 3.2", r.stdout)       # the macOS system bash the installer's users have
+
+
+class ReviewA(CliBase):
+    def test_m3_selected_project_mutations_warn_when_default_is_running(self):
+        inst = harness.Instance(self.suite, "review-a-project").start()
+        try:
+            use = self.suite.rivis("projects", "use", "neo", home=inst.home, env=inst.env)
+            self.assertEqual(use.returncode, 0, use.stdout + use.stderr)
+            for args in (("rules", "add", "review-a", "action=block", "match=/review-a"),
+                         ("breakpoint", "/review-a"), ("throttle", "3g-urban"),
+                         ("nocache", "on"), ("tls", "list")):
+                with self.subTest(args=args):
+                    result = self.suite.rivis(*args, home=inst.home, env=inst.env)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("running proxy serves project 'default', not 'neo'", result.stderr)
+            with open(os.path.join(inst.home, ".rivis", "projects", "neo", "rules.json")) as fh:
+                self.assertIn("review-a", fh.read())
+        finally:
+            inst.stop()
+
+    def test_m4_stop_warns_about_only_emulators_on_this_proxy_port(self):
+        emu = os.path.join(self.home, "fake-emulator")
+        os.makedirs(emu)
+        with open(os.path.join(emu, "proxy"), "w") as fh:
+            fh.write("10.0.2.2:" + self.env["RIVIS_PORT"])
+        env = dict(self.env, ADB=os.path.join(harness.REPO, "tests", "fakes", "settings_adb.py"),
+                   FAKE_SETTINGS_DIR=emu)
+        result = self.cli("stop", env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("emulator-5554", result.stderr)
+        self.assertIn("rivis android off", result.stderr)
+        with open(os.path.join(emu, "proxy"), "w") as fh:
+            fh.write("10.0.2.2:9999")
+        self.assertNotIn("android off", self.cli("stop", env=env).stderr)
+
+    def test_m5_declined_magisk_consent_does_not_drive_settings(self):
+        tool = os.path.join(self.home, "tool")
+        shutil.copytree(harness.REPO, tool, ignore=shutil.ignore_patterns(".git", "__pycache__", ".artifacts"))
+        magisk = os.path.join(self.home, "magisk")
+        os.mkdir(magisk)
+        helper = os.path.join(tool, "addons", "android_magisk.sh")
+        with open(helper, "w") as fh:
+            fh.write("#!/bin/bash\necho 'android: cancelled — nothing changed' >&2\nexit 3\n")
+        os.chmod(helper, 0o755)
+        emu = os.path.join(self.home, "fake-emulator")
+        os.mkdir(emu)
+        env = dict(self.env, ADB=os.path.join(harness.REPO, "tests", "fakes", "settings_adb.py"),
+                   FAKE_SETTINGS_DIR=emu, RIVIS_MAGISK_DIR=magisk)
+        result = self.cli("android", "on", env=env, bin=os.path.join(tool, "rivis"))
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn("cancelled", result.stdout + result.stderr)
+        self.assertNotIn("step 1/5", result.stdout)
+        self.assertNotIn("settings put global http_proxy 10.0.2.2", open(os.path.join(emu, "log")).read())
+
+    def test_m12_m13_docs_match_mock_deletion_and_project_scope(self):
+        doc = open(os.path.join(harness.REPO, "docs", "REFERENCE.md")).read()
+        self.assertIn("deletes the mock file owned by that Map Local rule", doc)
+        self.assertIn("selected project's `throttle_match`", doc)
+        self.assertIn("`throttle off` also restores that project scope", doc)
+
+    def test_m14_readme_and_reference_explain_release_zip_upgrade(self):
+        readme = open(os.path.join(harness.REPO, "README.md")).read()
+        reference = open(os.path.join(harness.REPO, "docs", "REFERENCE.md")).read()
+        self.assertIn("To upgrade, download the new release zip", readme)
+        self.assertIn("signed updates when configured; otherwise install the new release zip", reference)
 
 
 class BugReport(CliBase):
@@ -1289,7 +1379,7 @@ class StatusUiStop(CliBase):
 
     def test_android_and_ios_without_devices(self):
         r = self.refused("android", "on")
-        self.assertIn("adb not found", r.stderr)
+        self.assertIn("adb not found", r.stdout + r.stderr)
         r = self.refused("ios", "frob")
         self.assertIn("usage", r.stderr + r.stdout)
         r = self.refused("android", "frob")
@@ -1577,7 +1667,7 @@ class AndroidCaRemoval(CliBase):
         self.assertEqual(self.proxy(), ":0", "the proxy was turned on without a trusted CA")
         r = self.cli("android", "on", "--all", "--manual")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("not done on emulator-5554", r.stderr)
+        self.assertIn("not done on emulator-5554", r.stdout + r.stderr)
         self.assertEqual(self.proxy(), ":0")
         out = self.ok("android", "on", "--manual", "--proxy-only").stdout      # deliberate: installed by hand
         self.assertIn("--proxy-only", out)

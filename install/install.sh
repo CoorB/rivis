@@ -578,5 +578,5 @@ echo "  then Tools → Devices: one click per simulator / emulator   (or: $CLI s
 # One less step for a new user: offer to start now (interactive runs only).
 if [ "$YES" = 0 ] && [ -t 0 ] && [ -t 1 ]; then
   echo; printf 'Start %s now and open its UI? [Y/n] ' "$NAME"; read -r ans || ans=n
-  case "$ans" in ""|y|Y|yes) echo; exec "$LINK" start --background ;; esac   # keeps running when this window closes
+  case "$ans" in ""|y|Y|yes) echo; cleanup; exec "$LINK" start --background ;; esac   # keeps running when this window closes
 fi

@@ -2,6 +2,8 @@
 idempotent and reversible, hash pins are enforced, releases carry no state/secrets."""
 import hashlib
 import os
+import pty
+import select
 import shlex
 import shutil
 import signal
@@ -157,6 +159,46 @@ class DryRun(InstallerBase):
 
 
 class RealInstall(InstallerBase):
+    def test_review_m4_interactive_default_start_removes_temp_dir(self):
+        stage = os.path.join(self.home, "release")
+        shutil.copytree(harness.REPO, stage, ignore=shutil.ignore_patterns(".git", "tests", "__pycache__", ".artifacts"))
+        with open(os.path.join(stage, "rivis"), "w") as fh:
+            fh.write("#!/bin/bash\necho \"started $*\" >> \"$HOME/start.log\"\n")
+        os.chmod(os.path.join(stage, "rivis"), 0o755)
+        mitm = os.path.join(self.home, ".local", "rivis", "mitmproxy-12.2.3",
+                            "mitmproxy.app", "Contents", "MacOS", "mitmdump")
+        os.makedirs(os.path.dirname(mitm))
+        with open(mitm, "w") as fh:
+            fh.write("#!/bin/sh\necho 'Mitmproxy: 12.2.3'\n")
+        os.chmod(mitm, 0o755)
+        shutil.copytree(self.suite.ca_dir, os.path.join(self.home, ".mitmproxy"))
+        env = self.suite.env(self.home, extra={"SKIP_CLT_CHECK": "1"})
+        master, slave = pty.openpty()
+        proc = subprocess.Popen(["/bin/bash", os.path.join(stage, "install", "install.sh")],
+                                env=env, cwd=self.suite.root, stdin=slave, stdout=slave, stderr=slave)
+        os.close(slave)
+        output = b""
+        try:
+            deadline = time.monotonic() + 60
+            while proc.poll() is None and time.monotonic() < deadline:
+                ready, _, _ = select.select([master], [], [], 0.2)
+                if ready:
+                    try:
+                        output += os.read(master, 8192)
+                    except OSError:
+                        break
+                    if b"Start Rivis now" in output:
+                        os.write(master, b"\n")
+                        output = output.replace(b"Start Rivis now", b"Start prompt answered")
+            self.assertEqual(proc.wait(timeout=3), 0, output.decode(errors="replace")[-2000:])
+            self.assertIn("started start --background", open(os.path.join(self.home, "start.log")).read())
+            self.assertFalse([n for n in os.listdir(env["TMPDIR"]) if n.startswith("rivis-inst.")])
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            os.close(master)
+
     def test_interrupt_during_ca_generation_stops_helper(self):
         shim_dir = os.path.join(self.home, "ca-shim")
         os.makedirs(shim_dir)
@@ -812,6 +854,8 @@ class RedirectorApproval(InstallerBase):
                     break
                 out += line
             self.assertIn("waiting for the approval", out, out[-2500:])
+            harness.wait_for(lambda: os.path.isfile(pidfile) and os.path.getsize(pidfile),
+                             timeout=5, desc="approval helper PID")
             helper = int(open(pidfile).read().strip())
             os.kill(p.pid, signal.SIGINT)                               # Ctrl-C reaches the installer
             p.wait(timeout=30)

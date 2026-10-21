@@ -641,6 +641,20 @@ def _android_ca_recorded(adb, serial, confdir):
     return bool(avd) and devices._android_records(STATE_ROOT).get(avd) == want
 
 
+def _magisk_available():
+    pins = os.path.join(HERE, "android", "magisk.pins")
+    try:
+        version = next(line.split("=", 1)[1].strip() for line in open(pins) if line.startswith("MAGISK_VERSION="))
+    except (OSError, StopIteration):
+        return False
+    explicit = os.environ.get("RIVIS_MAGISK_DIR")
+    if explicit:
+        return os.path.isdir(explicit)
+    return any(os.path.isdir(path) for path in (
+        os.path.join(REPO_ROOT, "..", "magisk-" + version),
+        os.path.join(REPO_ROOT, "..", "pilot-mirror", "magisk", version)))
+
+
 def check_android(rep, adb, port=None, confdir=None):
     sec = "Android emulator"
     adb = adb or which("adb") or os.path.expanduser("~/Library/Android/sdk/platform-tools/adb")
@@ -712,8 +726,10 @@ def check_android(rep, adb, port=None, confdir=None):
                     "can't read the CA store without root",
                     "check Settings \u2192 Security \u2192 Trusted credentials \u2192 User, or `%s android on`" % PRODUCT["cli"])
         if is_play:
+            setup = ("one emulator restart (about 30–40 s)" if _magisk_available()
+                     else "the Settings route (up to 240 s); install from the release zip for Magisk one-click setup")
             rep.add(sec, INFO, "%s: Google Play image" % s,
-                    "`%s android on` installs the CA with one emulator restart (about 30–40 s)" % PRODUCT["cli"])
+                    "`%s android on` installs the CA with %s" % (PRODUCT["cli"], setup))
 
 
 def _mask(tok):

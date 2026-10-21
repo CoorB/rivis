@@ -214,6 +214,15 @@ class MagiskRestarts(MagiskFixture):
             time.sleep(0.1)
         return read()
 
+    def test_review_m5_declined_consent_returns_distinct_code_without_restart(self):
+        env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"),
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, FAKE_DIR=self.root, HOME=self.root)
+        result = subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", self.magisk, self.state],
+                                capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn("cancelled — nothing changed", result.stderr)
+        self.assertNotIn("emu kill", open(self.log).read())
+
     def test_default_restarts_once_into_the_setup_boot_and_stops_there(self):
         r, starts = self.run_flow("--yes")
         self.assertEqual(r.returncode, 0, r.stderr)

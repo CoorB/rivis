@@ -65,10 +65,11 @@ class SettingsRoute(unittest.TestCase):
         self.assertRegex(setup_log, r'\d{4}-\d\d-\d\dT\d\d:')
 
     def test_serial_timeout_is_nonzero_and_proxy_remains_off(self):
-        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '0.2'
+        open(os.path.join(self.emu, 'stall'), 'w').write('select')
+        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '6'
         result = self.run_cli('-s', 'emulator-5554')
         self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
-        self.assertIn('step 1/5:', result.stdout)
+        self.assertIn('step 4/5:', result.stdout)
         self.assertIn('Settings setup timed out', result.stdout)
         self.assertIn('release zip', result.stdout)
         self.assertIn('finish the CA install by hand', result.stdout)
@@ -79,7 +80,8 @@ class SettingsRoute(unittest.TestCase):
         magisk = os.path.join(self.home, 'bundled-magisk')
         os.makedirs(magisk)
         self.env['RIVIS_MAGISK_DIR'] = magisk
-        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '0.2'
+        open(os.path.join(self.emu, 'stall'), 'w').write('select')
+        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '6'
         result = self.run_cli('-s', 'emulator-5554')
         self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
         self.assertIn('emulator binary not found', result.stdout + result.stderr)
@@ -89,12 +91,13 @@ class SettingsRoute(unittest.TestCase):
         self.assertNotIn('install Rivis from the release zip', result.stdout)
 
     def test_panel_job_reports_current_step_and_timeout_error(self):
-        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '0.5'
+        open(os.path.join(self.emu, 'stall'), 'w').write('select')
+        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '6'
         jobs = devices.Jobs()
         jobs.start(['/bin/bash', harness.RIVIS, 'android', 'on', '-s', 'emulator-5554'],
                    'Android Test_Play', 'android', 'emulator-5554', env=self.env)
         seen = False
-        deadline = time.time() + 20
+        deadline = time.time() + 40
         while time.time() < deadline:
             status = jobs.summary()
             if status['running'] and status['step']:
@@ -104,7 +107,7 @@ class SettingsRoute(unittest.TestCase):
             time.sleep(0.05)
         self.assertTrue(seen, status)
         self.assertEqual(status['rc'], 124, status)
-        self.assertIn('step 1/5:', status['step'])
+        self.assertIn('step 4/5:', status['step'])
         self.assertIn('Settings setup timed out', status['error'])
         self.assertIn('release zip', '\n'.join(status['lines']))
 
@@ -112,14 +115,26 @@ class SettingsRoute(unittest.TestCase):
         magisk = os.path.join(self.home, 'bundled-magisk')
         os.makedirs(magisk)
         self.env['RIVIS_MAGISK_DIR'] = magisk
-        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '0.2'
+        open(os.path.join(self.emu, 'stall'), 'w').write('select')
+        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '6'
         jobs = devices.Jobs()
         jobs.start(['/bin/bash', harness.RIVIS, 'android', 'on', '-s', 'emulator-5554'],
                    'Android Test_Play', 'android', 'emulator-5554', env=self.env)
-        deadline = time.time() + 20
+        deadline = time.time() + 40
         while time.time() < deadline and jobs.summary()['running']:
             time.sleep(0.05)
         self.assertIn('emulator binary not found', '\n'.join(jobs.summary()['lines']))
+
+    def test_plain_android_on_bounds_the_initial_trust_check(self):
+        open(os.path.join(self.emu, 'stall'), 'w').write('trust')
+        self.env['RIVIS_ANDROID_SETUP_TIMEOUT'] = '0.2'
+        before = time.monotonic()
+        result = self.run_cli(timeout=20)
+        self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
+        self.assertLess(time.monotonic() - before, 12)
+        self.assertIn('CA trust check timed out', result.stdout)
+        self.assertNotIn('step 1/5', result.stdout)
+        self.assertEqual(self.proxy(), ':0')
 
 
 if __name__ == '__main__':

@@ -92,6 +92,7 @@ product_value() {
 }
 PRODUCT_NAME="$(product_value name)"
 CLI="$(product_value cli)"
+die() { echo "$CLI: $*" >&2; exit 1; }
 ENV_PREFIX="$(product_value env_prefix)"
 STATE_ROOT="$(product_value state_dir)"
 STATE_ROOT="${STATE_ROOT/#\~/$HOME}"
@@ -198,7 +199,6 @@ usage_for() {   # usage_for CMD — only that command's lines of the usage above
     p { print }')
   if [ -n "$out" ]; then echo "$out"; else usage; fi
 }
-die()   { echo "$CLI: $*" >&2; exit 1; }
 info()  { echo "• $*"; }
 
 atomic_private_text() {
@@ -426,7 +426,7 @@ cmd_start() {
   local a; for a in "$@"; do [ "$a" = --background ] || fwd+=("$a"); done
   while [ $# -gt 0 ]; do case "$1" in
     --background) bg=1 ;;
-    --insecure|--dev) insecure=1 ;; --no-ios) ios=0 ;; --ios-filter) filter="$2"; shift ;;
+    --insecure|--dev) insecure=1 ;; --no-ios) ios=0 ;; --ios-filter) [ $# -ge 2 ] || die "--ios-filter needs a value"; filter="$2"; shift ;;
     --allow-private-hosts) [ $# -ge 2 ] || die "--allow-private-hosts needs a regex"; private_hosts="$2"; shift ;;
     --project-only|--neo-only) project_only=1 ;; --no-open) open_ui=0 ;; --all) show_all=1 ;;
     *) die "start: unknown option $1" ;; esac; shift; done
@@ -584,10 +584,8 @@ ui_curl() {
   case "$path" in *\?*) sep="&" ;; esac
   printf 'url = "http://127.0.0.1:%s%s%stoken=%s"\n' "$WEB_PORT" "$path" "$sep" "$tok" | curl -sf --noproxy '*' -K - "$@"
 }
-# R2A-07: rules/scripts load only at start, so `--project X` against a running proxy of project Y changes files nobody reads.
-# Prints the running project on stderr when it differs from the requested one (silent when not running or the same).
+# Rules and scripts load for the running project, which may differ from the selected project.
 warn_running_project() {
-  [ -n "$PROJECT_ARG" ] || return 0
   local running; running=$(ui_curl /proxy/api/state 2>/dev/null | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("active_project") or "")' 2>/dev/null) || return 0
   [ -z "$running" ] || [ "$running" = "$PROJECT" ] || echo "$CLI: warning: the running proxy serves project '$running', not '$PROJECT' — changes to '$PROJECT' apply only after: $CLI --project $PROJECT stop && $CLI --project $PROJECT start" >&2
   return 0
@@ -603,7 +601,7 @@ cmd_update() {
     login|logout) "${U[@]}" "$action" ;;
     status) "${U[@]}" status ;;
     check|install)
-      out=$("${U[@]}" check) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error","update check failed"))' 2>/dev/null)"
+      out=$("${U[@]}" check) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error","update check failed"))' 2>/dev/null). To upgrade, download the new release zip from https://github.com/CoorB/rivis/releases and run its install.sh."
       local v notes; v=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; a=json.load(sys.stdin)["available"]; print(a["version"] if a else "")')
       if [ -z "$v" ]; then info "$PRODUCT_NAME $(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["current"])') is up to date"; return 0; fi
       notes=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["available"]["notes"])')
@@ -624,12 +622,23 @@ cmd_update() {
   esac
 }
 
+warn_android_proxy_on_stop() {
+  [ -x "$ADB" ] || return 0
+  local s proxy matches=""
+  for s in $("$ADB" devices 2>/dev/null | awk '/^emulator-[0-9]+[[:space:]]+device$/{print $1}'); do
+    proxy=$("$ADB" -s "$s" shell settings get global http_proxy 2>/dev/null | tr -d '\r') || continue
+    [ "$proxy" = "10.0.2.2:$PORT" ] && matches="$matches $s"
+  done
+  [ -z "$matches" ] || echo "$CLI: warning: emulator(s)$matches still use this proxy port; run '$CLI android off' to restore their network" >&2
+  return 0
+}
 cmd_stop() {   # stop our mitmweb on our ports (only ours — never another app, HOME or user)
   local pids pid i other; pids=$(our_listeners)
   if [ -z "$pids" ]; then
     other=$(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u | tr '\n' ' ')
     [ -n "$other" ] && info "ports $PORT/$WEB_PORT are held by another program or another $PRODUCT_NAME (pid $other) — not ours, left running" \
                     || info "nothing to stop on :$PORT/:$WEB_PORT"
+    warn_android_proxy_on_stop
     return 0
   fi
   for pid in $pids; do kill "$pid" 2>/dev/null || true; done
@@ -646,6 +655,7 @@ cmd_stop() {   # stop our mitmweb on our ports (only ours — never another app,
     rm -f "$TOKEN_FILE" "$BOOTSTRAP_FILE"
   fi
   info "stopped mitmweb on :$PORT/:$WEB_PORT"
+  warn_android_proxy_on_stop
 }
 
 # health — is the instance on these ports really serving, and on the installed version? Used after every upgrade
@@ -848,7 +858,7 @@ cmd_browser() {
 }
 
 # ───────────────────────── rules / throttle ─────────────────────────
-cmd_breakpoint() { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" breakpoint "$@"; }
+cmd_breakpoint() { ensure_rules; warn_running_project; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" breakpoint "$@"; }
 
 # mock NAME URL-REGEX — Proxyman's "right-click → Map Local": take the newest captured call
 # matching the regex, save its real response body to a file, and serve that file from now on.
@@ -899,10 +909,11 @@ cmd_scripts()  {
   fi
   /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" --script-dir "$PROJECT_STATE/scripts" "$@"
 }
-cmd_throttle() { ensure_rules; RIVIS_ACTIVE_PROJECT="$PROJECT" /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" throttle "$@"; }
-cmd_nocache() { ensure_rules; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" nocache "$@"; }
+cmd_throttle() { ensure_rules; warn_running_project; RIVIS_ACTIVE_PROJECT="$PROJECT" /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" throttle "$@"; }
+cmd_nocache() { ensure_rules; warn_running_project; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" nocache "$@"; }
 cmd_tls() {
   ensure_rules
+  warn_running_project
   [ $# -gt 0 ] || set -- list
   /usr/bin/python3 -I "$SCRIPT_DIR/addons/tls_cli.py" "$RULES" "$@"
 }
@@ -991,12 +1002,19 @@ ui_picker_action() {
 ui_install_ca_step() {
   local s="$1" step="$2"
   case "$step" in
+    0) ui_has_current_ca "$s" ;;
     1) open_credentials "$s" ;;
     2) ui_tap "$s" "Install a certificate" && ui_tap "$s" "CA certificate" ;;
     3) ui_tap "$s" "INSTALL ANYWAY|Install anyway" ;;
     4) ui_picker_action "$s" drawer && ui_picker_action "$s" downloads && ui_picker_action "$s" file ;;
     5) ui_has_current_ca "$s" ;;
   esac
+}
+run_android_magisk() {
+  ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$@"
+  local rc=$?
+  [ "$rc" = 3 ] && exit 3  # a declined consent prompt is final; do not open Settings
+  return "$rc"
 }
 android_settings_route() {
   local s="$1" magisk_dir="${2:-}" limit="${RIVIS_ANDROID_SETUP_TIMEOUT:-45}" before after rc prior now step label
@@ -1127,7 +1145,7 @@ cmd_android() {
   local action="${1:-}"; shift || true
   local auto_ui=1 all=0 consent="" strict="" proxy_only=0
   while [ $# -gt 0 ]; do case "$1" in
-    -s) SERIAL="$2"; shift ;; --all) all=1 ;; --manual) auto_ui=0 ;; --yes) consent=--yes ;;
+    -s) [ $# -ge 2 ] || die "android -s needs a serial"; SERIAL="$2"; shift ;; --all) all=1 ;; --manual) auto_ui=0 ;; --yes) consent=--yes ;;
     --proxy-only) proxy_only=1 ;;                   # CA installed by hand where Rivis cannot read Settings: proxy anyway
     --strict) strict=--strict ;;                    # Play images: restart back to normal at once (two restarts)
     --auto-ui) ;;                                   # the default now; still accepted
@@ -1179,12 +1197,19 @@ cmd_android() {
           done
         fi
         [ "$auto_ui" = 1 ] && [ -z "$magisk_dir" ] && info "$s: one-click setup unavailable — Magisk $magisk_ver not found next to $PRODUCT_NAME (install from the release zip, or set ${ENV_PREFIX}_MAGISK_DIR); using the slower Settings route"
-        if [ "$auto_ui" = 1 ] && ui_has_current_ca "$s"; then
+        local limit="${RIVIS_ANDROID_SETUP_TIMEOUT:-45}" check_rc=0
+        [[ "$limit" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk "BEGIN {exit !($limit > 0)}" \
+          || die "RIVIS_ANDROID_SETUP_TIMEOUT must be a positive number of seconds"
+        if [ "$auto_ui" = 1 ]; then
+          /usr/bin/python3 -I "$SCRIPT_DIR/addons/android_settings_timeout.py" "$limit" "$SCRIPT_DIR/rivis" "$s" 0 || check_rc=$?
+          [ "$check_rc" = 124 ] && { info "$s: CA trust check timed out after ${limit} s; proxy left off"; return 124; }
+        fi
+        if [ "$auto_ui" = 1 ] && [ "$check_rc" = 0 ]; then
           info "$s: already trusts this CA — nothing to install"; android_record "$s"; ca_ok=1
           "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
         elif [ "$auto_ui" = 1 ] && [ -n "$magisk_dir" ] \
             && info "$s: choosing one-click Magisk path ($magisk_dir)" \
-            && ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent $strict; then
+            && run_android_magisk "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent $strict; then
           android_record "$s"; ca_ok=1   # one-click Play-image path (Proxyman's Magisk approach); it verifies and reports
         elif [ "$auto_ui" = 1 ] && info "$s: one-click Magisk setup unavailable or failed (see reason above); choosing Settings route" \
             && android_settings_route "$s" "$magisk_dir"; then
@@ -1288,7 +1313,7 @@ sim_truststore() { find "$HOME/Library/Developer/CoreSimulator/Devices/$1/data/p
 
 cmd_ios() {
   local action="${1:-}"; shift || true; local udid="" all=0
-  while [ $# -gt 0 ]; do case "$1" in --udid) udid="$2"; shift ;; --all) all=1 ;; *) die "ios: unknown option $1" ;; esac; shift; done
+  while [ $# -gt 0 ]; do case "$1" in --udid) [ $# -ge 2 ] || die "ios --udid needs a value"; udid="$2"; shift ;; --all) all=1 ;; *) die "ios: unknown option $1" ;; esac; shift; done
   case "$action" in on|off) ;; *) die "usage: $CLI ios on|off [--udid UDID | --all]" ;; esac
   [ -n "$udid" ] && [ "$all" = 1 ] && die "ios: pass --udid or --all, not both"
   # F-17: the UDID becomes part of a path whose trust store we edit
@@ -1506,6 +1531,7 @@ case "${1:-}" in
   doctor)    shift; cmd_doctor "$@" ;;
   bug-report) shift; cmd_bug_report "$@" ;;
   update)    shift; cmd_update "$@" ;;
+  uninstall) die "run install.sh --uninstall from the unzipped Rivis release zip (download: https://github.com/CoorB/rivis/releases)" ;;
   cert)      cmd_cert ;;
   --version|-V|version)   # installed copies carry VERSION at their root; a repo checkout keeps it in install/
     v=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || cat "$SCRIPT_DIR/install/VERSION" 2>/dev/null || echo dev)

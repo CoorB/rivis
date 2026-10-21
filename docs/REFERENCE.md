@@ -116,11 +116,11 @@ rivis compose list | send NAME [--var name=value] [--no-wait]
 rivis breakpoint [REGEX [--request|--response] [--method M] | off [NAME]]   # no arguments: list; paused calls: Continue in the UI
 rivis mock NAME URL-REGEX
 rivis net-reset [--dry-run]
-rivis update [check|install|login|logout|status]     # signed in-app updates from the team's GitHub releases
+rivis update [check|install|login|logout|status]     # signed updates when configured; otherwise install the new release zip
 ```
 
 For `throttle`, `loss=` applies only to that command; a later profile uses its own packet loss.
-Each throttle command starts with all calls in scope; pass `match=REGEX` to scope that profile. `throttle off` clears the previous scope.
+Each throttle command resets the scope to the selected project's `throttle_match` (all calls for `default`); pass `match=REGEX` to override it. `throttle off` also restores that project scope.
 `throttle` and `rules list` show the active manual latency, jitter, bandwidth, loss and response delay values.
 `rules add`, `rules on` and `rules edit` check enabled rules against the proxy's load validation. `rules list`
 marks rules that the proxy skips as `SKIPPED` and prints the reason. Editing a rules file saves only after that
@@ -219,8 +219,7 @@ a project selector. That selector changes only the host view; restart with `--pr
 rules file.
 
 Devices and Network are pages inside the **Tools** drawer on the right, not tabs along the top.
-`rivis rules rm NAME` removes a Map Local rule but keeps its mock file in the project `mocks/` directory;
-delete that file separately when it is no longer needed.
+`rivis rules rm NAME` also deletes the mock file owned by that Map Local rule. Files shared with other rules or created separately are kept.
 The panel script editor checks syntax on Save. For a CLI-edited JavaScript file, send a matching call before
 checking `rivis scripts list` or `rivis doctor` for a syntax error.
 
