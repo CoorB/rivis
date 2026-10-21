@@ -956,7 +956,10 @@ exit 0
         return open(log).read().split("\n")[:-1] if os.path.exists(log) else []
 
     def test_auto_clears_a_dead_loopback_proxy_and_says_so(self):
-        env, log = self.fake("127.0.0.1", self.dead_port())
+        port = self.dead_port()
+        env, log = self.fake("127.0.0.1", port)
+        os.makedirs(self.state, exist_ok=True)
+        open(os.path.join(self.state, "proxy-owner-history"), "w").write("127.0.0.1:%d 987654321\n" % port)
         r = self.ok("net-reset", "--auto", env=env)
         self.assertEqual(sorted(self.changes(log)), ["-setsecurewebproxystate Wi-Fi off", "-setwebproxystate Wi-Fi off"])
         self.assertIn("fixed:", r.stdout)
@@ -973,7 +976,10 @@ exit 0
             self.assertEqual(r.stdout.strip(), "", "--auto must stay silent when it changes nothing")
 
     def test_start_clears_the_leftover_before_capturing(self):
-        env, log = self.fake("127.0.0.1", self.dead_port())
+        port = self.dead_port()
+        env, log = self.fake("127.0.0.1", port)
+        os.makedirs(self.state, exist_ok=True)
+        open(os.path.join(self.state, "proxy-owner-history"), "w").write("127.0.0.1:%d 987654321\n" % port)
         env["SHIM_DRYRUN"] = "1"
         r = self.suite.rivis("start", "--no-open", "--no-ios", home=self.home, env=env)
         self.assertIn("-setsecurewebproxystate Wi-Fi off", self.changes(log), r.stdout + r.stderr)
@@ -982,7 +988,10 @@ exit 0
     def test_start_still_starts_when_this_account_may_not_change_network_settings(self):
         # Night QA A4: a standard (non-admin) account behind a Proxyman leftover — `start` died on the
         # refused networksetup call, so Rivis never started at all. Now it says how to clear it and starts.
-        env, log = self.fake("127.0.0.1", self.dead_port(), deny=True)
+        port = self.dead_port()
+        env, log = self.fake("127.0.0.1", port, deny=True)
+        os.makedirs(self.state, exist_ok=True)
+        open(os.path.join(self.state, "proxy-owner-history"), "w").write("127.0.0.1:%d 987654321\n" % port)
         env["SHIM_DRYRUN"] = "1"
         open(os.path.join(self.suite.shimlog, "mitm-argv.log"), "w").close()
         r = self.suite.rivis("start", "--no-open", "--no-ios", home=self.home, env=env)
@@ -1650,6 +1659,12 @@ class AndroidCaRemoval(CliBase):
         self.assertFalse(os.path.exists(store), "this workstation's CA was not removed")
         self.assertIn("removed 1 CA file(s)", out)
         self.assertNotIn("not this workstation's CA", out)
+
+    def test_android_off_unroots_adb_when_it_rooted_the_emulator(self):
+        self.ok("android", "off")
+        log = open(os.path.join(self.emu, "log")).read()
+        self.assertIn("-s emulator-5554 root", log)
+        self.assertIn("-s emulator-5554 unroot", log)
 
     def proxy(self):
         try:

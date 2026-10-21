@@ -20,5 +20,33 @@
     "record_match": "example\\.test",
     "replay": [],
     "strict": false
-  }
+  },
+  "rule_examples": [
+    {
+      "name": "example-header",
+      "enabled": false,
+      "match": "example\\.test",
+      "action": "set_header",
+      "side": "request",
+      "header": "X-Debug",
+      "value": "1"
+    },
+    {
+      "name": "example-json",
+      "enabled": false,
+      "match": "example\\.test",
+      "action": "json_patch",
+      "set": {
+        "debug": true
+      }
+    },
+    {
+      "name": "example-remote",
+      "enabled": false,
+      "match": "example\\.test",
+      "action": "map_remote",
+      "replace": "^https://example\\.test/",
+      "with": "https://staging.example.test/"
+    }
+  ]
 }

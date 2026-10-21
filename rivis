@@ -33,6 +33,8 @@
 #                                 Proxyman-style rules, hot-reloaded, kept across restarts:
 #                                 respond | map_local | status | json_patch | delay |
 #                                 set_header | map_remote | block   (see rules.example.json)
+#                                 set_header: header=NAME value=TEXT [side=request|response];
+#                                 json_patch: set='{"path":value}'; map_remote: replace=REGEX with=URL
 #   <cli> scripts list|new NAME --lang py|js [--match REGEX]|on NAME|off NAME|edit NAME|rm NAME
 #   <cli> throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]
 #                 [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
@@ -249,6 +251,7 @@ ca_history_field() {  # 1 = sha256, 2 = android hash; current CA first, then eve
 safe_name() { [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]] && [[ "$1" != .* ]] || die "name '$1': letters, digits, . _ - only (max 64, not starting with .)"; }
 
 port_owner() { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==2{print $1" pid "$2" "$9}'; }
+port_accepts() { /usr/bin/python3 -I -c 'import socket,sys; s=socket.socket(); s.settimeout(.5); sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))) != 0)' "$1"; }
 
 secure_dirs() {
   (umask 077; mkdir -p "$STATE_ROOT" "$PROJECT_STATE" "$PROJECT_STATE/mocks" \
@@ -431,6 +434,8 @@ cmd_start() {
     --project-only|--neo-only) project_only=1 ;; --no-open) open_ui=0 ;; --all) show_all=1 ;;
     *) die "start: unknown option $1" ;; esac; shift; done
   [ "$ios" = 1 ] && check_capture_filter "$filter"
+  [ -z "$private_hosts" ] || /usr/bin/python3 -I -c 'import re,sys; re.compile(sys.argv[1])' "$private_hosts" 2>/dev/null \
+    || die "--allow-private-hosts needs a valid regex"
   # Android-only testers skip the Redirector in the installer; capturing the Simulator without it only brings up macOS
   # prompts. Start without it and say how to turn it on. (An unreadable extension list changes nothing.)
   if [ "$ios" = 1 ] && [ "$(uname)" = Darwin ]; then
@@ -450,20 +455,37 @@ cmd_start() {
     info "  open the UI: $CLI ui    ·    to start it with other options: $CLI stop, then $CLI start …"
     return 0
   fi
+  # A second start must not replace the first process's UI token while mitmweb is still binding its ports.
+  local start_guard="$STATE_ROOT/start-guard-$WEB_PORT" guard_pid=""
+  if [ -z "${RIVIS_START_INTERNAL:-}" ]; then
+    if ! mkdir "$start_guard" 2>/dev/null; then
+      guard_pid=$(cat "$start_guard/pid" 2>/dev/null || true)
+      if [ -z "$guard_pid" ] || kill -0 "$guard_pid" 2>/dev/null; then
+        die "start already in progress on UI port $WEB_PORT; retry after it finishes"
+      fi
+      rm -rf "$start_guard"
+      mkdir "$start_guard" 2>/dev/null || die "start already in progress on UI port $WEB_PORT"
+    fi
+    printf '%s\n' "$$" > "$start_guard/pid"
+  fi
   local o free_hint="quit it, or start on free ports: ${ENV_PREFIX}_PORT=18080 ${ENV_PREFIX}_WEB_PORT=18083 $CLI start"
-  o=$(port_owner "$PORT"); [ -n "$o" ] && die "port $PORT already taken by another program: $o — $free_hint"
-  o=$(port_owner "$WEB_PORT"); [ -n "$o" ] && die "UI port $WEB_PORT already taken by another program: $o — $free_hint"
+  o=$(port_owner "$PORT"); { [ -n "$o" ] || port_accepts "$PORT"; } && die "port $PORT already taken by another program: ${o:-listener not visible to this account} — $free_hint"
+  o=$(port_owner "$WEB_PORT"); { [ -n "$o" ] || port_accepts "$WEB_PORT"; } && die "UI port $WEB_PORT already taken by another program: ${o:-listener not visible to this account} — $free_hint"
   # how this instance was started, so an in-app update can restart it the same way (addons/update_install.sh)
+  if [ -z "${RIVIS_START_INTERNAL:-}" ]; then
   { printf 'START_PORT=%q\nSTART_WEB_PORT=%q\nSTART_PROJECT_SOURCE=%q\nSTART_PROJECT_EXPLICIT=%q\nSTART_ARGS=(' "$PORT" "$WEB_PORT" "${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}" "$start_explicit"
-    printf '%q ' --project "$PROJECT" start --background --no-open ${fwd[@]+"${fwd[@]}"}; printf ')\n'; } > "$START_FILE.tmp" \
+    printf '%q ' --project "$PROJECT" start; [ "$bg" = 1 ] && printf '%q ' --background
+    for a in ${fwd[@]+"${fwd[@]}"}; do printf '%q ' "$a"; done; [ "$open_ui" = 0 ] || printf '%q ' --no-open; printf ')\n'; } > "$START_FILE.tmp" \
     && chmod 600 "$START_FILE.tmp" && mv -f "$START_FILE.tmp" "$START_FILE"
+  fi
   if [ "$bg" = 1 ]; then   # same start, detached from this terminal; output goes to a private log
     mkdir -p "$STATE_ROOT/logs"; local log="$STATE_ROOT/logs/mitmweb.log"
     # R2A-14: line-buffered, so script log() lines show in the log while the proxy runs, not only after stop
-    RIVIS_START_PROJECT_SOURCE="${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}" RIVIS_START_PROJECT_EXPLICIT="$start_explicit" PYTHONUNBUFFERED=1 nohup "$0" --project "$PROJECT" start ${fwd[@]+"${fwd[@]}"} < /dev/null > "$log" 2>&1 &
+    RIVIS_START_INTERNAL=1 RIVIS_START_PROJECT_SOURCE="${RIVIS_START_PROJECT_SOURCE:-$PROJECT_SOURCE}" RIVIS_START_PROJECT_EXPLICIT="$start_explicit" PYTHONUNBUFFERED=1 nohup "$0" --project "$PROJECT" start ${fwd[@]+"${fwd[@]}"} < /dev/null > "$log" 2>&1 &
     local child=$! i; disown "$child" 2>/dev/null || true
     for i in $(seq 1 60); do [ -n "$(port_owner "$WEB_PORT")" ] && break; kill -0 "$child" 2>/dev/null || break; sleep 0.5; done
     [ -n "$(port_owner "$WEB_PORT")" ] || { tail -5 "$log" >&2; die "did not start — full log: $log"; }
+    rmdir "$start_guard" 2>/dev/null || rm -rf "$start_guard"
     info "$PRODUCT_NAME is running in the background (proxy 127.0.0.1:$PORT, UI http://127.0.0.1:$WEB_PORT/)"
     info "devices  in the UI: Tools → Devices, one click per simulator / emulator (or: $CLI setup)"
     info "reopen the UI: $CLI ui   ·   stop: $CLI stop   ·   log: $log"
@@ -527,7 +549,9 @@ cmd_start() {
     local who; who=$(port_owner "${sp##*:}" | awk '{print $1}')
     if [ -n "$who" ]; then
       echo "!! $who is your Mac's proxy ($sp): the iOS Simulator sends its traffic there, not to $PRODUCT_NAME." >&2
-      echo "!! Quit $who, then run: $CLI start --background   (any setting it leaves behind is cleared automatically)" >&2
+      echo "!! Check the Mac's proxy settings before expecting Simulator traffic in $PRODUCT_NAME; an unknown setting is never cleared automatically." >&2
+    elif [[ "${sp##*:}" =~ ^[0-9]+$ ]] && port_accepts "${sp##*:}"; then
+      echo "!! The Mac's proxy $sp accepts TCP connections, but its owner is not visible to this account — left alone. iOS Simulator traffic goes there." >&2
     else
       echo "!! WARNING: macOS system proxy is $sp — iOS Simulator traffic goes there, not to $PRODUCT_NAME." >&2
     fi
@@ -558,10 +582,11 @@ our_mitmweb() {   # our_mitmweb PID — a mitmweb started from THIS state dir (n
   return 1
 }
 running_tool_dir() { # R4A-01: read the actual add-on path, not the launcher or current symlink.
-  local arg
-  for arg in $(ps -ww -o args= -p "$1" 2>/dev/null); do
-    case "$arg" in "$HOME/.local/$CLI/tool-"*/addons/proxy_auth.py) printf '%s\n' "${arg%/proxy_auth.py}"; return 0 ;; esac
-  done
+  ps -ww -o args= -p "$1" 2>/dev/null | /usr/bin/python3 -I -c 'import re,sys
+prefix=re.escape(sys.argv[1])
+for line in sys.stdin:
+ m=re.search(r"(?:^|\s)-s\s+("+prefix+r"/tool-[^/\s]+/addons)/proxy_auth\.py(?:\s|$)",line)
+ if m: print(m.group(1)); break' "$HOME/.local/$CLI"
 }
 warn_running_version() {
   local pid path version installed
@@ -654,6 +679,7 @@ cmd_stop() {   # stop our mitmweb on our ports (only ours — never another app,
   if [ "$WEB_PORT" != 8083 ] || ! ps -axww -o args= 2>/dev/null | grep -qF "proxy_auth_token_file=$STATE_ROOT/web-token "; then
     rm -f "$TOKEN_FILE" "$BOOTSTRAP_FILE"
   fi
+  rm -rf "$STATE_ROOT/start-guard-$WEB_PORT"
   info "stopped mitmweb on :$PORT/:$WEB_PORT"
   warn_android_proxy_on_stop
 }
@@ -1182,7 +1208,9 @@ cmd_android() {
   local h=""; [ -f "$CA_PEM" ] && h=$(ca_hash)
   # The user store is sufficient for debug builds that trust user CAs; no system remount is used.
   local dst="/data/misc/user/0/cacerts-added/$h.0"
-  "$ADB" -s "$s" root >/dev/null 2>&1 || true; sleep 2
+  local rooted_by_us=0
+  if ! have_root "$s" && "$ADB" -s "$s" root >/dev/null 2>&1; then rooted_by_us=1; fi
+  sleep 2
   "$ADB" -s "$s" wait-for-device || die "$s: wait-for-device failed"
   case "$action" in
     on)
@@ -1295,7 +1323,9 @@ cmd_android() {
       if ps -ax -o args= 2>/dev/null | grep -v "grep " | grep -F -- "-port ${s#emulator-} " | grep -qF -- "-ramdisk $STATE_ROOT/android-ramdisk/"; then
         ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "${h:-00000000}.0" "-" "$STATE_ROOT" --restore \
           || info "$s: could not restart it normally — Cold Boot it from Android Studio's Device Manager"
-      fi ;;
+      fi
+      [ "$rooted_by_us" = 0 ] || "$ADB" -s "$s" unroot >/dev/null 2>&1 || info "$s: adb unroot failed; run adb -s $s unroot"
+      ;;
   esac
 }
 
@@ -1336,7 +1366,11 @@ cmd_ios() {
     local booted; booted=$(xcrun simctl list devices booted | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}')
     [ -z "$booted" ] && die "no booted simulator"
     if [ "$all" = 1 ]; then
-      local u; for u in $booted; do cmd_ios "$action" --udid "$u"; done
+      local u failed=""; for u in $booted; do
+        if (cmd_ios "$action" --udid "$u"); then info "$u: ios $action complete"
+        else failed="$failed $u"; echo "$CLI: $u: ios $action failed" >&2; fi
+      done
+      [ -z "$failed" ] || die "ios $action: not done on$failed (see above)"
       return
     fi
     [ "$(echo "$booted" | wc -l | tr -d ' ')" -gt 1 ] && die "several simulators booted — run '$CLI ios $action --all' for every one, or pass --udid: $(echo $booted)"
@@ -1368,10 +1402,10 @@ cmd_ios() {
 # ───────────────────────── net-reset ─────────────────────────
 # FRTMProxy / Proxyman restore whatever proxy state they found at launch. If that was a
 # leftover 127.0.0.1 from a crashed session, every Mac app loses the network once the
-# proxy app quits. Only stale local-loopback entries are safe to clear.
-cmd_net_reset() {   # [--dry-run | --auto]  --auto: silent unless it clears something (used by start and the installer)
+# proxy app quits. A dead port is cleared only after its previously observed listener process has exited.
+cmd_net_reset() {   # [--dry-run | --auto]  --auto reports changes and unproven loopback settings
   local dry=0 auto=0; [ "${1:-}" = "--dry-run" ] && dry=1; [ "${1:-}" = "--auto" ] && auto=1
-  local changed=0 enabled=0 stale_seen="" failed=0
+  local changed=0 enabled=0 stale_seen="" failed=0 known="$STATE_ROOT/proxy-owner-history" owner proof owner_line owner_pid observed active_seen="" recorded_pid
   while IFS= read -r svc; do
     case "$svc" in ""|"An asterisk"*|\**) continue ;; esac
     local kind getter setter details on host port label
@@ -1387,8 +1421,29 @@ cmd_net_reset() {   # [--dry-run | --auto]  --auto: silent unless it clears some
       enabled=1
       host=$(printf '%s\n' "$details" | awk '/^Server:/{sub(/^Server:[[:space:]]*/,"");print;exit}')
       port=$(printf '%s\n' "$details" | awk '/^Port:/{print $2;exit}')
-      if { [ "$host" = 127.0.0.1 ] || [ "$host" = localhost ] || [ "$host" = ::1 ]; } \
-          && [ -n "$port" ] && [ -z "$(port_owner "$port")" ]; then
+      owner=""; proof=0
+      if [[ "$port" =~ ^[0-9]+$ ]] && { [ "$host" = 127.0.0.1 ] || [ "$host" = localhost ]; }; then
+        owner_line=$(port_owner "$port")
+        if port_accepts "$port"; then
+          active_seen="$active_seen $host:$port"
+          owner=$(printf '%s\n' "$owner_line" | awk '{print $1}')
+          owner_pid=$(printf '%s\n' "$owner_line" | awk '{print $3}')
+          observed=0
+          [ "$owner" = Proxyman ] && observed=1
+          [ "$owner" = mitmweb ] && [ -n "$owner_pid" ] && our_mitmweb "$owner_pid" && observed=1
+          if [ "$observed" = 1 ] && [ "$dry" = 0 ]; then
+            (umask 077; mkdir -p "$STATE_ROOT") || die "cannot record observed proxy ownership"
+            { [ -f "$known" ] && awk -v p="$host:$port" '$1 != p' "$known" || true; printf '%s %s\n' "$host:$port" "$owner_pid"; } > "$known.tmp"
+            chmod 600 "$known.tmp"; mv -f "$known.tmp" "$known"
+          fi
+        else
+          recorded_pid=$(awk -v p="$host:$port" '$1 == p {print $2; exit}' "$known" 2>/dev/null)
+          if [ -z "$owner_line" ] && ! [[ " $active_seen " == *" $host:$port "* ]] \
+              && [[ "$recorded_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$recorded_pid" 2>/dev/null \
+              && [ -z "$(ps -p "$recorded_pid" -o pid= 2>/dev/null)" ]; then proof=1; fi
+        fi
+      fi
+      if [ "$proof" = 1 ] && ! port_accepts "$port"; then
         changed=1
         [ "$auto" = 1 ] || echo "  $svc: $label=$host:$port — $([ "$dry" = 1 ] && echo 'would clear' || echo 'clearing')"
         if [ "$dry" = 0 ] && ! networksetup "$setter" "$svc" off; then
@@ -1396,17 +1451,29 @@ cmd_net_reset() {   # [--dry-run | --auto]  --auto: silent unless it clears some
           # and Compose work; only the iOS Simulator follows the Mac's proxy until it is cleared)
           echo "$CLI: could not clear the leftover $label proxy $host:$port on $svc (this account may not change network settings)." >&2
           echo "  Clear it in System Settings → Network → $svc → Details → Proxies (turn off the proxies set to $host:$port), or ask IT." >&2
-          [ "$auto" = 1 ] || failed=1
+          failed=1
           continue
         fi
-        [ "$auto" = 1 ] && stale_seen="$host:$port"
+        stale_seen="$host:$port"
       else
-        [ "$auto" = 1 ] || echo "  $svc: $label=$host:$port — left alone (not a local leftover)"
+        if [ "$auto" = 1 ] && [ -z "$owner" ] && { [ "$host" = 127.0.0.1 ] || [ "$host" = localhost ]; }; then
+          if [[ " $active_seen " == *" $host:$port "* ]]; then
+            echo "$CLI: $svc $label proxy $host:$port is in use (TCP connection succeeded) — left alone" >&2
+          else
+            echo "$CLI: $svc $label proxy $host:$port left alone; cannot prove it is a dead $PRODUCT_NAME/Proxyman leftover" >&2
+          fi
+        elif [ "$auto" = 0 ]; then
+          echo "  $svc: $label=$host:$port — left alone (active or origin unproven)"
+        fi
       fi
     done
   done < <(networksetup -listallnetworkservices)
+  if [ "$changed" = 1 ] && [ "$failed" = 0 ] && [ -n "$stale_seen" ]; then
+    awk -v p="$stale_seen" '$1 != p' "$known" > "$known.tmp" 2>/dev/null || true
+    mv -f "$known.tmp" "$known"
+  fi
   if [ "$auto" = 1 ]; then
-    [ -n "$stale_seen" ] && info "fixed: another proxy app (Proxyman, Charles…) had left your Mac's proxy set to $stale_seen with nothing listening — cleared, so Mac apps and the Simulator reach the network again"
+    [ -n "$stale_seen" ] && info "fixed: a previously observed $PRODUCT_NAME/Proxyman proxy at $stale_seen no longer accepts connections — cleared"
     return 0
   fi
   if [ "$enabled" = 0 ]; then info "no system proxy set on any service — network is clean"
@@ -1450,7 +1517,11 @@ print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n
   /usr/bin/python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); isinstance(c, dict) and c.get("no_cache") and print("No caching: on")' "$RULES" 2>/dev/null || true
   [ "$PROJECT_ANDROID" = "[]" ] || echo "project Android packages: $PROJECT_ANDROID"
   [ "$PROJECT_IOS" = "[]" ] || echo "project iOS bundle IDs: $PROJECT_IOS"
-  echo "macOS system https proxy: $sp$( [ "$sp" != off ] && [ -z "$(port_owner "${sp##*:}")" ] && echo "   ← NOTHING LISTENS THERE: Mac apps have no network. Run: $CLI net-reset")"
+  echo "macOS system https proxy: $sp"
+  if [[ "$sp" == 127.0.0.1:* || "$sp" == localhost:* ]] && [[ "${sp##*:}" =~ ^[0-9]+$ ]] \
+      && ! port_accepts "${sp##*:}"; then
+    echo "  ! no TCP connection to that proxy; inspect the setting. $CLI net-reset clears only a previously observed dead $PRODUCT_NAME/Proxyman listener."
+  fi
   if [ -x "$ADB" ]; then
     for s in $("$ADB" devices | awk '/^emulator-[0-9]+\tdevice$/{print $1}'); do
       echo "android $s: http_proxy=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r')"

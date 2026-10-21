@@ -39,6 +39,15 @@ class PowerShellSource(unittest.TestCase):
         for command in ("stop", "breakpoint", "mock", "setup"):
             self.assertRegex(self.src, r'(?m)^  "' + command + r'" \{', command)
 
+    def test_start_keeps_its_token_until_the_first_process_exits(self):
+        self.assertIn('RivisStart-', self.src)
+        self.assertIn('start already in progress', self.src)
+
+    def test_unproven_windows_proxy_is_left_unchanged(self):
+        block = self.src[self.src.index('  "net-reset" {'):self.src.index('  "doctor" {')]
+        self.assertNotIn('ProxyEnable -Value 0', block)
+        self.assertNotIn('netsh winhttp reset proxy', block)
+
     def test_fresh_browser_profile_is_private_and_swept_like_bash(self):
         """Review m11 parity: -Fresh keeps its profile under the state root and deletes leftovers, sparing one still in use."""
         block = self.src[self.src.index("if ($Fresh) {"):self.src.index("Web apps on localhost go through Rivis")]

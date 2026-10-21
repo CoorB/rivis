@@ -61,7 +61,7 @@ Mac with Apple Silicon. No admin password, nothing else to download. Apple's Com
 
 To upgrade, download the new release zip from the latest release page and run its `install.sh`.
 `rivis update` remains available for signed in-app updates when that feature is configured; otherwise it points to the release zip.
-Installing an update restarts a running instance on the new version when its saved start settings are available. If
+Installing an update restarts a running instance on the new version when its saved start settings are available. A foreground instance continues in the background after an installer or detached update, and the restart message says so. `rivis restart` in a terminal keeps foreground mode. If
 the installer reports an instance still running on an older version, use the shown ports with `rivis restart` before
 using the updated features. `rivis status` also reports a running version that differs from the installed version.
 

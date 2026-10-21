@@ -10,8 +10,9 @@ into mitmweb; the installed mitmproxy is never modified.
 
 - Proxy and web UI bind to `127.0.0.1` only. Android emulators reach host loopback at `10.0.2.2`; physical
   devices are intentionally rejected.
-- The tool never enables a macOS or Windows system proxy. `net-reset` only clears a stale loopback proxy whose
-  listener has disappeared.
+- The tool never enables a macOS or Windows system proxy. On macOS, `net-reset` clears a dead loopback setting only
+  when Rivis previously observed Rivis or Proxyman listening there and that process has exited; an unknown setting is left alone. On Windows it
+  reports unanswered proxy settings for manual inspection.
 - Certificates are installed only on simulators/emulators and removed by `ios off` or `android off`.
 - Collections, sessions, mocks, and HAR files stay on the workstation. There is no upload or Git sync.
 - The panel may write only inside the active project's state directory.
@@ -386,7 +387,7 @@ the lists are *Hosts to decrypt* and *Hosts to leave alone*. It is stored per pr
   `allow_hosts` / `ignore_hosts`. `*.example.test` does not match `example.test` itself; add both if you need both.
   The NEO project ships `*.neo.sa` and `*.alahli.com` in its allow list but stays in mode `all`.
 - **No restart.** mitmproxy reads these options for every new connection (it also applies in local-capture mode,
-  which is where the iOS Simulator is captured), and Rivis re-applies the file within a second. Connections that
+  which is where the iOS Simulator is captured), and Rivis re-applies the file on its next poll; allow a few seconds. Connections that
   are already open keep their earlier decision: reopen the app or its screen. `rivis status` shows the mode.
 - Ignored hosts are **not intercepted at all**: rules, Map Local, breakpoints, scripts and throttling do not
   apply to them. In regular (Android emulator) mode mitmproxy ignores only TLS traffic, so plain HTTP to such a host
@@ -497,8 +498,8 @@ It is **read-only** by default and checks, in order:
 3. macOS **local-capture extension** is activated + enabled (needed for the iOS Simulator).
 4. The **proxy / web ports** are free or owned by Rivis — otherwise it names the process
    (Proxyman, FRTMProxy, an older instance) and how to stop it.
-5. The **system proxy**: a stale localhost leftover (offers `net-reset`), a local tool that is
-   stealing simulator traffic, or a corporate proxy (left untouched).
+5. The **system proxy**: an unanswered localhost setting (ownership must be checked before clearing), a local tool
+   routing simulator traffic, or a corporate proxy (left untouched).
 6. **Proxyman / FRTMProxy** running.
 7. **iOS Simulators** booted and whether each trusts the Rivis CA → `rivis ios on` if not.
 8. **Android emulators**: running, `http_proxy`, CA in the user store, Play vs Google APIs image.

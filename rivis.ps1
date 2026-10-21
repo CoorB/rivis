@@ -619,6 +619,9 @@ switch ($Command) {
     } else { Die "usage: projects list|use ID|show [ID]|new ID -Label LABEL -Hosts REGEX" }
   }
   "start" {
+    $startMutex = [System.Threading.Mutex]::new($false, ("RivisStart-" + ($TokenPath -replace '[^A-Za-z0-9]','_')))
+    if (-not $startMutex.WaitOne(0)) { $startMutex.Dispose(); Die "start already in progress on UI port $WebPort; retry after it finishes" }
+    try {
     if (-not (Get-Command mitmweb -ErrorAction SilentlyContinue)) { Die "mitmweb not found (install mitmproxy from the internal mirror)" }
     Ensure-Ca
     Ensure-Rules
@@ -668,6 +671,7 @@ switch ($Command) {
       } | Out-Null
     }
     & mitmweb @margs
+    } finally { $startMutex.ReleaseMutex(); $startMutex.Dispose() }
   }
   "stop" {
     $stopped = 0
@@ -891,7 +895,7 @@ switch ($Command) {
     $cfg = Read-RulesConfig
     $tls = Get-Tls $cfg
     $sub = if ($Action) { $Action.ToLowerInvariant() } else { "list" }
-    $tlsNote = "applies to new connections within a second - no restart; open connections keep their earlier decision"
+    $tlsNote = "applies to new connections after the next rules poll; allow a few seconds - no restart; open connections keep their earlier decision"
     if ($sub -eq "list") {
       Write-Host "tls mode: $($tls.mode)"
       foreach ($which in @("allow","ignore")) {
@@ -1116,9 +1120,7 @@ switch ($Command) {
     if ($cur.ProxyEnable -eq 1 -and -not $userStale) {
       Info "user proxy left alone (not a local leftover)"
     } elseif ($userStale) {
-      $dryNote = if ($DryRun) { " (would clear)" } else { "" }
-      Info "user proxy is a stale local leftover$dryNote"
-      if (-not $DryRun) { Set-ItemProperty $key -Name ProxyEnable -Value 0 }
+      Info "user proxy does not answer; left alone because its origin cannot be proved"
     }
     $whLine = $whLines | Where-Object { $_ -match '^\s*Proxy Server\(s\)\s*:' } | Select-Object -First 1
     $whSpec = if ($whLine) { ($whLine -replace '^\s*Proxy Server\(s\)\s*:\s*', '').Trim() } else { "" }
@@ -1126,13 +1128,11 @@ switch ($Command) {
     if ($whSpec -and -not $winHttpStale) {
       Info "WinHTTP proxy left alone (not a local leftover)"
     } elseif ($winHttpStale) {
-      $dryNote = if ($DryRun) { " (would clear)" } else { "" }
-      Info "WinHTTP proxy is a stale local leftover$dryNote"
-      if (-not $DryRun) { netsh winhttp reset proxy | Out-Null; Run "netsh winhttp reset proxy (run as admin)" }
+      Info "WinHTTP proxy does not answer; left alone because its origin cannot be proved"
     }
     if ($DryRun) { Info "dry run: nothing changed" }
     elseif (-not $userStale -and -not $winHttpStale) { Info "no stale local proxy found" }
-    else { Info "stale local proxies cleared; all other proxies left alone" }
+    else { Info "unanswered local proxy settings were left alone; clear them manually after checking ownership" }
   }
   "doctor" {
     # Prefer the shared Python checker (same logic as macOS). Read-only.
@@ -1181,7 +1181,7 @@ switch ($Command) {
     $cur = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction SilentlyContinue
     if ($cur.ProxyEnable -eq 1) {
       $stale = Test-StaleLocalProxy $cur.ProxyServer
-      if ($stale) { $doctorExit = 2; Write-Host ("  [error] stale WinINET proxy {0} — run: {1}.ps1 net-reset" -f $cur.ProxyServer,$Cli) }
+      if ($stale) { $doctorExit = 2; Write-Host ("  [error] unanswered WinINET proxy {0} — inspect it in Windows proxy settings" -f $cur.ProxyServer) }
       else        { $doctorExit = [Math]::Max($doctorExit, 1); Write-Host ("  [warn] WinINET system proxy set: {0} (steals emulator traffic)" -f $cur.ProxyServer) }
     } else { Write-Host "  [ok] no WinINET system proxy" }
     $whLine = (netsh winhttp show proxy 2>$null | Select-String 'Proxy Server')
