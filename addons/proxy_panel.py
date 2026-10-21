@@ -2545,9 +2545,25 @@ class ProxyPanel:
                     return "cross-site request"
                 return None
 
-            def get(self, op):
+            async def _test_hold(self, op):
+                """Test-only: RIVIS_TEST_PANEL_DELAY_FILE names a JSON file {"<op>": seconds}; that op then answers late
+                (the event loop stays free), to reproduce a proxy that does not answer. Inert unless the variable is set."""
+                path = os.environ.get("RIVIS_TEST_PANEL_DELAY_FILE")
+                if not path:
+                    return
+                try:
+                    with open(path) as fh:
+                        wait = float(json.load(fh).get(op, 0))
+                except (OSError, ValueError, AttributeError):
+                    return
+                if wait > 0:
+                    import asyncio
+                    await asyncio.sleep(wait)
+
+            async def get(self, op):
                 if op != "state":
                     raise webapp.APIError(404, "unknown")
+                await self._test_hold(op)
                 self.set_header("Content-Type", "application/json")
                 self.write(json.dumps(impl(self).state()))
 
@@ -2569,6 +2585,7 @@ class ProxyPanel:
 
             async def post(self, op):
                 self.set_header("Content-Type", "application/json")
+                await self._test_hold(op)
                 try:
                     a = json.loads(self.request.body or b"{}")
                     if op in OFF_LOOP_OPS:   # F-03: slow reads/exports must not stall the proxy's event loop

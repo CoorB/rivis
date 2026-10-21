@@ -11,17 +11,41 @@
   const drawerW = () => Math.round(Math.min(460, Math.max(380, window.innerWidth * 0.32)));   // laptop screens keep more room for the list
 
   const xsrf = () => (document.cookie.match(/(?:^|;\s*)_mitmproxy_xsrf=([^;]+)/) || [])[1] || "";
-  const api = async (op, body) => {
+  // A request that never answers must end in a message, never in silence (and must give its connection back: a browser
+  // allows 6 per host, and hung requests that are only abandoned, not aborted, starve every later click).
+  // Normal ops get 15 s; these legitimately take longer (a whole capture saved / loaded / exported, an update, a device set-up).
+  const SLOW_OPS = new Set(["sess_har", "sess_save", "sess_load", "coll_replay", "coll_import", "update_check", "update_install", "device_setup", "browser_open"]);
+  const NORMAL_MS = 15000, SLOW_MS = 120000;
+  const product = () => (state && state.product) || {};
+  const noAnswer = (what, secs, post) => {
+    const cli = product().cli || "rivis";
+    return new Error(`${product().name || "Rivis"} did not answer within ${secs} s${what ? " (" + what + ")" : ""} — the proxy may be busy or stuck. ` +
+      `Run \`${cli} status\` in Terminal; if that hangs too, run \`${cli} restart\`.${post ? " The action may still have been applied." : ""}`);
+  };
+  const fetchT = async (url, opts, ms, what) => {
+    const ac = new AbortController(), t = setTimeout(() => ac.abort(), ms);
+    try { return await fetch(url, { ...opts, signal: ac.signal }); }
+    catch (e) {
+      if (ac.signal.aborted) throw noAnswer(what, Math.round(ms / 1000), opts && opts.method && opts.method !== "GET");
+      throw e;
+    }
+    finally { clearTimeout(t); }
+  };
+  const api = async (op, body, ms) => {
     const opts = body === undefined
       ? { credentials: "same-origin" }
       : { method: "POST", credentials: "same-origin",
           headers: { "Content-Type": "application/json", "X-XSRFToken": xsrf() }, body: JSON.stringify(body) };
-    const r = await fetch("./proxy/api/" + op, opts);
+    const r = await fetchT("./proxy/api/" + op, opts, ms || (SLOW_OPS.has(op) ? SLOW_MS : NORMAL_MS), OP_NAMES[op] || op);
     let j = {};
     try { j = await r.json(); } catch (e) { j = { error: "HTTP " + r.status }; }
     if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
     return j;
   };
+  const OP_NAMES = { mock: "Map Local", maplocal_add: "Map Local", bp_add: "Breakpoint", bp_update: "Breakpoint", bp_delete: "Breakpoint",
+    retry: "Repeat", retry_get: "Edit & Repeat", focus_host: "Show only this host", tls_host: "TLS decryption", tls_set: "TLS decryption",
+    tls_update: "TLS decryption", view: "view filter", source: "source filter", delete: "delete", sess_save: "session save", sess_load: "session load",
+    sess_har: "HAR export", compose_send: "Compose send", codegen: "Copy as code", export: "Copy", update_install: "update" };
   const selectedFlow = () => {   // mitmweb keeps the selection in the hash: #/flows/<id>/<tab>
     const p = location.hash.replace(/^#\/?/, "").split("?")[0].split("/");
     return p[0] === "flows" && p[1] ? p[1] : null;
@@ -472,11 +496,18 @@
     list[i < 0 ? (e.shiftKey ? n - 1 : 0) : (i + (e.shiftKey ? n - 1 : 1)) % n].focus();
   };
   let viewers = { tokens:[], graphql_ops:[], graphql_error_ids:[], complete:false };
-  const toast = (msg, err, action) => {
+  const toast = (msg, err, action, sticky) => {
+    toast._working = null;
     const t = $("toast"); t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action.label)}</button>` : ""}`;
     t.className = "toast" + (err ? " err" : ""); t.style.display = "flex";
     if (action) t.querySelector("button").onclick = () => { t.style.display = "none"; action.run(); };
-    clearTimeout(toast._t); toast._t = setTimeout(() => (t.style.display = "none"), action ? 8000 : err ? 5000 : 2500);
+    clearTimeout(toast._t);
+    if (!sticky) toast._t = setTimeout(() => (t.style.display = "none"), action ? 8000 : err ? (msg.length > 80 ? 12000 : 5000) : 2500);
+  };
+  // "Working…": shown when an action is still waiting after a moment, so a slow answer is visible; whatever result follows replaces it
+  const working = (what) => {
+    const mark = {}, timer = setTimeout(() => { toast(`Working… ${what}`, false, null, true); toast._working = mark; }, 250);
+    return () => { clearTimeout(timer); if (toast._working === mark) { toast._working = null; clearTimeout(toast._t); $("toast").style.display = "none"; } };
   };
   // R9-05: mitmweb's File → Open posts to /flows/dump and ignores the answer. The server now refuses a file it cannot
   // read with a 400 and a readable reason (keeping the current calls); show that reason instead of nothing.
@@ -521,11 +552,13 @@
   const busy = new Set();
   const run = async (op, body, ok) => {
     const key = op + JSON.stringify(body || {});
-    if (busy.has(key)) return;
+    const what = OP_NAMES[op] || op.replace(/_/g, " ");
+    if (busy.has(key)) { toast(`Still waiting for the previous ${what}… (${product().name || "Rivis"} has not answered yet)`, true); return; }
     busy.add(key);
-    try { const r = await api(op, body); if (r.state) state = r.state; if (ok) toast(typeof ok === "function" ? ok(r) : ok); render(); return r; }
+    const done = working(what);
+    try { const r = await api(op, body); if (r.state) state = r.state; done(); if (ok) toast(typeof ok === "function" ? ok(r) : ok); render(); return r; }
     catch (e) { toast(e.message, true); }
-    finally { busy.delete(key); }
+    finally { done(); busy.delete(key); }
   };
   const breakpointOn = (flowId) => {
     const repeatId = flowId || selectedFlow();
@@ -556,26 +589,26 @@
 
   const flowCache = { at: 0, byId: new Map(), pending: null };
   async function refreshFlows() {
-    if (!flowCache.pending) flowCache.pending = fetch("./flows", { credentials: "same-origin" })
+    if (!flowCache.pending) flowCache.pending = fetchT("./flows", { credentials: "same-origin" }, 10000, "call list")
       .then((r) => r.json()).then((all) => {
         flowCache.byId = new Map(all.map((f) => [f.id, f])); flowCache.at = Date.now();
       }).finally(() => { flowCache.pending = null; });
     await flowCache.pending;
   }
-  async function flowsById(id) {
+  async function flowsById(id, strict) {
     try {
       const fresh = Date.now() - flowCache.at < 800;
       if (fresh && flowCache.byId.has(id)) return flowCache.byId.get(id);
       await refreshFlows();
       return flowCache.byId.get(id) || null;
     }
-    catch (e) { return null; }
+    catch (e) { if (strict) throw e; return null; }
   }
   async function builtinContent(id, side, views) {
     for (const view of views) {
       try {
         // R6-06: the decoded protobuf view must include every byte, including beyond the normal UI clip.
-        const r = await fetch(`./flows/${id}/${side}/content/${encodeURIComponent(view)}.json?full=1`, { credentials:"same-origin" });
+        const r = await fetchT(`./flows/${id}/${side}/content/${encodeURIComponent(view)}.json?full=1`, { credentials:"same-origin" }, NORMAL_MS, "call body");
         if (r.ok) return await r.json();
       } catch (e) { /* use the panel-side schema-less fallback */ }
     }
@@ -1594,7 +1627,7 @@
       const n = (mwStore() && mwStore().getState().flows.list.length) || 0;
       if (!n) return toast("The list is already empty");
       if (!confirm(`Clear all ${n} calls from the list?\n\nSaved sessions, rules and scripts are not affected.`)) return;
-      try { const r = await fetch("./clear", { method: "POST", credentials: "same-origin", headers: { "X-XSRFToken": xsrf() } }); if (!r.ok) throw new Error("HTTP " + r.status); toast("List cleared"); }
+      try { const r = await fetchT("./clear", { method: "POST", credentials: "same-origin", headers: { "X-XSRFToken": xsrf() } }, NORMAL_MS, "clear"); if (!r.ok) throw new Error("HTTP " + r.status); toast("List cleared"); }
       catch (err) { toast("Could not clear the list: " + err.message, true); }
     };
   }
@@ -1684,7 +1717,8 @@
   async function openCallMenu(x, y, tr) {
     const mf = flowOf(tr); if (!mf) return;
     if (!tr.classList.contains("selected")) tr.click();                  // select it first, exactly like a left click
-    const f = await flowsById(mf.id);
+    let f;
+    try { f = await flowsById(mf.id, true); } catch (e) { toast(e.message, true); return; }   // not a wrong "host-only" menu when the list did not load
     const m = $("cmenu"), mod = KMOD;
     const isHttp = !!f && f.type === "http", address = (f && f.server_conn && f.server_conn.address) || [],
       tunnelHost = (f && ((f.client_conn || {}).sni || (f.server_conn || {}).sni)) || address[0] || "",
@@ -1717,7 +1751,7 @@
       else if (k === "src") setSource(srcOn ? null : (src.app ? src.key : deviceKey(src)));
       else if (k === "tls" || k === "tlson") run("tls_host", { flow_id: id, host: hostName, decrypt: k === "tlson" }, (r) => r.message);
       else if (k === "del" && confirm("Delete this call from the list?")) {
-        try { const r = await fetch("./flows/" + id, { method: "DELETE", credentials: "same-origin", headers: { "X-XSRFToken": xsrf() } }); if (!r.ok) throw new Error("HTTP " + r.status); toast("Call deleted"); }
+        try { const r = await fetchT("./flows/" + id, { method: "DELETE", credentials: "same-origin", headers: { "X-XSRFToken": xsrf() } }, NORMAL_MS, "delete"); if (!r.ok) throw new Error("HTTP " + r.status); toast("Call deleted"); }
         catch (err) { toast("Could not delete: " + err.message, true); }
       }
     }));
@@ -2243,7 +2277,7 @@
   let viewerPoll = null;
   async function refreshViewerSummaries() {
     if (viewerPoll || !$("drawer").classList.contains("open")) return viewerPoll;
-    viewerPoll = api("viewer_summaries", { limit:12 }).then((r) => {
+    viewerPoll = api("viewer_summaries", { limit:12 }, 5000).then((r) => {
       viewers = r.viewers || viewers;
       tagCells();
     }).catch(() => {}).finally(() => { viewerPoll = null; });
@@ -2254,7 +2288,7 @@
   let lostSince = 0, missed = 0;
   const showLost = (on) => {
     const bar = $("lostbar"), cli = (state && state.product && state.product.cli) || "rivis";
-    if (on) bar.innerHTML = `Can't reach ${esc((state && state.product && state.product.name) || "Rivis")} for ${Math.round((Date.now() - lostSince) / 1000)} s — calls are <b>not</b> being captured. Check it with <code>${esc(cli)} status</code>; start it with <code>${esc(cli)} start --background</code>.`;
+    if (on) bar.innerHTML = `${esc((state && state.product && state.product.name) || "Rivis")} is not responding (no answer for ${Math.round((Date.now() - lostSince) / 1000)} s) — calls may <b>not</b> be captured, and menu actions will fail. Check it with <code>${esc(cli)} status</code>; if that hangs, run <code>${esc(cli)} restart</code>; if it is stopped, <code>${esc(cli)} start --background</code>.`;
     bar.classList.toggle("open", on);
   };
   // Another proxy app as the Mac's proxy: the iOS Simulator's calls go there instead (a leftover on a dead port is
@@ -2315,13 +2349,13 @@
   }
   async function poll() {
     try {
-      const s = await Promise.race([api("state"), new Promise((_, no) => setTimeout(() => no(new Error("no answer")), 4000))]);
+      const s = await api("state", undefined, 4000);   // aborted at 4 s, so a hung proxy never holds a connection
       missed = 0; lostSince = 0; showLost(false);
       state = s; badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow();
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
       // the call list (megabytes at a few thousand calls) is for the Tools drawer's own tabs: skip it while the drawer is
       // closed or the page is hidden (row tags come from mitmweb's own rows), and flowsById() fetches on demand
-      if ($("drawer").classList.contains("open") && !document.hidden) await refreshFlows();
+      if ($("drawer").classList.contains("open") && !document.hidden) await refreshFlows().catch(() => {});   // its own 10 s budget; never stalls the heartbeat
       tagCells(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
       if (!pausedOpen && waiting.length && !$("pause").classList.contains("open")) openPaused(waiting[0].id, true);
@@ -2383,7 +2417,14 @@
   // so watch the selected call id ourselves
   // tells flow retention which call to keep; mitmweb sets its XSRF cookie only after its first requests,
   // so skip until then (a POST without it is refused and logs a console error)
-  const noteSelected = (id) => { if (xsrf()) api("flow_selected", { id }).catch(() => {}); };
+  // (one request at a time: the latest selection waits for the one in flight instead of stacking up behind a stuck proxy)
+  let noting = false, noteNext;
+  const noteSelected = (id) => {
+    if (!xsrf()) return;
+    if (noting) { noteNext = { id }; return; }
+    noting = true;
+    api("flow_selected", { id }, 5000).catch(() => {}).finally(() => { noting = false; if (noteNext) { const n = noteNext; noteNext = null; noteSelected(n.id); } });
+  };
   let lastSel = selectedFlow();
   noteSelected(lastSel);
   setInterval(() => {

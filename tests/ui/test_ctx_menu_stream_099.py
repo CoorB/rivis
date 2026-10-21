@@ -51,12 +51,20 @@ class CtxMenuStreaming(UiBase):
         self.addCleanup(lambda: (stop.set(), t.join(5)))
 
     def menu_on(self):
-        self.page.locator(".flow-table tbody tr", has_text="a=1").first.click(button="right")
-        wait_for(lambda: self.P("#cmenu.open").count() > 0, 5, 0.1, "menu open")
-        self.page.wait_for_timeout(1200)       # past the 700 ms grace; several polls and new rows
+        for _ in range(4):                     # a streamed row can scroll the list and close the menu after its grace: open it again
+            self.page.locator(".flow-table tbody tr", has_text="a=1").first.click(button="right")
+            wait_for(lambda: self.P("#cmenu.open").count() > 0, 5, 0.1, "menu open")
+            self.page.wait_for_timeout(1200)   # past the 700 ms grace; several polls and new rows
+            if self.P("#cmenu.open").count():
+                return
 
     def pointer_press(self, k, between=None):
         b = self.P("#cmenu button[data-k=%s]" % k).bounding_box()
+        for _ in range(3):
+            if b:
+                break
+            self.menu_on()                     # closed by a streamed row's scroll since menu_on returned
+            b = self.P("#cmenu button[data-k=%s]" % k).bounding_box()
         self.page.mouse.move(b["x"] + 30, b["y"] + 8, steps=6)
         self.page.mouse.down()
         if between:
