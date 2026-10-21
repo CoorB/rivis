@@ -2359,6 +2359,7 @@
     const ta = $("body"), st = $("st");
     return !ta || !st || ta.value !== e.original.content || st.value !== e.original.status || JSON.stringify(readHeaders("hd")) !== e.original.headers;
   };
+  const previewKB = (s) => Math.max(1, Math.round(s.length / 1024));   // a binary body above the server's preview size arrives clipped
   const BIG_BODY = 1024 * 1024;         // above this, JSON is checked after typing pauses, not on every key (R6B-09)
   function renderEditor(m) {
     const e = editing;
@@ -2370,9 +2371,10 @@
       <div class="sub" style="margin-top:6px">${esc(e.method || "ANY")} ${esc(pretty({ match: e.match }))}</div>
       <div class="seg"><button data-sub="body" class="${e.sub === "body" ? "on" : ""}">Body</button><button data-sub="headers" class="${e.sub === "headers" ? "on" : ""}">Headers</button></div>
       <div id="pbody" style="${e.sub === "body" ? "" : "display:none"}">
-        ${e.binary ? `<div class="sub" style="margin-bottom:4px">Binary file (${e.size} bytes), shown as text. Save keeps its bytes unless you edit the text here.</div>` : ""}
-        <textarea id="body" spellcheck="false" aria-label="Response body" ${e.editable ? "" : "readonly"}></textarea>
-        <div class="btns"><button class="b" id="fmt">Format JSON</button><span class="sub" id="jsonok"></span></div></div>
+        ${e.clipped ? `<div class="sub" id="binclip" style="margin-bottom:4px">Binary file (${e.size} bytes): a read-only preview of the first ${previewKB(e.content)} KB. Save keeps the file's bytes; status and headers can still be changed.</div>`
+          : e.binary ? `<div class="sub" style="margin-bottom:4px">Binary file (${e.size} bytes), shown as text. Save keeps its bytes unless you edit the text here.</div>` : ""}
+        <textarea id="body" spellcheck="false" aria-label="Response body" ${e.editable && !e.clipped ? "" : "readonly"}></textarea>
+        <div class="btns"><button class="b" id="fmt" ${e.clipped ? "disabled" : ""}>Format JSON</button><span class="sub" id="jsonok"></span></div></div>
       <div id="phdr" style="${e.sub === "headers" ? "" : "display:none"}">${headersHTML(e.headers, "hd")}
         <div class="sub">Content-Type defaults to the file type when not set.</div></div>
       <div class="btns"><button class="b p" id="save" ${e.editable ? "" : "disabled"}>Save</button><span class="sub" id="dirty"></span></div>

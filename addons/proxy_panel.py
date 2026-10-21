@@ -95,6 +95,10 @@ MAX_PANEL_DEPTH = 16
 # F-03: a session HAR leaves out any single body larger than this (with a comment saying so). Redacting a 60 MB body
 # took a minute of pure-Python regex that holds the interpreter lock, so even off the event loop it froze live traffic.
 HAR_BODY_LIMIT = 4 * 1024 * 1024
+# A binary mock (a PDF, an image) opens in the editor as text with U+FFFD for every byte that is not UTF-8. Chromium needs
+# ~10 s to lay out 1 MB of that in a textarea (~110 s for 3 MB; plain ASCII takes 75 ms), blocking the whole page. Above this
+# size the editor gets a read-only preview of the first bytes; status and headers stay editable and Save keeps the file's bytes.
+MOCK_BINARY_PREVIEW = 16 * 1024
 # panel ops whose work (disk read, HAR build, redaction) runs on a worker thread so live traffic and the panel keep flowing
 OFF_LOOP_OPS = ("sess_har",)
 
@@ -541,6 +545,16 @@ class ProxyPanel:
             raise PanelError("the proxy would skip this rule: %s" % e)
 
     # ── mock files: only ever <active-project>/mocks/<safe-name>.json ──────────
+    @staticmethod
+    def mock_text(raw):
+        """How the panel editor sees a mock file: (text, binary, clipped)."""
+        try:
+            return raw.decode("utf-8"), False, False
+        except UnicodeDecodeError:
+            if len(raw) > MOCK_BINARY_PREVIEW:
+                return raw[:MOCK_BINARY_PREVIEW].decode("utf-8", "replace"), True, True
+            return raw.decode("utf-8", "replace"), True, False
+
     @staticmethod
     def mock_path(name):
         if not SAFE_NAME.fullmatch(name or ""):
@@ -2245,12 +2259,8 @@ class ProxyPanel:
                 raw = fh.read()
                 headers = r.get("headers") or {}
                 header_rows = list(headers.items()) if isinstance(headers, dict) else headers
-                try:
-                    raw.decode("utf-8")
-                    binary = False
-                except UnicodeDecodeError:
-                    binary = True          # an image, protobuf…: shown as text, but Save keeps the bytes unless edited
-                return {"content": raw.decode("utf-8", "replace"), "status": r.get("status", 200), "binary": binary,
+                text, binary, clipped = self.mock_text(raw)   # binary: an image, protobuf…, shown as text; Save keeps the bytes unless edited
+                return {"content": text, "status": r.get("status", 200), "binary": binary, "clipped": clipped,
                         "draft": r.get("draft") is True,
                         "size": len(raw),
                         "headers": [[k, v] for k, v in header_rows],
@@ -2273,7 +2283,11 @@ class ProxyPanel:
                     raw = fh.read()
                 # a binary mock comes back from the editor as its replacement-character text: writing that turned every
                 # non-UTF-8 byte into U+FFFD (QA-08). Unchanged text = keep the file's bytes, change only status/headers.
-                if a["content"] != raw.decode("utf-8", "replace"):
+                text, _binary, clipped = self.mock_text(raw)
+                if a["content"] != text:
+                    if clipped:
+                        raise PanelError("this body is binary and larger than %d KB: the panel shows only a preview and cannot replace the file "
+                                         "(status and headers can still be saved)" % (MOCK_BINARY_PREVIEW // 1024))
                     atomic_write_text(path, a["content"])
             if str(a.get("status", "")).strip():
                 r["status"] = http_status(a["status"])

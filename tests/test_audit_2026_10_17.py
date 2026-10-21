@@ -188,6 +188,30 @@ class Payloads(Base):
         self.assertEqual(r.body, png, "binary mock corrupted by an unchanged open+save in the panel (%d -> %d bytes)"
                          % (len(png), len(r.body)))
 
+    def test_large_binary_mock_opens_as_a_clipped_preview_and_keeps_its_bytes(self):
+        """A multi-MB PDF as text (U+FFFD per byte) took Chromium ~10 s per MB to lay out in the editor's textarea (R-S5): above
+        16 KB the panel gets a preview and the file is never replaced by it."""
+        pdf = b"%PDF-1.4\n" + bytes(range(1, 256)) * 400            # 102 KB, not UTF-8
+        srv = RawServer(b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
+                        % len(pdf) + pdf)
+        self.inst.fetch(srv.url("/doc.pdf"))
+        name = self.p.ok("mock", {"flow_id": self.fid("/doc.pdf")})["name"]
+        got = self.p.ok("mockfile_get", {"name": name})
+        self.assertIs(got["clipped"], True)
+        self.assertIs(got["binary"], True)
+        self.assertEqual(got["size"], len(pdf))
+        self.assertLessEqual(len(got["content"]), 16 * 1024, "the whole binary body was sent to the editor")
+        # the editor sends the preview back unchanged, with a status change: the file keeps every byte
+        self.p.ok("mockfile_put", {"name": name, "content": got["content"], "status": 201, "headers": got["headers"]})
+        r = self.inst.fetch(srv.url("/doc.pdf"))
+        self.assertEqual((r.status, r.body), (201, pdf), "the clipped preview replaced the binary mock")
+        # any other text for a clipped body is refused, and the file stays as it was
+        code, doc, raw = self.p.post("mockfile_put", {"name": name, "content": got["content"] + "x", "status": 200, "headers": got["headers"]})
+        self.assertEqual(code, 400, raw[:200])
+        r = self.inst.fetch(srv.url("/doc.pdf"))
+        srv.close()
+        self.assertEqual(r.body, pdf)
+
     def test_big_response_100mb_passes_intact(self):
         r = self.inst.fetch(UP.url("/big?mb=100"), timeout=120)
         self.assertEqual(r.status, 200)

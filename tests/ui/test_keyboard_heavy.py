@@ -302,6 +302,37 @@ class KeyboardAndHeavyBodies(UiBase):
         self.assertTrue(any(r.get("action") == "map_local" and r.get("enabled") for r in self.panel.state()["rules"]))
         self.assertEqual(self.errors, [])
 
+    # ── R-S5: the 24 s freeze in the 25-minute soak ────────────────────────────────────────────────
+    def test_map_local_of_a_1mb_binary_call_does_not_freeze_the_page(self):
+        """Map Local from a PDF call put 1 MB of U+FFFD text into a textarea: Chromium spent ~10-60 s laying it out, the page was
+        dead and the panel made no request (soak seed 99, a statement.pdf row). Now a binary body above 16 KB opens as a clipped,
+        read-only preview, and Save keeps the file's bytes."""
+        self.page.set_default_timeout(240000)          # unfixed code must fail on the measured block below, not on a Playwright timeout
+        self.fetch("/big?mb=1&kbbin=1", timeout=60)    # 1 MiB of non-UTF-8 bytes
+        page = self.open()
+        self.select("kbbin=1")
+        page.evaluate("""() => { window.__lt = []; new PerformanceObserver((l) => l.getEntries().forEach((e) => window.__lt.push(Math.round(e.duration))))
+            .observe({ entryTypes: ['longtask'] }); }""")
+        self.P("#fab").click()
+        self.P("button[data-t=call]").click()
+        wait_for(lambda: "kbbin=1" in self.P("#main").inner_text(), 15, 0.2, "the Call tab to show the selected call")
+        self.P("#mock").click()
+        self.P("#main #body").wait_for(timeout=240000)
+        wait_for(lambda: self.P("#main #body").evaluate("t => t.value.length") > 1000, 20, 0.5, "binary body shown")
+        page.wait_for_timeout(1500)                    # a layout that is still running shows up as a long task by now
+        worst = max(page.evaluate("window.__lt") or [0])
+        self.assertLess(worst, 1000, "opening Map Local on a 1 MB binary body blocked the page for %d ms" % worst)
+        body = self.P("#main #body")
+        self.assertLessEqual(body.evaluate("t => t.value.length"), 16 * 1024)
+        self.assertEqual(body.get_attribute("readonly"), "")
+        self.assertIn("preview", self.P("#main #binclip").inner_text())
+        self.P("#main #st").fill("201")
+        self.P("#save").click()
+        wait_for(lambda: "Saved" in self.P("#toast").inner_text(), 20, 0.2, "Saved toast")
+        r = self.fetch("/big?mb=1&kbbin=1", timeout=60)
+        self.assertEqual((r.status, len(r.body)), (201, 1048576), "the clipped preview replaced the binary body")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
