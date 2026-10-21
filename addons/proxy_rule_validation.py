@@ -17,6 +17,13 @@ def map_remote_warning(rule):
     # concrete example; skip complex regexes rather than guessing a URL that may not match them.
     if not re.fullmatch(r"/[A-Za-z0-9/_?&=.%+-]+", match):
         return None
+    # B6: if replace is a full-URL pattern targeting a specific host/scheme and matches the path in match,
+    # the rule works for that host; testing against example.test produces a false warning.
+    try:
+        if "://" in replace and user_regex(match).search(replace):
+            return None
+    except re.error:
+        pass
     example = "https://example.test" + match
     try:
         if user_regex(match).search(example) and not user_regex(replace).search(example):

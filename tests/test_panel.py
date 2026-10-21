@@ -181,6 +181,14 @@ class Ops(LiveCase):
         self.assertIn("replace is the URL pattern", warning)
         self.assertIn("may never rewrite", warning)
 
+    def test_b6_map_remote_full_url_replace_matching_path_no_false_warning(self):
+        # B6: path-only match with full-URL replace must not warn with example.test
+        rule = {"name": "mr_full", "action": "map_remote", "match": "/hosts",
+                "replace": r"^http://127\.0\.0\.1:18101/hosts$", "with": "http://localhost:18101/hosts"}
+        self.panel.ok("add", {"rule": rule})
+        warnings = self.panel.state()["rule_warnings"]
+        self.assertNotIn("mr_full", warnings)
+
     def test_add_validation(self):
         self.bad("add", {"rule": {"name": "bad name!", "action": "respond"}}, "name")
         self.bad("add", {"rule": {"name": "x", "action": "explode"}}, "action")
