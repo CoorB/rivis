@@ -414,6 +414,43 @@ class Breakpoints(LiveCase):
         self.assertEqual(held.result(15).status, 200)
         self.assertEqual(self.panel.state()["paused"], [])
 
+    def give_up(self, path):
+        """A client that sends a request through the proxy and closes its connection while the call is paused."""
+        import socket
+        from urllib.parse import urlparse
+        url = self.up.url(path)
+        sock = socket.create_connection(("127.0.0.1", self.inst.proxy_port), timeout=10)
+        sock.sendall(("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n" % (url, urlparse(url).netloc)).encode())
+        return sock
+
+    def test_a_paused_call_whose_client_gave_up_is_released_not_left_paused(self):
+        """B1: a call paused at its request whose client gave up (curl -m 3) stayed "paused" for good, and the panel's
+        sheet and "1 paused" button kept reopening it. The breakpoint is still ON here: the call must end by itself,
+        say why, and never be sent upstream."""
+        self.reset_state(breakpoints=[bp("a", "/echo")])
+        sock = self.give_up("/echo?gaveup=1")
+        self.paused()
+        sock.close()                                                   # the client gives up
+        wait_for(lambda: not self.panel.state()["paused"], 15, 0.2, "abandoned call no longer paused")
+        self.assertIn("client gave up", self.comment("/echo?gaveup=1"))
+        time.sleep(0.5)
+        self.assertEqual(self.up.hits_for("/echo"), [], "an abandoned call must not be sent upstream")
+        live = self.bg("/echo?live=1")                                 # the breakpoint still works for the next call
+        p = self.paused()[0]
+        self.panel.ok("paused_skip", {"id": p["id"]})
+        self.assertEqual(live.result().status, 200)
+
+    def test_breakpoint_off_after_the_client_gave_up_leaves_nothing_paused(self):
+        """B1 / m9 (ebd68d9): `breakpoint off` releases a dead call too, and nothing goes upstream."""
+        self.reset_state(breakpoints=[bp("a", "/echo")])
+        sock = self.give_up("/echo?gaveup=2")
+        self.paused()
+        sock.close()
+        self.panel.ok("bp_update", {"name": "a", "enabled": False})
+        wait_for(lambda: not self.panel.state()["paused"], 15, 0.2, "nothing paused after breakpoint off")
+        time.sleep(0.5)
+        self.assertEqual(self.up.hits_for("/echo"), [])
+
     def test_method_filter_and_disabled(self):
         self.reset_state(breakpoints=[bp(method="DELETE"), bp("off", "/json", enabled=False)])
         self.assertEqual(self.fetch("/echo").status, 200)             # GET, not paused

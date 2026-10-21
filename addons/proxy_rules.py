@@ -504,6 +504,26 @@ class ProxyRules:
         if freed:
             ctx.master.view.update(freed)
 
+    def _abandon_paused(self, client):
+        """A call paused at a breakpoint whose client has gone (the app timed out, `curl -m`) can never be answered: end
+        it as abandoned instead of leaving it "paused" for good. Killed, not resumed, so nothing is sent upstream."""
+        try:
+            view = ctx.master.view
+            flows = list(getattr(view, "_store", {}).values()) or list(view)
+        except Exception:      # no flow view (unit tests, startup): nothing can be paused yet
+            return
+        freed = []
+        for f in flows:
+            if getattr(f, "intercepted", False) and getattr(f, "client_conn", None) is not None \
+                    and f.client_conn.id == client.id:
+                f.comment = (f.comment + " | " if f.comment else "") + "client gave up while paused: not sent"
+                f.kill()
+                if f.intercepted:
+                    f.resume()
+                freed.append(f)
+        if freed:
+            ctx.master.view.update(freed)
+
     def _set_tls(self, cfg):
         """Apply allow/ignore to NEW connections. mitmproxy's next_layer reads ctx.options per
         connection, so no restart is needed; connections already open keep their earlier decision."""
@@ -752,6 +772,7 @@ class ProxyRules:
             data.server.sni = name
 
     def client_disconnected(self, client):
+        self._abandon_paused(client)
         self._https_pins = {key: value for key, value in self._https_pins.items() if key[0] != client.id}
 
     @staticmethod
