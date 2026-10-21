@@ -50,7 +50,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
-from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRODUCT, SAFE_NAME, STATE_ROOT, atomic_json,
+from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRESETS, PRODUCT, SAFE_NAME, STATE_ROOT, atomic_json,
                           atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
                           confined_path, migrate_collection, migrate_rules, owned_mock_file, project_profile,
                           project_profiles, project_state, tls_config, tls_covering, tls_update,
@@ -375,7 +375,7 @@ class ProxyPanel:
                     raise ValueError("each rule must be an object")
             throttle = str(cfg.get("throttle", "off") or "off").lower()
             shorthand = throttle_shorthand(throttle)
-            if throttle not in {p["id"] for p in PROFILES} and shorthand is None:
+            if throttle not in PRESETS and shorthand is None:       # PRESETS = the panel's profiles + the CLI's lte/3g/edge/slow
                 raise ValueError("unknown throttle '%s'" % throttle)
             if cfg.get("throttle_match"):
                 user_regex(cfg["throttle_match"])
@@ -1769,11 +1769,17 @@ class ProxyPanel:
             cfg["no_cache"] = bool(a.get("on"))
             self.save_cfg(cfg)
         elif op == "profile":
-            pid = a.get("id", cfg.get("throttle", "off"))
-            if pid not in {p["id"] for p in PROFILES}:
+            current = cfg.get("throttle", "off")
+            pid = a.get("id", current)
+            # a CLI preset (`rivis throttle 3g`, `500ms`) is not in the panel's list, but editing only its URL scope
+            # sends it back as the current profile: keep it, and its loss, as they are
+            keep_cli = pid == current and pid not in {p["id"] for p in PROFILES} and (
+                pid in PRESETS or throttle_shorthand(pid) is not None)
+            if pid not in {p["id"] for p in PROFILES} and not keep_cli:
                 raise PanelError("unknown profile")
             cfg["throttle"] = pid
-            cfg["loss"] = 0                  # the profile's own loss applies
+            if not keep_cli:
+                cfg["loss"] = 0              # the profile's own loss applies
             if pid == "manual":
                 m = cfg.setdefault("manual", {})
                 for k in MANUAL_KEYS:
@@ -1856,7 +1862,8 @@ class ProxyPanel:
         elif op == "export":           # Copy URL / Copy cURL
             f = self.flow(a["flow_id"])
             if a.get("fmt") == "url":
-                return {"text": request_url(f.request)}
+                url = request_url(f.request)
+                return {"text": proxy_redact.url(url) if a.get("mask", True) is not False else url}
             # mask secrets unless the panel explicitly unticked "Mask secrets" (bank policy: no shared tokens)
             return {"text": generate(self._flow_request(f), "curl", a.get("mask", True) is not False)}
         elif op == "retry":            # Edit & Retry: copy the call, apply edits, send it again

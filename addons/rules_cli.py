@@ -325,6 +325,8 @@ def rules_cmd(path, args):
             if reason:
                 die("rule '%s' skipped by proxy: %s" % (name, reason))
         r["enabled"] = cmd == "on"
+        if cmd == "on":
+            r.pop("draft", None)         # switched on by hand: no longer a discardable draft (the panel toggle does the same)
         save(path, cfg)
         print("%s → %s" % (name, cmd.upper()))
     elif cmd == "show":

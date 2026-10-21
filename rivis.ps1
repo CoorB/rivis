@@ -765,6 +765,7 @@ switch ($Command) {
         }
       } else {
         $rule | Add-Member -NotePropertyName enabled -NotePropertyValue ($subcommand -eq "on") -Force
+        if ($subcommand -eq "on") { $rule.PSObject.Properties.Remove("draft") }
         Save-RulesConfig $cfg
         Write-Host "$ruleName -> $($subcommand.ToUpperInvariant())"
       }
