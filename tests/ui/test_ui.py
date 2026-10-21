@@ -98,6 +98,77 @@ class ProjectShowToast(UiBase):
 
 
 @unittest.skipIf(PW_REASON, PW_REASON or "")
+class UiScrollRegression(UiBase):
+    PROJECT = "neo"
+
+    def test_selected_project_call_can_wheel_to_and_follow_the_top(self):
+        """A selected request pane and arriving calls must not trap the wheel below the newest row."""
+        self.wheel_to_top_while_calls_arrive(select=True)
+
+    def test_unselected_project_list_can_wheel_to_and_follow_the_top(self):
+        """The same with no call selected and the detail pane closed."""
+        self.wheel_to_top_while_calls_arrive(select=False)
+
+    def wheel_to_top_while_calls_arrive(self, select):
+        self.panel.ok("view", {"project": "neo", "project_only": True, "show_dns": False})
+        for i in range(35):
+            self.fetch("/json/small?scroll099=%02d" % i, headers={"Host": "api.neo.sa"})
+        page = self.open()
+        table = page.locator(".flow-table")
+        wait_for(lambda: "sort-desc" in (page.locator(".flow-table th.col-timestamp").get_attribute("class") or ""),
+                 10, 0.1, "descending Start time")
+        wait_for(lambda: "scroll099=34" in (page.locator(".flow-table tbody tr:has(td.col-path)").first.text_content() or ""),
+                 10, 0.1, "newest initial call")
+        self.assertTrue(self.panel.state()["project_only"])
+        table.evaluate("e => e.scrollTop = 320")
+        page.wait_for_timeout(400)
+        if select:
+            page.locator(".flow-table tbody tr:has(td.col-path)").filter(has_text="scroll099=20").click()
+            wait_for(lambda: "/request" in page.evaluate("location.hash"), 10, 0.1, "selected Request pane")
+        self.assertGreater(table.evaluate("e => e.scrollTop"), 0)
+
+        # Mirror the emulator's connectivity checks: a call every 1–3 s while the owner wheels upward.
+        def arrive():
+            for i in range(35, 39):
+                self.fetch("/json/small?scroll099=%02d" % i, headers={"Host": "api.neo.sa"})
+                time.sleep(1)
+        traffic = Background(arrive)
+        box = table.bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 3, box["y"] + box["height"] / 2)
+        for _ in range(8):
+            page.mouse.wheel(0, -420)
+            page.wait_for_timeout(120)
+        traffic.result(15)
+        page.wait_for_timeout(400)
+        top = table.evaluate("""e => {
+          const head = e.querySelector('thead').getBoundingClientRect().bottom;
+          const rows = [...e.querySelectorAll('tbody tr')].filter(r => r.querySelector('.col-path'));
+          return { scrollTop: e.scrollTop, first: rows[0]?.querySelector('.col-path')?.textContent,
+                   gap: rows[0]?.getBoundingClientRect().top - head };
+        }""")
+        self.assertLessEqual(top["scrollTop"], 1, top)
+        self.assertIn("scroll099=38", top["first"], top)
+        self.assertLessEqual(abs(top["gap"]), 2, top)
+        self.fetch("/json/small?scroll099=39", headers={"Host": "api.neo.sa"})
+        wait_for(lambda: "scroll099=39" in (table.locator("tbody tr:has(td.col-path)").first.text_content() or ""),
+                 10, 0.1, "following a later new call")
+        self.assertLessEqual(table.evaluate("e => e.scrollTop"), 1)
+        table.evaluate("e => e.scrollTop = 320")
+        page.wait_for_timeout(400)
+        visible = """e => { const top = e.querySelector('thead').getBoundingClientRect().bottom;
+          for (const tr of e.querySelectorAll('tbody tr')) { const r = tr.getBoundingClientRect();
+            if (tr.querySelector('.col-path') && r.bottom > top + 1)
+              return [tr.querySelector('.col-path').textContent, Math.round(r.top - top)]; }
+        }"""
+        middle = table.evaluate(visible)
+        for i in range(40, 42):
+            self.fetch("/json/small?scroll099=%02d" % i, headers={"Host": "api.neo.sa"})
+            page.wait_for_timeout(1000)
+            self.assertEqual(table.evaluate(visible), middle, "the middle row moved during live calls")
+        self.assertEqual(self.errors, [])
+
+
+@unittest.skipIf(PW_REASON, PW_REASON or "")
 class UiSmoke(UiBase):
 
     def test_page_loads_with_flows_and_the_panel_button(self):

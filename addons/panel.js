@@ -2719,10 +2719,12 @@
       correctedScroll = null;
       if (observedScroll !== null && Math.abs(ft.scrollTop - observedScroll) < 1 && recordTimer !== null) return;
       observedScroll = ft.scrollTop;
+      if (ft.scrollTop <= 0) anchor = null;                // follow new calls as soon as the user reaches the top
       scheduleRecord(true);
     };
     const correct = () => {
       if (!ft) return;
+      if (recordTimer !== null) return;                    // virtual rows are changing for a user scroll, not new traffic
       if (!anchor) { scheduleRecord(false); return; }
       const top = ft.getBoundingClientRect().top + headH();
       for (const tr of rows()) {
