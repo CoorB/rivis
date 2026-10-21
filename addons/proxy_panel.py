@@ -50,6 +50,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
+from rules_cli import acquire_lock
 from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRESETS, PRODUCT, SAFE_NAME, STATE_ROOT, atomic_json,
                           atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
                           confined_path, migrate_collection, migrate_rules, owned_mock_file, project_profile,
@@ -394,6 +395,13 @@ class ProxyPanel:
         return cfg
 
     def save_cfg(self, cfg):
+        if self._rules_error:
+            raise PanelError("rules.json is invalid on disk: %s; fix it before changing rules" % self._rules_error)
+        try:
+            with open(self.rules_path) as fh:
+                json.load(fh)
+        except (OSError, ValueError) as exc:
+            raise PanelError("rules.json is invalid on disk: %s; fix it before changing rules" % exc)
         atomic_json(self.rules_path, migrate_rules(cfg))
         # Apply now, not on the proxy's next once-a-second poll: a breakpoint set in the panel must catch the very next
         # call (on a quiet app that is the only call; seen with a real app, 2026-10-15).
@@ -402,7 +410,7 @@ class ProxyPanel:
                 try:
                     addon.mtime = None
                     addon._reload(force=True)
-                except Exception as e:  # noqa: BLE001 - the file is saved; the proxy still picks it up within a second
+                except Exception as e:  # noqa: BLE001 - the file is saved; the proxy still picks it up on its next poll
                     ctx.log.warn(f"panel: could not apply the rules change at once: {e}")
 
     @staticmethod
@@ -636,10 +644,8 @@ class ProxyPanel:
         return self._sysproxy.get()[1]
 
     def _system_proxy_check(self):
-        """Runs on a background thread (scutil, lsof and possibly a 30 s net-reset must never block the proxy).
-        A proxy app that quit (Proxyman, Charles…) can leave it on a dead loopback port: the Simulator and every Mac
-        app lose the network. Still dead on the next check -> cleared with `<cli> net-reset --auto` (stale loopback
-        entries only, never a live or a remote proxy). A LIVE other app is reported so the panel can name it."""
+        """Inspect the system proxy off the event loop; clear only a previously observed Rivis/Proxyman leftover."""
+        import socket
         import time
         now = time.time()
         stale_since = self._sysproxy_stale_since
@@ -651,11 +657,16 @@ class ProxyPanel:
                 if kv.get(pre + "Enable") == "1":
                     host, port = kv.get(pre + "Proxy", ""), kv.get(pre + "Port", "")
                     owner, ours = "", False
-                    if port.isdigit():
+                    if port.isdigit() and host in ("127.0.0.1", "localhost"):
                         rows = subprocess.run(["lsof", "-nP", "-iTCP:%s" % port, "-sTCP:LISTEN"], capture_output=True,
                                               text=True, timeout=3).stdout.splitlines()[1:]
                         if rows:
                             owner, ours = rows[0].split()[0], rows[0].split()[1] == str(os.getpid())
+                        try:
+                            with socket.create_connection(("127.0.0.1", int(port)), timeout=0.5):
+                                owner = owner or "another local listener"
+                        except OSError:
+                            pass
                     info = {"host": host, "port": port, "owner": owner, "ours": ours,
                             "stale": host in ("127.0.0.1", "localhost", "::1") and not owner}
                     break
@@ -664,10 +675,11 @@ class ProxyPanel:
         if info and info["stale"]:
             if stale_since and now - stale_since >= 4:          # not a proxy app in the middle of quitting
                 try:
-                    subprocess.run([devices.CLI, "net-reset", "--auto"], capture_output=True, text=True, timeout=30)
+                    reset = subprocess.run([devices.CLI, "net-reset", "--auto"], capture_output=True, text=True, timeout=30)
+                    if reset.returncode == 0 and "fixed:" in reset.stdout:
+                        info = dict(info, fixed=True)
                 except (OSError, subprocess.SubprocessError):
                     pass
-                info = dict(info, fixed=True)
                 stale_since = 0.0
             elif not stale_since:
                 stale_since = now
@@ -1230,7 +1242,7 @@ class ProxyPanel:
             out["error"] = None
         except ValueError as e:
             out = {"mode": "all", "allow": [], "ignore": [], "error": str(e)}
-        out["note"] = ("Applies to new connections within a second — no restart. Connections that are "
+        out["note"] = ("Applies to new connections after the next rules poll; allow a few seconds — no restart. Connections that are "
                        "already open keep their earlier decision; reopen the app or its screen. "
                        "Hosts that are not decrypted still show up as a host-only row, but their URLs, headers and bodies "
                        "stay hidden, and rules, Map Local, breakpoints, scripts and network conditions cannot touch them. "
@@ -1419,6 +1431,14 @@ class ProxyPanel:
 
     # ── actions ───────────────────────────────────────────────────────────────
     def act(self, op, a):
+        lock = acquire_lock(self.rules_path)
+        try:
+            return self._act(op, a)
+        finally:
+            if lock is not None:
+                lock.close()
+
+    def _act(self, op, a):
         if not isinstance(a, dict):
             raise PanelError("request body must be a JSON object")
         self._check_input(a)

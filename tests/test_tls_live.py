@@ -91,6 +91,19 @@ class TlsLive(LiveCase):
         self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
         wait_for(self.decrypted, 12, 0.3, "CLI all reaches proxy")
 
+    def test_measure_cli_ignore_activation(self):
+        import time
+        env = dict(self.inst.env)
+        self.assertTrue(self.decrypted())
+        started = time.monotonic()
+        for args in (("tls", "ignore", "add", "127.0.0.1"), ("tls", "mode", "ignore")):
+            cp = self.suite.run(["/bin/bash", harness.RIVIS, *args], home=self.inst.home, env=env)
+            self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        wait_for(lambda: not self.decrypted(), 12, 0.2, "CLI ignore activation")
+        elapsed = time.monotonic() - started
+        print("TLS ignore activation %.2f s" % elapsed)
+        self.assertLess(elapsed, 10)
+
     def test_invalid_tls_block_keeps_the_previous_policy(self):
         self.apply({"mode": "ignore", "ignore": ["127.0.0.1"]}, False)
         self.inst.write_cfg({"tls": {"mode": "bogus"}}, sync=False)

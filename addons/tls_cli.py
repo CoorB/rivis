@@ -6,7 +6,7 @@
   tls_cli.py FILE ignore add|rm PATTERN
 
 Patterns are host names with Proxyman-style wildcards (*.example.test). The running proxy picks the
-change up within a second; it applies to NEW connections, no restart needed.
+change up after the next rules poll; allow a few seconds for NEW connections, no restart needed.
 """
 import json
 import os
@@ -16,8 +16,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
 from proxy_common import PRODUCT, atomic_json, migrate_rules, tls_config, tls_host_regex, tls_update
+from rules_cli import acquire_lock
 
-NOTE = "applies to new connections within a second — no restart; open connections keep their earlier decision"
+NOTE = "applies to new connections after the next rules poll; allow a few seconds — no restart; open connections keep their earlier decision"
 
 
 def die(msg):
@@ -43,6 +44,7 @@ def main(argv):
     if len(argv) < 2:
         die(__doc__)
     path, args = argv[0], argv[1:]
+    lock = acquire_lock(path)
     try:
         with open(path) as fh:
             cfg = migrate_rules(json.load(fh))
@@ -62,9 +64,12 @@ def main(argv):
             message = "%s %s: %s" % (cmd, "added" if args[1] == "add" else "removed", args[2].lower())
         else:
             die("usage: tls list | tls mode [all|allow|ignore] | tls allow|ignore add|rm HOST[:PORT]")
+        atomic_json(path, cfg)
     except (OSError, ValueError) as e:
         die(str(e))
-    atomic_json(path, cfg)
+    finally:
+        if lock is not None:
+            lock.close()
     print(message)
     tls = tls_config(cfg)
     if tls["mode"] != "all" and not tls[tls["mode"]]:

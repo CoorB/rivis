@@ -122,6 +122,28 @@ class Ops(LiveCase):
     def rules(self):
         return [r for r in self.panel.state()["rules"] if not r["name"].startswith("sync-")]
 
+    def test_invalid_rules_file_is_preserved_on_panel_write(self):
+        with open(self.inst.rules_path, "w") as fh:
+            fh.write('{"rules": [')
+        self.bad("add", {"rule": {"name": "must-not-save", "match": "/x", "action": "block"}}, "rules.json is invalid")
+        with open(self.inst.rules_path) as fh:
+            self.assertEqual(fh.read(), '{"rules": [')
+
+    def test_panel_write_waits_for_cli_rules_lock(self):
+        import fcntl
+        import threading
+        lock_path = os.path.join(os.path.dirname(self.inst.rules_path), ".rules.lock")
+        with open(lock_path, "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            timer = threading.Timer(0.5, lambda: fcntl.flock(lock, fcntl.LOCK_UN))
+            timer.start()
+            try:
+                started = time.monotonic()
+                self.panel.ok("add", {"rule": {"name": "after-lock", "match": "/after", "action": "block"}})
+                self.assertGreater(time.monotonic() - started, 0.35)
+            finally:
+                timer.join()
+
     def widen_match(self, name, match):
         """Rules built from a call anchor on host+path and drop the :port (FOUND-BUGS B3); the suite's upstream is
         on a random port, so point the rule at the path to keep exercising everything else."""
@@ -1143,11 +1165,14 @@ class LeftoverSystemProxyWhileRunning(LiveCase):
         return open(self.setlog).read().split("\n")[:-1] if os.path.exists(self.setlog) else []
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS system proxy")
-    def test_a_dead_leftover_is_cleared_and_reported_once_it_stays_dead(self):
+    def test_an_unproven_dead_proxy_is_reported_and_left_alone(self):
         self.set_port(free_port())
-        fixed = wait_for(lambda: (self.panel.state().get("system_proxy") or {}).get("fixed") or None, 20, 1.0, "auto-fix")
-        self.assertTrue(fixed)
-        self.assertIn("-setsecurewebproxystate Wi-Fi off", self.changes())
+        state = wait_for(lambda: (lambda x: x if x and x.get("port") == open(self.portfile).read() else None)(
+            self.panel.state().get("system_proxy")), 20, 1.0, "proxy status")
+        self.assertTrue(state["stale"])
+        time.sleep(5)
+        self.assertFalse((self.panel.state().get("system_proxy") or {}).get("fixed"))
+        self.assertEqual(self.changes(), [])
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS system proxy")
     def test_a_live_proxy_app_is_named_and_never_touched(self):
