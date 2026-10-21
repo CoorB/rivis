@@ -188,9 +188,15 @@ class Scenarios:
         check(info["host"] in after["allow"] + after["ignore"] or after["mode"] != before["mode"], "TLS lists do not mention %s: %s" % (info["host"], after))
         ui.pause()
         ui.open_tools("net")                                         # and back, from the Network tab
-        t1 = ui.now_ms()
-        for x in ui.P("[data-tlsrm]").all():
-            ui.click(x)
+        # the chips are drawn after the tab opens: wait for them, then remove one at a time (each removal redraws the list)
+        left = after["allow"] + after["ignore"]
+        ui.wait(lambda: ui.P("[data-tlsrm]").count() >= len(left), 8, "the HTTPS decryption lists to show %s" % left)
+        while ui.P("[data-tlsrm]").count():
+            n = ui.P("[data-tlsrm]").count()
+            t1 = ui.now_ms()
+            ui.click(ui.P("[data-tlsrm]").first)
+            ui.wait_toast(r"Removed", t1)
+            ui.wait(lambda: ui.P("[data-tlsrm]").count() < n, 6, "the removed host to leave the list")
             ui.pause(200, 600)
         ui.click(ui.P("#tlsmode [data-tm=all]"))
         ui.wait(lambda: (lambda t: t["mode"] == "all" and not t["ignore"] and not t["allow"])(self.panel.state()["tls"]), 8, "decryption back to every host")
