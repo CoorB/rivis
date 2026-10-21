@@ -19,6 +19,8 @@ PWSH = harness.PWSH
 HAVE_PWSH = os.path.isfile(PWSH) and os.access(PWSH, os.X_OK)
 NO_PWSH = "portable pwsh not found at %s" % PWSH
 WINDOWS_ONLY = "needs the Windows registry (HKCU:) / netstat, which do not exist in pwsh on macOS"
+IS_WIN = harness.IS_WIN
+NO_BASH_CLI = "the bash CLI needs /usr/bin/python3 under Git bash (the Windows workflow provides it)"
 
 
 def mode(path):
@@ -90,6 +92,14 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertIn('rules mock-set $Action', mock)
         self.assertIn('"headers=$headers"', mock)
         self.assertIn('"created_mock=$createdMock"', mock)
+
+    def test_state_root_acl_is_not_applied_recursively(self):
+        """icacls /T put the owner entry on existing files as inherit-only, so with inheritance removed they became
+        unreadable on Windows ("Access denied" on a profile's rules.example.json after `projects new`)."""
+        guard = self.src[self.src.index('function Protect-StateRoot'):self.src.index('function New-UiBootstrap')]
+        acl = [l for l in guard.splitlines() if "icacls.exe $StateRoot" in l]
+        self.assertEqual(len(acl), 1, guard)
+        self.assertNotIn("/T", acl[0])
 
     def test_stop_waits_for_both_ports_and_has_a_forced_bounded_fallback(self):
         stop = self.src[self.src.index('  "stop" {'):self.src.index('  "ui" {')]
@@ -163,7 +173,8 @@ class Commands(unittest.TestCase):
         with open(mine, "w") as fh:
             fh.write("{}")
         self.assertIn("trusted on this machine", self.ok("rules", "allow-file", mine))
-        self.assertIn(os.path.realpath(mine), self.bash("rules", "trusted-files"))   # same file both CLIs read
+        listed = self.bash("rules", "trusted-files")                                 # same file both CLIs read
+        self.assertIn(os.path.normcase(os.path.realpath(mine)).replace("\\", "/"), os.path.normcase(listed).replace("\\", "/"))
         key = os.path.join(self.home, ".ssh", "id_rsa")
         os.makedirs(os.path.dirname(key), exist_ok=True)
         with open(key, "w") as fh:
@@ -192,11 +203,17 @@ class Commands(unittest.TestCase):
         self.assertIn("proxy_bootstrap_file=%s " % boot, line + " ")
         self.assertIn("http2=false", line)
         for path in (token, boot):
-            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600, path)
+            self.assertTrue(os.path.isfile(path), path)
+            if not IS_WIN:      # on Windows the private file is an NTFS ACL (icacls), not a mode
+                self.assertEqual(os.stat(path).st_mode & 0o777, 0o600, path)
         with open(token) as fh:
             self.assertEqual(fh.read().strip(), "ps-secret-0123456789abcdef")
 
     def bash(self, *args):
+        if not harness.BASH_CLI_READY:
+            self.skipTest(NO_BASH_CLI)
+        if IS_WIN and not os.path.exists(self.rules_file()):
+            self.ok("rules", "list")        # let PowerShell create the state: Git bash's POSIX-emulation ACL on a file it creates can be unreadable to PowerShell
         cp = self.suite.rivis(*args, home=self.home, env=self.env)
         self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
         return cp.stdout
@@ -461,9 +478,15 @@ class Commands(unittest.TestCase):
         out = self.ok("projects", "show", bin="neo-mitm.ps1")
         self.assertEqual(json.loads(out)["id"], "neo")
 
-    @unittest.skip(WINDOWS_ONLY)
+    @unittest.skipUnless(IS_WIN, WINDOWS_ONLY)
     def test_status_and_net_reset_dry_run(self):
-        pass
+        out = self.ok("status")
+        self.assertRegex(out, r"windows system proxy: ")
+        self.assertIn("not listening", out)
+        out = self.ok("net-reset", "-DryRun")
+        self.assertIn("user proxy:", out)
+        self.assertIn("winhttp:", out)
+        self.assertIn("dry run: nothing changed", out)
 
     @unittest.skip("Android emulator / adb are not part of the hermetic suite")
     def test_android_on_off(self):

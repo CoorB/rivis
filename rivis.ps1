@@ -182,7 +182,10 @@ function Protect-StateRoot {
   $marker = Join-Path $StateRoot ".acl-v1"
   if (Test-Path $marker) { return }
   if (($PSVersionTable.PSEdition -eq "Desktop") -or $IsWindows) {
-    & icacls.exe $StateRoot /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" /T /Q | Out-Null
+    # No /T: with /T the (OI)(CI) entry lands on files that already exist as an inherit-only entry, and with the inherited
+    # entries removed those files become unreadable ("Access denied" on rules.example.json after `projects new`). Without it
+    # Windows propagates the new directory ACL to the existing children itself.
+    & icacls.exe $StateRoot /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" /Q | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host "WARNING: could not restrict $StateRoot to $($env:USERNAME) (icacls exit $LASTEXITCODE)"; return }
   } else {
     & chmod 700 $StateRoot

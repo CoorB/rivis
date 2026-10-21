@@ -27,12 +27,20 @@ RIVIS = os.path.join(REPO, "rivis")
 NEO_MITM = os.path.join(REPO, "neo-mitm")
 ARTIFACTS = os.path.join(TESTS, ".artifacts")
 FORBIDDEN_PORTS = {8080, 8083, 8090, 8093, 9090, 9091}
+IS_WIN = os.name == "nt"
 REAL_MITMWEB = shutil.which("mitmweb") or "/opt/homebrew/bin/mitmweb"
 REAL_MITMDUMP = shutil.which("mitmdump") or "/opt/homebrew/bin/mitmdump"
 # portable PowerShell for the rivis.ps1 tests: $RIVIS_TEST_PWSH, else pwsh on PATH, else the team's tools folder
 # (it used to live in a session scratch folder: when that was cleared, 21 tests skipped without anyone noticing)
 PWSH = (os.environ.get("RIVIS_TEST_PWSH") or shutil.which("pwsh")
         or os.path.expanduser("~/Work/NEO/proxy-replacement/tools/pwsh/pwsh"))
+# bash for the bash-CLI parity checks: Git for Windows' bash on Windows (never the WSL stub in System32), /bin/bash elsewhere
+BASH = "/bin/bash"
+if IS_WIN:
+    BASH = next((p for p in (r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe")
+                 if os.path.isfile(p)), None)
+# the bash CLI hardcodes /usr/bin/python3, which Git bash does not have: usable only where the runner provides it (windows.yml does)
+BASH_CLI_READY = bool(BASH) and (not IS_WIN or subprocess.run([BASH, "-c", "/usr/bin/python3 -c 1"], capture_output=True).returncode == 0)
 NODE = shutil.which("node")
 REAL_HOME = os.path.expanduser("~")
 
@@ -141,6 +149,20 @@ exec /usr/sbin/networksetup "$@"
 }
 
 
+def _cmd_quote(path):
+    return '"%s"' % path
+
+
+# Windows: PowerShell runs the shims through PATHEXT, so they are .cmd files. Only the two the PowerShell edition calls.
+WIN_SHIMS = {
+    "mitmweb.cmd": '@echo off\r\n>>"%SHIM_LOG%\\mitm-argv.log" echo mitmweb %*\r\nif defined SHIM_DRYRUN exit /b 0\r\n'
+                   'if defined SHIM_PRE_ADDON ( ' + _cmd_quote(REAL_MITMWEB or "mitmweb") + ' -s "%SHIM_PRE_ADDON%" %* ) else ( '
+                   + _cmd_quote(REAL_MITMWEB or "mitmweb") + ' %* )\r\nexit /b %errorlevel%\r\n',
+    "mitmdump.cmd": '@echo off\r\n>>"%SHIM_LOG%\\mitm-argv.log" echo mitmdump %*\r\nif defined SHIM_DRYRUN exit /b 0\r\n'
+                    + _cmd_quote(REAL_MITMDUMP or "mitmdump") + ' %*\r\nexit /b %errorlevel%\r\n',
+}
+
+
 class Suite:
     """One per test process: temp root, shims, private CA, upstreams. Cleaned up at exit."""
     _inst = None
@@ -158,11 +180,16 @@ class Suite:
         self.shimlog = os.path.join(self.root, "shimlog")
         for d in (self.shim, self.shimlog):
             os.makedirs(d)
-        for name, text in SHIMS.items():
-            path = os.path.join(self.shim, name)
-            with open(path, "w") as fh:
-                fh.write(text)
-            os.chmod(path, 0o755)
+        if IS_WIN:
+            for name, text in WIN_SHIMS.items():
+                with open(os.path.join(self.shim, name), "w", newline="") as fh:
+                    fh.write(text)
+        else:
+            for name, text in SHIMS.items():
+                path = os.path.join(self.shim, name)
+                with open(path, "w") as fh:
+                    fh.write(text)
+                os.chmod(path, 0o755)
         self.instances = []
         self.upstreams = []
         self._counter = 0
@@ -175,16 +202,25 @@ class Suite:
         home_tmp = os.path.join(os.path.dirname(home), os.path.basename(home) + "-tmp")
         os.makedirs(home, exist_ok=True)
         os.makedirs(home_tmp, exist_ok=True)
-        env = {
-            "PATH": ":".join([self.shim, "/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin"]),
-            "HOME": home, "TMPDIR": home_tmp, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8",
-            "USER": "rivistest", "LOGNAME": "rivistest", "SHELL": "/bin/zsh",
-            "EDITOR": "/usr/bin/true", "VISUAL": "/usr/bin/true",
-            "ADB": "/nonexistent/adb", "SHIM_LOG": self.shimlog,
-            "NO_COLOR": "1", "PYTHONDONTWRITEBYTECODE": "1",
-            # in-app updates keep the GitHub sign-in in the macOS Keychain: tests use a private file instead
-            "RIVIS_TOKEN_FILE": os.path.join(home_tmp, "update-token"),
-        }
+        if IS_WIN:
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("RIVIS_", "NEO_MITM_"))}
+            env.update({"PATH": os.pathsep.join([self.shim, os.environ.get("PATH", "")]), "HOME": home, "USERPROFILE": home,
+                        "APPDATA": os.path.join(home, "AppData", "Roaming"), "LOCALAPPDATA": os.path.join(home, "AppData", "Local"),
+                        "TMP": home_tmp, "TEMP": home_tmp, "TMPDIR": home_tmp, "NO_COLOR": "1", "PYTHONDONTWRITEBYTECODE": "1",
+                        "PYTHONIOENCODING": "utf-8", "MSYS2_ARG_CONV_EXCL": "match=;body=;method=;file=",   # Git bash would rewrite match=/api into a drive path
+                        "SHIM_LOG": self.shimlog, "ADB": os.path.join(self.root, "no-adb"),
+                        "RIVIS_TOKEN_FILE": os.path.join(home_tmp, "update-token")})
+        else:
+            env = {
+                "PATH": ":".join([self.shim, "/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin"]),
+                "HOME": home, "TMPDIR": home_tmp, "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8",
+                "USER": "rivistest", "LOGNAME": "rivistest", "SHELL": "/bin/zsh",
+                "EDITOR": "/usr/bin/true", "VISUAL": "/usr/bin/true",
+                "ADB": "/nonexistent/adb", "SHIM_LOG": self.shimlog,
+                "NO_COLOR": "1", "PYTHONDONTWRITEBYTECODE": "1",
+                # in-app updates keep the GitHub sign-in in the macOS Keychain: tests use a private file instead
+                "RIVIS_TOKEN_FILE": os.path.join(home_tmp, "update-token"),
+            }
         if confdir:
             env["RIVIS_CONFDIR"] = confdir
         # never the defaults: a test that starts, stops or uninstalls with 8080/8083 acts on the user's live Rivis
@@ -223,7 +259,7 @@ class Suite:
                               input=input, capture_output=True, text=True, timeout=timeout)
 
     def rivis(self, *args, home=None, env=None, timeout=60, bin=None, **kw):
-        return self.run(["/bin/bash", bin or RIVIS] + list(args), home=home, env=env, timeout=timeout, **kw)
+        return self.run([BASH, bin or RIVIS] + list(args), home=home, env=env, timeout=timeout, **kw)
 
     def shim_log(self, name):
         try:

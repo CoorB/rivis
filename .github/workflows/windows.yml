@@ -1,0 +1,42 @@
+name: Windows edition
+
+on:
+  push:
+    branches: [main, "ci/**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          $pin = (Select-String -Path install/mirror.conf -Pattern '^MITMPROXY_VERSION=(.+)$').Matches[0].Groups[1].Value
+          python -m pip install --upgrade pip pytest "mitmproxy==$pin"
+      - name: Let Git bash find python3 (the bash edition's parity checks run it as /usr/bin/python3)
+        shell: pwsh
+        run: |
+          $py = (Get-Command python).Source -replace '\\','/'
+          [IO.File]::WriteAllText("C:\Program Files\Git\usr\bin\python3", "#!/bin/sh`nexec `"$py`" `"`$@`"`n")
+      - name: Windows edition tests (rivis.ps1, neo-mitm.ps1, install.ps1)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path test-logs | Out-Null
+          python -m pytest -v -rs -p no:cacheprovider --junitxml=test-logs/junit.xml tests/test_powershell.py 2>&1 | Tee-Object -FilePath test-logs/pytest.log
+          exit $LASTEXITCODE
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-logs
+          path: |
+            test-logs
+            tests/.artifacts
+          if-no-files-found: ignore
