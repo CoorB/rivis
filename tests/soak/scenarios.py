@@ -154,9 +154,9 @@ class Scenarios:
         fid, info = self.open_menu(pos, contains="i=")
         t0 = ui.now_ms()
         self.pick_item("url")
-        ui.wait_toast(r"Copied", t0)
+        ui.wait_toast(r"(?i)URL copied", t0)
         txt = ui.clipboard()
-        check(txt.startswith("http") and info["host"] in txt and info["pq"].split("?")[0] in txt,
+        check(txt.startswith("http") and info["host"] in txt and info["pq"] in txt,
               "clipboard is not this call's URL (%s): %r" % (info["pq"], txt[:160]))
 
     def menu_host_focus(self, pos):
