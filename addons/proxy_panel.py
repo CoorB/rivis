@@ -473,8 +473,15 @@ class ProxyPanel:
             self._client_certs = client_certs.Active(store)
         want = self._client_certs.refresh() or ""
         have = ctx.options.client_certs or ""
-        if have != want and (not have or have.startswith(os.path.join(store, client_certs.RUN_DIR))):
-            ctx.options.update(client_certs=want or None)   # a --set client_certs=… given at start is left alone
+        # ours = what this add-on set, or any project's active folder (a hot reload forgets the first): after a switch
+        # to another project the previous project's folder must go too (review 2026-10-23). A --set client_certs=…
+        # given at start is left alone.
+        projects = os.path.join(STATE_ROOT, "projects") + os.sep
+        ours = have == getattr(ctx.master, "_rivis_client_certs", None) or (
+            have.startswith(projects) and (os.sep + "client-certs" + os.sep + client_certs.RUN_DIR + os.sep) in have)
+        if have != want and (not have or ours):
+            ctx.options.update(client_certs=want or None)
+            ctx.master._rivis_client_certs = want or None
         return self._client_certs
 
     def server_connect(self, data):

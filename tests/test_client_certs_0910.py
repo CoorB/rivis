@@ -167,6 +167,23 @@ class ClientCertsLive(LiveCase):
         self.panel.ok("client_cert_rm", {"host": "127.0.0.1"})
         self.assertEqual(self.panel.state()["client_certs"], [])
 
+    def test_a_live_project_switch_switches_the_certificates(self):
+        """Review 2026-10-23: after a switch to another project the proxy went on presenting the first project's
+        certificate (it only replaced a client_certs value under the NEW project's folder)."""
+        neo_store = os.path.join(self.inst.home, ".rivis", "projects", "neo", "client-certs")
+        self.assertEqual(self.cli("add", "127.0.0.1", self.alice[2], "--password-stdin", input="s3cret pass\n").returncode, 0)
+        wait_for(lambda: self.call().status == 200, 10, 0.3, "alice in default")
+        try:
+            self.panel.set_option("proxy_project", "neo")
+            wait_for(lambda: self.call().status != 200, 10, 0.3, "the neo project has no certificate: refused")
+            with open(self.bob[2], "rb") as fh:
+                client_certs.add(neo_store, "127.0.0.1", fh.read(), "other")
+            wait_for(lambda: self.call().json() == {"client_cn": "bob"}, 10, 0.3, "neo's own certificate")
+        finally:
+            self.panel.set_option("proxy_project", "default")
+            client_certs.remove(neo_store, "127.0.0.1")
+        wait_for(lambda: self.call().json() == {"client_cn": "alice"}, 10, 0.3, "back to default's certificate")
+
     def test_store_is_private(self):
         self.assertEqual(self.cli("add", "127.0.0.1", self.alice[2], "--password-stdin", input="s3cret pass\n").returncode, 0)
         self.assertEqual(stat.S_IMODE(os.stat(self.store).st_mode), 0o700)
