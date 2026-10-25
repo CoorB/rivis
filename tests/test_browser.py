@@ -207,6 +207,9 @@ class Browser(unittest.TestCase):
                 fh.write("secret")
         # a browser still running on a profile: its --user-data-dir is on the command line
         running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "--user-data-dir=" + busy])
+        # the sweep reads `ps`: start only once the "browser" shows there with its profile (2 of 5 runs failed under load)
+        harness.wait_for(lambda: ("--user-data-dir=" + busy) in subprocess.run(["ps", "-axww", "-o", "command="],
+                         capture_output=True, text=True).stdout, 10, 0.1, "the busy browser in ps")
         try:
             fresh = self.fresh_profile()
         finally:

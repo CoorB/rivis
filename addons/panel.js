@@ -3313,6 +3313,11 @@
   // R6B-01: a chord moves the keyboard into the drawer (Compose: its URL field; other tabs: their tab button), so
   // keys typed next go to the panel and never to mitmweb's list shortcuts. Checked once more after a redraw.
   const focusDrawer = (again = 1) => {
+    // the drawer draws after a state request, so this runs a moment after the chord: a user who has moved on to a field
+    // outside the drawer by then (Cmd+F right after the chord) keeps it (flaky-test hunt 2026-10-23: the filter box lost
+    // the keyboard after its first letter)
+    const a = root.activeElement;
+    if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && !$("drawer").contains(a)) return;
     const el = (tab === "compose" && !editing && $("cu")) || root.querySelector("nav button.on");
     if (el && $("drawer").classList.contains("open")) el.focus({ preventScroll: true });
     if (again) setTimeout(() => { if ($("drawer").classList.contains("open") && !$("drawer").contains(root.activeElement)) focusDrawer(0); }, 300);

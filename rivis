@@ -867,7 +867,8 @@ current_tab() {   # prints "<app>\t<url>" of the front tab of the first running 
 }
 # Delete leftover --fresh profiles, except one a browser is still running on (its --user-data-dir shows in ps).
 browser_sweep_fresh() {
-  local d running; running=$(ps -axo command= 2>/dev/null)
+  # a process list that cannot be read proves nothing: delete nothing then (a profile in use must never go)
+  local d running; running=$(ps -axww -o command= 2>/dev/null) && [ -n "$running" ] || return 0
   for d in "$@"; do
     [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || continue
     printf '%s\n' "$running" | grep -qF -- "--user-data-dir=$d" && continue

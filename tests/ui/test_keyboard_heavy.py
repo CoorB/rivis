@@ -192,6 +192,24 @@ class KeyboardAndHeavyBodies(UiBase):
         self.assertEqual(self.errors, [])
 
     # ── R6B-05 ─────────────────────────────────────────────────────────────────────────────────────
+    def test_a_filter_typed_right_after_a_chord_is_kept(self):
+        """Flaky-test hunt 2026-10-23: a chord opens the drawer and, 300 ms later, pulls the keyboard into it again; a
+        filter typed within those 300 ms (Cmd+F right after the chord) lost focus mid-word and the box ended up empty."""
+        page = self.open()
+        for _ in range(3):
+            page.keyboard.press("Alt+Shift+L")
+            self.P("#drawer.open").wait_for(timeout=10000)
+            page.keyboard.press(KMOD + "+f")
+            page.keyboard.type("/json/small?chord", delay=40)    # ~600 ms of typing: spans the 300 ms re-check
+            page.wait_for_timeout(600)
+            self.assertEqual(self.active()["id"], "sq", "the keyboard stays in the filter box")
+            self.assertEqual(self.P("#sq").input_value(), "/json/small?chord")
+            page.keyboard.press("Escape")                       # clear it
+            page.keyboard.press("Escape")                       # leave the box
+            page.keyboard.press("Escape")                       # close the drawer
+            page.wait_for_timeout(300)
+        self.assertEqual(self.errors, [])
+
     def test_filter_box_stays_readable_beside_the_open_drawer_at_900(self):
         self.fetch("/json/small?kbf=1")
         page = self.open()
