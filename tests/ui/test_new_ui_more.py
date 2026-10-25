@@ -29,6 +29,8 @@ class MoreWindows(UiBase):
         self.page.locator("#fab").wait_for(timeout=15000)
         self.page.goto("http://127.0.0.1:%d/rivis/" % self.inst.web_port)
         self.page.locator("#rv-app").wait_for(timeout=15000)
+        # leaving the previous page (the classic login page polls state) aborts its poll: not this page's error
+        self.errors[:] = [e for e in self.errors if not (e[0] == "requestfailed" and e[1].endswith("/proxy/api/state"))]
         wait_for(lambda: self.page.evaluate("!!(window.RivisTools && window.RivisApp && window.__rivisUI.state)"), 10, 0.1, "windows ready")
         return self.page
 
@@ -150,6 +152,8 @@ class MoreWindows(UiBase):
         self.wait_row("variable=1")
         self.page.reload()
         self.page.locator("#rv-app").wait_for(timeout=15000)
+        # leaving the previous page (the classic login page polls state) aborts its poll: not this page's error
+        self.errors[:] = [e for e in self.errors if not (e[0] == "requestfailed" and e[1].endswith("/proxy/api/state"))]
         w = self.more("compose")
         w.locator("[data-compose-saved]").select_option("saved-request")
         w.locator('[data-compose-action="load"]').click()

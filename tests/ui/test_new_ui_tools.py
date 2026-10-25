@@ -32,6 +32,8 @@ class ToolWindows(UiBase):
         self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))
         self.page.goto("http://127.0.0.1:%d/rivis/" % self.inst.web_port)
         self.page.locator("#rv-app").wait_for(timeout=15000)
+        # leaving the previous page (the classic login page polls state) aborts its poll: not this page's error
+        self.errors[:] = [e for e in self.errors if not (e[0] == "requestfailed" and e[1].endswith("/proxy/api/state"))]
         wait_for(lambda: self.page.evaluate("!!(window.RivisTools && window.RivisApp && window.__rivisUI.state)"), 10, 0.1, "tools ready")
         return self.page
 
@@ -275,6 +277,8 @@ class ToolWindows(UiBase):
         wait_for(lambda: "pinned" in self.page.locator("#sources").inner_text().lower(), 5, 0.1, "pinned section")
         self.page.reload()
         self.page.locator("#rv-app").wait_for(timeout=15000)
+        # leaving the previous page (the classic login page polls state) aborts its poll: not this page's error
+        self.errors[:] = [e for e in self.errors if not (e[0] == "requestfailed" and e[1].endswith("/proxy/api/state"))]
         wait_for(lambda: "pinned" in self.page.locator("#sources").inner_text().lower(), 5, 0.1, "kept after a reload")
         self.page.locator("[data-unpin]").first.click(force=True)
         wait_for(lambda: "pinned" not in self.page.locator("#sources").inner_text().lower(), 5, 0.1, "unpinned")

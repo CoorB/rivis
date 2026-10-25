@@ -23,6 +23,8 @@ class NewUiBase(UiBase):
         self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))
         self.page.goto("http://127.0.0.1:%d/rivis/" % self.inst.web_port)
         self.page.locator("#rv-app").wait_for(timeout=15000)
+        # leaving the previous page (the classic login page polls state) aborts its poll: not this page's error
+        self.errors[:] = [e for e in self.errors if not (e[0] == "requestfailed" and e[1].endswith("/proxy/api/state"))]
         wait_for(lambda: self.page.evaluate("!!(window.RivisApp && window.__rivisUI.state)"), 10, 0.1, "page ready")
         return self.page
 
