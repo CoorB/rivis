@@ -2342,6 +2342,8 @@ class ProxyPanel:
             try:
                 flowfilter.parse(text)
             except ValueError as e:
+                if "~(" in text:
+                    return {"ok": False, "error": "Expected a filter operator after '~'; '(' starts a group"}
                 return {"ok": False, "error": str(e).replace("Invalid filter expression: ", "")[:200]}
             return {"ok": True}
         elif op == "filters_list":

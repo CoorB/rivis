@@ -154,6 +154,12 @@ class NewMainWindow(UiBase):
         self.wait_rows("after-bad=1")
         self.assertIn("Live", self.page.locator("#status").inner_text())
 
+    def test_invalid_filter_explains_the_parser_error(self):
+        self.open_new()
+        self.page.locator("#q").fill("~(")
+        self.page.locator("#q").press("Enter")
+        wait_for(lambda: "operator" in self.page.locator("#qerr").inner_text().lower(), 5, 0.1, "parser reason")
+
     def test_saved_filter_chip_and_alt_1(self):
         self.panel.ok("filters_save", {"name": "Only echo", "filter": "~u echo"})
         try:

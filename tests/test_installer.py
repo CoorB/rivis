@@ -13,6 +13,7 @@ import sys
 import tarfile
 import time
 import unittest
+import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
@@ -20,6 +21,21 @@ from harness import Suite
 
 INSTALL = os.path.join(harness.REPO, "install", "install.sh")
 MAKE_RELEASE = os.path.join(harness.REPO, "install", "mirror", "make-release.sh")
+
+
+class CandidateArchive(unittest.TestCase):
+    def test_supplied_zip_matches_checkout_version(self):
+        path = os.environ.get("RIVIS_CANDIDATE_ZIP")
+        if not path:
+            self.skipTest("set RIVIS_CANDIDATE_ZIP to validate a supplied release zip")
+        version = open(os.path.join(harness.REPO, "install", "VERSION")).read().strip()
+        with zipfile.ZipFile(path) as bundle:
+            names = bundle.namelist()
+            roots = {name.split("/", 1)[0] for name in names if "/" in name}
+            self.assertEqual(roots, {"rivis-installer-" + version})
+            root = roots.pop()
+            self.assertEqual(bundle.read(root + "/VERSION").decode().strip(), version)
+            self.assertIn(root + "/rivis-" + version + ".tar.gz", names)
 
 
 def snapshot(root):

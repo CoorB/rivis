@@ -273,13 +273,23 @@ def on_request(context, url, request):
         r = self.fetch("/cookies")
         self.assertEqual(sorted(c.split(";")[0] for c in r.header_all("set-cookie")), ["a=1", "b=2"])
 
-    def test_scripts_run_after_rules_and_skip_locally_answered_calls(self):
+    def test_scripts_run_after_rules_on_locally_answered_calls(self):
         self.install("late.py", 'def on_request(context, url, request):\n    return mock(500, "from script")\n\n'
                                 'def on_response(context, url, request, response):\n    response["headers"]["X-Resp-Script"] = "1"\n    return response\n',
                      match="/echo", rules=[self.rule("r", "respond", "/echo", status=203, body="from rule")])
         r = self.fetch("/echo")
         self.assertEqual((r.status, r.text), (203, "from rule"))
-        self.assertIsNone(r.header("x-resp-script"))
+        self.assertEqual(r.header("x-resp-script"), "1")
+
+    def test_response_script_runs_on_map_local_reply(self):
+        path = self.inst.path("mock.json")
+        with open(path, "w") as fh:
+            fh.write('{"from":"map-local"}')
+        self.install("mapped.py", 'def on_response(context, url, request, response):\n    response["headers"]["X-QA-Response"] = "scripted"\n    return response\n',
+                     match="/json/small", rules=[self.rule("local", "map_local", "/json/small", file=path)])
+        r = self.fetch("/json/small")
+        self.assertEqual(r.json(), {"from": "map-local"})
+        self.assertEqual(r.header("x-qa-response"), "scripted")
 
     def test_disabled_script_does_not_run_and_toggle_works(self):
         self.install("off.py", 'def on_request(context, url, request):\n    return mock(299, "x")\n', match="/echo", enabled=False)

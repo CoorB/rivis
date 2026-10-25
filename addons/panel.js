@@ -2056,7 +2056,7 @@
     }
     if (seq !== sbSeq) return;                      // a newer keystroke is already in flight
     $("sbox").classList.toggle("bad", !res.ok);
-    if (!res.ok) { spop(`Not a valid filter yet — the list keeps the last good one. Plain words always work; for a <code>~</code> filter, see <button class="lnk" data-ex-help>the examples</button>.`, true); $("spop").title = res.error || ""; return; }
+    if (!res.ok) { spop(`Not a valid filter: ${esc(res.error || "Invalid expression")}. The list keeps the last good one. See <button class="lnk" data-ex-help>the examples</button>.`, true); return; }
     spop(document.activeElement === host && !text ? examplesHTML() : "");
     if (f !== lastSent) { lastSent = f; st.dispatch({ type: "ui/filters/setFilter", payload: f }); }
     drawStrip();

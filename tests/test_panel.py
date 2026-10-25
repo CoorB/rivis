@@ -718,6 +718,9 @@ class Ops(LiveCase):
         doc = self.panel.ok("filter_check", {"filter": "~d ("})
         self.assertFalse(doc.get("ok"))
         self.assertTrue(doc.get("error"))
+        doc = self.panel.ok("filter_check", {"filter": "~("})
+        self.assertFalse(doc.get("ok"))
+        self.assertIn("operator", doc.get("error", "").lower())
 
     # -- export / codegen / compose --------------------------------------------------------------------
     def test_export_url_and_curl_mask_secrets_by_default(self):

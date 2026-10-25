@@ -11,6 +11,12 @@ from test_ui import PW_REASON, UiBase
 
 @unittest.skipIf(PW_REASON, PW_REASON or "")
 class FiltersCurlUi(UiBase):
+    def test_invalid_filter_shows_parser_reason_in_classic_view(self):
+        self.open()
+        self.P("#sq").fill("~(")
+        wait_for(lambda: "err" in (self.P("#spop").get_attribute("class") or ""), 5, 0.1, "filter error")
+        self.assertIn("operator", self.P("#spop").inner_text().lower())
+
     def P(self, selector):
         return self.page.locator("#proxy-panel-host").locator(selector)
 

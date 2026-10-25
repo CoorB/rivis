@@ -826,8 +826,6 @@ class ProxyScripts:
             return
         await self._reload()
         response_side = hook == "on_response"
-        if response_side and flow.metadata.get("proxy_local"):
-            return
         request = self._request(flow)
         response = self._message(flow.response, True) if response_side and flow.response else None
         for item in self.scripts:
