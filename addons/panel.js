@@ -45,7 +45,7 @@
   const OP_NAMES = { mock: "Map Local", maplocal_add: "Map Local", bp_add: "Breakpoint", bp_update: "Breakpoint", bp_delete: "Breakpoint",
     retry: "Repeat", retry_get: "Edit & Repeat", focus_host: "Show only this host", tls_host: "TLS decryption", tls_set: "TLS decryption",
     tls_update: "TLS decryption", view: "view filter", source: "source filter", delete: "delete", sess_save: "session save", sess_load: "session load",
-    sess_har: "HAR export", compose_send: "Compose send", codegen: "Copy as code", export: "Copy", update_install: "update" };
+    sess_har: "HAR export", client_cert_add: "client certificate", client_cert_rm: "client certificate", compose_send: "Compose send", codegen: "Copy as code", export: "Copy", update_install: "update" };
   const selectedFlow = () => {   // mitmweb keeps the selection in the hash: #/flows/<id>/<tab>
     const p = location.hash.replace(/^#\/?/, "").split("?")[0].split("/");
     return p[0] === "flows" && p[1] ? p[1] : null;
@@ -1062,11 +1062,13 @@
       <h4>Caching</h4>
       <div class="row">${sw('id="nocache" aria-describedby="nocache-d"', state.no_cache)}<div class="n"><label for="nocache">No caching</label> <div class="sub" id="nocache-d">Strips If-None-Match / If-Modified-Since from requests and marks responses no-store, so the app always gets fresh content (never an empty 304). Map Local answers are left as they are</div></div></div>
       ${tlsSectionHTML()}
+      ${clientCertsHTML()}
       <h4>What the list shows</h4>
       <div class="row">${sw('id="project-filter"', state.project_only)}<div class="n">Only ${esc(state.project.label)} calls <div class="sub">Hides other apps' traffic. Also in the “Show” menu above</div></div></div>
       <div class="row">${sw('id="dns"', state.show_dns)}<div class="n">Show background lookups (DNS) <div class="sub">Off = only web calls are listed</div></div></div>
       <div class="row"><div class="n">Appearance <div class="sub">Theme and compact rows live in Settings (this browser only)</div></div><button class="b" id="openset">${ico("gear", "sm")}Settings</button></div>`;
     wireTlsSection();
+    wireClientCerts();
     root.querySelectorAll("[data-prof]").forEach((c) => (c.onclick = () => {
       if (c.dataset.prof === "manual") { $("manual").style.display = ""; root.querySelectorAll("[data-prof]").forEach((x) => x.classList.toggle("on", x === c)); return; }
       run("profile", { id: c.dataset.prof, match: $("tm").value }, "Network: " + c.querySelector(".t").textContent);
@@ -2322,6 +2324,53 @@
     root.querySelectorAll("[data-tlsadd]").forEach((i) => (i.onkeydown = (e) => { if (e.key === "Enter") add(i.dataset.tlsadd); }));
   }
 
+  // Client certificates (mutual TLS): the certificate a server that asks for one gets, per host and project.
+  // The Network tab redraws on every poll, so a half-filled form lives here, not only in the inputs (files and the
+  // password stay in this page's memory; nothing is saved until Add).
+  const ccDraft = { host: "", pass: "", file: null, key: null };
+  function clientCertsHTML() {
+    const rows = state.client_certs || [];
+    const when = (t) => (t ? new Date(t * 1000).toLocaleDateString() : "?");
+    return `<h4 id="ccsec">Client certificates ${info("For servers that ask the app for a certificate of its own (mutual TLS). The certificate added for a host is sent to it; same idea as Client Certificates in other proxies.")}</h4>
+      ${rows.length ? rows.map((r) => `<div class="row" data-cc="${esc(r.host)}"><div class="n"><div><b>${esc(r.host)}</b>${r.expired ? ' <span class="tag err">expired</span>' : ""}</div>
+          <div class="sub">${r.error ? "unreadable: " + esc(r.error) : esc(r.subject) + " · expires " + esc(when(r.not_after))}</div></div>
+          <button class="b d" data-ccrm="${esc(r.host)}" aria-label="Remove the client certificate of ${esc(r.host)}">${ico("x", "sm")}</button></div>`).join("")
+        : '<div class="sub">None. Add one when a server answers with a TLS error about a missing certificate.</div>'}
+      <div class="grid" id="ccadd">
+        <label>Host<input type="text" id="cchost" placeholder="api.example.test or *.example.test" autocomplete="off" value="${esc(ccDraft.host)}"></label>
+        <label>Certificate (.p12, .pfx or .pem)<input type="file" id="ccfile" accept=".p12,.pfx,.pem,.crt,.cer">${ccDraft.file ? `<span class="sub">${esc(ccDraft.file.name)}</span>` : ""}</label>
+        <label>Password (for a .p12 or an encrypted key)<input type="password" id="ccpass" autocomplete="new-password" value="${esc(ccDraft.pass)}"></label>
+        <label>Private key, if it is in a separate .pem<input type="file" id="cckey" accept=".pem,.key">${ccDraft.key ? `<span class="sub">${esc(ccDraft.key.name)}</span>` : ""}</label>
+      </div>
+      <div class="btns"><button class="b p" id="ccaddbtn">Add client certificate</button>
+        <span class="sub">Kept unencrypted in this project's private folder. Used from the next connection, no restart.</span></div>`;
+  }
+  function wireClientCerts() {
+    const b64 = async (file) => { const bytes = new Uint8Array(await file.arrayBuffer()); let s = ""; for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192)); return btoa(s); };
+    if (!$("ccaddbtn")) return;
+    $("cchost").oninput = () => (ccDraft.host = $("cchost").value);
+    $("ccpass").oninput = () => (ccDraft.pass = $("ccpass").value);
+    $("ccfile").onchange = () => { ccDraft.file = $("ccfile").files[0] || null; };
+    $("cckey").onchange = () => { ccDraft.key = $("cckey").files[0] || null; };
+    $("ccaddbtn").onclick = async () => {
+      const host = ccDraft.host.trim(), file = ccDraft.file, key = ccDraft.key;
+      if (!host) return toast("Type the host the certificate is for", true);
+      if (!file) return toast("Choose the certificate file first", true);
+      const replacing = (state.client_certs || []).some((r) => r.host === host.toLowerCase());
+      if (replacing && !await ask("Replace the client certificate of " + host + "?", { yes: "Replace" })) return;
+      const args = { host, file_b64: await b64(file), password: ccDraft.pass };
+      if (key) args.key_b64 = await b64(key);
+      run("client_cert_add", args, (x) => {
+        Object.assign(ccDraft, { host: "", pass: "", file: null, key: null });
+        return "Client certificate for " + x.cert.host + ": " + x.cert.subject + (x.cert.expired ? " (EXPIRED)" : "");
+      });
+    };
+    root.querySelectorAll("[data-ccrm]").forEach((x) => (x.onclick = async () => {
+      if (await ask("Remove the client certificate of " + x.dataset.ccrm + "?", { yes: "Remove", danger: true }))
+        run("client_cert_rm", { host: x.dataset.ccrm }, "Removed the client certificate of " + x.dataset.ccrm);
+    }));
+  }
+
   // ───────────── Compose (a new request from scratch) ─────────────
   const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
   // the call's own method is always an option: with PROPFIND, PURGE, … missing, the browser selected GET and an
@@ -3289,6 +3338,7 @@
     ["Clear the session", "The trash button next to the filter box (asks first)", "filter"],
     ["Right-click a call", "Map Local, Breakpoint, Repeat, Copy as cURL, Show only this host…", "call"],
     ["SSL Proxying list", "<b>Network → HTTPS decryption</b> (every host, only the hosts you list, or all except the ones you list)", "net"],
+    ["Client Certificates", "<b>Network → Client certificates</b> (a .p12 or PEM per host, for mutual TLS)", "net"],
     ["Scripting", "<b>Scripts</b> tab (JavaScript or Python, per project)", "scripts"],
     ["Save a session", "<b>Sessions</b> tab → save, add a note, reopen later", "sess"],
     ["Copy as cURL", "<b>This call → Copy cURL</b> or <b>Copy as…</b> (many languages)", "call"],

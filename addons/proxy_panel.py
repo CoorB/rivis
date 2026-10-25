@@ -67,6 +67,8 @@ from proxy_compose import ComposerStore, normalize_request, normalize_url
 from curl_import import parse_curl
 from proxy_rule_validation import compile_rule, explain_rules, map_remote_warning
 from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, find_jwts)
+import client_certs
+importlib.reload(client_certs)
 import proxy_source        # helpers only (summaries, the list-filter clause); the add-on itself is loaded by the CLI
 importlib.reload(proxy_source)
 
@@ -103,7 +105,7 @@ HAR_BODY_LIMIT = 4 * 1024 * 1024
 # size the editor gets a read-only preview of the first bytes; status and headers stay editable and Save keeps the file's bytes.
 MOCK_BINARY_PREVIEW = 16 * 1024
 # panel ops whose work (disk read, HAR build, redaction) runs on a worker thread so live traffic and the panel keep flowing
-OFF_LOOP_OPS = ("sess_har",)
+OFF_LOOP_OPS = ("sess_har", "client_cert_add")
 COLUMN_BUILTINS = ("path", "method", "status", "size", "time", "timestamp", "duration", "content_type", "source_app", "comment")
 COLUMN_NATIVE = ("path", "method", "status", "size", "time", "timestamp", "comment")
 COLUMN_DEFAULT = ("path", "method", "status", "size", "time", "timestamp")
@@ -410,6 +412,8 @@ class ProxyPanel:
         self._last_good_cfg = {"rules": []}
         self._rules_error = None
         self._bad_cfg = None
+        self._client_certs = None        # client_certs.Active for this project's store
+        self._client_cert_rows = (None, [])
 
     def configure(self, updated):
         global STATE_DIR, COLL_DIR, SESS_DIR, MOCK_DIR, SCRIPT_DIR, COMPOSE_DIR
@@ -456,6 +460,53 @@ class ProxyPanel:
             data.ignore_connection = True
         else:
             del self._untrusted[host]
+
+    # Client certificates (mTLS), per host and project (pilot 2026-10-21: "no client certificate support"). mitmproxy
+    # sends <client_certs>/<server name>.pem to a server that asks for one; the active directory follows the store
+    # (client_certs.Active), so an added, replaced or removed certificate counts from the next connection.
+    def _client_cert_store(self):
+        return os.path.join(project_state(self.active_project), "client-certs")
+
+    def _client_certs_sync(self):
+        store = self._client_cert_store()
+        if self._client_certs is None or self._client_certs.store != store:
+            self._client_certs = client_certs.Active(store)
+        want = self._client_certs.refresh() or ""
+        have = ctx.options.client_certs or ""
+        if have != want and (not have or have.startswith(os.path.join(store, client_certs.RUN_DIR))):
+            ctx.options.update(client_certs=want or None)   # a --set client_certs=… given at start is left alone
+        return self._client_certs
+
+    def server_connect(self, data):
+        try:
+            active = self._client_certs_sync()
+            if active.dir:
+                server = data.server
+                active.prepare(server.sni or (server.address[0] if server.address else ""))
+        except Exception as e:      # never break a connection over this
+            ctx.log.warn(f"proxy_panel: client certificate not prepared ({type(e).__name__}: {e})")
+
+    def client_cert_add(self, a):
+        """Panel: add or replace the client certificate of a host (runs off the event loop: openssl and file I/O)."""
+        import base64
+        raw = [a.get(k) for k in ("file_b64", "key_b64")]
+        if not isinstance(raw[0], str) or any(x is not None and not isinstance(x, str) for x in raw) \
+                or any(x and len(x) > client_certs.MAX_FILE * 4 // 3 + 8 for x in raw):
+            raise PanelError("choose a certificate file (.p12, .pfx or .pem) of at most %d KB" % (client_certs.MAX_FILE // 1024))
+        try:
+            data, key = (base64.b64decode(x, validate=True) if x else None for x in raw)
+            info = client_certs.add(self._client_cert_store(), a.get("host"), data,
+                                    a.get("password") if isinstance(a.get("password"), str) else None, key)
+        except (ValueError, OSError) as e:
+            raise PanelError(str(e))
+        return {"cert": info}           # the next connection to the host picks it up (server_connect)
+
+    def client_certs_state(self):
+        store = self._client_cert_store()
+        version = (store, client_certs.fingerprint(store))
+        if self._client_cert_rows[0] != version:        # openssl runs only when the store changed, not on every poll
+            self._client_cert_rows = (version, client_certs.entries(store))
+        return self._client_cert_rows[1]
 
     def untrusted_state(self):
         now = time.monotonic()
@@ -714,6 +765,7 @@ class ProxyPanel:
             "version": self.product_version(),
             "system_proxy": self.system_proxy_state(),
             "untrusted": self.untrusted_state(),
+            "client_certs": self.client_certs_state(),
             "android_restored": list(getattr(ctx.master, "_rivis_android_restored", [])),
             "flow_count": len(self.all_flows()),
             "stream_large_bodies": str(ctx.options.stream_large_bodies),
@@ -1754,6 +1806,13 @@ class ProxyPanel:
                 return {"id": self._browser_jobs.start(argv, a.get("browser"), env=env)}
             except (ValueError, RuntimeError) as e:
                 raise PanelError(str(e))
+        if op == "client_cert_rm":
+            try:
+                if not client_certs.remove(self._client_cert_store(), client_certs.normalize_host(a.get("host"))):
+                    raise PanelError("no client certificate for that host")
+            except client_certs.CertError as e:
+                raise PanelError(str(e))
+            return {}
         if op == "untrusted_retry":     # "Decrypt again": the device has been set up since
             self._untrusted.clear()
             self._tls_drops.clear()
@@ -2806,6 +2865,7 @@ class ProxyPanel:
             self.focused_host = m.group(1).replace("\\", "") if m else None
             self.source = self.source_from_filter(vf)        # a hot reload keeps the chosen device / app
             self._start_android_watch()
+            self._client_certs_sync()
             self._restore_view_choice(vf)
             self._register()
             self._apply_columns()

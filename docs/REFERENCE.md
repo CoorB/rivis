@@ -463,12 +463,17 @@ the lists are *Hosts to decrypt* and *Hosts to leave alone*. It is stored per pr
   is still captured; in local-capture mode (iOS Simulator) everything to that host is tunnelled, plain HTTP included.
   An empty `allow` list therefore decrypts nothing (Rivis passes mitmproxy a never-matching pattern, because mitmproxy
   itself ignores nothing when both lists are empty).
-- **Servers requiring a client certificate (mTLS):** Rivis does not configure or forward client certificates while
-  decrypting HTTPS. If the app already has a certificate for the server, let it negotiate directly through a tunnel:
-  `rivis tls ignore add api.example.test`, then `rivis tls mode ignore`. Start a new connection (reopen the app or
-  screen). The client still needs its certificate; this setting cannot create one. The call's contents cannot be
-  inspected or changed while that host is ignored. If you use the `allow` mode instead, leave the host out of the
-  allow list.
+- **Servers requiring a client certificate (mTLS):** add the certificate for that host and Rivis presents it to the
+  server while decrypting, so the calls stay readable and editable. Panel: **Tools → Network → Client certificates**
+  (host, a `.p12`/`.pfx` with its password, or a PEM certificate with its key). CLI:
+  `rivis tls client-cert add api.example.test client.p12 --password-stdin` (the password is read from stdin, never
+  from the command line), `rivis tls client-cert add '*.example.test' client.pem --key client.key`,
+  `rivis tls client-cert list`, `rivis tls client-cert rm HOST`. HOST is a host name, an IPv4 address, or
+  `*.domain` for every subdomain; an exact host wins over a wildcard. Certificates are per project, stored
+  unencrypted (that is what mitmproxy reads) in the project's private folder (`client-certs/`, 0700, files 0600),
+  and used from the next connection to the host, with no restart. A server that does not ask for a certificate never
+  gets it. Alternatively, if the app has its own certificate, pass the host through undecrypted:
+  `rivis tls ignore add api.example.test`, then `rivis tls mode ignore` (its contents can then not be inspected).
 - A host that is not decrypted still appears as a host-only **tunnel** row marked "🔒 not decrypted" (Rivis
   turns on mitmproxy's `show_ignored_hosts` and lets the list show those rows when the mode is not `all`; mitmproxy
   warns that this keeps the tunnels' bytes in memory, which adds up over a long session). IP-only

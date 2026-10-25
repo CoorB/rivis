@@ -123,9 +123,10 @@ instance using this installation before removing its add-ons, and leaves saved p
    host through undecrypted, or start with `--insecure`. If it fails for every site on your company network, Rivis
    trusts what your Mac trusts: install IT's root certificate in Keychain Access (or start with
    `RIVIS_EXTRA_TRUST=/path/root.pem`).
-4. A server requires a **client certificate** (mTLS): leave that host undecrypted with
-   `rivis tls ignore add HOST` and `rivis tls mode ignore`. The app must already have its client certificate;
-   Rivis does not supply one. Calls to that host will no longer show request or response contents.
+4. A server requires a **client certificate** (mTLS): give Rivis that certificate for the host, in the panel
+   (Tools → Network → Client certificates) or with `rivis tls client-cert add HOST FILE.p12 --password-stdin`.
+   Rivis then sends it to the server, and the calls stay readable. Or leave the host undecrypted
+   (`rivis tls ignore add HOST`, `rivis tls mode ignore`), so the app presents its own certificate through a tunnel.
 5. It broke right after an upgrade: `rivis health` says what is wrong, and `rivis rollback` takes you back to the
    version you had before, with the same options.
 6. Still stuck? Run `rivis bug-report` and attach the zip it creates (it contains no calls, tokens or keys),

@@ -42,7 +42,7 @@ stream as they arrive; see the [Rules section](REFERENCE.md#rules) for the editi
 | **Clear the session** | The trash button next to the filter box (asks first). |
 | **Right-click a call** | Map Local, Breakpoint, Repeat, Edit & Repeat, Compare, Copy as cURL, Show only this host, Delete. |
 | **SSL Proxying list** | **Network → HTTPS decryption**: every host, only the hosts you list, or everything except the hosts you list. Per-host quick toggles are on each call (**This call → HTTPS**, or right-click). |
-| **Client certificates (mTLS)** | Rivis cannot present a client certificate to the server while decrypting. If your app already has one, leave that host undecrypted: `rivis tls ignore add HOST`, then `rivis tls mode ignore`. The app connects through a tunnel; its calls cannot be inspected or rewritten. |
+| **Client certificates (mTLS)** | **Tools → Network → Client certificates**: a host plus a `.p12` (with its password) or PEM certificate and key, like Proxyman's Certificate → Custom Certificates → Client Certificates. CLI: `rivis tls client-cert add HOST FILE.p12 --password-stdin`. Wildcards (`*.example.test`) work. |
 | **Scripting** | **Scripts** tab — JavaScript or Python, enabled per project, run in filename order after rules. (Trusted user code: it runs with your rights; the Node VM drops network/`require` to prevent accidents but is not a security boundary.) |
 | **Save a session** | **Sessions** tab → save, add a note, reopen later, or export HAR. |
 | **Copy as cURL** | **This call → Copy cURL**, or **Copy as…** for many languages. Secrets (Authorization, cookies) are masked by default — untick **Mask secrets** to include them. |

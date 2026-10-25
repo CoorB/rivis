@@ -43,6 +43,10 @@
 #   <cli> tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
 #                                 which hosts are decrypted (Proxyman "SSL Proxying list"); wildcards like
 #                                 *.example.test. Hot-reloaded for NEW connections — no restart.
+#   <cli> tls client-cert list | add HOST FILE [--key KEY_FILE] [--password-stdin] | rm HOST
+#                                 client certificate (mTLS) sent to HOST (api.example.test, *.example.test or
+#                                 an IP) when its server asks for one. FILE: .p12/.pfx (password on stdin)
+#                                 or PEM. Per project, kept private; used from the next connection
 #   <cli> compose list | send NAME [--var name=value] [--no-wait]
 #                                 replay a request saved in the panel's Compose tab through the running proxy
 #   <cli> breakpoint [URL-REGEX [--request|--response] [--method M] | off [NAME]]
@@ -984,6 +988,11 @@ cmd_tls() {
   ensure_rules
   warn_running_project
   [ $# -gt 0 ] || set -- list
+  if [ "$1" = client-cert ]; then   # client certificates (mTLS) per host, kept in the project's private state
+    shift; [ $# -gt 0 ] || set -- list
+    /usr/bin/python3 -I "$SCRIPT_DIR/addons/client_certs.py" "$PROJECT_STATE/client-certs" "$@"
+    return
+  fi
   /usr/bin/python3 -I "$SCRIPT_DIR/addons/tls_cli.py" "$RULES" "$@"
 }
 cmd_compose() {

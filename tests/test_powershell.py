@@ -459,6 +459,26 @@ class Commands(unittest.TestCase):
         self.bad("tls", "mode", "sideways")
         self.assertIn("tls mode: ignore", self.bash("tls", "list"))
 
+    def test_tls_client_cert_parity_with_bash(self):
+        from test_client_certs_0910 import Pki
+        pki = Pki(self.suite.new_home("pki-ps"))
+        crt, key, p12 = pki.client("erin", password="ps pass")
+        script = os.path.join(harness.REPO, "rivis.ps1")
+        cp = self.suite.run([PWSH, "-NoProfile", "-NonInteractive", "-File", script, "tls", "client-cert", "add", "API.example.test",
+                             p12, "-PasswordStdin"], home=self.home, env=self.env, timeout=120, input="ps pass\n")
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertIn("client certificate for api.example.test", cp.stdout)
+        self.ok("tls", "client-cert", "add", "*.example.test", crt, "-Key", key)
+        store = os.path.join(self.state, "projects", "default", "client-certs")
+        self.assertEqual(sorted(os.listdir(store)), ["_wildcard.example.test.pem", "api.example.test.pem"])
+        self.assertEqual(mode(store), 0o700)
+        listing = self.ok("tls", "client-cert", "list")
+        self.assertIn("*.example.test", listing)
+        self.assertIn("api.example.test", self.bash("tls", "client-cert", "list"))
+        self.ok("tls", "client-cert", "rm", "*.example.test")
+        self.bad("tls", "client-cert", "rm", "*.example.test", msg="no client certificate")
+        self.bad("tls", "client-cert", "add", "https://x.test", crt, "-Key", key, msg="host name")
+
     def test_scripts_new_list_on_off_rm(self):
         self.ok("scripts", "new", "hello", "-Lang", "py", "-Match", "/api")
         self.ok("scripts", "new", "jsone", "-Lang", "js")

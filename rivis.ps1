@@ -23,6 +23,8 @@ system proxy, one CA per workstation, removed again with `off`.
   .\<cli>.ps1 nocache on|off|status         No Caching: strip If-None-Match/If-Modified-Since... from requests and
                                             force no-store on responses (Map Local answers untouched)
   .\<cli>.ps1 tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
+  .\<cli>.ps1 tls client-cert list | add HOST FILE [-Key KEY_FILE] [-PasswordStdin] | rm HOST
+                                            client certificate (mTLS) per host; FILE .p12/.pfx or PEM
                                             which hosts are decrypted (wildcards like *.example.test);
                                             hot-reloaded for NEW connections, no restart
   .\<cli>.ps1 compose list | send NAME [-Var name=value] [-NoWait]
@@ -78,6 +80,8 @@ param(
   [Alias("-all")][switch]$All,
   [Alias("h","-help")][switch]$Help,
   [string[]]$Var = @(),
+  [string]$Key = "",
+  [switch]$PasswordStdin,
   [Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest = @()
 )
 $ErrorActionPreference = "Stop"
@@ -593,7 +597,7 @@ if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report"
 } elseif ($Action -eq "list" -and $Command -in @("projects","rules","scripts","compose")) {
   if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif (@($Rest).Count -and $Command -ne "throttle" -and
-          -not ($Command -eq "tls" -and $Action -in @("allow","ignore")) -and
+          -not ($Command -eq "tls" -and $Action -in @("allow","ignore","client-cert")) -and
           -not ($Command -eq "rules" -and $Action -in @("add","variant")) -and
           -not ($Command -eq "rules" -and $Action -eq "test" -and @($Rest).Count -eq 1)) {
   $unexpected += @($Rest)
@@ -961,6 +965,14 @@ switch ($Command) {
     $cfg = Read-RulesConfig
     $tls = Get-Tls $cfg
     $sub = if ($Action) { $Action.ToLowerInvariant() } else { "list" }
+    if ($sub -eq "client-cert") {   # client certificates (mTLS) per host, kept in the project's private state
+      $ccArgs = @($(if ($Name) { $Name } else { "list" })) + @($Rest)
+      if ($Key) { $ccArgs += @("--key", $Key) }
+      if ($PasswordStdin) { $ccArgs += "--password-stdin" }
+      $python = Get-PythonCommand
+      & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\client_certs.py") (Join-Path $ProjectState "client-certs") @ccArgs
+      exit $LASTEXITCODE
+    }
     $tlsNote = "applies to new connections after the next rules poll; allow a few seconds - no restart; open connections keep their earlier decision"
     if ($sub -eq "list") {
       Write-Host "tls mode: $($tls.mode)"
