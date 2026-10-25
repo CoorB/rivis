@@ -1065,13 +1065,15 @@ cmd_compose() {
 # ───────────────────────── android ─────────────────────────
 pick_serial() {
   local s devices q1 q2
+  devices=$("$ADB" devices) || die "adb devices failed"
   if [ -n "${SERIAL:-}" ]; then s="$SERIAL"
   else
-    devices=$("$ADB" devices) || die "adb devices failed"
     s=$(printf '%s\n' "$devices" | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
   fi
   [ -z "$s" ] && die "no running emulator (adb devices). Physical devices need a separate approval."
   [ "$(echo "$s" | wc -l | tr -d ' ')" -gt 1 ] && die "several emulators running — pass -s SERIAL: $(echo $s)"
+  printf '%s\n' "$devices" | awk -v serial="$s" '$1 == serial && $2 == "device" {found=1} END {exit !found}' \
+    || die "$s: not an attached device (adb devices)"
   [[ "$s" =~ ^emulator-[0-9]+$ ]] || die "physical devices need a separate approval"
   q1=$("$ADB" -s "$s" shell getprop ro.kernel.qemu 2>/dev/null | tr -d '\r') || die "$s: could not verify emulator status"
   q2=$("$ADB" -s "$s" shell getprop ro.boot.qemu 2>/dev/null | tr -d '\r') || die "$s: could not verify emulator status"

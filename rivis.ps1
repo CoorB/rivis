@@ -538,13 +538,16 @@ function Set-AndroidSystemMark($adb, $serial, [bool]$on) {   # AVDs that asked f
 function Run($what) { if ($LASTEXITCODE -ne 0) { Die "$what failed (exit $LASTEXITCODE)" } }
 
 function Pick-Serial($adb) {
+  $devices = & $adb devices; Run "adb devices"
   if ($Serial) { $s = $Serial }
   else {
-    $devices = & $adb devices; Run "adb devices"
     $s = $devices | Select-String '^(emulator-\d+)\s+device$' | ForEach-Object { $_.Matches[0].Groups[1].Value }
   }
   if (-not $s) { Die "no running emulator. Physical devices need a separate approval." }
   if (@($s).Count -gt 1) { Die "several emulators running - pass -Serial: $($s -join ' ')" }
+  if (-not ($devices | Select-String -Pattern ('^{0}\s+device$' -f [regex]::Escape($s)))) {
+    Die "${s}: not an attached device (adb devices)"
+  }
   if ($s -notmatch '^emulator-\d+$') { Die "physical devices need a separate approval" }
   $q1 = ((& $adb -s $s shell getprop ro.kernel.qemu) -replace "`r","").Trim(); Run "verify emulator status"
   $q2 = ((& $adb -s $s shell getprop ro.boot.qemu) -replace "`r","").Trim(); Run "verify emulator status"

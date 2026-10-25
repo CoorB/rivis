@@ -1059,6 +1059,19 @@ class AdbDiscovery(CliBase):
         self.assertNotIn("adb not found", r.stdout + r.stderr)
         self.assertTrue(os.path.exists(log), r.stdout + r.stderr)
 
+    def test_explicit_unattached_android_serial_is_reported_as_missing(self):
+        adb = os.path.join(self.home, "adb")
+        with open(adb, "w") as fh:
+            fh.write('#!/bin/sh\n[ "$1" = devices ] && printf "List of devices attached\\n\\n"\nexit 0\n')
+        os.chmod(adb, 0o755)
+        env = dict(self.env, ADB=adb)
+        for serial in ("definitely-not-a-device", "emulator-9998"):
+            with self.subTest(serial=serial):
+                r = self.cli("android", "on", "-s", serial, "--manual", env=env)
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("not an attached device", r.stdout + r.stderr)
+                self.assertNotIn("physical devices need", r.stdout + r.stderr)
+
 
 class NoCommandLineTools(CliBase):
     """Night review A2: on a Mac without Apple's Command Line Tools, /usr/bin/python3 only pops an install dialog, and

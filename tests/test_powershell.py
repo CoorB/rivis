@@ -192,6 +192,21 @@ class Commands(unittest.TestCase):
     def test_native_window_is_mac_only(self):
         self.bad("app", msg="the native window is macOS only — use rivis ui")
 
+    def test_explicit_unattached_android_serial_is_reported_as_missing(self):
+        shim = os.path.join(self.home, "adbshim")
+        os.makedirs(shim)
+        adb = os.path.join(shim, "adb")
+        with open(adb, "w") as fh:
+            fh.write('#!/bin/sh\n[ "$1" = devices ] && printf "List of devices attached\\n\\n"\nexit 0\n')
+        os.chmod(adb, 0o755)
+        self.env = dict(self.env, PATH=shim + os.pathsep + self.env["PATH"])
+        for serial in ("definitely-not-a-device", "emulator-9998"):
+            with self.subTest(serial=serial):
+                cp = self.ps("android", "on", "-Serial", serial)
+                self.assertNotEqual(cp.returncode, 0)
+                self.assertIn("not an attached device", cp.stdout + cp.stderr)
+                self.assertNotIn("physical devices need", cp.stdout + cp.stderr)
+
     def test_proxyman_import_parity_with_bash(self):
         source = os.path.join(harness.REPO, "tests", "fixtures", "proxyman")
         self.ok("rules", "list")
