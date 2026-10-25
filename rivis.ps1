@@ -9,7 +9,7 @@ system proxy, one CA per workstation, removed again with `off`.
                                             mitmweb: proxy 127.0.0.1:8080, UI http://127.0.0.1:8083
                                             -Lan: phones/tablets on this Wi-Fi too (allow each one first)
   .\<cli>.ps1 lan [list] | allow IP [NAME] | rm IP   phones and tablets allowed to use the proxy
-  .\<cli>.ps1 stop | ui | status | cert
+  .\<cli>.ps1 stop | ui [-New] | status | cert   (ui -New: the new main window, laid out like Proxyman)
   .\<cli>.ps1 browser [URL] [-Browser chrome|edge|chromium|brave] [-Fresh] [-List]   (-Current: macOS CLI only)
                                             web apps: a separate browser window with its own profile, pointed
                                             at the proxy and trusting only this CA. Your normal browser, the
@@ -88,6 +88,7 @@ param(
   [string]$Key = "",
   [switch]$PasswordStdin,
   [switch]$Lan,
+  [switch]$New,
   [Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest = @()
 )
 $ErrorActionPreference = "Stop"
@@ -773,7 +774,9 @@ switch ($Command) {
   "ui" {
     if (-not (Port-Owner $WebPort)) { Die "mitmweb is not running - ${Cli}.ps1 start" }
     if (-not (Test-Path $TokenPath)) { Die "no token file - restart with ${Cli}.ps1 start" }
-    Start-Process (New-UiBootstrap)
+    $uiUrl = New-UiBootstrap
+    if ($New) { $uiUrl += "?next=rivis" }      # the new main window (UI overhaul phase 1); the classic view stays
+    Start-Process $uiUrl
   }
   "rules" {
     Ensure-Rules

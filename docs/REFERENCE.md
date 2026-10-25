@@ -329,6 +329,23 @@ before removing add-ons. It retains `~/.rivis` and `~/.mitmproxy` and prints sep
 
 ## Panel
 
+### New main window (preview)
+
+`rivis ui --new` (rivis.ps1: `ui -New`) opens the new main window at `http://127.0.0.1:<web port>/rivis/`, laid out
+like Proxyman: tool switches in the toolbar (lit when on; No Caching switches there, the other tools open in the
+classic view until their own windows exist), filter chips (All, HTTP, HTTPS, WebSocket, JSON, Form, XML, JS, CSS,
+GraphQL, Document, Media, 1xx–5xx) and your saved filters, apps, devices and domains on the left, the call list in the
+middle, and the request and response side by side under it. The filter box takes plain text or a `~` filter; an
+invalid `~` filter is reported and never applied. The list keeps live without a reload; **Record** pauses it (new
+calls wait and are counted), **Follow** keeps the newest call selected. Each pane has Header, Query/Body/Cookies/Raw
+(request) or Body/Tree/Raw (response), and a search inside the body (n of N, Enter / Shift+Enter). The Tree is built
+for JSON bodies up to 2 MB, opens only what you open or what a search finds, and copies a value or its path. Binary
+bodies show as hex; text is shown up to 512 KB. Right-click a call for Copy URL, Copy as cURL, Repeat, Map Local,
+Breakpoint, Show only this host and Delete. Columns are the project's (the same choice as the classic view's picker).
+Shortcuts: ⌥⌘F filter, ⌘F search in the body, ⌘K find a source, ⇧⌘L follow the newest, ⇧⌘⌫ clear all (asks
+first), ⌥⌘N No Caching, ⌥⌘L / ⌥⌘R / ⌥⌘B Map Local / Map Remote / Breakpoint, ⌥1–⌥9 saved filters, ↑ ↓ calls,
+⌫ delete the selected call. The classic view stays as it is (**Classic view** in the toolbar).
+
 Open the mitmweb UI and click the **Tools** button at the right end of the toolbar. Tabs provide This call, Compose, Map Local,
 Breakpoints, Network, Devices, Collections, Compare, Sessions, Scripts, and Rules. The header shows `Rivis / <project label>` (for example `Rivis / NEO`, or `Rivis / All`) and has
 a project selector. That selector changes only the host view; restart with `--project ID` to load a different

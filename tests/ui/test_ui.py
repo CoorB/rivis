@@ -61,6 +61,8 @@ class UiBase(LiveCase):
         self.page.on("console", lambda m: self.errors.append(("console.error", m.text)) if m.type == "error" else None)
         self.page.on("pageerror", lambda e: self.errors.append(("pageerror", str(e))))
         self.page.on("requestfailed", lambda r: self.errors.append(("requestfailed", r.url)) if "/proxy/" in r.url else None)
+        # the new window's first-run welcome (/rivis/) shows once per browser; its own test clears this
+        self.page.add_init_script("try { if (location.pathname.startsWith('/rivis/')) localStorage.setItem('rivis-ui-welcome', 'done') } catch (e) {}")
 
     def tearDown(self):
         self.context.close()

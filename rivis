@@ -28,7 +28,8 @@
 #                                              in Tools → Devices. Off by default
 #   <cli> lan [list] | allow IP [NAME] | rm IP   the phones and tablets allowed to use the proxy (--lan)
 #   <cli> projects list|use ID|show ID|new ID --label L --hosts REGEX
-#   <cli> ui | stop | restart | status | cert
+#   <cli> ui [--new] | stop | restart | status | cert
+#                                 ui --new: the new main window, laid out like Proxyman (preview; the classic view stays)
 #   <cli> browser [URL | --current] [--browser chrome|edge|chromium|brave] [--fresh] [--list]
 #                                 web apps: a separate browser window with its own profile, pointed at the
 #                                 proxy and trusting only this CA. Your normal browser, the system proxy
@@ -824,13 +825,15 @@ cmd_restart() { # R4A-01: replay saved project and flags after an upgrade, for t
   RIVIS_START_PROJECT_SOURCE="$START_PROJECT_SOURCE" RIVIS_START_PROJECT_EXPLICIT="$START_PROJECT_EXPLICIT" "$0" "${START_ARGS[@]}"
 }
 
-cmd_ui() {
+cmd_ui() {   # ui [--new]: --new opens the new main window (UI overhaul phase 1) instead of the classic view
+  local next=""
+  case "${1:-}" in --new) next="?next=rivis" ;; "") ;; *) die "usage: $CLI ui [--new]" ;; esac
   [ -n "$(port_owner "$WEB_PORT")" ] || die "mitmweb is not running — $CLI start"
   [ -f "$TOKEN_FILE" ] || die "no token file — restart with $CLI start"
   local bootstrap
   bootstrap=$(openssl rand -hex 16) || die "could not generate a one-time UI login"
   atomic_private_text "$BOOTSTRAP_FILE" "$bootstrap" || die "could not save one-time UI login"
-  open "http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap"
+  open "http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap$next"
 }
 
 # browser — a separate Chrome/Edge window for web apps (HTTP Toolkit / Proxyman's "open a browser with the proxy").
@@ -1766,7 +1769,7 @@ case "${1:-}" in
   ios)       shift; cmd_ios "$@" ;;
   net-reset) shift; cmd_net_reset "$@" ;;
   status)    cmd_status ;;
-  ui)        cmd_ui ;;
+  ui)        shift; cmd_ui "$@" ;;
   browser)   shift; cmd_browser "$@" ;;
   stop)      cmd_stop ;;
   restart)   cmd_restart ;;

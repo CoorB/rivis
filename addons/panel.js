@@ -3330,6 +3330,12 @@
     if (el && $("drawer").classList.contains("open")) el.focus({ preventScroll: true });
     if (again) setTimeout(() => { if ($("drawer").classList.contains("open") && !$("drawer").contains(root.activeElement)) focusDrawer(0); }, 300);
   };
+  // the new main window (/rivis/) opens a tool here until its own tool windows exist (UI phase 2): #rivis-tool=<tab>
+  const toolLink = location.hash.match(/^#rivis-tool=(map|rules|bp|scripts|net)$/);
+  if (toolLink) {
+    history.replaceState(null, "", location.pathname + location.search);   // mitmweb's router must not see it
+    setTimeout(() => openDrawer(toolLink[1]).then(() => focusDrawer()), 300);
+  }
   const closeDrawer = () => { clearTimeout(editorCheckT); setOpen(false); returnTo.editor = null; giveBack("drawer"); }; // R6-05/07
   const repeatSelected = () => {
     const id = selectedFlow();

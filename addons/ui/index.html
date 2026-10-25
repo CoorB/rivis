@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rivis</title>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<div id="rv-app" class="rv-app" data-follow="1">
+  <header class="rv-toolbar" role="toolbar" aria-label="Main toolbar">
+    <div class="rv-tb-group">
+      <button class="rv-tb" id="tb-record" aria-pressed="true" title="Record (pause to freeze the list)"><span class="rv-dot"></span><span class="rv-tb-l">Record</span></button>
+      <button class="rv-tb" id="tb-clear" title="Clear all calls (⇧⌘⌫)"><span class="rv-ico">⌫</span><span class="rv-tb-l">Clear</span></button>
+      <button class="rv-tb" id="tb-follow" aria-pressed="true" title="Follow the newest call (⇧⌘L)"><span class="rv-ico">↧</span><span class="rv-tb-l">Follow</span></button>
+    </div>
+    <div class="rv-tb-sep"></div>
+    <div class="rv-tb-group" id="tb-tools" aria-label="Tools"></div>
+    <div class="rv-tb-spacer"></div>
+    <span class="rv-proj" id="tb-project"></span>
+    <button class="rv-tb" id="tb-help" title="Shortcuts and help (?)" aria-label="Shortcuts and help"><span class="rv-ico">?</span></button>
+    <button class="rv-tb" id="tb-settings" title="Settings" aria-label="Settings"><span class="rv-ico">⚙</span></button>
+    <a class="rv-tb rv-tb-link" id="tb-classic" href="../" title="The classic Rivis view">Classic view</a>
+  </header>
+
+  <div class="rv-filterbar">
+    <div class="rv-search">
+      <span class="rv-ico" aria-hidden="true">⌕</span>
+      <input id="q" type="text" spellcheck="false" autocomplete="off" placeholder="Filter: host, path, or a ~filter (⌥⌘F)" aria-label="Filter calls">
+      <span class="rv-qerr" id="qerr" role="status"></span>
+    </div>
+    <div class="rv-chips" id="chips" role="group" aria-label="Call types"></div>
+    <div class="rv-chips rv-saved" id="saved" role="group" aria-label="Saved filters"></div>
+  </div>
+
+  <div class="rv-banners" id="banners" role="region" aria-label="Notices"></div>
+
+  <div class="rv-body">
+    <nav class="rv-side" id="side" aria-label="Sources">
+      <input id="sq" type="text" spellcheck="false" autocomplete="off" placeholder="Find or pin a domain (⌘K)" aria-label="Find or pin a domain">
+      <div id="sources"></div>
+    </nav>
+    <main class="rv-main">
+      <section class="rv-list" id="list" aria-label="Calls">
+        <div class="rv-thead" id="thead" role="row"></div>
+        <div class="rv-tscroll" id="tscroll" tabindex="0" role="grid" aria-label="Calls" aria-rowcount="0">
+          <div class="rv-tspace" id="tspace"><div class="rv-rows" id="rows"></div></div>
+          <div class="rv-empty" id="empty"></div>
+        </div>
+      </section>
+      <div class="rv-hsplit" id="hsplit" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
+      <section class="rv-detail" id="detail" aria-label="Selected call">
+        <div class="rv-pane" id="pane-req"></div>
+        <div class="rv-vsplit" role="separator" aria-orientation="vertical"></div>
+        <div class="rv-pane" id="pane-res"></div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="rv-status" id="status" role="status"></footer>
+</div>
+<div class="rv-menu" id="menu" role="menu" hidden></div>
+<div class="rv-scrim" id="scrim" hidden></div>
+<div class="rv-dialog" id="dialog" role="dialog" aria-modal="true" hidden></div>
+<div class="rv-toast" id="toast" role="status" aria-live="polite"></div>
+<script src="./app.js"></script>
+<script src="./tools.js"></script>
+<script src="./tool-bp.js"></script>
+<script src="./tool-map.js"></script>
+<script src="./tool-rules.js"></script>
+<script src="./tool-scripts.js"></script>
+<script src="./tool-net.js"></script>
+<script src="./tool-compose.js"></script>
+<script src="./tool-more.js"></script>
+</body>
+</html>

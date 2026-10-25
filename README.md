@@ -85,6 +85,7 @@ rivis start --background   # start (keeps running after you close Terminal)
 rivis start --upstream http://proxy.company:3128  # forward calls through an HTTP proxy; saved for later starts
 rivis start --upstream direct  # return to a direct connection
 rivis ui                   # reopen the browser tab
+rivis ui --new             # preview: the new main window, laid out like Proxyman
 rivis browser URL          # web apps: open a separate Chrome/Edge window that goes through Rivis
 rivis browser --current    # the same, for the page open in your browser's front tab
 rivis status               # is it running?

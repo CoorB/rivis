@@ -3015,6 +3015,37 @@ class ProxyPanel:
                     chunk = s
                 return super().finish(chunk)
 
+        class NewUI(webapp.RequestHandler):
+            """UI overhaul phase 1: the Proxyman-style main window (addons/ui), served next to mitmweb's own page and
+            behind the same login (every webapp.RequestHandler is). Only the files listed here; nothing from the request
+            ever becomes a path."""
+            FILES = {"": ("index.html", "text/html; charset=utf-8"), "app.css": ("app.css", "text/css"),
+                     **{js: (js, "application/javascript") for js in (
+                         "app.js", "tools.js", "tool-bp.js", "tool-map.js", "tool-rules.js", "tool-scripts.js", "tool-net.js",
+                         "tool-compose.js", "tool-more.js")}}
+
+            def get(self, name):
+                if name not in self.FILES:
+                    raise tornado.web.HTTPError(404)
+                fn, ctype = self.FILES[name]
+                with open(os.path.join(HERE, "ui", fn), "rb") as fh:
+                    data = fh.read()
+                self.set_header("Content-Type", ctype)
+                self.set_header("Cache-Control", "no-store")
+                self.set_header("X-Content-Type-Options", "nosniff")
+                if not name:
+                    port = ctx.options.web_port
+                    self.set_header("Content-Security-Policy",
+                                    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                                    f"connect-src 'self' ws://127.0.0.1:{port} ws://localhost:{port}; frame-ancestors 'none'; "
+                                    "base-uri 'none'; form-action 'none'")
+                    self.set_header("Referrer-Policy", "no-referrer")
+                self.write(data)
+
+        class NewUIRedirect(webapp.RequestHandler):
+            def get(self):
+                self.redirect("/rivis/")
+
         class PanelJS(webapp.RequestHandler):
             def get(self):
                 with open(os.path.join(HERE, "panel.js"), "rb") as fh:
@@ -3156,7 +3187,7 @@ class ProxyPanel:
                 self.set_header("Referrer-Policy", "no-referrer")
                 self.set_secure_cookie(f"mitmproxy-auth-{ctx.options.web_port}", "y", expires_days=COOKIE_DAYS(),
                                        httponly=True, samesite="Strict")
-                self.redirect("/")
+                self.redirect("/rivis/" if self.get_argument("next", "") == "rivis" else "/")   # `rivis ui --new`
 
         class Api(webapp.RequestHandler):
             def _refuse_cross_site(self):
@@ -3259,6 +3290,8 @@ class ProxyPanel:
         app.add_handlers(r".*", [
             (r"/", ProxyIndex),
             (r"/proxy/panel\.js", PanelJS),
+            (r"/rivis", NewUIRedirect),
+            (r"/rivis/(|[a-z-]+\.js|app\.css)", NewUI),
             (r"/proxy/theme\.css", ThemeCSS),
             (r"/commands/export", MitmwebExport),
             (r"/flows/dump", SafeDumpFlows),
