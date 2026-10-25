@@ -1225,7 +1225,7 @@ android_system_ca() {   # android_system_ca SERIAL inject|remove|status — prin
   fi
   "$ADB" -s "$s" shell rm -f /data/local/tmp/rivis_system_ca.sh >/dev/null 2>&1
   printf '%s\n' "$out"
-  case "$out" in "rivis-system-ca: ok"|"rivis-system-ca: removed"|"rivis-system-ca: present") return 0 ;; *) return 1 ;; esac
+  case "$out" in "rivis-system-ca: ok"|"rivis-system-ca: ok partial "*|"rivis-system-ca: removed"|"rivis-system-ca: present") return 0 ;; *) return 1 ;; esac
 }
 android_proxy_mark() {   # android_proxy_mark SERIAL on|off
   local avd f="$STATE_ROOT/android-proxy"; avd=$(avd_of "$1"); [ -n "$avd" ] || return 0
@@ -1363,6 +1363,7 @@ cmd_android() {
           local sys_out; sys_out=$(android_system_ca "$s" inject) && sys_ok=1 || sys_ok=0
           if [ "$sys_ok" = 1 ]; then android_system_mark "$s" on
             info "$s: CA also in the SYSTEM store ($h.0) — apps that trust only system certificates see it. It is put back after a restart while $PRODUCT_NAME runs"
+            case "$sys_out" in *"ok partial "*) echo "!! $s: ${sys_out##*partial } app(s) already running kept the old system store — restart them (or the emulator) to use it" >&2 ;; esac
           else echo "!! $s: could not add the CA to the system store (${sys_out:-no answer}); the user store and proxy are still set" >&2; fi
         fi
       else

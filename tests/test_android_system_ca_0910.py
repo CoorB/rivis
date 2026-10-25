@@ -88,6 +88,14 @@ class AndroidSystemCa(CliBase):
         self.assertFalse(os.path.exists(self.system))
         self.assertIn("CA removed from the system store", out)
 
+    def test_running_apps_that_kept_the_old_store_are_named(self):
+        self.root_image()
+        open(os.path.join(self.emu, "system_partial"), "w").close()
+        r = self.cli("android", "on", "--system")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("2 app(s) already running kept the old system store", r.stdout + r.stderr)
+        self.assertEqual(self.wanted(), ["Test_API_37"])
+
     def test_system_and_strict_are_refused_together(self):
         r = self.cli("android", "on", "--system", "--strict")
         self.assertNotEqual(r.returncode, 0)
@@ -146,8 +154,31 @@ class OnDeviceScript(unittest.TestCase):
         src = open(self.PATH).read()
         self.assertIn("mount -t tmpfs tmpfs \"$SYS\"", src)
         self.assertNotIn("remount", src)                  # the system image is never made writable
-        self.assertIn("sys_is_ours", src.split("remove)")[1])    # remove only our own tmpfs
         self.assertIn("pidof zygote zygote64", src)
+
+    def test_only_its_own_mounts_are_ever_unmounted(self):
+        """Review 2026-10-23: removal took any tmpfs holding the file for its own; a failed install left the store
+        overlaid. Every umount is now guarded by the device number of this boot's own tmpfs."""
+        src = open(self.PATH).read()
+        for line in src.splitlines():
+            if "umount" in line and not line.strip().startswith("#"):
+                self.assertRegex(line, r'top_dev [^)]*\)" = "\$_dev" \]|"\$SYS"; say "fail no-mount-id"', line)
+        self.assertIn('echo "$(boot_id) $name $dev" > "$MARK"', src)
+        self.assertIn("test_fail mount", src.split("mv \"$COPY\"")[0], "the rollback covers the very next step")
+
+    def test_mountinfo_parser_and_rollback_in_a_shell(self):
+        """Run the script's own helpers in a POSIX sh against a fake /proc (no Android needed)."""
+        import tempfile
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "proc", "self"))
+        with open(os.path.join(d, "proc", "self", "mountinfo"), "w") as fh:
+            fh.write("21 1 253:5 / /system rw - ext4 /dev/block/dm-5 ro\n"
+                     "88 21 0:41 / /system/etc/security/cacerts rw - tmpfs tmpfs rw\n"
+                     "90 88 0:57 / /system/etc/security/cacerts rw - tmpfs tmpfs rw\n")
+        src = open(self.PATH).read().split("case \"$action\" in")[0].replace("/proc/$1/mountinfo", d + "/proc/$1/mountinfo")
+        out = subprocess.run(["sh", "-c", src + '\ntop_dev self /system/etc/security/cacerts; top_dev self /nope'],
+                             capture_output=True, text=True).stdout.split("\n")
+        self.assertEqual(out[:2], ["0:57", ""], "the last mount at a path wins; no mount = empty")
 
     def test_magisk_overlay_carries_the_script(self):
         inject = open(os.path.join(harness.REPO, "addons", "android", "rivis_inject.sh")).read()

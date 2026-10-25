@@ -161,9 +161,11 @@ else
 fi
 
 # ---- 3. boot the copy once ----------------------------------------------------------------------------------------
-# `emu kill` stops the emulator at once: without a sync this request never reaches its disk (device pass 2026-10-23)
-if [ "$SYSTEM" = 1 ]; then sh_ "echo 1 > /data/local/tmp/rivis-ca.want-system && sync" >/dev/null
-else sh_ "rm -f /data/local/tmp/rivis-ca.want-system && sync" >/dev/null; fi
+# `emu kill` stops the emulator at once: without a sync this request never reaches its disk (device pass 2026-10-23).
+# An old status line must go too: read right after the boot, a previous run's "ok" was taken for this one's while the
+# service had not even run yet (device pass 2026-10-23).
+if [ "$SYSTEM" = 1 ]; then sh_ "rm -f /data/local/tmp/rivis-ca.status && echo 1 > /data/local/tmp/rivis-ca.want-system && sync" >/dev/null
+else sh_ "rm -f /data/local/tmp/rivis-ca.status /data/local/tmp/rivis-ca.want-system && sync" >/dev/null; fi
 info "restarting '$AVD' with the temporary ramdisk…"
 "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1 || die "the emulator did not accept the stop command"
 gone || die "the emulator did not stop within 60 seconds"

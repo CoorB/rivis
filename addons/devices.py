@@ -166,7 +166,7 @@ def system_ca_present(adb, serial, name):
         return False
     _, out = _run([adb, "-s", serial, "shell", "cat /data/local/tmp/rivis-system-ca.boot; echo; cat /proc/sys/kernel/random/boot_id"])
     lines = [x.strip() for x in out.splitlines() if x.strip()]
-    return len(lines) == 2 and lines[0] == "%s %s" % (lines[1], name)
+    return len(lines) == 2 and lines[0].split()[:2] == [lines[1], name]      # "<boot id> <name> [<device>]"
 
 
 def avd_name(adb, serial, runner=None):

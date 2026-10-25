@@ -20,7 +20,7 @@ cmp -s "$here/rivis_ca.0" "$store/$name" || done_with "fail verify"
 if [ -f /data/local/tmp/rivis-ca.want-system ]; then
   rm -f /data/local/tmp/rivis-ca.want-system
   cp "$here/rivis_ca.0" /data/local/tmp/rivis-sys-ca.0
-  if sh "$here/rivis_system_ca.sh" inject /data/local/tmp/rivis-sys-ca.0 "$name" 2>&1 | grep -q "^rivis-system-ca: ok$"; then
+  if sh "$here/rivis_system_ca.sh" inject /data/local/tmp/rivis-sys-ca.0 "$name" 2>&1 | grep -qE "^rivis-system-ca: ok( partial [0-9]+)?$"; then
     done_with "ok $name system"
   fi
   done_with "ok $name system-failed"

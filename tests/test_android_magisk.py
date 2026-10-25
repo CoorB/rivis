@@ -265,6 +265,15 @@ class MagiskRestarts(MagiskFixture):
         self.assertIn("-no-snapshot-save", starts[0])                 # the rooted boot is never saved as Quick Boot
         self.assertIn("temporary setup boot", r.stdout)
 
+    def test_an_old_status_line_is_removed_before_the_restart(self):
+        """Device pass 2026-10-23: a previous run's "ok" was read right after the boot and taken for this run's, before
+        the one-shot service had run (it wrote its own line a moment later)."""
+        r, starts = self.run_flow("--yes")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        log = open(self.log).read()
+        before_kill = log[:log.index("emu kill")]
+        self.assertRegex(before_kill, r"rm -f /data/local/tmp/rivis-ca\.status[^\n]*&& sync")
+
     def test_strict_goes_back_to_the_stock_boot_at_once(self):
         r, starts = self.run_flow("--yes", "--strict")
         self.assertEqual(r.returncode, 0, r.stderr)

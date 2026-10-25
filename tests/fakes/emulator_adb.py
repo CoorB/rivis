@@ -12,6 +12,7 @@
   system/<h>.0    the SYSTEM store tmpfs that rivis_system_ca.sh adds (gone after a "reboot": a new boot_id)
   boot_id         this boot's id (default "boot-1"); mark: what rivis_system_ca.sh recorded ("<boot id> <name>")
   system_fail     present = rivis_system_ca.sh inject fails
+  system_partial  present = inject answers "ok partial 2" (two running apps kept the old store)
   log             every call
 Only what `rivis android off` uses is implemented; anything else answers nothing, exit 0."""
 import os
@@ -139,7 +140,7 @@ elif cmd.startswith("shell sh /data/local/tmp/rivis_system_ca.sh "):
     sysd = os.path.join(D, "system")
     if not os.path.exists(os.path.join(D, "root")):
         if act == "status":
-            print("rivis-system-ca: present" if read("mark").strip() == "%s %s" % (boot, rest[0]) else "rivis-system-ca: absent")
+            print("rivis-system-ca: present" if read("mark").split()[:2] == [boot, rest[0]] else "rivis-system-ca: absent")
         else:
             print("rivis-system-ca: fail not-root")
     elif act == "inject":
@@ -148,8 +149,8 @@ elif cmd.startswith("shell sh /data/local/tmp/rivis_system_ca.sh "):
         else:
             os.makedirs(sysd, exist_ok=True)
             open(os.path.join(sysd, rest[1]), "w").write(read("tmp/" + os.path.basename(rest[0])))
-            open(os.path.join(D, "mark"), "w").write("%s %s" % (boot, rest[1]))
-            print("rivis-system-ca: ok")
+            open(os.path.join(D, "mark"), "w").write("%s %s 0:123" % (boot, rest[1]))
+            print("rivis-system-ca: ok partial 2" if os.path.exists(os.path.join(D, "system_partial")) else "rivis-system-ca: ok")
     elif act == "remove":
         if os.path.exists(os.path.join(sysd, rest[0])):
             os.remove(os.path.join(sysd, rest[0]))
