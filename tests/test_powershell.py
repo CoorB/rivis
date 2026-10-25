@@ -195,6 +195,44 @@ class Commands(unittest.TestCase):
             self.assertIn(msg, cp.stdout + cp.stderr)
         return cp
 
+    def test_tls_rejects_the_shared_invalid_host_corpus(self):
+        for pattern in ("<script>", "a>b.test", "مرحبا.example", "café.test", "https://host.test", "host.test:65536"):
+            with self.subTest(pattern=pattern):
+                self.bad("tls", "allow", "add", pattern, msg="TLS host pattern")
+        self.ok("tls", "allow", "add", "*.example.test:443")
+
+    def test_status_only_queries_an_initialized_android_home(self):
+        with open(os.path.join(harness.REPO, "rivis.ps1")) as fh:
+            source = fh.read()
+        block = source[source.index('  "status" {') + len('  "status" {'):source.index('  "browser" {')]
+        block = block[:block.rfind("}")]
+        script = os.path.join(self.home, "status.ps1")
+        prelude = r'''$ErrorActionPreference = "Stop"
+$HOME = $env:HOME
+function Get-Command { param($Name, $ErrorAction) if ($Name -eq 'adb') { return @{Source='fake'} } }
+function Get-ItemProperty { return @{ProxyEnable=0} }
+function Port-Owner { return $null }
+function Get-Upstream { return "" }
+function Read-RulesConfig { return @{rules=@(); scripts=@(); tls=@{mode='all';allow=@();ignore=@()}} }
+function Get-Tls { return @{mode='all'} }
+function adb { New-Item -ItemType Directory -Force (Join-Path $HOME '.android') | Out-Null; Add-Content (Join-Path $HOME 'adb-called') ($args -join ' ') }
+$RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}; $Project='default'; $Port=18680; $WebPort=18683
+'''
+        # Bind the isolated home without assigning the shell's read-only automatic variable.
+        prelude = prelude.replace('$HOME = $env:HOME', '$statusHome = $env:HOME').replace('$HOME', '$statusHome')
+        with open(script, "w") as fh:
+            fh.write(prelude + "\n" + block.replace("$HOME", "$statusHome"))
+        def run():
+            return self.suite.run([PWSH, "-NoProfile", "-NonInteractive", "-File", script], home=self.home, env=self.env)
+        first = run()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        called = os.path.join(self.home, "adb-called")
+        self.assertFalse(os.path.exists(called), "status invoked adb in a fresh home")
+        os.mkdir(os.path.join(self.home, ".android"))
+        second = run()
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("devices", open(called).read())
+
     def test_native_window_is_mac_only(self):
         self.bad("app", msg="the native window is macOS only — use rivis ui")
 

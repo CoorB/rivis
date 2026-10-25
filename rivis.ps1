@@ -485,7 +485,7 @@ function Convert-ToNumber($text, $what) {
 # Same validation as proxy_common.tls_host_regex (the add-on turns the pattern into an anchored regex).
 function Test-TlsPattern([string]$pattern) {
   $p = $pattern.Trim().ToLowerInvariant().TrimEnd('.')
-  if (-not $p -or $p.Contains('/') -or $p -match '\s') { Die "TLS host pattern must be a hostname such as *.example.test" }
+  if (-not $p -or $p.Contains('/') -or $p -match '[\s<>\x80-\uffff]') { Die "TLS host pattern must be a hostname such as *.example.test" }
   $hostPart = $p
   if (@($p.ToCharArray() | Where-Object { $_ -eq ':' }).Count -eq 1) {
     $i = $p.LastIndexOf(':'); $port = $p.Substring($i + 1)
@@ -1410,7 +1410,8 @@ switch ($Command) {
     $cur = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
     Write-Host "windows system proxy: $(if ($cur.ProxyEnable -eq 1) { $cur.ProxyServer } else { 'off' })"
     $adb = Get-Command adb -ErrorAction SilentlyContinue
-    if ($adb) {
+    # adb creates ~/.android on first run; status must not touch HOME (cycle 6).
+    if ($adb -and (Test-Path (Join-Path $HOME ".android"))) {
       & adb devices | Select-String '^(emulator-\d+)\s+device$' | ForEach-Object {
         $e = $_.Matches[0].Groups[1].Value
         Write-Host "android ${e}: http_proxy=$((& adb -s $e shell settings get global http_proxy) -replace "`r",'')"

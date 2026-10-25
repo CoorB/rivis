@@ -75,6 +75,18 @@ class FiltersCurlUi(UiBase):
         wait_for(lambda: self.P("[data-saved]").count() >= len(self.panel.state()["saved_filters"]),
                  10, 0.1, "a chip for every saved filter")
 
+    def test_cycle6_rejected_saved_filter_rename_keeps_dialog(self):
+        self.open()
+        self.save("~m GET", "First")
+        self.save("~m POST", "Second")
+        self.P("[data-smenu='0']").click()
+        self.P("[data-sact='rename']").click()
+        self.answer("Second")
+        self.page.wait_for_timeout(300)
+        self.assertTrue(self.P("#askdlg.open").count())
+        self.assertEqual(self.P("#ask-in").input_value(), "Second")
+        self.assertIn("already exists", self.P("#askdlg").inner_text())
+
     def test_saved_filter_chips_apply_rename_order_delete_shortcut_and_reload(self):
         self.open()
         self.save("~m POST", "Posts")

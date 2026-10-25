@@ -619,12 +619,20 @@ class Ops(LiveCase):
         self.assertEqual(r.json(), {"m": 1})
         self.assertEqual(self.fetch("/echoo").status, 404)
         self.bad("maplocal_add", {"path": "/x"}, "host")
+        for bad in ("http://localhost:99999/x", "http://localhost:65536/x", "localhost:99999", "127.0.0.1:65536"):
+            self.bad("maplocal_add", {"host": bad, "path": "/"}, "1..65535")
         self.assertEqual(self.panel.post("maplocal_add", {"host": "h", "status": "abc"})[0], 400)
         for bad_status in (0, -1, 70000, 999):                          # MQ-16: these gave the app an empty reply
             self.bad("maplocal_add", {"host": "h", "path": "/s", "status": bad_status}, "100 to 599")
         self.panel.ok("add", {"rule": {"name": "plain", "match": ".", "action": "block"}})
         self.bad("mockfile_get", {"name": "plain"}, "not a map local")
         self.bad("mockfile_put", {"name": "plain", "content": "x"}, "not a map local")
+
+    def test_maplocal_bracketed_ipv6_port_range(self):
+        for port in (0, 65536, 99999):
+            self.bad("maplocal_add", {"host": "[::1]:%d" % port, "path": "/ok"}, "1..65535")
+        self.panel.ok("maplocal_add", {"name": "ipv6", "host": "[::1]:443", "path": "/ok"})
+        self.assertTrue(any(r["name"] == "ipv6" for r in self.rules()))
 
     def test_maplocal_add_uses_url_extension_for_content_type(self):
         # R4B-03: manual static asset mocks need the browser's strict module/style MIME checks to pass.

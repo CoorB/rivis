@@ -136,6 +136,12 @@ def compile_rule(source, state_dir, fallback_name=None, confdir=None):
             parsed = urlsplit(base) if isinstance(base, str) else None
             if not parsed or parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.query or parsed.fragment:
                 raise ValueError("map_local folder needs base=http(s)://host/path/")
+            if parsed.port is not None and not 1 <= parsed.port <= 65535:
+                raise ValueError("map_local folder base port must be 1..65535")
+            if parsed.netloc.count(":") == 1 and not parsed.netloc.startswith("["):
+                _, possible = parsed.netloc.rsplit(":", 1)
+                if possible.isdigit() and not 1 <= int(possible) <= 65535:
+                    raise ValueError("map_local folder base port must be 1..65535")
             if not base.endswith("/"):
                 raise ValueError("map_local folder base must end with /")
             if not os.path.isdir(rule["file"]):

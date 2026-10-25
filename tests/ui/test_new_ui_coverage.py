@@ -335,6 +335,8 @@ class NewWindowCoverage(UiBase):
         w.locator('[data-mlsave]').click()
         wait_for(lambda: self.fetch('/json/small?variant=1').json() == {'variant': True}, 8, 0.1, 'alternate response')
         w.locator('#mlvar').select_option('Default')
+        active = lambda: next((r.get('active') for r in self.panel.state()['rules'] if r.get('action') == 'map_local'), None)   # noqa: E731
+        wait_for(lambda: active() == 'Default', 8, 0.1, 'the picker switched the rule back')
         wait_for(lambda: self.fetch('/json/small?variant=1').json() != {'variant': True}, 8, 0.1, 'default response')
 
     def test_classic_view_has_a_visible_link_to_the_main_window(self):

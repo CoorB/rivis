@@ -110,9 +110,12 @@ def wait_for(fn, timeout=10.0, interval=0.1, desc="condition"):
 SHIMS = {
     "bash": '#!/bin/sh\nexec /bin/bash "$@"\n',
     "open": '#!/bin/sh\necho "$@" >> "$SHIM_LOG/open.log"\nexit 0\n',
-    # `simctl list devices booted` prints $SHIM_LOG/booted (one "Name (UDID) (Booted)" per line) when a test writes it
+    # `simctl list devices booted` prints $SHIM_LOG/booted (one "Name (UDID) (Booted)" per line) when a test writes it.
+    # `simctl getenv UDID HOME` prints $SHIM_LOG/simctl-home-<UDID> when set (cycle 6: ios off must follow simctl's data path).
     "xcrun": '#!/bin/sh\necho "$@" >> "$SHIM_LOG/xcrun.log"\n'
              'if [ "$1 $2 $3 $4" = "simctl list devices booted" ] && [ -f "$SHIM_LOG/booted" ]; then cat "$SHIM_LOG/booted"; fi\n'
+             'if [ "$1 $2" = "simctl getenv" ] && [ "$4" = "HOME" ] && [ -f "$SHIM_LOG/simctl-home-$3" ]; then cat "$SHIM_LOG/simctl-home-$3"; fi\n'
+             'if [ "$1 $2 $3 $4" = "simctl list devices -j" ]; then /usr/bin/python3 -c \'import glob,json,os; paths=glob.glob(os.path.join(os.environ["HOME"],"Library/Developer/CoreSimulator/Devices/*/data")); print(json.dumps({"devices":{"test":[{"udid":os.path.basename(os.path.dirname(p)),"dataPath":p,"state":"Shutdown"} for p in paths]}}))\'; fi\n'
              'exit 0\n',
     # AppleScript: never the real one (it would read or drive the tester's own browser). `application "X" is running`
     # answers true for each app named in $SHIM_LOG/osascript-running; any other script prints $SHIM_LOG/osascript-out,

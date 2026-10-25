@@ -47,7 +47,8 @@ class Wildcards(unittest.TestCase):
         self.assertTrue(regex.startswith("^") and regex.endswith("$"))
 
     def test_invalid(self):
-        for bad in ("", "  ", "a/b", "https://x.test", "a b.test", ".x.test", "h:0", "h:70000", ".", "..", None):
+        for bad in ("", "  ", "a/b", "https://x.test", "a b.test", ".x.test", "h:0", "h:70000", ".", "..", None,
+                    "<script>", "مرحبا.example"):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 tls_host_regex(bad)
 

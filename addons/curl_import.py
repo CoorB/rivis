@@ -174,6 +174,10 @@ def parse_curl(command):
     if not url or not re.match(r"^https?://", url, re.I):
         raise ValueError("cURL needs an http:// or https:// URL")
     url = re.sub(r"\\([\[\]{}])", r"\1", url)       # DevTools escapes curl's URL globbing characters: \[ \] \{ \}
+    from urllib.parse import urlsplit as _urlsplit
+    parsed = _urlsplit(url)
+    if not parsed.netloc or not parsed.hostname:
+        raise ValueError("cURL needs a URL with a host name")
     body = "&".join(data)
     if get_data and data:
         parts = urlsplit(url)

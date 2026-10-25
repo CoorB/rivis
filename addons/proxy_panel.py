@@ -106,6 +106,9 @@ HAR_BODY_LIMIT = 4 * 1024 * 1024
 MOCK_BINARY_PREVIEW = 16 * 1024
 # panel ops whose work (disk read, HAR build, redaction) runs on a worker thread so live traffic and the panel keep flowing
 OFF_LOOP_OPS = ("sess_har", "client_cert_add")
+# sess_load: read the file off-loop, then add/remove this many flows per event-loop turn (cycle 6: one-shot add of
+# thousands of calls held every proxied request for ~2.5 s)
+SESS_LOAD_CHUNK = 32
 COLUMN_BUILTINS = ("path", "method", "status", "size", "time", "timestamp", "duration", "content_type", "source_app", "comment")
 COLUMN_NATIVE = ("path", "method", "status", "size", "time", "timestamp", "comment")
 COLUMN_DEFAULT = ("path", "method", "status", "size", "time", "timestamp")
@@ -130,6 +133,25 @@ def checked_columns(value):
     return value
 
 
+def _host_port_ok(netloc):
+    """Port in host:port must be 1..65535 (same rule as the TLS decryption list)."""
+    host = (netloc or "").strip()
+    if host.startswith("["):
+        end = host.find("]")
+        suffix = host[end + 1:] if end >= 0 else ""
+        if end < 0 or (suffix and (not suffix.startswith(":") or not suffix[1:].isdigit())):
+            raise PanelError("invalid bracketed host port")
+        if not suffix:
+            return
+        possible = suffix[1:]
+    else:
+        if not host or host.count(":") != 1:
+            return
+        _, possible = host.rsplit(":", 1)
+    if possible.isdigit() and not 1 <= int(possible) <= 65535:
+        raise PanelError("host port must be 1..65535")
+
+
 def wildcard_regex(host, path, literal_query=False):
     """FRTMProxy-style host/path with * and ? wildcards → URL regex used by the rules engine."""
     def wc(t, star):
@@ -140,10 +162,14 @@ def wildcard_regex(host, path, literal_query=False):
     if full_url:                             # a full URL pasted into the host box
         parsed = urlsplit(host)
         host = parsed.netloc.lower()
+        _host_port_ok(host)
+        if parsed.port is not None and not 1 <= parsed.port <= 65535:
+            raise PanelError("host port must be 1..65535")
         path = (parsed.path or "/") + (("?" + parsed.query) if parsed.query else "")
         literal_query = bool(parsed.query)
     else:
         host = host.lower()
+        _host_port_ok(host)
     if not host:
         raise PanelError("host is required")
     if not path.startswith("/"):
@@ -790,6 +816,7 @@ class ProxyPanel:
             "client_certs": self.client_certs_state(),
             "lan": self.lan_state(),
             "android_restored": list(getattr(ctx.master, "_rivis_android_restored", [])),
+            "restore_in_progress": bool(getattr(ctx.master.view, "_rivis_restoring", False)),
             "flow_count": len(self.all_flows()),
             "stream_large_bodies": str(ctx.options.stream_large_bodies),
             "ssl_insecure": bool(getattr(ctx.options, "ssl_insecure", False)),
@@ -1504,6 +1531,7 @@ class ProxyPanel:
             feed = view._rivis_feed = FlowFeed(view)
         full, flows, removed = feed.since(epoch, cursor)
         return {"epoch": feed.epoch, "cursor": feed.seq, "full": full, "removed": removed,
+                "restore_in_progress": bool(getattr(view, "_rivis_restoring", False)),
                 "flows": [flow_to_json(f) for f in flows]}
 
     def paused(self):
@@ -2490,6 +2518,8 @@ class ProxyPanel:
             return self.diff(self.flow(a["a"]), self.flow(a["b"]))
         # ── sessions: save / reload the whole capture (stays on this workstation) ──
         elif op == "sess_save":
+            if getattr(ctx.master.view, "_rivis_restoring", False):
+                raise PanelError("capture restore in progress; wait before saving")
             import time as _t
             from mitmproxy import io as mio
             name = (a.get("name") or "").strip()
@@ -2532,18 +2562,8 @@ class ProxyPanel:
             atomic_json(mpath, meta)
             return {"count": len(flows)}
         elif op == "sess_load":
-            flows = self.read_session(a["name"])
-            if a.get("replace"):
-                # keep calls paused at a breakpoint: view.clear() dropped them too, the sheet closed and the app's
-                # call hung until its own timeout with nothing left to Continue (QA-03)
-                view = ctx.master.view
-                gone = [f for f in list(view) if not getattr(f, "intercepted", False)]
-                if gone:
-                    view.remove(gone)
-            known = {f.id for f in self.all_flows()}
-            new = [f for f in flows if f.id not in known]
-            ctx.master.view.add(new)
-            return {"count": len(new)}
+            # Handled by Api.post → sess_load_async so the proxy event loop stays free (cycle 6).
+            raise PanelError("sess_load must run through the async panel path")
         elif op == "sess_note":
             _, mpath = self.sess_paths(a["name"])
             with open(mpath) as fh:
@@ -2739,6 +2759,70 @@ class ProxyPanel:
     def _write_coll(self, doc):
         os.makedirs(COLL_DIR, exist_ok=True)
         atomic_json(self.coll_file(doc["name"]), migrate_collection(doc))
+
+    async def sess_load_async(self, a):
+        """Read off-thread, then apply bounded, reversible chunks on the event loop."""
+        if not isinstance(a, dict):
+            raise PanelError("request body must be a JSON object")
+        self._check_input(a)
+        return await self._capture_restore(lambda: self.read_session(a["name"]), bool(a.get("replace")))
+
+    async def _capture_restore(self, reader, replace):
+        import asyncio
+        view = ctx.master.view
+        if not hasattr(view, "_rivis_restore_lock"):
+            view._rivis_restore_lock = asyncio.Lock()
+            view._rivis_restore_generation = 0
+
+            def cleared():
+                view._rivis_restore_generation += 1
+
+            view._rivis_restore_cleared = cleared
+            view.sig_store_refresh.connect(cleared)
+        generation = view._rivis_restore_generation
+        async with view._rivis_restore_lock:
+            def check():
+                if generation != view._rivis_restore_generation:
+                    raise PanelError("capture restore cancelled by Clear")
+
+            check()
+            # Only rows present before the disk read belong to this replacement.
+            candidates = [f.id for f in self.all_flows()] if replace else []
+            removed, added = {}, {}
+            view._rivis_restoring = True
+            try:
+                flows = await asyncio.to_thread(reader)
+                check()
+                for start in range(0, len(candidates), SESS_LOAD_CHUNK):
+                    chunk = []
+                    for fid in candidates[start:start + SESS_LOAD_CHUNK]:
+                        f = view.get_by_id(fid)
+                        if f is not None and not f.live and not f.intercepted:
+                            removed[fid] = f
+                            chunk.append(f)
+                    view.remove(chunk)
+                    await asyncio.sleep(0)
+                    check()
+                for start in range(0, len(flows), SESS_LOAD_CHUNK):
+                    chunk = []
+                    for f in flows[start:start + SESS_LOAD_CHUNK]:
+                        if view.get_by_id(f.id) is None and f.id not in added:
+                            added[f.id] = f
+                            chunk.append(f)
+                    view.add(chunk)
+                    await asyncio.sleep(0)
+                    check()
+                return {"count": sum(view.get_by_id(fid) is f for fid, f in added.items())}
+            except BaseException:
+                # Clear owns the empty capture; never resurrect rows after it was acknowledged.
+                own = [f for fid, f in added.items() if view.get_by_id(fid) is f
+                       and not f.live and not f.intercepted]
+                view.remove(own)
+                if generation == view._rivis_restore_generation:
+                    view.add([f for fid, f in removed.items() if view.get_by_id(fid) is None])
+                raise
+            finally:
+                view._rivis_restoring = False
 
     def sess_har(self, a):
         """A saved session as a HAR. Runs on a worker thread when asked from the panel (F-03): it only reads the
@@ -3099,6 +3183,24 @@ class ProxyPanel:
                     return result
                 return clip_view(result, len(raw) if isinstance(raw, (bytes, bytearray)) else None, preview is not None)
 
+        class SafeFlowContent(webapp.FlowContent):
+            """mitmweb's content.data: get_content() is None when the peer closed early, and write(None) is a 500
+            (cycle 6 — new window Body tab: "Could not load the body: HTTP 500"). Answer the explanation instead."""
+
+            def get(self, flow_id, message):
+                if message == "messages":
+                    raise webapp.APIError(400, "Message lists have no single body; use the messages view.")
+                msg = getattr(self.flow, message, None)
+                if msg is None or msg.get_content(strict=False) is None:
+                    err = getattr(self.flow.error, "msg", None) if getattr(self.flow, "error", None) else None
+                    text = (err or "Content is missing.").encode("utf-8")
+                    self.set_header("Content-Type", "text/plain; charset=utf-8")
+                    self.set_header("X-Content-Type-Options", "nosniff")
+                    self.set_header("X-Frame-Options", "DENY")
+                    self.write(text)
+                    return
+                return super().get(flow_id, message)
+
         class MitmwebExport(webapp.RequestHandler):
             """mitmweb's own toolbar menu Export ▾ (Copy as cURL / HTTPie / raw) copied tokens and cookies in clear text,
             next to our masked Copy as. Same masking here; unmasked copies stay a deliberate choice in Copy as."""
@@ -3122,9 +3224,9 @@ class ProxyPanel:
         class SafeDumpFlows(webapp.DumpFlows):
             """R9-05: mitmweb's File → Open (POST /flows/dump) clears the list before it parses the file, so a broken
             HAR wiped every captured call and answered a bare 500. Parse the whole file first; if it cannot be read,
-            answer 400 with a readable reason and leave the current calls alone. A readable file goes to the stock
-            handler unchanged. F1: when calls are already captured, the file is added to them (see below) unless the
-            request says mode=replace."""
+            answer 400 with a readable reason and leave the current calls alone. Readable files share the serialized,
+            reversible session restore. When calls are already captured, the file is added to them unless the request
+            says mode=replace."""
 
             async def post(self):
                 from io import BytesIO
@@ -3147,22 +3249,22 @@ class ProxyPanel:
                     self.finish("Could not open %s: %s (%s). Your current calls were kept."
                                 % (name or "the file", kind, problem))
                     return
-                existing = len(getattr(self.view, "_store", None) or ())
-                if existing == 0 or self.get_query_argument("mode", "") == "replace":
-                    return await super().post()      # nothing to lose, or the panel's dialog asked for a replacement
-                # F1: File → Open replaced the whole live capture without asking. Without an explicit mode=replace the
-                # file's calls are added next to the captured ones, marked as imported, with fresh ids (a dump of this
-                # very capture would otherwise collide with itself).
+                flows = list(mio.FlowReader(BytesIO(data)).stream())
+                merging = bool(impl(self).all_flows()) and self.get_query_argument("mode", "") != "replace"
                 label = "imported from %s" % (os.path.basename(str(name)) or "a file")
-                added = 0
-                for f in mio.FlowReader(BytesIO(data)).stream():
+                for f in flows:
                     f.id = str(uuid.uuid4())
-                    f.comment = (f.comment + " | " if f.comment else "") + label
-                    f.marked = ":large_blue_circle:"
-                    await self.master.load_flow(f)
-                    added += 1
+                    if merging:
+                        f.comment = (f.comment + " | " if f.comment else "") + label
+                        f.marked = ":large_blue_circle:"
+                result = await impl(self)._capture_restore(lambda: flows, self.get_query_argument("mode", "") == "replace")
                 self.set_header("Content-Type", "application/json")
-                self.finish(json.dumps({"added": added, "kept": existing}))
+                self.finish(json.dumps({"added": result["count"], "kept": len(impl(self).all_flows()) - result["count"]}))
+
+            def get(self):
+                if getattr(self.view, "_rivis_restoring", False):
+                    raise webapp.APIError(409, "Capture restore in progress; wait before exporting.")
+                return super().get()
 
         class ThemeCSS(webapp.RequestHandler):
             def get(self):
@@ -3289,7 +3391,10 @@ class ProxyPanel:
                 await self._test_hold(op)
                 try:
                     a = json.loads(self.request.body or b"{}")
-                    if op in OFF_LOOP_OPS:   # F-03: slow reads/exports must not stall the proxy's event loop
+                    if op == "sess_load":
+                        # cycle 6: must yield on the event loop while adding; cannot run wholly off-thread
+                        out = await impl(self).sess_load_async(a) or {}
+                    elif op in OFF_LOOP_OPS:   # F-03: slow reads/exports must not stall the proxy's event loop
                         import asyncio
                         if not isinstance(a, dict):
                             raise PanelError("request body must be a JSON object")
@@ -3330,6 +3435,8 @@ class ProxyPanel:
             (r"/proxy/theme\.css", ThemeCSS),
             (r"/commands/export", MitmwebExport),
             (r"/flows/dump", SafeDumpFlows),
+            (r"/flows/(?P<flow_id>[0-9a-f\-]+)/(?P<message>request|response|messages)/content\.data",
+             SafeFlowContent),
             (r"/flows/(?P<flow_id>[0-9a-f\-]+)/(?P<message>request|response|messages)/content/(?P<content_view>[0-9a-zA-Z\-\_%]+)(?:\.json)?",
              ClippedContentView),
             (r"/static/(index-[A-Za-z0-9_-]+\.js)", MitmwebIndexJS),

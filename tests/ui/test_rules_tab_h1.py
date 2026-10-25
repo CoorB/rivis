@@ -278,7 +278,7 @@ class RulesTabEveryType(UiBase):
         self.rules_tab()
         self.P("#rnetoff").click()                               # delete = off (one throttle per project)
         wait_for(lambda: self.inst.cfg()["throttle"] == "off", 8, 0.2, "off")
-        self.assertEqual(self.P("#rnetedit").count(), 0)
+        wait_for(lambda: self.P("#rnetedit").count() == 0, 8, 0.2, "the row leaves the Rules tab")
 
     def edit_net(self, **fields):
         self.rules_tab()

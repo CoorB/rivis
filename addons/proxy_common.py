@@ -731,6 +731,8 @@ def tls_host_regex(pattern):
             pattern, port = host, ":" + possible_port
     if not pattern or pattern.startswith(".") or pattern.endswith("."):
         raise ValueError("TLS host pattern is not a valid hostname")
+    if any(ord(c) > 127 for c in pattern) or "<" in pattern or ">" in pattern:
+        raise ValueError("TLS host pattern must be a hostname such as *.example.test")
     expression = "".join(".*" if c == "*" else "." if c == "?" else re.escape(c)
                          for c in pattern)
     suffix = re.escape(port) if port else r"(?::\d+)?"

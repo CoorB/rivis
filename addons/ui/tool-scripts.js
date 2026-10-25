@@ -75,7 +75,7 @@
           aria-selected="${!!(w.data.edit && w.data.edit.file === x.file)}">
           <input type="checkbox" data-script-on="${esc(x.file)}" aria-label="${esc(x.name)} on"${x.enabled === false ? "" : " checked"}>
           <span class="rv-spacer"><b>${esc(x.name)}</b> <span class="rv-badge">${esc(x.lang)}</span>
-            ${errors[x.file] ? `<span class="rv-badge warn" title="${esc(errors[x.file].message || errors[x.file])}">Error</span>` : ""}
+            ${errors[x.file] ? `<span class="rv-badge warn" data-script-error-badge title="${esc(errors[x.file].message || errors[x.file])}">Error</span>` : ""}
             ${x.exists === false ? `<span class="rv-badge warn">File missing</span>` : ""}<br>
             <span class="rv-win-hint">${esc(x.method || "Any method")} · ${esc(x.match || ".")}</span></span>
           <button type="button" class="rv-icon-btn" data-script-del="${esc(x.file)}" aria-label="Delete ${esc(x.name)}">✕</button></div>`).join("")
@@ -85,8 +85,7 @@
         const el = list.querySelector(`[${attr}="${CSS.escape(focus.file)}"]`);
         if (el) el.focus({ preventScroll: true });
       }
-      const msg = w.body.querySelector("[data-script-error]");
-      if (msg && w.data.edit && w.data.edit.file) msg.innerHTML = errorHTML(errors[w.data.edit.file]);
+      refreshScriptErrors(w, st);
       const node = w.body.querySelector("[data-script-node]");
       if (node) {
         const message = (st.script_status || {}).node_message;
@@ -102,6 +101,26 @@
     dirty: (w) => !!(w.data.edit && w.data.edit.dirty),
     closed(w) { w.data.edit = null; w.data.initialized = false; w.data.loading = null; },
   });
+
+  function refreshScriptErrors(w, st) {
+    const errors = (st.script_status || {}).errors || {};
+    const msg = w.body.querySelector("[data-script-error]");
+    if (msg && w.data.edit && w.data.edit.file) msg.innerHTML = errorHTML(errors[w.data.edit.file]);
+    w.body.querySelectorAll("[data-script-open]").forEach((row) => {
+      const file = row.dataset.scriptOpen, err = errors[file];
+      let badge = row.querySelector("[data-script-error-badge]");
+      if (err) {
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.className = "rv-badge warn";
+          badge.dataset.scriptErrorBadge = "";
+          row.querySelector(".rv-spacer b").after(badge);
+        }
+        badge.title = err.message || String(err);
+        badge.textContent = "Error";
+      } else if (badge) badge.remove();
+    });
+  }
 
   async function mayLeave(w) {
     return !(w.data.edit && w.data.edit.dirty) || await A.ask("Discard unsaved changes?", "The script edits in this window have not been saved.", "Discard", true);
@@ -166,7 +185,17 @@
       return;
     }
     const r = await ui.run("script_put", { file: e.file, match: e.match, method: e.method, content: e.content });
-    if (r) { e.dirty = false; A.toast(r.syntax_error ? "Saved, but it has a syntax error — " + r.syntax_error : "Script saved — hot reloads within 1 s", !!r.syntax_error); }
+    if (r) {
+      e.dirty = false;
+      A.toast(r.syntax_error ? "Saved, but it has a syntax error — " + r.syntax_error : "Script saved — hot reloads within 1 s", !!r.syntax_error);
+      if (r.syntax_error) {
+        const msg = w.body.querySelector("[data-script-error]");
+        if (msg) msg.innerHTML = errorHTML({ phase: "syntax", message: r.syntax_error });
+      } else {
+        const st = A.state();
+        if (st) refreshScriptErrors(w, st);
+      }
+    }
   }
   async function deleteScript(w, file) {
     const item = scripts().find((x) => x.file === file);

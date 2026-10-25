@@ -1553,8 +1553,15 @@ cmd_android_logged() {
 }
 
 # ───────────────────────── ios ─────────────────────────
-# iOS ≤17: TrustStore.sqlite, iOS 18+/26: TrustStore.sqlite3 — same tsettings table
-sim_truststore() { find "$HOME/Library/Developer/CoreSimulator/Devices/$1/data/private/var/protected/trustd" -name "TrustStore.sqlite*" -not -name "*-*" 2>/dev/null | head -1; }
+# iOS ≤17: TrustStore.sqlite, iOS 18+/26: TrustStore.sqlite3 — same tsettings table (under trustd/ or trustd/private/).
+# simctl always writes under the real CoreSimulator Devices tree; $HOME may be a scratch dir (tests, a custom
+# install HOME) and must not hide the store — cycle 6: `ios off` said "nothing to remove" while the CA stayed.
+sim_truststore() {
+  local data=""
+  data=$(/usr/bin/python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import devices; data = devices._sim_data_root(sys.argv[2]); print(data or ""); sys.exit(0 if data else 1)' "$SCRIPT_DIR/addons" "$1") || return 1
+  [ -d "$data/private/var/protected/trustd" ] || return 0
+  find "$data/private/var/protected/trustd" -name "TrustStore.sqlite*" -not -name "*-*" 2>/dev/null | head -1
+}
 
 cmd_ios() {
   local action="${1:-}"; shift || true; local udid="" all=0
@@ -1588,7 +1595,7 @@ cmd_ios() {
     off)
       # `simctl keychain reset` would also wipe the app's keychain (device binding,
       # passcode) and force a re-onboard. Delete only our row from the trust store.
-      local db; db=$(sim_truststore "$udid")
+      local db; db=$(sim_truststore "$udid") || die "$udid: simulator data path unresolved; check simctl list devices -j and retry"
       if [ -z "$db" ]; then info "$udid: no trust store — nothing to remove"; return; fi
       local shas; shas=$(ca_history_field 1 | tr '[:lower:]' '[:upper:]')
       [ -n "$shas" ] || die "no CA on record and $CA_PEM is gone, cannot tell which cert to remove"
@@ -1729,7 +1736,8 @@ print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n
       && ! port_accepts "${sp##*:}"; then
     echo "  ! no TCP connection to that proxy; inspect the setting. $CLI net-reset clears only a previously observed dead $PRODUCT_NAME/Proxyman listener."
   fi
-  if [ -x "$ADB" ]; then
+  # adb creates an empty ~/.android on first run; status must not touch HOME (cycle 6).
+  if [ -x "$ADB" ] && [ -d "$HOME/.android" ]; then
     for s in $("$ADB" devices | awk '/^emulator-[0-9]+\tdevice$/{print $1}'); do
       echo "android $s: http_proxy=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r')"
     done

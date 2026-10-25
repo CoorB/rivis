@@ -3,12 +3,13 @@ delete, HAR), live through the proxy."""
 import json
 import os
 import stat
+import subprocess
 import sys
 import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import LiveCase, Instance, wait_for
+from harness import Background, LiveCase, Instance, wait_for
 import harness
 import upstream
 
@@ -516,6 +517,36 @@ class Sessions(LiveCase):
         self.fetch("/json/small")
         self.panel.ok("sess_save", {"name": "r"})
         self.assertGreaterEqual(self.panel.ok("sess_load", {"name": "r", "replace": True})["count"], 1)
+
+    def test_cycle6_opening_a_large_session_does_not_stall_proxied_calls(self):
+        # Cycle 6: opening/replacing with ~4,500 saved calls held every proxied call for ~2.3–2.5 s while a direct
+        # control stayed under 5 ms (import-probe-{1,2,3}.json). The restore path must not monopolise mitmproxy's loop.
+        # 3500 calls is enough here to hold the loop for well over 0.4 s when load runs in one turn.
+        n = 3500
+        argv = ["curl", "-sS", "--noproxy", "", "-x", "http://127.0.0.1:%d" % self.inst.proxy_port, "-o", "/dev/null"]
+        for i in range(n):
+            argv += [self.up.url("/json/small?sessstall=%d" % i)]
+            if i < n - 1:
+                argv += ["-o", "/dev/null"]
+        subprocess.run(argv, timeout=180, check=False)
+        wait_for(lambda: sum(1 for f in self.inst.flows()
+                             if "sessstall=" in ((f.get("request") or {}).get("path") or "")) >= n,
+                 90, 0.5, "%d saved calls" % n)
+        self.panel.ok("sess_save", {"name": "stall-probe", "overwrite": True})
+        load = Background(lambda: self.panel.ok("sess_load", {"name": "stall-probe", "replace": True}))
+        time.sleep(0.02)
+        worst, probes = 0.0, 0
+        while load._t.is_alive() or probes < 8:
+            t0 = time.time()
+            r = self.fetch("/json/small?during-sess-load=%d" % probes, timeout=15)
+            worst = max(worst, time.time() - t0)
+            self.assertEqual(r.status, 200, r)
+            probes += 1
+            if probes > 120:
+                break
+            time.sleep(0.02)
+        self.assertGreaterEqual(load.result(180)["count"], n)
+        self.assertLess(worst, 0.4, "a proxied call took %.2f s while a saved session was opening" % worst)
 
     def test_invalid_input_returns_json_errors(self):
         for op, body in (("sess_save", {"name": ""}), ("sess_save", {"name": "../x"}), ("sess_save", {"name": "a b"}),

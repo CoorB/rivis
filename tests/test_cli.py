@@ -70,6 +70,20 @@ class Help(CliBase):
         self.assertFalse(os.path.exists(self.rules_file()))
         self.assertFalse(os.path.exists(self.state), "read-only commands must not create project directories")
 
+    def test_status_only_queries_an_initialized_android_home(self):
+        adb = os.path.join(self.home, "adb")
+        called = os.path.join(self.home, "adb-called")
+        with open(adb, "w") as fh:
+            fh.write('#!/bin/sh\nmkdir -p "$HOME/.android"\necho "$*" >> "$HOME/adb-called"\n')
+        os.chmod(adb, 0o755)
+        self.env["ADB"] = adb
+        self.stopped_status()
+        self.assertFalse(os.path.exists(called), "status invoked adb in a fresh home")
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".android")))
+        os.mkdir(os.path.join(self.home, ".android"))
+        self.stopped_status()
+        self.assertIn("devices", open(called).read())
+
     def test_cycle5_health_uses_aligned_web_ui_labels(self):
         source = open(os.path.join(harness.REPO, "rivis")).read()
         start = source.index("cmd_health() {")
@@ -912,7 +926,7 @@ class Tls(CliBase):
         self.assertIn("TLS decryption: ignore (1 host pattern)", self.stopped_status().stdout)
 
     def test_invalid_patterns(self):
-        for bad in ("http://x.test", "a b", "a/b", ".x.test", "x.test:99999", "x.test:0", ""):
+        for bad in ("http://x.test", "a b", "a/b", ".x.test", "x.test:99999", "x.test:0", "", "<script>", "مرحبا.example"):
             r = self.cli("tls", "allow", "add", bad)
             self.assertNotEqual(r.returncode, 0, repr(bad))
         self.refused("tls", "mode", "sideways", msg="tls mode")
@@ -1684,6 +1698,59 @@ class CaRemoval(CliBase):
         self.assertEqual(left, [other])
         hist = os.path.join(self.state, "ca-history")
         self.assertEqual(os.stat(hist).st_mode & 0o777, 0o600)
+
+    def test_ios_off_requires_a_resolved_device_and_uses_exact_inventory_id(self):
+        shim = os.path.join(self.home, "sim-bin")
+        os.mkdir(shim)
+        xcrun = os.path.join(shim, "xcrun")
+        inventory = os.path.join(self.home, "inventory.json")
+        self.env["PATH"] = shim + ":" + self.env["PATH"]
+        for failure in ("exit 9", "exit 0"):
+            with open(xcrun, "w") as fh:
+                fh.write('#!/bin/sh\nif [ "$2" = getenv ]; then ' + failure + '; fi\ncat "$HOME/inventory.json"\n')
+            os.chmod(xcrun, 0o755)
+            with open(inventory, "w") as fh:
+                json.dump({"devices": {}}, fh)
+            r = self.refused("ios", "off", "--udid", self.UDID, msg="data path unresolved")
+            self.assertNotIn("nothing to remove", r.stdout)
+        data = os.path.join(self.home, "shutdown-data")
+        os.mkdir(data)
+        with open(inventory, "w") as fh:
+            json.dump({"devices": {"old": [{"name": "Same", "udid": self.UDID + "0", "dataPath": data}],
+                                   "new": [{"name": "Same", "udid": self.UDID, "state": "Shutdown", "dataPath": data}]}}, fh)
+        self.assertIn("no trust store", self.ok("ios", "off", "--udid", self.UDID).stdout)
+        with open(inventory, "w") as fh:
+            json.dump({"devices": {"old": [{"name": "Same", "udid": self.UDID + "0", "dataPath": data}]}}, fh)
+        self.refused("ios", "off", "--udid", self.UDID, msg="data path unresolved")
+
+    def test_cycle6_ios_off_finds_trust_store_via_simctl_data_path(self):
+        # Cycle 6: with a scratch HOME (tests / custom install), $HOME/Library/…/CoreSimulator is empty while
+        # simctl still wrote the CA under the real Devices tree. ios off said "nothing to remove" and left the cert.
+        import sqlite3
+        pem = os.path.join(self.env["RIVIS_CONFDIR"], "mitmproxy-ca-cert.pem")
+        self.ok("ios", "on", "--udid", self.UDID)
+        want = self.sha(pem)
+        # Plant the store only where simctl getenv HOME points — not under $HOME/Library
+        real_data = os.path.join(self.home, "real-sim-data")
+        trustd = os.path.join(real_data, "private/var/protected/trustd/private")
+        os.makedirs(trustd)
+        db_path = os.path.join(trustd, "TrustStore.sqlite3")
+        db = sqlite3.connect(db_path)
+        db.execute("create table tsettings (sha256 blob, subj blob, tset blob, data blob)")
+        db.execute("insert into tsettings (sha256) values (?)", (bytes.fromhex(want),))
+        db.commit()
+        db.close()
+        home_file = os.path.join(self.suite.shimlog, "simctl-home-" + self.UDID)
+        with open(home_file, "w") as fh:
+            fh.write(real_data)
+        self.addCleanup(lambda: os.path.exists(home_file) and os.remove(home_file))
+        under_home = os.path.join(self.home, "Library/Developer/CoreSimulator/Devices", self.UDID)
+        self.assertFalse(os.path.isdir(under_home), "repro requires the store NOT to live under $HOME")
+        out = self.ok("ios", "off", "--udid", self.UDID).stdout
+        self.assertIn("removed 1 trust entry", out)
+        self.assertNotIn("nothing to remove", out)
+        left = sqlite3.connect(db_path).execute("select count(*) from tsettings").fetchone()[0]
+        self.assertEqual(left, 0)
 
 
 

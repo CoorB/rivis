@@ -169,6 +169,23 @@ class ToolWindows(UiBase):
         self.assertTrue(w.is_visible(), "Cancel keeps the window and the edit")
         self.assertEqual(w.locator("#mlbody").input_value(), "changed")
 
+    def test_map_local_rejects_out_of_range_port(self):
+        self.open_new("/json/small?nbadport=1")
+        self.page.locator('[data-tool="map"]').click()
+        w = self.win_open("map")
+        for url in ("[::1]:0", "[::1]:65536", "http://localhost:99999/x", "http://localhost:65536/x"):
+            w.locator("[data-ml-new]").click()
+            w.locator(".rv-sheet input[name=url]").fill(url)
+            w.locator(".rv-sheet button[type=submit]").click()
+            wait_for(lambda: w.locator("[data-sh-err]").count() and "1..65535" in w.locator("[data-sh-err]").inner_text(), 5, 0.1, url)
+            self.assertTrue(w.locator(".rv-sheet").is_visible())
+            w.locator("[data-sh-cancel]").click()
+
+        w.locator("[data-ml-new]").click()
+        w.locator(".rv-sheet input[name=url]").fill("[::1]:443/ok")
+        w.locator(".rv-sheet button[type=submit]").click()
+        wait_for(lambda: any("443" in r.get("match", "") for r in self.panel.state()["rules"]), 5, 0.1, "valid IPv6 rule")
+
     def test_add_a_rule_by_url_and_toggle_it_from_the_list(self):
         self.open_new("/json/small?nadd=1")
         self.page.locator('[data-tool="map"]').click()
@@ -230,6 +247,37 @@ class ToolWindows(UiBase):
         wait_for(lambda: self.panel.state()["throttle"] == prof["id"], 5, 0.1, "throttle")
         w.locator("[data-net-profile]").select_option("off")
         wait_for(lambda: self.panel.state()["throttle"] == "off", 5, 0.1, "throttle off")
+
+    def test_script_runtime_updates_editor_feedback_and_missing_file_badge(self):
+        self.inst.clear_dir("scripts")
+        file = self.panel.ok("script_new", {"name": "err-live", "lang": "py", "match": "errlive"})["file"]
+        self.panel.ok("script_put", {"file": file, "content": 'def on_request(context, url, request):\n    raise ValueError(url.rsplit("=", 1)[-1])\n'})
+        self.open_new()
+        self.page.locator('[data-tool="scripts"]').click()
+        w = self.win_open("scripts")
+        wait_for(lambda: w.locator('[data-script-field="content"]').count() == 1, 10, 0.1, "editor")
+        for word in ("first-runtime", "second-runtime"):
+            self.page.wait_for_timeout(1200)
+            self.fetch("/echo?errlive=" + word)
+            err = wait_for(lambda: (self.panel.state()["script_status"]["errors"].get(file) or {})
+                           if word in (self.panel.state()["script_status"]["errors"].get(file) or {}).get("message", "") else None,
+                           12, 0.2, "new runtime error")
+            wait_for(lambda: err["message"] in w.locator("[data-script-error]").inner_text()
+                     and err["time"] in w.locator("[data-script-error]").inner_text(), 8, 0.2, "complete error and timestamp")
+        frozen = self.panel.state()
+        self.page.route("**/proxy/api/state", lambda route: route.fulfill(json=frozen))
+        w.locator('[data-script-field="content"]').fill("def broken(:\n")
+        w.locator("[data-script-save]").click()
+        wait_for(lambda: "syntax" in w.locator("[data-script-error]").inner_text().lower(), 4, 0.1, "immediate editor feedback")
+        self.assertNotIn("second-runtime", w.locator("[data-script-error]").inner_text())
+        self.page.unroute("**/proxy/api/state")
+        self.panel.ok("script_put", {"file": file, "content": "def on_request(context, url, request):\n    return None\n"})
+        self.panel.ok("script_toggle", {"file": file, "enabled": False})
+        wait_for(lambda: file not in self.panel.state()["script_status"]["errors"], 5, 0.1, "no runtime error")
+        os.remove(self.inst.path("scripts", file))
+        wait_for(lambda: "File missing" in w.locator('[data-script-open="%s"]' % file).inner_text(), 8, 0.2, "missing source warning")
+        self.page.wait_for_timeout(2300)
+        self.assertIn("File missing", w.locator('[data-script-open="%s"]' % file).inner_text())
 
     def test_scripting_window_creates_and_switches_a_script(self):
         self.open_new("/json/small?nsc=1")

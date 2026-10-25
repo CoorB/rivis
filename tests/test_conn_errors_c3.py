@@ -29,7 +29,7 @@ class ConnectionErrors(LiveCase):
         self.assertIn(b"<html>", result.body)
         self.assertIn(b"Rivis could not reach", result.body)
 
-    def test_cycle5_early_close_names_the_host_and_explains_the_failure(self):
+    def _early_close_server(self):
         class ShortBody(BaseHTTPRequestHandler):
             def do_GET(self):
                 self.send_response(200)
@@ -43,17 +43,29 @@ class ConnectionErrors(LiveCase):
         server = HTTPServer(("127.0.0.1", 0), ShortBody)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
-        try:
-            result = self.inst.fetch("http://127.0.0.1:%d/cycle5-short" % server.server_port)
-            self.assertEqual(result.status, 502)
-            self.assertIn(b"Rivis", result.body)
-            self.assertIn(("127.0.0.1:%d" % server.server_port).encode(), result.body)
-            self.assertIn(b"before the response was complete", result.body)
-            self.assertIn("before the response was complete", self.error_of("cycle5-short"))
-        finally:
-            server.shutdown()
-            server.server_close()
-            worker.join(3)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        return server
+
+    def test_cycle5_early_close_names_the_host_and_explains_the_failure(self):
+        server = self._early_close_server()
+        result = self.inst.fetch("http://127.0.0.1:%d/cycle5-short" % server.server_port)
+        self.assertEqual(result.status, 502)
+        self.assertIn(b"Rivis", result.body)
+        self.assertIn(("127.0.0.1:%d" % server.server_port).encode(), result.body)
+        self.assertIn(b"before the response was complete", result.body)
+        self.assertIn("before the response was complete", self.error_of("cycle5-short"))
+
+    def test_cycle6_early_close_body_content_data_does_not_500(self):
+        # Cycle 6: new window Body tab fetches content.data; mitmweb wrote None → HTTP 500 ("Could not load the body").
+        server = self._early_close_server()
+        self.inst.fetch("http://127.0.0.1:%d/cycle6-early-body" % server.server_port)
+        flow = wait_for(lambda: self.inst.flow_for("cycle6-early-body"), 5, 0.2, "early-close flow")
+        self.assertIn("before the response was complete", (flow.get("error") or {}).get("msg", ""))
+        code, raw = self.panel.get("/flows/%s/response/content.data" % flow["id"])
+        self.assertEqual(code, 200, raw[:200])
+        text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        self.assertIn("before the response was complete", text)
 
     def error_of(self, path):
         return wait_for(lambda: (self.inst.flow_for(path) or {}).get("error"), 5, 0.2, "the call's error")["msg"]

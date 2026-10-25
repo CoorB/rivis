@@ -46,14 +46,40 @@ class Status(unittest.TestCase):
         self.trust(UDID, self.want)
         self.trust(OTHER, "AB" * 32)
         listing = {"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-26-0": [
-            {"udid": UDID, "name": "iPhone 17", "state": "Booted"},
-            {"udid": OTHER, "name": "iPad", "state": "Booted"},
+            {"udid": UDID, "name": "iPhone 17", "state": "Booted", "dataPath": os.path.join(self.home, "Library/Developer/CoreSimulator/Devices", UDID, "data")},
+            {"udid": OTHER, "name": "iPad", "state": "Booted", "dataPath": os.path.join(self.home, "Library/Developer/CoreSimulator/Devices", OTHER, "data")},
             {"udid": "../evil", "name": "x", "state": "Booted"}]}}
         with mock.patch.object(devices, "_simctl", return_value=(0, json.dumps(listing), "")):
             got = devices.ios_devices(self.want)
         self.assertEqual([(d["name"], d["ready"], d["os"]) for d in got], [("iPad", False, "iOS 26.0"), ("iPhone 17", True, "iOS 26.0")])
+        listing["devices"]["com.apple.CoreSimulator.SimRuntime.iOS-26-0"][0].pop("dataPath")
+        with mock.patch.object(devices, "_simctl", return_value=(0, json.dumps(listing), "")):
+            unknown = next(d for d in devices.ios_devices(self.want) if d["id"] == UDID)
+            self.assertFalse(unknown["ready"], "unresolved simulator was reported ready from a guessed path")
+            self.assertFalse(unknown["trust_resolved"])
+        self.assertTrue(all(d["trust_resolved"] for d in got))
         with mock.patch.object(devices, "_simctl", return_value=("missing", "", "")):
             self.assertIsNone(devices.ios_devices(self.want))          # no Xcode tools
+
+    def test_simulator_resolution_and_trust_distinguish_unknown_from_absent(self):
+        import doctor
+        data = os.path.join(self.home, "shutdown-data")
+        os.mkdir(data)
+        listing = json.dumps({"devices": {"old": [{"udid": OTHER, "name": "Same", "dataPath": data}],
+                                          "new": [{"udid": UDID, "name": "Same", "state": "Shutdown", "dataPath": data}]}})
+        for failed in ((9, "", "lookup failed"), (0, "", "")):
+            with mock.patch.object(devices, "_simctl", return_value=failed), mock.patch.object(doctor, "run", return_value=failed):
+                self.assertIsNone(devices._sim_trusted(UDID, self.want))
+                self.assertIsNone(doctor._sim_truststores(UDID))
+                self.assertIsNone(devices._sim_data_root(UDID))
+            def run(argv):
+                return failed if "getenv" in argv else (0, listing, "")
+            with mock.patch.object(devices, "_simctl", side_effect=run), mock.patch.object(doctor, "run", side_effect=run):
+                self.assertEqual(devices._sim_data_root(UDID), data)
+                self.assertEqual(doctor._sim_truststores(UDID), [])
+                self.assertIs(devices._sim_trusted(UDID, self.want), False)
+        with mock.patch.object(devices, "_simctl", return_value=(0, listing, "")):
+            self.assertIsNone(devices._sim_data_root(UDID[:-1] + "6"))
 
     def test_android_ready_needs_the_recorded_ca_and_the_proxy(self):
         state = os.path.join(self.home, "state")

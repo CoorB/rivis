@@ -63,11 +63,38 @@ def adb_path():
     return None
 
 
+def _sim_data_root(udid, runner=None):
+    """Resolve an exact device, including shutdown devices; never guess from HOME."""
+    runner = runner or _simctl
+    if not UDID.fullmatch(udid):
+        return None
+    rc, out, _ = runner(["xcrun", "simctl", "getenv", udid, "HOME"])
+    data = (out or "").strip()
+    if rc == 0 and os.path.isabs(data) and os.path.isdir(data):
+        return data
+    rc, out, _ = runner(["xcrun", "simctl", "list", "devices", "-j"])
+    if rc == 0:
+        try:
+            for items in json.loads(out).get("devices", {}).values():
+                for device in items:
+                    data = device.get("dataPath") or ""
+                    if device.get("udid", "").lower() == udid.lower() and os.path.isabs(data) and os.path.isdir(data):
+                        return data
+        except (ValueError, AttributeError, TypeError):
+            pass
+    return None
+
+
 def _sim_trusted(udid, want):
     # the sqlite3 command, not the module: mitmproxy's bundled Python has no sqlite3 (the CLI uses the same tool)
     if not re.fullmatch(r"[0-9A-F]{64}", want or ""):
         return False
-    base = os.path.expanduser("~/Library/Developer/CoreSimulator/Devices/%s/data/private/var/protected/trustd" % udid)
+    data = _sim_data_root(udid)
+    if data is None:
+        return None
+    base = os.path.join(data, "private/var/protected/trustd")
+    if not os.path.isdir(base):
+        return False
     for root, _dirs, names in os.walk(base):
         for name in names:
             if name.startswith("TrustStore.sqlite") and "-" not in name:
@@ -127,8 +154,9 @@ def _booted(want, out):
         os_name = runtime.rsplit(".", 1)[-1].replace("iOS-", "iOS ").replace("-", ".")
         for d in items:
             if d.get("state") == "Booted" and UDID.match(d.get("udid", "")):
+                trusted = _sim_trusted(d["udid"], want) if want else None
                 devices.append({"id": d["udid"], "name": d.get("name", "Simulator"), "os": os_name,
-                                "ready": bool(want) and _sim_trusted(d["udid"], want)})
+                                "ready": trusted is True, "trust_resolved": trusted is not None})
     return sorted(devices, key=lambda d: d["name"])
 
 

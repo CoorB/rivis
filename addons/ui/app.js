@@ -481,8 +481,11 @@
       try {
         let r;
         if (act === "rename") {
-          const name = await askText("Rename filter", "", row.name); if (!name || name === row.name) return;
-          r = await api("filters_save", { old: row.name, name });
+          r = await askText("Rename filter", "", row.name, async (name) => {
+            if (!name || name === row.name) throw new Error(name === row.name ? "Choose a different name" : "Name is required");
+            return api("filters_save", { old: row.name, name });
+          });
+          if (!r) return;
         } else if (act === "delete") {
           if (!await ask("Delete saved filter " + row.name + "?", "", "Delete", true)) return;
           r = await api("filters_delete", { name: row.name });
@@ -949,8 +952,14 @@
   });
 
   // ── dialogs, toast, copy ─────────────────────────────────────────────────────────────────────────────────────────
+  let dialogOwner = null;
+  function ownDialog(cancel) {
+    if (dialogOwner) dialogOwner();
+    dialogOwner = cancel || null;
+  }
   function ask(title, text, yes, danger) {
     return new Promise((resolve) => {
+      ownDialog();
       const d = $("dialog"), sc = $("scrim");
       d.innerHTML = `<h3>${esc(title)}</h3><p>${esc(text)}</p><div class="rv-btns"><button class="rv-btn" id="dno">Cancel</button><button class="rv-btn ${danger ? "d" : "p"}" id="dyes">${esc(yes)}</button></div>`;
       d.hidden = sc.hidden = false;
@@ -962,6 +971,7 @@
     });
   }
   async function pickColumns() {
+    ownDialog();
     const cur = columns().slice(1), d = $("dialog"), sc = $("scrim");
     const labels = Object.assign({}, ...BUILTINS.map((c) => ({ [c]: COLS[c].label })));
     const extra = cur.filter((c) => !BUILTINS.includes(c));
@@ -992,16 +1002,37 @@
       drawList(true);
     } catch (e) { toast("Could not change the call: " + e.message, true); }
   }
-  function askText(title, text, value) {
+  function askText(title, text, value, validate) {
     return new Promise((resolve) => {
+      ownDialog();
+      let settled = false, submitting = false;
       const d = $("dialog"), sc = $("scrim"), back = document.activeElement;
-      d.innerHTML = `<h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}<form><textarea id="dtext" rows="3" style="width:100%;margin-bottom:12px;padding:6px;font:inherit">${esc(value || "")}</textarea>`
-        + `<div class="rv-btns"><button type="button" class="rv-btn" id="dno">Cancel</button><button type="submit" class="rv-btn p">Save</button></div></form>`;
+      const paint = () => {
+        d.innerHTML = `<h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}<form><textarea id="dtext" rows="3" style="width:100%;margin-bottom:12px;padding:6px;font:inherit">${esc(value || "")}</textarea>`
+          + `<p id="dtext-err" class="rv-err" hidden role="alert"></p>`
+          + `<div class="rv-btns"><button type="button" class="rv-btn" id="dno">Cancel</button><button type="submit" class="rv-btn p">Save</button></div></form>`;
+      };
+      paint();
       d.hidden = sc.hidden = false;
-      const done = (v) => { d.hidden = sc.hidden = true; d.onkeydown = null; if (back && back.focus) back.focus(); resolve(v); };
-      d.querySelector("form").onsubmit = (e) => { e.preventDefault(); done($("dtext").value.trim()); };
+      const done = (v) => { if (settled || dialogOwner !== cancel) return; settled = true; dialogOwner = null; d.hidden = sc.hidden = true; d.onkeydown = null; if (back && back.focus) back.focus(); resolve(v); };
+      const cancel = () => done(null);
+      dialogOwner = cancel;
+      const submit = async () => {
+        if (settled || dialogOwner !== cancel || submitting) return;
+        submitting = true;
+        const err = $("dtext-err"), save = d.querySelector('button[type=submit]'), v = $("dtext").value.trim();
+        err.hidden = true;
+        if (validate) {
+          save.disabled = true;
+          try { const r = await validate(v); done(r !== undefined ? r : v); }
+          catch (e) { if (settled || dialogOwner !== cancel) return; submitting = false; err.textContent = e.message || String(e); err.hidden = false; save.disabled = false; $("dtext").focus(); }
+          return;
+        }
+        done(v);
+      };
+      d.querySelector("form").onsubmit = (e) => { e.preventDefault(); submit(); };
       $("dno").onclick = () => done(null); sc.onclick = () => done(null);
-      d.onkeydown = (e) => { if (e.key === "Escape") done(null); if (e.key === "Enter" && (isMac ? e.metaKey : e.ctrlKey)) { e.preventDefault(); done($("dtext").value.trim()); } };
+      d.onkeydown = (e) => { if (e.key === "Escape") done(null); if (e.key === "Enter" && (isMac ? e.metaKey : e.ctrlKey)) { e.preventDefault(); submit(); } };
       $("dtext").focus();
     });
   }
@@ -1145,6 +1176,7 @@
     ["↑ ↓", "Move through the list"], ["⌫", "Delete the selected call"], [`${MOD}↩`, "Continue a paused call · send in Edit and Repeat"], [`${MOD}S`, "Save in Map Local"], ["Esc", "Close the front window"],
   ];
   function showDialog(html, focusSel) {
+    ownDialog();
     const d = $("dialog"), sc = $("scrim"), back = document.activeElement;
     d.className = "rv-dialog wide"; d.innerHTML = html; d.hidden = sc.hidden = false;
     const done = () => { d.hidden = sc.hidden = true; d.className = "rv-dialog"; d.onkeydown = null; if (back && back.focus) back.focus(); };

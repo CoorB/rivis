@@ -36,7 +36,8 @@ class CurlImport(unittest.TestCase):
         self.assertIn(["Cookie", "session=1", True], r["spec"]["headers"])
         self.assertIn("--mystery", r["ignored"])
         self.assertTrue(any("TLS verification" in x for x in r["ignored"]))
-        for command in ("", "wget https://example.test", "curl -H broken https://example.test", "curl 'unterminated"):
+        for command in ("", "wget https://example.test", "curl -H broken https://example.test", "curl 'unterminated",
+                        "curl http://", "curl https://"):
             with self.assertRaises(ValueError):
                 parse_curl(command)
 

@@ -576,11 +576,18 @@ def check_other_tools(rep):
                 "if Simulator traffic should use %s, turn off the other proxy setting first" % PRODUCT["name"])
 
 
+def _sim_data_root(udid):
+    from devices import _sim_data_root as resolve
+    return resolve(udid, runner=run)
+
+
 def _sim_truststores(udid):
     # iOS ≤17: TrustStore.sqlite, iOS 18+/26: .sqlite3; it sits under trustd/ or trustd/private/.
     # Match the CLI's `find … -name TrustStore.sqlite* -not -name *-*` (skip -wal/-shm).
-    base = os.path.expanduser(
-        "~/Library/Developer/CoreSimulator/Devices/%s/data/private/var/protected/trustd" % udid)
+    data = _sim_data_root(udid)
+    if data is None:
+        return None
+    base = os.path.join(data, "private/var/protected/trustd")
     out = []
     if os.path.isdir(base):
         for root, _dirs, names in os.walk(base):
@@ -616,7 +623,7 @@ def check_ios(rep, confdir):
         stores = _sim_truststores(udid)
         if not stores or not want:
             rep.add(sec, WARN, "%s: cannot verify CA trust" % name,
-                    "no trust store yet" if not stores else "CA fingerprint unknown",
+                    "simulator data path unresolved" if stores is None else "no trust store yet" if not stores else "CA fingerprint unknown",
                     "`%s ios on` to trust the CA" % PRODUCT["cli"])
             continue
         trusted = False

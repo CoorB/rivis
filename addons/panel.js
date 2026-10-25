@@ -2173,7 +2173,13 @@
         const i = Number(b.dataset.si), row = savedRows()[i], act = b.dataset.sact; if (!row) return;
         try {
           let r;
-          if (act === "rename") { const name = await ask("Rename filter", { input: row.name, yes: "Rename" }); if (!name || name === row.name) return; r = await api("filters_save", { old: row.name, name }); }
+          if (act === "rename") {
+            await ask("Rename filter", { input: row.name, yes: "Rename", validate: async (name) => {
+              if (!name || name === row.name) throw new Error(name === row.name ? "Choose a different name" : "Name is required");
+              r = await api("filters_save", { old: row.name, name });
+            } });
+            if (!r) return;
+          }
           else if (act === "delete") { if (!await ask("Delete saved filter '" + row.name + "'?", { yes: "Delete", danger: true })) return; r = await api("filters_delete", { name: row.name }); }
           else { const names = savedRows().map((x) => x.name), j = act === "left" ? i - 1 : i + 1; [names[i], names[j]] = [names[j], names[i]]; r = await api("filters_order", { names }); }
           state.saved_filters = r.filters; savedMenu = -1; drawStrip();
