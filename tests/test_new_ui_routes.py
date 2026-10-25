@@ -30,7 +30,7 @@ class NewUiRoutes(LiveCase):
         return "http://127.0.0.1:%d" % self.inst.web_port
 
     def test_needs_the_same_login_as_the_classic_view(self):
-        for path in ("/rivis/", "/rivis/app.js", "/rivis/app.css"):
+        for path in ("/rivis/", "/rivis/app.js", "/rivis/app.css", "/rivis/tree-worker.js", "/proxy/tree-worker.js"):
             self.assertEqual(get(opener(), self.base() + path)[0], 403, path)
 
     def test_serves_its_three_files_and_nothing_else(self):
@@ -41,6 +41,7 @@ class NewUiRoutes(LiveCase):
         self.assertIn(b'<div id="rv-app"', body)
         csp = headers.get("Content-Security-Policy", "")
         self.assertIn("script-src 'self'", csp)
+        self.assertIn("worker-src 'self'", csp)
         self.assertIn("frame-ancestors 'none'", csp)
         self.assertNotIn("unsafe-eval", csp)
         self.assertIn("ws://127.0.0.1:%d" % self.inst.web_port, csp)
@@ -48,6 +49,8 @@ class NewUiRoutes(LiveCase):
         status, headers, body, _ = get(op, self.base() + "/rivis/app.js")
         self.assertEqual((status, headers.get("Content-Type")), (200, "application/javascript"))
         self.assertIn(b"flows/updateFilter", body)
+        self.assertIn(b"JSON.parse", get(op, self.base() + "/rivis/tree-worker.js")[2])
+        self.assertIn(b"JSON.parse", get(op, self.base() + "/proxy/tree-worker.js")[2])
         self.assertEqual(get(op, self.base() + "/rivis/app.css")[1].get("Content-Type"), "text/css")
         for path in ("/rivis/index.html", "/rivis/../proxy_panel.py", "/rivis/%2e%2e/proxy_panel.py", "/rivis/ui/app.js", "/rivis/app.js.map"):
             self.assertIn(get(op, self.base() + path)[0], (403, 404), path)

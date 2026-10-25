@@ -114,6 +114,10 @@ class Handler(BaseHTTPRequestHandler):
             # a long JSON body (about 1 MB at n=12000): mitmweb shows it a screenful at a time behind "Show more"
             n = int((q.get("n") or ["12000"])[0])
             return self._send(200, {"accounts": [{"id": i, "name": "account %d" % i, "balance": i * 3} for i in range(n)]})
+        if p == "/json/tree-large":
+            n = int(float((q.get("mb") or ["20"])[0]) * 1048576)
+            body = b'{"padding":"' + b"a" * n + b'","tail":{"branch":{"last_key":"end marker"}}}'
+            return self._send(200, body, ctype="application/json")
         if p == "/json/find":
             return self._send(200, {"products": [{"id": i, "sku": "FINDME"} for i in range(12)], "meta": {"source": "fixture"}})
         if p == "/closing":

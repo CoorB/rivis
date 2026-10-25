@@ -3022,13 +3022,13 @@ class ProxyPanel:
             FILES = {"": ("index.html", "text/html; charset=utf-8"), "app.css": ("app.css", "text/css"),
                      **{js: (js, "application/javascript") for js in (
                          "app.js", "tools.js", "tool-bp.js", "tool-map.js", "tool-rules.js", "tool-scripts.js", "tool-net.js",
-                         "tool-compose.js", "tool-more.js")}}
+                         "tool-compose.js", "tool-more.js", "tree-worker.js")}}
 
             def get(self, name):
                 if name not in self.FILES:
                     raise tornado.web.HTTPError(404)
                 fn, ctype = self.FILES[name]
-                with open(os.path.join(HERE, "ui", fn), "rb") as fh:
+                with open(os.path.join(HERE, "tree-worker.js" if name == "tree-worker.js" else os.path.join("ui", fn)), "rb") as fh:
                     data = fh.read()
                 self.set_header("Content-Type", ctype)
                 self.set_header("Cache-Control", "no-store")
@@ -3036,7 +3036,7 @@ class ProxyPanel:
                 if not name:
                     port = ctx.options.web_port
                     self.set_header("Content-Security-Policy",
-                                    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                                    "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
                                     f"connect-src 'self' ws://127.0.0.1:{port} ws://localhost:{port}; frame-ancestors 'none'; "
                                     "base-uri 'none'; form-action 'none'")
                     self.set_header("Referrer-Policy", "no-referrer")
@@ -3051,6 +3051,14 @@ class ProxyPanel:
                 with open(os.path.join(HERE, "panel.js"), "rb") as fh:
                     self.set_header("Content-Type", "application/javascript")
                     self.set_header("Cache-Control", "no-store")
+                    self.write(fh.read())
+
+        class TreeWorkerJS(webapp.RequestHandler):
+            def get(self):
+                with open(os.path.join(HERE, "tree-worker.js"), "rb") as fh:
+                    self.set_header("Content-Type", "application/javascript")
+                    self.set_header("Cache-Control", "no-store")
+                    self.set_header("X-Content-Type-Options", "nosniff")
                     self.write(fh.read())
 
         class MitmwebIndexJS(webapp.RequestHandler):
@@ -3290,6 +3298,7 @@ class ProxyPanel:
         app.add_handlers(r".*", [
             (r"/", ProxyIndex),
             (r"/proxy/panel\.js", PanelJS),
+            (r"/proxy/tree-worker\.js", TreeWorkerJS),
             (r"/rivis", NewUIRedirect),
             (r"/rivis/(|[a-z-]+\.js|app\.css)", NewUI),
             (r"/proxy/theme\.css", ThemeCSS),

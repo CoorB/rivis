@@ -214,6 +214,23 @@ class NewMainWindow(UiBase):
         self.assertEqual(count.inner_text(), "1 of 12")
         self.assertEqual(self.page.evaluate("CSS.highlights.get('rv-find').size"), 12)
 
+    def test_folded_tree_rows_preview_their_contents_and_search_ignores_the_preview(self):
+        self.open_new("/json/long?n=5&prev=1")
+        self.wait_rows("prev=1")
+        self.rows("prev=1").first.click()
+        self.page.locator("#pane-res [data-tab=tree]").click()
+        tree = self.page.locator("#pane-res .rv-tree")
+        wait_for(lambda: tree.count() == 1 and tree.get_attribute("data-ready") == "1", 10, 0.1, "tree")
+        row = tree.locator('.rv-tl[data-path="$.accounts[3]"]')
+        if row.count() == 0:                                         # accounts folded: open it
+            tree.locator('.rv-tl[data-path="$.accounts"] .rv-tog').click()
+        wait_for(lambda: row.count() == 1, 5, 0.1, "accounts[3] row")
+        self.assertEqual(row.get_attribute("aria-expanded"), "false")
+        self.assertIn('id: 3, name: "account 3", balance: 9', row.inner_text())
+        self.page.locator("[data-find=res]").fill("account 3")
+        wait_for(lambda: self.page.locator("[data-fc=res]").inner_text().startswith("1 of 1"), 5, 0.1, "one match, not one per preview")
+        self.assertFalse(row.locator(".rv-prev").is_visible(), "the opened row hides its preview")
+
     def test_json_tree_search_opens_branches_and_copies_a_path(self):
         self.open_new("/json/long?n=600&tree=1")
         self.wait_rows("tree=1")
@@ -232,14 +249,14 @@ class NewMainWindow(UiBase):
         node.locator("[data-copy=path]").click()
         wait_for(lambda: self.page.evaluate("navigator.clipboard.readText()") == "$.accounts[512].name", 5, 0.1, "path copied")
 
-    def test_a_body_over_2_mb_gets_no_tree_and_a_clipped_text_view(self):
-        self.open_new("/big?mb=3&big=1")
+    def test_a_body_over_24_mb_gets_no_tree_and_a_clipped_text_view(self):
+        self.open_new("/big?mb=25&big=1")
         self.wait_rows("big=1")
         self.rows("big=1").first.click()
         self.page.locator("#pane-res [data-tab=tree]").click()
-        wait_for(lambda: "up to 2 MB" in self.page.locator("#pane-res").inner_text(), 15, 0.1, "no tree")
+        wait_for(lambda: "up to 24 MB" in self.page.locator("#pane-res").inner_text(), 15, 0.1, "no tree")
         self.page.locator("#pane-res [data-tab=body]").click()
-        wait_for(lambda: "Binary body, 3.0 MB" in self.page.locator("#pane-res").inner_text(), 15, 0.1, "binary shown as hex")
+        wait_for(lambda: "Binary body, 25.0 MB" in self.page.locator("#pane-res").inner_text(), 15, 0.1, "binary shown as hex")
         self.assertIn("00000000  ", self.page.locator("#pane-res pre").inner_text())
 
     def test_a_long_text_body_is_clipped_with_a_note(self):

@@ -39,16 +39,89 @@ def _ansi_c_quotes(command):
     return "".join(out)
 
 
+def _windows_args(command):
+    """Chrome/Edge "Copy as cURL (cmd)": every argument is wrapped in ^"...^", special characters carry a ^ (cmd.exe's
+    escape), lines continue with ' ^', and a newline inside a value is ^ followed by two line breaks. Undo cmd.exe's layer,
+    then split the way a Windows program reads its command line (\\" is a quote, backslashes count only before a quote)."""
+    text, i, quoted = [], 0, False
+    while i < len(command):
+        c = command[i]
+        if c == "^" and not quoted:
+            nl = re.match(r"\r?\n", command[i + 1:])
+            if nl:
+                j = i + 1 + len(nl.group(0))
+                nl2 = re.match(r"\r?\n", command[j:])
+                if nl2:                                   # ^ + two line breaks: a newline inside the value
+                    text.append("\n")
+                    i = j + len(nl2.group(0))
+                else:                                     # ' ^' at the end of a line: the command continues
+                    text.append(" ")
+                    i = j
+                continue
+            if i + 1 < len(command):
+                text.append(command[i + 1])
+                i += 2
+                continue
+        if c == '"':
+            quoted = not quoted
+        text.append(c)
+        i += 1
+    line, args, cur, has, i, quoted = "".join(text), [], [], False, 0, False
+    chrome = '^"' in command
+    while i < len(line):
+        c = line[i]
+        if c == "\\":
+            n = len(re.match(r"\\+", line[i:]).group(0))
+            if i + n < len(line) and line[i + n] == '"':
+                cur.append("\\" * (n // 2))
+                if n % 2:
+                    cur.append('"')
+                    i += n + 1
+                else:
+                    i += n
+                has = True
+                continue
+            cur.append("\\" * (n // 2 if chrome and n % 2 == 0 else n))   # DevTools doubled every backslash first
+            i += n
+            has = True
+            continue
+        if c == '"':
+            if quoted and line[i + 1:i + 2] == '"':          # "" inside quotes: a literal quote
+                cur.append('"')
+                i += 2
+                continue
+            quoted, has = not quoted, True
+            i += 1
+            continue
+        if c in " \t\r\n" and not quoted:
+            if has:
+                args.append("".join(cur))
+                cur, has = [], False
+            i += 1
+            continue
+        cur.append(c)
+        has = True
+        i += 1
+    if quoted:
+        raise ValueError("Invalid cURL quoting: no closing quote")
+    if has:
+        args.append("".join(cur))
+    return args
+
+
 def parse_curl(command):
     if not isinstance(command, str) or not command.strip():
         raise ValueError("Paste a cURL command")
-    # DevTools and Postman split long shell commands with backslash-newline.
-    command = re.sub(r"\\\r?\n[ \t]*", "", command.strip())
-    command = _ansi_c_quotes(command)
-    try:
-        args = shlex.split(command)
-    except ValueError as exc:
-        raise ValueError("Invalid cURL quoting: %s" % exc)
+    command = command.strip()
+    if '^"' in command or re.search(r" \^\r?\n", command):     # Windows "Copy as cURL (cmd)"
+        args = _windows_args(command)
+    else:
+        # DevTools and Postman split long shell commands with backslash-newline.
+        command = _ansi_c_quotes(re.sub(r"\\\r?\n[ \t]*", "", command))
+        try:
+            args = shlex.split(command)
+        except ValueError as exc:
+            raise ValueError("Invalid cURL quoting: %s" % exc)
     if not args or args[0].lower() not in ("curl", "curl.exe"):
         raise ValueError("Command must start with curl")
     method, explicit, get_data, url = "GET", False, False, None
@@ -100,6 +173,7 @@ def parse_curl(command):
         i += 1
     if not url or not re.match(r"^https?://", url, re.I):
         raise ValueError("cURL needs an http:// or https:// URL")
+    url = re.sub(r"\\([\[\]{}])", r"\1", url)       # DevTools escapes curl's URL globbing characters: \[ \] \{ \}
     body = "&".join(data)
     if get_data and data:
         parts = urlsplit(url)

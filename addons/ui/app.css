@@ -146,6 +146,8 @@ button, input, select { font: inherit; color: inherit; }
 .rv-vs { color: var(--rv-str); white-space: pre-wrap; word-break: break-all; }
 .rv-vn { color: var(--rv-num); } .rv-vb, .rv-vz { color: var(--rv-lit); }
 .rv-sum { color: var(--rv-text-3); }
+.rv-prev { color: var(--rv-text-3); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rv-tl[aria-expanded="true"] .rv-prev { display: none; }
 .rv-copy { margin-left: 6px; visibility: hidden; border: 0; background: transparent; color: var(--rv-accent-text); cursor: pointer; font-size: 11px; }
 .rv-tl:hover .rv-copy, .rv-tl:focus-within .rv-copy { visibility: visible; }
 

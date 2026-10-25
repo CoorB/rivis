@@ -556,25 +556,33 @@
 
   // ── request | response ───────────────────────────────────────────────────────────────────────────────────────────
   const D = { req: store.get("rivis-ui-req-tab", "header"), res: store.get("rivis-ui-res-tab", "body"), bodies: new Map(), sig: "" };
-  const REQ_TABS = [["header", "Header"], ["query", "Query"], ["body", "Body"], ["cookies", "Cookies"], ["raw", "Raw"]];
+  const REQ_TABS = [["header", "Header"], ["query", "Query"], ["body", "Body"], ["tree", "Tree"], ["cookies", "Cookies"], ["raw", "Raw"]];
   const RES_TABS = [["header", "Header"], ["body", "Body"], ["tree", "Tree"], ["raw", "Raw"]];
-  const TREE_MAX = 2 * 1024 * 1024, TEXT_MAX = 512 * 1024, HEX_MAX = 4096;
+  const TREE_MAX = 24 * 1024 * 1024, TEXT_MAX = 512 * 1024, HEX_MAX = 4096;
+  function parseTree(text) {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker("./tree-worker.js");
+      worker.onmessage = (e) => { worker.terminate(); e.data.error ? reject(new SyntaxError(e.data.error)) : resolve(e.data.data); };
+      worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message)); };
+      worker.postMessage(text);
+    });
+  }
   const sigOf = (f) => f ? f.id + ":" + (f.response ? f.response.status_code + ":" + f.response.contentLength + ":" + (f.response.timestamp_end || 0) : "-") + ":" + (f.request.contentLength || 0) + ":" + ((f.error && f.error.msg) || "") : "";
   function refreshDetailIfChanged() { const f = S.byId.get(S.sel); if (sigOf(f) !== D.sig) drawDetail(); }
-  async function body(f, side) {
+  async function body(f, side, forTree) {
     const msg = f[side]; if (!msg) return { text: "", bytes: 0 };
-    const k = f.id + ":" + side + ":" + (msg.contentHash || msg.contentLength) + ":" + (msg.timestamp_end || "");
+    const limit = forTree ? TREE_MAX : TEXT_MAX;
+    const k = f.id + ":" + side + ":" + limit + ":" + (msg.contentHash || msg.contentLength) + ":" + (msg.timestamp_end || "");
     if (D.bodies.has(k)) return D.bodies.get(k);
     const p = (async () => {
       const r = await http("../flows/" + encodeURIComponent(f.id) + "/" + side + "/content.data", {}, 30000);
       if (!r.ok) throw new Error("HTTP " + r.status);
-      // only as much as the views can show (the tree's 2 MB + 1 byte), then the download is cancelled: a call can
-      // carry hundreds of MB (review). The real size is the message's own.
+      // Read only the view's bound plus one byte, then cancel. The real size is the message's own.
       const parts = []; let got = 0;
       const reader = r.body.getReader();
-      while (got <= TREE_MAX) { const { done, value } = await reader.read(); if (done) break; parts.push(value); got += value.byteLength; }
+      while (got <= limit) { const { done, value } = await reader.read(); if (done) break; parts.push(value); got += value.byteLength; }
       reader.cancel().catch(() => {});
-      const all = new Uint8Array(Math.min(got, TREE_MAX + 1)); let off = 0;
+      const all = new Uint8Array(Math.min(got, limit + 1)); let off = 0;
       for (const part of parts) { const n = Math.min(part.byteLength, all.length - off); all.set(part.subarray(0, n), off); off += n; if (off >= all.length) break; }
       const buf = all.buffer, size = msg.contentLength != null ? msg.contentLength : got;
       const text = new TextDecoder("utf-8", { fatal: false }).decode(buf.byteLength > TEXT_MAX ? buf.slice(0, TEXT_MAX) : buf);
@@ -583,7 +591,7 @@
                full: buf.byteLength > TEXT_MAX ? new TextDecoder().decode(buf) : text };
     })();
     D.bodies.set(k, p);
-    if (D.bodies.size > 12) D.bodies.delete(D.bodies.keys().next().value);       // at most ~12 × 2 MB kept
+    if (D.bodies.size > 3) D.bodies.delete(D.bodies.keys().next().value);
     return p;
   }
   const kvTable = (rows) => rows.length ? `<table class="rv-kv">${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>` : `<div class="rv-note">None</div>`;
@@ -619,7 +627,7 @@
     if (tab === "cookies") { el.innerHTML = kvTable(cookieRows(f)); return find(side, false); }
     el.innerHTML = `<div class="rv-note">Loading…</div>`;
     let b;
-    try { b = await body(f, side === "req" ? "request" : "response"); } catch (e) { if (D.sig === mySig) el.innerHTML = `<div class="rv-note rv-err">Could not load the body: ${esc(e.message)}</div>`; return; }
+    try { b = await body(f, side === "req" ? "request" : "response", tab === "tree"); } catch (e) { if (D.sig === mySig) el.innerHTML = `<div class="rv-note rv-err">Could not load the body: ${esc(e.message)}</div>`; return; }
     if (D.sig !== mySig) return;                 // another call was selected meanwhile
     if (tab === "raw") {
       const head = side === "req" ? `${msg.method} ${msg.path} ${msg.http_version}` : `${msg.http_version} ${msg.status_code} ${msg.reason || ""}`;
@@ -629,8 +637,9 @@
     if (!b.bytes) { el.innerHTML = `<div class="rv-note">No body.</div>`; return find(side, false); }
     if (tab === "tree") {
       let doc;
-      if (b.bytes > TREE_MAX) { el.innerHTML = `<div class="rv-note">The body is ${esc(fmtBytes(b.bytes))}: the tree shows bodies up to 2 MB. Use Body and search in it.</div>`; return; }
-      try { doc = JSON.parse(b.full); } catch (e) { el.innerHTML = `<div class="rv-note">Not JSON — see Body.</div>`; return; }
+      if (b.bytes > TREE_MAX) { el.innerHTML = `<div class="rv-note">The body is ${esc(fmtBytes(b.bytes))}: the tree shows bodies up to 24 MB. Use Body and search in it.</div>`; return; }
+      try { doc = await parseTree(b.full); } catch (e) { el.innerHTML = `<div class="rv-note">Not JSON — see Body.</div>`; return; }
+      if (D.sig !== mySig || D[side] !== tab) return;
       el.innerHTML = `<div class="rv-tree" role="tree"></div>`;
       const t = el.firstChild; t.append(treeNode(doc, "$", null, 0, true)); t.dataset.ready = "1";
       return find(side, false);
@@ -640,9 +649,9 @@
       return find(side, false);
     }
     let text = b.text;
-    if (/json/.test((hdr(msg, "content-type") || "").toLowerCase()) && b.bytes <= TREE_MAX) { try { text = JSON.stringify(JSON.parse(b.full), null, 2); } catch (e) { /* not valid JSON: as it came */ } }
+    if (/json/.test((hdr(msg, "content-type") || "").toLowerCase()) && b.bytes <= TEXT_MAX) { try { text = JSON.stringify(JSON.parse(b.full), null, 2); } catch (e) { /* not valid JSON: as it came */ } }
     const clipped = text.length > TEXT_MAX;           // also after pretty-printing, which makes a body longer
-    el.innerHTML = `<pre>${esc(clipped ? text.slice(0, TEXT_MAX) : text)}</pre>` + (clipped || b.bytes > TEXT_MAX ? `<div class="rv-note">Showing the first 512 KB of ${esc(fmtBytes(b.bytes))}. Search covers what is shown; the Tree covers the whole body up to 2 MB.</div>` : "");
+    el.innerHTML = `<pre>${esc(clipped ? text.slice(0, TEXT_MAX) : text)}</pre>` + (clipped || b.bytes > TEXT_MAX ? `<div class="rv-note">Showing the first 512 KB of ${esc(fmtBytes(b.bytes))}. Search covers what is shown; the Tree covers the whole body up to 24 MB.</div>` : "");
     find(side, false);
   }
   const clipNote = (b) => b.bytes > TEXT_MAX ? `<div class="rv-note">Showing the first 512 KB of ${esc(fmtBytes(b.bytes))}.</div>` : "";
@@ -669,6 +678,15 @@
 
   // JSON tree: branches are built when opened; big arrays 200 entries at a time; search opens what matches
   const PAGE = 200;
+  // a folded branch's one-line preview (as Proxyman shows): its first entries, values cut short; plain text, never markup
+  function jsonPreview(v, max = 90) {
+    const short = (x) => x === null ? "null" : Array.isArray(x) ? `[${x.length}]` : typeof x === "object" ? `{${Object.keys(x).length}}`
+      : typeof x === "string" ? JSON.stringify(x.length > 24 ? x.slice(0, 24) + "…" : x) : String(x);
+    const parts = [], arr = Array.isArray(v), keys = arr ? null : Object.keys(v), n = arr ? v.length : keys.length;
+    let len = 0, i = 0;
+    for (; i < n && len < max; i++) { const t = arr ? short(v[i]) : `${keys[i]}: ${short(v[keys[i]])}`; parts.push(t); len += t.length + 2; }
+    return parts.join(", ") + (i < n ? ", …" : "");
+  }
   function treeNode(v, path, key, depth, open) {
     const isObj = v && typeof v === "object", entries = isObj ? (Array.isArray(v) ? v.map((x, i) => [i, x]) : Object.entries(v)) : [];
     const wrap = document.createElement("div");
@@ -677,8 +695,7 @@
     const k = key === null ? "" : `<span class="rv-k">${typeof key === "number" ? key : esc(JSON.stringify(key))}</span>: `;
     if (isObj) {
       const kind = Array.isArray(v) ? `[${entries.length}]` : `{${entries.length}}`;
-      const preview = entries.slice(0, 3).map(([ek]) => Array.isArray(v) ? "" : ek).filter(Boolean).join(", ");
-      line.innerHTML = `<span class="rv-tog" aria-hidden="true">${open ? "▾" : "▸"}</span>${k}<span class="rv-sum">${kind}${!Array.isArray(v) && preview ? " " + esc(preview) + (entries.length > 3 ? "…" : "") : ""}</span><button class="rv-copy" data-copy="path">copy path</button><button class="rv-copy" data-copy="value">copy value</button>`;
+      line.innerHTML = `<span class="rv-tog" aria-hidden="true">${open ? "▾" : "▸"}</span>${k}<span class="rv-sum">${kind}</span>${entries.length ? `<span class="rv-prev">${esc(jsonPreview(v))}</span>` : ""}<button class="rv-copy" data-copy="path">copy path</button><button class="rv-copy" data-copy="value">copy value</button>`;
       line.setAttribute("aria-expanded", String(!!open));
       wrap.append(line);
       const kids = document.createElement("div"); kids.className = "rv-tn"; kids.hidden = !open;
@@ -694,7 +711,8 @@
       if (open) line._rvFill(PAGE);
     } else {
       const cls = typeof v === "string" ? "rv-vs" : typeof v === "number" ? "rv-vn" : v === null ? "rv-vz" : "rv-vb";
-      line.innerHTML = `<span class="rv-tog"></span>${k}<span class="${cls}">${esc(typeof v === "string" ? JSON.stringify(v) : String(v))}</span><button class="rv-copy" data-copy="path">copy path</button><button class="rv-copy" data-copy="value">copy value</button>`;
+      const shown = typeof v === "string" && v.length > 500 ? JSON.stringify(v.slice(0, 500)) + `… (${fmtBytes(v.length)})` : typeof v === "string" ? JSON.stringify(v) : String(v);
+      line.innerHTML = `<span class="rv-tog"></span>${k}<span class="${cls}">${esc(shown)}</span><button class="rv-copy" data-copy="path">copy path</button><button class="rv-copy" data-copy="value">copy value</button>`;
       wrap.append(line);
     }
     line._rvValue = v;
@@ -738,7 +756,7 @@
       if (tree) openMatches(tree, q);
       const walk = document.createTreeWalker(pane.querySelector(".rv-dyn") || pane, NodeFilter.SHOW_TEXT);
       for (let n = walk.nextNode(); n && hits[side].length < 5000; n = walk.nextNode()) {
-        if (n.parentElement && n.parentElement.closest(".rv-copy,.rv-tog")) continue;
+        if (n.parentElement && n.parentElement.closest(".rv-copy,.rv-tog,.rv-prev")) continue;
         const t = n.data.toLowerCase();
         for (let i = t.indexOf(q); i >= 0 && hits[side].length < 5000; i = t.indexOf(q, i + q.length)) { const r = new Range(); r.setStart(n, i); r.setEnd(n, i + q.length); hits[side].push(r); }
       }

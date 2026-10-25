@@ -427,6 +427,8 @@ input[type="checkbox"] { accent-color: var(--rv-accent); }
 .contentview .rv-tree-num { color: var(--rv-info); }
 .contentview .rv-tree-lit { color: var(--rv-t-composed); }
 .contentview .rv-tree-count { color: var(--rv-text-3); margin-left: 7px; }
+.contentview .rv-tree-prev { color: var(--rv-text-3); margin-left: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contentview details[open] > summary > .rv-tree-prev { display: none; }
 .contentview .rv-tree-copy { opacity: 0; margin-left: 7px; border: 1px solid var(--rv-border-strong); border-radius: var(--rv-r-sm); background: var(--rv-surface); color: var(--rv-text-2); cursor: pointer; }
 .contentview .rv-tree-row:hover .rv-tree-copy, .contentview .rv-tree-copy:focus-visible { opacity: 1; }
 .contentview pre[hidden], .contentview .rv-tree[hidden], .contentview .rv-body-note[hidden], .contentview .rv-tree-toggle[hidden] { display: none !important; }

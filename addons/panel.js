@@ -1686,7 +1686,7 @@
   function bodyRanges(el, query) {
     if (!query || !window.Highlight || !window.CSS || !CSS.highlights) return [];
     const nodes = [], walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) =>
-      n.parentElement.closest(".rv-tree-copy") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+      n.parentElement.closest(".rv-tree-copy, .rv-tree-prev") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
     let full = "", node;
     while ((node = walker.nextNode())) { nodes.push({ node, start: full.length }); full += node.nodeValue; }
     const hits = [], lower = full.toLowerCase(), needle = query.toLowerCase();
@@ -1725,6 +1725,15 @@
     bodyShowMatch();
   }
   function bodyStep(by) { if (!bodyMatches.length) return; bodyAt = (bodyAt + by + bodyMatches.length) % bodyMatches.length; bodyShowMatch(); }
+  // a folded branch's one-line preview (as Proxyman shows): its first entries, values cut short; plain text, never markup
+  function jsonPreview(v, max = 90) {
+    const short = (x) => x === null ? "null" : Array.isArray(x) ? `[${x.length}]` : typeof x === "object" ? `{${Object.keys(x).length}}`
+      : typeof x === "string" ? JSON.stringify(x.length > 24 ? x.slice(0, 24) + "…" : x) : String(x);
+    const parts = [], arr = Array.isArray(v), keys = arr ? null : Object.keys(v), n = arr ? v.length : keys.length;
+    let len = 0, i = 0;
+    for (; i < n && len < max; i++) { const t = arr ? short(v[i]) : `${keys[i]}: ${short(v[keys[i]])}`; parts.push(t); len += t.length + 2; }
+    return parts.join(", ") + (i < n ? ", …" : "");
+  }
   const bodyPath = (base, key, array) => array ? `${base}[${key}]` : /^[A-Za-z_$][\w$]*$/.test(key) ? `${base}.${key}` : `${base}[${JSON.stringify(key)}]`;
   function bodyTreeNode(value, key, path, array, depth) {
     const branch = value !== null && typeof value === "object", kind = Array.isArray(value) ? "array" : "object";
@@ -1733,15 +1742,17 @@
     const row = document.createElement(branch ? "summary" : "div"); row.className = "rv-tree-row";
     if (key !== null) { const k = document.createElement("span"); k.className = "rv-tree-key"; k.textContent = array ? String(key) : key; row.appendChild(k); }
     const val = document.createElement("span"); val.className = branch ? "rv-tree-count" : value === null || typeof value === "boolean" ? "rv-tree-lit" : typeof value === "number" ? "rv-tree-num" : "rv-tree-str";
-    val.textContent = branch ? `${Array.isArray(value) ? "[" : "{"}${Object.keys(value).length}${Array.isArray(value) ? "]" : "}"}` : JSON.stringify(value);
+    val.textContent = branch ? `${Array.isArray(value) ? "[" : "{"}${Object.keys(value).length}${Array.isArray(value) ? "]" : "}"}`
+      : typeof value === "string" && value.length > 500 ? JSON.stringify(value.slice(0, 500)) + `… (${value.length} characters)` : JSON.stringify(value);
     row.appendChild(val);
+    if (branch && Object.keys(value).length) { const pv = document.createElement("span"); pv.className = "rv-tree-prev"; pv.textContent = jsonPreview(value); row.appendChild(pv); }
     for (const label of ["Copy path", "Copy JSON"]) {
       const b = document.createElement("button"); b.type = "button"; b.className = "rv-tree-copy"; b.title = label; b.setAttribute("aria-label", `${label} ${path}`); b.textContent = label === "Copy path" ? "$" : "{}";
       b.onclick = (e) => { e.stopPropagation(); e.preventDefault(); navigator.clipboard.writeText(label === "Copy path" ? path : JSON.stringify(value)).then(() => toast(label === "Copy path" ? "Path copied" : "JSON copied"), () => toast("Could not copy")); };
       row.appendChild(b);
     }
     el.appendChild(row);
-    // children are built when their branch first opens: a 2 MB body as a full tree was a million elements and froze the page
+    // children are built when their branch first opens: a large body as a full tree can freeze the page
     // …and 200 at a time, behind a "Show N more" row (searching builds only as far as a match)
     const entries = branch ? Object.entries(value) : [];
     let done = 0, more = null;
@@ -1781,7 +1792,7 @@
     const needle = query.toLowerCase(), want = new Set(), root = tree.firstElementChild;
     if (!root || root._rvData === undefined) return;
     const walk = (value, path, array) => {
-      if (want.size >= 200) return;                              // opens the first 200 matches: enough to read, quick on 2 MB
+      if (want.size >= 200) return;
       if (value === null || typeof value !== "object") return;
       Object.entries(value).forEach(([k, v]) => {
         const p = bodyPath(path, k, array), leaf = v === null || typeof v !== "object";
@@ -1809,6 +1820,33 @@
       }
     });
   }
+  const BODY_TREE_MAX = 24 * 1024 * 1024;
+  const treeLimitNote = "Tree is available for JSON up to 24 MB. Use the text view for this body.";
+  async function treeBody(src) {
+    const r = await fetchT(src, { credentials: "same-origin" }, NORMAL_MS, "body");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const reader = r.body.getReader(), parts = [];
+    let size = 0;
+    while (size <= BODY_TREE_MAX) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      parts.push(value); size += value.byteLength;
+    }
+    reader.cancel().catch(() => {});
+    if (size > BODY_TREE_MAX) return null;
+    const bytes = new Uint8Array(size);
+    let at = 0;
+    for (const part of parts) { bytes.set(part, at); at += part.byteLength; }
+    return new TextDecoder().decode(bytes);
+  }
+  function parseTree(text) {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker("./proxy/tree-worker.js");
+      worker.onmessage = (e) => { worker.terminate(); e.data.error ? reject(new SyntaxError(e.data.error)) : resolve(e.data.data); };
+      worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message)); };
+      worker.postMessage(text);
+    });
+  }
   function syncBodyFind() {
     const view = document.querySelector(".flow-detail .contentview"), controls = view && view.querySelector(":scope > .controls"), pre = view && view.querySelector("pre");
     if (!view || !controls || !pre) { bodyPre = null; bodyHighlight(); return; }
@@ -1827,7 +1865,8 @@
     }
     // two ways a body is only partly on screen: Rivis clips one over VIEW_SOURCE_LIMIT ("showing first …"), and mitmweb
     // draws a long one a screenful at a time behind "Show more". The tree reads the whole body from the proxy instead.
-    const label = (controls.querySelector("h5") || {}).textContent || "", json = /json/i.test(label), clipped = /showing first/i.test(label);
+    const label = (controls.querySelector("h5") || {}).textContent || "", clipped = /showing first/i.test(label);
+    const json = /json/i.test(label) || (clipped && /^\s*[{[]/.test(pre.textContent));
     const more = [...view.querySelectorAll("button")].some((b) => /show more/i.test(b.textContent));
     const toggle = tools.querySelector(".rv-tree-toggle"); toggle.hidden = !json; toggle.setAttribute("aria-pressed", String(bodyTree));
     let note = view.querySelector(":scope > .rv-body-note");
@@ -1847,18 +1886,16 @@
     tree.replaceChildren(); tree.dataset.ready = "0";
     tree.hidden = !json || !bodyTree; pre.hidden = false;
     if (json && bodyTree) {
-      if (clipped) tree.textContent = "Tree is available for JSON up to 2 MB. Use the text view for this body.";
-      else if (!src) tree.textContent = "This body cannot be shown as a tree.";
+      if (!src) tree.textContent = "This body cannot be shown as a tree.";
       else {
         tree.textContent = "Loading the tree…";
-        fetchT(src, { credentials: "same-origin" }, NORMAL_MS, "body").then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); }).then((text) => {
+        treeBody(src).then((text) => text === null ? null : parseTree(text)).then((data) => {
           if (bodyMode !== mode || !tree.isConnected) return;               // another call or tab since
           tree.replaceChildren();
-          if (new Blob([text]).size > 2 * 1024 * 1024) { tree.textContent = "Tree is available for JSON up to 2 MB. Use the text view for this body."; return; }
-          try { const data = JSON.parse(text), top = bodyTreeNode(data, null, "$", false, 0); top._rvData = data; tree.appendChild(top); tree.dataset.ready = "1"; }
-          catch (e) { tree.textContent = "This body cannot be parsed as JSON."; return; }
+          if (data === null) { tree.textContent = treeLimitNote; return; }
+          const top = bodyTreeNode(data, null, "$", false, 0); top._rvData = data; tree.appendChild(top); tree.dataset.ready = "1";
           pre.hidden = true; bodySearch();
-        }).catch((e) => { if (bodyMode === mode) tree.textContent = "Could not load the body for the tree: " + e.message; });
+        }).catch((e) => { if (bodyMode === mode) tree.textContent = e instanceof SyntaxError ? "This body cannot be parsed as JSON." : "Could not load the body for the tree: " + e.message; });
       }
     }
     pre.hidden = tree.dataset.ready === "1";
@@ -2945,8 +2982,9 @@
     const jsonRows = fields.map(([k, v]) => { const t = v === null ? "null" : Array.isArray(v) || typeof v === "object" ? "json" : typeof v;
       const value = t === "json" ? JSON.stringify(v) : v === null ? "" : String(v);
       return `<div class="hrow"><input type="text" aria-label="JSON key" value="${esc(k)}" placeholder="Key"><select aria-label="Value type">${["string", "number", "boolean", "null", "json"].map((x) => `<option ${x === t ? "selected" : ""}>${x}</option>`).join("")}</select><input type="text" aria-label="JSON value" value="${esc(value)}" placeholder="Value"><button class="b d" data-jdel aria-label="Remove">${ico("x", "sm")}</button></div>`; }).join("");
-    $("ppf").innerHTML = `${isResp ? `<div class="btns">Status <input type="number" id="pfst" value="${esc($("pst").value)}" aria-label="Status code"></div>`
-      : `<div class="btns"><select id="pfm" aria-label="Method">${methodOpts($("pm").value)}</select><input type="text" id="pfpath" class="grow" aria-label="Path" value="${esc(url ? url.pathname : "")}" placeholder="Path"></div>
+    // method and status stay in the sheet's own bar above (shown once); the form edits the path, query and fields
+    $("ppf").innerHTML = `${isResp ? ""
+      : `<div class="btns"><input type="text" id="pfpath" class="grow" aria-label="Path" value="${esc(url ? url.pathname : "")}" placeholder="Path"></div>
          <h4>Query parameters</h4>${formRows(url ? [...url.searchParams.entries()] : [], "pfquery")}`}
       <h4>Headers</h4>${headersHTML(headers, "pfhd")}
       <h4>Body fields</h4>${kind === "json" ? `<div id="pfjson">${jsonRows}</div><button class="b" id="pfjadd">+ Add field</button>`
@@ -2961,9 +2999,8 @@
   }
   function applyPausedForm(p, isResp) {
     try {
-      if (isResp) $("pst").value = $("pfst").value;
-      else { const url = new URL($("pu").value); url.pathname = $("pfpath").value; url.search = "";
-        formValues("pfquery").forEach(([k, v]) => url.searchParams.append(k, v)); $("pu").value = url.href; $("pm").value = $("pfm").value; }
+      if (!isResp) { const url = new URL($("pu").value); url.pathname = $("pfpath").value; url.search = "";
+        formValues("pfquery").forEach(([k, v]) => url.searchParams.append(k, v)); $("pu").value = url.href; }
       const headers = readHeaders("pfhd"); $("pph").innerHTML = headersHTML(headers, "phd");
       wireHeaders($("sheet"));
       if (p.formKind === "urlencoded") $("pb").value = new URLSearchParams(formValues("pffields")).toString();

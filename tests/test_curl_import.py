@@ -51,6 +51,42 @@ class CurlImport(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_curl("curl -d $'unterminated https://x.example")
 
+    @staticmethod
+    def chrome_cmd(s):
+        """Chrome/Edge DevTools' escapeStringWindows, ported as is: what "Copy as cURL (cmd)" writes for each argument."""
+        import re as _re
+        s = s.replace("\\", "\\\\").replace('"', '\\"')
+        s = _re.sub(r"[^a-zA-Z0-9\s_\-:=+~'/.',?;()*`&]", lambda m: "^" + m.group(0), s)
+        s = _re.sub(r"%(?=[a-zA-Z0-9_])", "%^", s)
+        s = _re.sub(r"\r?\n", "^\n\n", s)
+        return '^"' + s + '^"'
+
+    def test_windows_copy_as_curl_cmd(self):
+        q = self.chrome_cmd
+        body = '{"name":"O\'Brien","path":"C:\\temp","pct":"100%","note":"a^b & c|d <e>","multi":"line1\nline2","id":"%USERNAME%"}'
+        url = "https://api.example.test/v1/items?ids=[1,2]&q=caf%C3%A9"
+        cmd = " ^\n  ".join(["curl " + q(url).replace("[", "\\[").replace("]", "\\]"),
+                              "-H " + q("accept: application/json"), "-H " + q('x-quoted: say "hi"'),
+                              "-H " + q("authorization: Bearer a.b-c_d"), "--data-raw " + q(body), "--compressed"])
+        r = parse_curl(cmd)
+        self.assertEqual(r["spec"]["method"], "POST")
+        self.assertEqual(r["spec"]["url"], url)
+        self.assertEqual(r["spec"]["headers"], [["accept", "application/json", True], ["x-quoted", 'say "hi"', True],
+                                                ["authorization", "Bearer a.b-c_d", True]])
+        self.assertEqual(r["spec"]["body"], body)
+        self.assertIn("line1\nline2", r["spec"]["body"])                 # a newline inside a value survives
+        self.assertEqual(r["ignored"], [])
+
+    def test_windows_cmd_plain_double_quotes_and_curl_exe(self):
+        r = parse_curl('curl.exe "https://example.test/a b" -X PUT -H "X-A: 1" -d "{\\"k\\": \\"v\\"}"')
+        self.assertEqual(r["spec"]["method"], "PUT")
+        self.assertEqual(r["spec"]["url"], "https://example.test/a b")
+        self.assertEqual(r["spec"]["body"], '{"k": "v"}')
+
+    def test_bash_copy_keeps_working_and_unescapes_url_globs(self):
+        r = parse_curl("curl 'https://example.test/x?ids=\\[1,2\\]&o=\\{a\\}' -H 'a: b'")
+        self.assertEqual(r["spec"]["url"], "https://example.test/x?ids=[1,2]&o={a}")
+
     def test_curl_import_cli_stdin_prints_json(self):
         cli = os.path.join(os.path.dirname(__file__), "..", "addons", "compose_cli.py")
         got = subprocess.run([sys.executable, cli, "from-curl", "-"], input="curl -X DELETE https://example.test/x",

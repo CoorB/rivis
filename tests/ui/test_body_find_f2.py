@@ -67,8 +67,24 @@ class BodyFindF2(UiBase):
                         self.page.evaluate("document.querySelector('#proxy-panel-host').shadowRoot.activeElement?.closest('[data-sbar]') !== null"))
         self.assertEqual(self.errors, [])
 
+    def test_folded_tree_rows_preview_their_contents_and_search_ignores_the_preview(self):
+        self.fetch("/json/long?n=5&prev=1")
+        self.open()
+        self.response("prev=1")
+        if self.page.locator(".rv-tree").count() == 0 or self.page.locator(".rv-tree").is_hidden():
+            self.page.locator(".rv-tree-toggle").click()
+        node = self.page.locator('.rv-tree-node[data-path="$.accounts[3]"]')
+        wait_for(lambda: node.count() == 1, 5, 0.1, "folded row")
+        row = node.locator("summary").first
+        self.assertIn('id: 3, name: "account 3", balance: 9', row.inner_text())
+        field = self.page.locator(".rv-body-find")
+        field.fill("account 3")
+        wait_for(lambda: self.page.locator(".rv-find-count").inner_text() == "1 of 1", 5, 0.1, "one match, not one per preview")
+        self.assertFalse(row.locator(".rv-tree-prev").is_visible(), "the opened row hides its preview")
+        self.assertEqual(self.errors, [])
+
     def test_truncated_body_notice_and_tree_limit(self):
-        self.fetch("/bigline?mb=3&type=json&f2=clip", timeout=60)
+        self.fetch("/bigline?mb=25&type=json&f2=clip", timeout=120)
         self.open()
         self.response("f2=clip")
         note = self.page.locator(".rv-body-note")
@@ -76,7 +92,7 @@ class BodyFindF2(UiBase):
         self.assertIn("shown part", note.inner_text().lower())
         self.page.locator(".rv-tree-toggle").click()
         self.assertEqual(self.page.evaluate("localStorage.getItem('rivis-body-tree')"), "1")
-        self.assertIn("up to 2 MB", self.page.locator(".rv-tree").inner_text())
+        wait_for(lambda: "up to 24 MB" in self.page.locator(".rv-tree").inner_text(), 15, 0.1, "tree limit")
         self.assertTrue(self.page.locator(".contentview pre").is_visible())
         self.page.locator(".rv-body-find").fill("data")
         wait_for(lambda: self.page.locator(".rv-find-count").inner_text() == "1 of 1", 5, 0.05, "one match")   # typing waits 150 ms
