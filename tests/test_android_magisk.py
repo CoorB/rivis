@@ -17,7 +17,7 @@ PINS = os.path.join(harness.REPO, "addons", "android", "magisk.pins")
 FAKE_ADB = r'''#!/bin/sh
 echo "$@" >> "$FAKE_LOG"
 case "$*" in
-  *"emu avd name"*) printf 'Test_Play\r\nOK\r\n' ;;
+  *"emu avd name"*) printf '%s\r\nOK\r\n' "$FAKE_AVD" ;;
   *"getprop ro.build.version.sdk"*) echo 36 ;;
   *"getprop ro.product.cpu.abi"*) echo arm64-v8a ;;
 esac
@@ -49,7 +49,9 @@ class MagiskFixture(unittest.TestCase):
         open(self.adb, "w").write(FAKE_ADB)
         os.chmod(self.adb, 0o755)
         self.avd_home = os.path.join(self.root, "avd")
-        self.avd_dir = os.path.join(self.avd_home, "Test_Play.avd")
+        # a name of its own: two runs at once must not see each other's fake emulator in `ps`
+        self.avd = "Test_Play_" + os.urandom(3).hex()
+        self.avd_dir = os.path.join(self.avd_home, self.avd + ".avd")
         os.makedirs(self.avd_dir)
         self.write_config("PlayStore.enabled = true\nimage.sysdir.1 = system-images/android-36/google_apis_playstore/arm64-v8a/\n")
         self.magisk = os.path.join(self.root, "magisk")
@@ -64,7 +66,7 @@ class MagiskFixture(unittest.TestCase):
 
     def run_it(self, *extra):
         env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"),
-                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, HOME=self.root)
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, FAKE_AVD=self.avd, HOME=self.root)
         return subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", self.magisk, self.state, *extra],
                               capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=60)
 
@@ -108,10 +110,10 @@ class MagiskGuards(MagiskFixture):
         fake_bin = os.path.join(self.root, 'fake-bin')
         os.makedirs(fake_bin)
         ps = os.path.join(fake_bin, 'ps')
-        open(ps, 'w').write('#!/bin/sh\necho "qemu-system-aarch64 -avd Test_Play -qt-hide-window -grpc-use-token -port 5554"\n')
+        open(ps, 'w').write('#!/bin/sh\necho "qemu-system-aarch64 -avd %s -qt-hide-window -grpc-use-token -port 5554"\n' % self.avd)
         os.chmod(ps, 0o755)
         env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, 'sdk'),
-                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, HOME=self.root,
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, FAKE_AVD=self.avd, HOME=self.root,
                    PATH=fake_bin + os.pathsep + os.environ.get('PATH', ''))
         r = subprocess.run(['/bin/bash', SCRIPT, 'emulator-5554', self.ca, 'c8750f0d.0', self.magisk, self.state, '--yes'],
                            capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=30)
@@ -127,14 +129,14 @@ class MagiskGuards(MagiskFixture):
         ps = os.path.join(fake_bin, 'ps')
         open(ps, 'w').write('#!/bin/sh\n'
                             'case "$*" in\n'
-                            '  *"-o pid=,args="*) echo "4242 qemu-system-aarch64 -avd Test_Play -port 5554" ;;\n'
+                            '  *"-o pid=,args="*) echo "4242 qemu-system-aarch64 -avd %s -port 5554" ;;\n' % self.avd +
                             '  *"-o ppid= -p 4242"*) echo " 777" ;;\n'
-                            '  *"-o args= -p 777"*) echo "%s" ;;\n'
-                            '  *) echo "qemu-system-aarch64 -avd Test_Play -port 5554" ;;\n'
-                            'esac\n' % parent_args)
+                            '  *"-o args= -p 777"*) echo "%s" ;;\n' % parent_args +
+                            '  *) echo "qemu-system-aarch64 -avd %s -port 5554" ;;\n' % self.avd +
+                            'esac\n')
         os.chmod(ps, 0o755)
         env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, 'sdk'),
-                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, HOME=self.root,
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, FAKE_AVD=self.avd, HOME=self.root,
                    PATH=fake_bin + os.pathsep + os.environ.get('PATH', ''))
         return subprocess.run(['/bin/bash', SCRIPT, 'emulator-5554', self.ca, 'c8750f0d.0', self.magisk, self.state, '--yes'],
                               capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=30)
@@ -153,7 +155,7 @@ class MagiskGuards(MagiskFixture):
         self.assertIn('not installed', r.stderr)          # it went on to the next check (no Magisk files in this fixture)
 
     def test_only_emulator_serials_and_safe_ca_names(self):
-        env = dict(os.environ, ADB=self.adb, FAKE_LOG=self.log)
+        env = dict(os.environ, ADB=self.adb, FAKE_LOG=self.log, FAKE_AVD=self.avd)
         for serial, name, msg in (("R58M123", "c8750f0d.0", "not an Android Studio emulator"),
                                   ("emulator-5554", "../x.0", "bad CA file name")):
             r = subprocess.run(["/bin/bash", SCRIPT, serial, self.ca, name, self.magisk, self.state, "--yes"],
@@ -181,7 +183,7 @@ class MagiskGuards(MagiskFixture):
 FLOW_ADB = r"""#!/bin/sh
 echo "$@" >> "$FAKE_LOG"
 case "$*" in
-  *"emu avd name"*) printf 'Test_Play\r\nOK\r\n' ;;
+  *"emu avd name"*) printf '%s\r\nOK\r\n' "$FAKE_AVD" ;;
   *"emu kill"*) : > "$FAKE_DIR/killed" ;;
   *"get-state"*) [ -f "$FAKE_DIR/killed" ] && exit 1; echo device ;;
   *"getprop ro.build.version.sdk"*) echo 36 ;;
@@ -224,7 +226,7 @@ class MagiskRestarts(MagiskFixture):
 
     def run_flow(self, *extra, status=None):
         env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"), ANDROID_AVD_HOME=self.avd_home,
-                   FAKE_LOG=self.log, FAKE_DIR=self.root, HOME=self.root)
+                   FAKE_LOG=self.log, FAKE_AVD=self.avd, FAKE_DIR=self.root, HOME=self.root)
         if status is not None:
             env["FAKE_STATUS"] = status
         r = subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", self.magisk, self.state, *extra],
@@ -248,7 +250,7 @@ class MagiskRestarts(MagiskFixture):
 
     def test_review_m5_declined_consent_returns_distinct_code_without_restart(self):
         env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"),
-                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, FAKE_DIR=self.root, HOME=self.root)
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, FAKE_AVD=self.avd, FAKE_DIR=self.root, HOME=self.root)
         result = subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", self.magisk, self.state],
                                 capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=30)
         self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
@@ -276,7 +278,7 @@ class MagiskRestarts(MagiskFixture):
     def test_restore_restarts_normally_without_needing_magisk(self):
         shutil.rmtree(self.magisk)
         env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"), ANDROID_AVD_HOME=self.avd_home,
-                   FAKE_LOG=self.log, FAKE_DIR=self.root, HOME=self.root)
+                   FAKE_LOG=self.log, FAKE_AVD=self.avd, FAKE_DIR=self.root, HOME=self.root)
         r = subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", "-", self.state, "--restore"],
                            capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120)
         starts = self.emulator_starts()
