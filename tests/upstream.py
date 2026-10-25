@@ -110,6 +110,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, doc)
         if p == "/json/small":
             return self._send(200, SMALL_JSON)
+        if p == "/closing":
+            # a gateway that ends the connection after its answer (the UAT edge does this on about half its calls)
+            return self._send(200, {"closing": True}, headers=[("Connection", "close"), ("Keep-Alive", "timeout=5")])
         if p == "/etag":
             # a cacheable resource: answers 304 when the client revalidates with the current validator
             validators = [("ETag", '"v1"'), ("Last-Modified", "Mon, 01 Jan 2024 00:00:00 GMT"),

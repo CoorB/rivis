@@ -63,7 +63,8 @@ if HERE not in sys.path:
 import proxy_common
 importlib.reload(proxy_common)
 from proxy_common import (PRODUCT, PROFILE_VALUES, atomic_json, STATE_ROOT, breakpoints, project_profile,
-                          migrate_rules, remote_url_problem, throttle_shorthand, tls_config, tls_options, user_regex)
+                          migrate_rules, remote_url_problem, throttle_shorthand, tls_config, tls_options, user_regex,
+                          without_hop_headers)
 import proxy_rule_validation
 importlib.reload(proxy_rule_validation)      # mitmproxy reloads this add-on in place: the validator must see the new proxy_common too
 from proxy_rule_validation import compile_rule, rule_fingerprint
@@ -948,7 +949,7 @@ class ProxyRules:
                 else:
                     body = self._body(r)
                     ctype = "application/json"
-                headers = [list(pair) for pair in (r.get("headers") or [])]
+                headers = [list(pair) for pair in without_hop_headers(r.get("headers") or [])]   # mocks saved before 0.9.10 kept them
                 if not any(k.lower() == "content-type" for k, _v in headers):
                     headers.insert(0, ["Content-Type", ctype])
                 origin = flow.request.headers.get("Origin")

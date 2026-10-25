@@ -56,7 +56,7 @@ from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRESETS,
                           atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
                           confined_path, migrate_collection, migrate_rules, owned_mock_file, project_profile,
                           project_profiles, project_state, tls_config, tls_covering, tls_update,
-                          throttle_shorthand, user_regex)
+                          throttle_shorthand, user_regex, without_hop_headers)
 from proxy_codegen import TARGETS, generate
 import proxy_redact
 import devices
@@ -1751,7 +1751,8 @@ class ProxyPanel:
                 r["draft"] = True
             if f.response:
                 unsafe = {"content-length", "transfer-encoding", "content-encoding"}
-                r["headers"] = [[k, v] for k, v in f.response.headers.items(multi=True) if k.lower() not in unsafe]
+                r["headers"] = without_hop_headers([k, v] for k, v in f.response.headers.items(multi=True)
+                                                   if k.lower() not in unsafe)
             cfg["rules"].append(r)
             self.save_cfg(cfg)
             return {"name": name, "draft": draft}

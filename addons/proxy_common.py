@@ -302,6 +302,18 @@ def project_state(project_id):
     return os.path.join(STATE_ROOT, "projects", project_id)
 
 
+HOP_HEADERS = frozenset(("connection", "keep-alive", "proxy-connection", "te", "trailer", "upgrade"))
+
+
+def without_hop_headers(pairs):
+    """[name, value] pairs without the headers that belong to one connection: those in HOP_HEADERS and any that a
+    Connection header names. A mock answers the app itself, so a server's `Connection: close` copied into it made
+    every mocked answer end the app's connection."""
+    pairs = list(pairs)
+    named = {t.strip().lower() for k, v in pairs if str(k).lower() == "connection" for t in str(v).split(",")}
+    return [p for p in pairs if str(p[0]).lower() not in HOP_HEADERS and str(p[0]).lower() not in named]
+
+
 def owned_mock_file(removed, remaining_rules, mocks_dir, current_rules_file=None):
     """Return a Rivis-created mock only when no project still reads it. Fail closed.
 
