@@ -991,9 +991,11 @@ class ProxyRules:
             await asyncio.sleep(sample / 2000 + ((size * 8 / 1000) / up if up else 0))
         for r in self._matching(flow, {"respond", "map_local"}):
             try:
-                status = int(r.get("status", 200))
+                selected = next((v for v in r.get("variants", []) if v["name"] == r.get("active")), None)
+                mock = {**r, **selected} if selected else r
+                status = int(mock.get("status", 200))
                 if r["action"] == "map_local":
-                    path = os.path.expanduser(r["file"])
+                    path = os.path.expanduser(mock["file"])
                     if os.path.isdir(path):
                         path, rest = folder_mock_path(r, flow.request.pretty_url)
                         if path is None:
@@ -1008,9 +1010,13 @@ class ProxyRules:
                     body = self._body(r)
                     ctype = "application/json"
                     saved = None
-                headers = [list(pair) for pair in without_hop_headers(r.get("headers") or [])]   # mocks saved before 0.9.10 kept them
+                headers = [list(pair) for pair in without_hop_headers(mock.get("headers") or [])]   # mocks saved before 0.9.10 kept them
                 if saved:
                     status, headers, body = saved
+                    if selected:
+                        status = int(selected.get("status", status))
+                        if "headers" in selected:
+                            headers = [list(pair) for pair in without_hop_headers(selected["headers"])]
                 if not any(k.lower() == "content-type" for k, _v in headers):
                     headers.insert(0, ["Content-Type", ctype])
                 origin = flow.request.headers.get("Origin")

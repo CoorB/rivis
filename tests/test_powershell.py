@@ -384,6 +384,23 @@ class Commands(unittest.TestCase):
         self.assertEqual(rules["patch-rule"]["set"], {"user.name": "PATCHED"})
         self.bad("rules", "add", msg="usage: rules add NAME")
 
+    def test_rules_variant_parity_with_bash_cli(self):
+        self.bash("rules", "add", "multi", "match=/multi", "action=map_local", "body={}")
+        self.ok("rules", "variant", "multi", "add", "error")
+        rule = next(r for r in self.cfg()["rules"] if r["name"] == "multi")
+        self.assertEqual(rule["active"], "error")
+        self.assertTrue(os.path.isfile(rule["variants"][1]["file"]))
+        self.bash("rules", "variant", "multi", "use", "Default")
+        self.assertEqual(next(r for r in self.cfg()["rules"] if r["name"] == "multi")["active"], "Default")
+        self.ok("rules", "variant", "multi", "rm", "error")
+        self.assertEqual(len(next(r for r in self.cfg()["rules"] if r["name"] == "multi")["variants"]), 1)
+        self.bad("rules", "variant", "multi", "rm", "Default", msg="last")
+        other = os.path.join(self.state, "projects", "default", "mocks", "other.json")
+        with open(other, "w") as fh:
+            fh.write('{"other":true}')
+        self.ok("rules", "variant", "multi", "add", "other", "file=" + other)
+        self.assertEqual(next(r for r in self.cfg()["rules"] if r["name"] == "multi")["active"], "other")
+
     def test_rules_test_explains_like_the_bash_cli(self):
         self.bash("rules", "add", "post-500", "match=/api/pay", "action=status", "status=500", "method=POST")
         out = self.ok("rules", "test", "https://api.example.test/api/pay", "POST")

@@ -97,6 +97,40 @@ def compile_rule(source, state_dir, fallback_name=None, confdir=None):
         # local files: confine to the project state dir (symlinks resolved) unless the
         # user trusted that file on this machine, or skip the rule with this error.
         rule["file"] = rule_file_path(state_dir, rule["file"], "map_local file", (confdir,))
+        if "variants" in rule:
+            variants = rule["variants"]
+            if not isinstance(variants, list) or not variants:
+                raise ValueError("map_local variants must be a nonempty list")
+            names = set()
+            checked = []
+            for variant in variants:
+                if not isinstance(variant, dict) or not isinstance(variant.get("name"), str) or not variant["name"].strip():
+                    raise ValueError("map_local variant needs a name")
+                if variant["name"] in names:
+                    raise ValueError("map_local variant names must be unique")
+                names.add(variant["name"])
+                if not isinstance(variant.get("file"), str):
+                    raise TypeError("map_local variant file must be text")
+                item = dict(variant)
+                item["file"] = rule_file_path(state_dir, item["file"], "map_local variant file", (confdir,))
+                if os.path.isdir(item["file"]):
+                    raise ValueError("map_local variant file must not be a folder")
+                if "status" in item:
+                    item["status"] = _final_status(item["status"])
+                if "headers" in item:
+                    headers = item["headers"]
+                    if isinstance(headers, dict):
+                        item["headers"] = [[str(k), str(v)] for k, v in headers.items()]
+                    elif isinstance(headers, list) and all(isinstance(x, (list, tuple)) and len(x) == 2 for x in headers):
+                        item["headers"] = [[str(k), str(v)] for k, v in headers]
+                    else:
+                        raise TypeError("map_local variant headers must be an object or name/value pairs")
+                checked.append(item)
+            if rule.get("active") not in names:
+                raise ValueError("map_local active variant must name a variant")
+            if rule.get("base"):
+                raise ValueError("map_local folders cannot have variants")
+            rule["variants"] = checked
         if rule.get("base") is not None or os.path.isdir(rule["file"]):
             base = rule.get("base")
             parsed = urlsplit(base) if isinstance(base, str) else None

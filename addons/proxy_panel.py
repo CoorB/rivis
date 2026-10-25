@@ -615,11 +615,23 @@ class ProxyPanel:
     @staticmethod
     def _servable_mock(r):
         """A Map Local rule worth reopening: its file is one of this project's mocks and exists."""
-        f = r.get("file")
+        active = next((v for v in r.get("variants", []) if v.get("name") == r.get("active")), None)
+        f = (active or r).get("file")
         if not isinstance(f, str) or not f:
             return False
         real = os.path.realpath(os.path.expanduser(f))
         return os.path.dirname(real) == os.path.realpath(MOCK_DIR) and os.path.isfile(real)
+
+    @staticmethod
+    def _mock_variant(r):
+        return next((v for v in r.get("variants", []) if v.get("name") == r.get("active")), r)
+
+    @staticmethod
+    def _mock_editor_path(r):
+        path = os.path.realpath(os.path.expanduser(ProxyPanel._mock_variant(r)["file"]))
+        if os.path.dirname(path) != os.path.realpath(MOCK_DIR) or not os.path.isfile(path):
+            raise PanelError("only mocks in the active project's state directory can be edited here")
+        return path
 
     # ── state for the drawer ──────────────────────────────────────────────────
     def _rules_outside(self, cfg):
@@ -1840,6 +1852,32 @@ class ProxyPanel:
                 if r.get("action") == "map_local" and matches and r.get("method") in (None, "", f.request.method):
                     if not self._servable_mock(r):   # an example/template rule whose file is missing or outside
                         continue                     # the project would be switched on and serve nothing
+                    if a.get("variant_name"):
+                        variant_name = str(a["variant_name"]).strip()
+                        if not variant_name or len(variant_name) > 64:
+                            raise PanelError("variant name must be 1..64 characters")
+                        variants = r.get("variants") or [{"name": "Default", "file": r["file"],
+                                                          "status": r.get("status", 200), "headers": r.get("headers", [])}]
+                        if any(v["name"] == variant_name for v in variants):
+                            raise PanelError("a variant with that name exists")
+                        stem = re.sub(r"[^A-Za-z0-9._-]", "-", r["name"] + "-" + variant_name)[:55].strip(".") or "variant"
+                        path = self.mock_path(stem)
+                        suffix = 2
+                        while os.path.lexists(path):
+                            path = self.mock_path(stem[:55] + "-" + str(suffix)); suffix += 1
+                        body = (f.response.get_content(strict=False) or b"") if f.response else b"{}\n"
+                        atomic_write_bytes(path, body)
+                        unsafe = {"content-length", "transfer-encoding", "content-encoding"}
+                        variant = {"name": variant_name, "file": path,
+                                   "status": f.response.status_code if f.response else 200,
+                                   "headers": without_hop_headers([k, v] for k, v in f.response.headers.items(multi=True)
+                                                                  if k.lower() not in unsafe) if f.response else []}
+                        r["variants"] = variants + [variant]
+                        r["active"] = variant_name
+                        self.engine_check(r)
+                        r["enabled"] = True
+                        self.save_cfg(cfg)
+                        return {"name": r["name"], "variant": variant_name, "existing": True}
                     if r.get("draft"):               # an unsaved draft stays off until it is saved
                         return {"name": r["name"], "draft": True}
                     r["enabled"] = True
@@ -2425,16 +2463,16 @@ class ProxyPanel:
             r = self.find(cfg, a["name"])
             if r.get("action") != "map_local":
                 raise PanelError("not a Map Local rule")
-            path = os.path.realpath(os.path.expanduser(r["file"]))
-            if os.path.dirname(path) != os.path.realpath(MOCK_DIR):
-                raise PanelError("only mocks in the active project's state directory can be opened in the panel")
+            path = self._mock_editor_path(r)
             with open(path, "rb") as fh:
                 raw = fh.read()
-                headers = r.get("headers") or {}
+                selected = self._mock_variant(r)
+                headers = selected.get("headers", r.get("headers")) or {}
                 header_rows = list(headers.items()) if isinstance(headers, dict) else headers
                 text, binary, clipped = self.mock_text(raw)   # binary: an image, protobuf…, shown as text; Save keeps the bytes unless edited
-                return {"content": text, "status": r.get("status", 200), "binary": binary, "clipped": clipped,
+                return {"content": text, "status": selected.get("status", r.get("status", 200)), "binary": binary, "clipped": clipped,
                         "draft": r.get("draft") is True,
+                        "variants": [v["name"] for v in r.get("variants", [])], "active": r.get("active"),
                         "size": len(raw),
                         "headers": [[k, v] for k, v in header_rows],
                         "match": r.get("match"), "method": r.get("method"),
@@ -2443,10 +2481,8 @@ class ProxyPanel:
             r = self.find(cfg, a["name"])
             if r.get("action") != "map_local":
                 raise PanelError("not a Map Local rule")
-            path = os.path.realpath(os.path.expanduser(r["file"]))
-            if os.path.dirname(path) != os.path.realpath(MOCK_DIR):
-                raise PanelError("only files in the active project's state directory can be edited here")
-            self.mock_path(os.path.basename(path)[:-5])   # name check
+            path = self._mock_editor_path(r)
+            selected = self._mock_variant(r)
             # R6B-09: the panel leaves "content" out when the body is unchanged (re-sending 20 MB on every Save froze
             # it); then only status / headers / on change and the file is not even read.
             if "content" in a:
@@ -2463,12 +2499,60 @@ class ProxyPanel:
                                          "(status and headers can still be saved)" % (MOCK_BINARY_PREVIEW // 1024))
                     atomic_write_text(path, a["content"])
             if str(a.get("status", "")).strip():
-                r["status"] = http_status(a["status"])
+                selected["status"] = http_status(a["status"])
             if isinstance(a.get("headers"), list):
-                r["headers"] = [[str(k), str(v)] for k, v in a["headers"] if str(k).strip()]
+                selected["headers"] = [[str(k), str(v)] for k, v in a["headers"] if str(k).strip()]
             if r.pop("draft", None):
                 r["enabled"] = True          # the first Save turns a new Map Local on
             self.save_cfg(cfg)
+        elif op == "mockvariant":
+            r = self.find(cfg, a["name"])
+            if r.get("action") != "map_local" or r.get("base"):
+                raise PanelError("variants need a Map Local file rule")
+            source = self._mock_editor_path(r)
+            action = a.get("action")
+            variants = r.get("variants") or [{"name": "Default", "file": r["file"],
+                                              "status": r.get("status", 200), "headers": r.get("headers", [])}]
+            name = str(a.get("variant") or "").strip()
+            if not name or len(name) > 64:
+                raise PanelError("variant name must be 1..64 characters")
+            item = next((v for v in variants if v["name"] == name), None)
+            if action == "add":
+                if item:
+                    raise PanelError("a variant with that name exists")
+                stem = re.sub(r"[^A-Za-z0-9._-]", "-", r["name"] + "-" + name)[:55].strip(".") or "variant"
+                path = self.mock_path(stem); suffix = 2
+                while os.path.lexists(path):
+                    path = self.mock_path(stem[:55] + "-" + str(suffix)); suffix += 1
+                with open(source, "rb") as fh:
+                    atomic_write_bytes(path, fh.read())
+                current = self._mock_variant(r)
+                variants.append({"name": name, "file": path, "status": current.get("status", r.get("status", 200)),
+                                 "headers": current.get("headers", r.get("headers", []))})
+                r["active"] = name
+            elif action == "use":
+                if not item:
+                    raise PanelError("no such variant")
+                r["active"] = name
+            elif action == "rename":
+                new_name = str(a.get("new_name") or "").strip()
+                if not item or not new_name or len(new_name) > 64 or any(v["name"] == new_name for v in variants if v is not item):
+                    raise PanelError("choose a unique variant name (1..64 characters)")
+                item["name"] = new_name
+                if r.get("active", "Default") == name:
+                    r["active"] = new_name
+            elif action == "rm":
+                if not item or len(variants) == 1:
+                    raise PanelError("cannot remove the last or an unknown variant")
+                variants.remove(item)
+                if r.get("active", "Default") == name:
+                    r["active"] = variants[0]["name"]
+            else:
+                raise PanelError("unknown variant action")
+            r["variants"] = variants
+            self.engine_check(r)
+            self.save_cfg(cfg)
+            return {"active": r["active"]}
         else:
             raise PanelError(f"unknown op {op}")
         return {}

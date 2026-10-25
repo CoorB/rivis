@@ -966,7 +966,7 @@
       ${maps.length ? maps.map(([r, i]) => `
         <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
           <div class="n"><div><b>${esc(pretty(r))}</b></div>
-            <div class="sub">${esc(r.method || "ANY")} · status ${esc(r.status || 200)} · ${esc(r.name)}</div></div>
+            <div class="sub">${esc(r.method || "ANY")} · status ${esc(((r.variants || []).find((v) => v.name === r.active) || {}).status || r.status || 200)} · ${esc(r.name)}${r.active ? " · active: " + esc(r.active) : ""}</div></div>
           <button class="b" data-edit="${i}">Edit</button><button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
       : emptyState("map", "No Map Local rules yet", "Select a call and use <b>Map Local this call</b>, or add one above with a host and path. <b>*</b> and <b>?</b> are wildcards.")}`;
     let pastedQuery = false;
@@ -2033,7 +2033,12 @@
     const src = sourceOfFlow(f), srcOn = !!(src && state.source && (state.source === src.key || state.source === deviceKey(src)));
     m.innerHTML = (isHttp
       ? `<div class="hd">${esc(f.request.method)} ${esc(hostName)}${esc(f.request.path.split("?")[0])}</div>` +
-        item("map", "Map Local this call…", "map") + item("bp", "Pause on this call (Breakpoint)", "bp") +
+        item("map", "Map Local this call…", "map") +
+        (state && state.rules.some((r) => r.action === "map_local" && (!r.method || r.method === f.request.method) && (() => {
+          const req = f.request, port = req.port && !((req.scheme === "http" && req.port === 80) || (req.scheme === "https" && req.port === 443)) ? ":" + req.port : "";
+          try { return new RegExp(r.match).test(req.pretty_url || req.url || (req.scheme + "://" + req.pretty_host + port + req.path)); } catch (e) { return false; }
+        })()) ? item("mapvariant", "Add as a new variant…", "map") : "") +
+        item("bp", "Pause on this call (Breakpoint)", "bp") +
         `<hr>` + item("repeat", "Repeat", "retry", `<kbd>${mod} ↵</kbd>`) + item("retry", "Edit &amp; Repeat…", "compose", `<kbd>${KALT} ${KSHIFT} ↵</kbd>`) + item("cmpA", "Compare: set as A", "cmp") +
         `<hr>` + item("curl", "Copy as cURL", "call") + item("url", "Copy URL", "call") +
         `<hr>` + item("host", focused ? "Show all hosts again" : "Show only this host", "search") + (src ? item("src", srcOn ? "Show every source again" : `Show only ${esc(src.app || deviceName(src))}`, "phone") : "") + item("tls", "Stop decrypting this host", "lock")
@@ -2047,6 +2052,7 @@
       closeCallMenu();
       const k = b.dataset.k, id = mf.id;
       if (k === "map") { const res = await run("mock", { flow_id: id, draft: true }, mockToast); if (res) { if (!$("drawer").classList.contains("open")) { setOpen(true); } openEditor(res.name); } }
+      else if (k === "mapvariant") { const name = await ask("Name the new variant from this call", { input: "" }); if (name) { const res = await run("mock", { flow_id: id, variant_name: name }, "Saved variant '" + name + "'"); if (res) { if (!$("drawer").classList.contains("open")) setOpen(true); openEditor(res.name); } } }
       else if (k === "bp") { const added = await run("bp_add", { flow_id: id, request: true, response: true }); if (added) breakpointOn(id); }
       else if (k === "repeat") run("retry", { flow_id: id, edits: {} }, "Repeated — the new call is in the list (newest first)");
       else if (k === "retry") openRetry(id);
@@ -2389,7 +2395,7 @@
   const ACTION_NAME = { map_local: "Map Local", map_remote: "Map Remote", respond: "Fixed reply", status: "Force status", delay: "Delay", json_patch: "Edit JSON", set_header: "Header", block: "Block", drop: "Block" };
   function describe(r) {
     const a = r.action;
-    if (a === "map_local") return r.base ? "Map Local folder → " + tilde(r.file) : "answers from a saved response" + (r.status ? " (" + r.status + ")" : "");
+    if (a === "map_local") { const v = (r.variants || []).find((x) => x.name === r.active); return r.base ? "Map Local folder → " + tilde(r.file) : "answers from a saved response" + (v ? " · " + v.name + " (" + (v.status || r.status || 200) + ")" : r.status ? " (" + r.status + ")" : ""); }
     if (a === "respond") return "answers with " + r.status;
     if (a === "status") return "changes the status to " + r.status;
     if (a === "delay") return "waits " + r.ms + " ms first";
@@ -2637,6 +2643,8 @@
         <b style="flex:1;align-self:center;overflow:hidden;text-overflow:ellipsis">${esc(e.name)}</b>
         status <input type="number" id="st" value="${esc(e.status)}" style="width:70px" aria-label="Status code"></div>
       <div class="sub" style="margin-top:6px">${esc(e.method || "ANY")} ${esc(pretty({ match: e.match }))}</div>
+      <div class="btns" id="variants"><label>Variant <select id="variant">${(e.variants.length ? e.variants : ["Default"]).map((n) => `<option value="${esc(n)}" ${n === (e.active || "Default") ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
+        <button class="b" id="vadd">Add</button><button class="b" id="vrename">Rename</button><button class="b d" id="vrm">Delete</button></div>
       <div class="seg"><button data-sub="body" class="${e.sub === "body" ? "on" : ""}">Body</button><button data-sub="headers" class="${e.sub === "headers" ? "on" : ""}">Headers</button></div>
       <div id="pbody" style="${e.sub === "body" ? "" : "display:none"}">
         ${e.clipped ? `<div class="sub" id="binclip" style="margin-bottom:4px">Binary file (${e.size} bytes): a read-only preview of the first ${previewKB(e.content)} KB. Save keeps the file's bytes; status and headers can still be changed.</div>`
@@ -2655,6 +2663,15 @@
     const check = () => { clearTimeout(editorCheckT); if (ta.value.length < BIG_BODY) jsonCheck(ta, $("jsonok")); else editorCheckT = setTimeout(() => { if (ta.isConnected && $("jsonok")) jsonCheck(ta, $("jsonok")); }, 400); };
     check();
     ta.oninput = () => { check(); editing.content = ta.value; $("dirty").textContent = "Modified"; };
+    const changeVariant = async (action, variant, newName) => {
+      if (mockEditorChanged(e)) { toast("Save or discard these edits before changing variants", true); $("variant").value = e.active || "Default"; return; }
+      try { await api("mockvariant", { name: e.name, action, variant, new_name: newName }); await openEditor(e.name); }
+      catch (x) { $("variant").value = e.active || "Default"; toast(x.message, true); }
+    };
+    $("variant").onchange = () => changeVariant("use", $("variant").value);
+    $("vadd").onclick = async () => { const name = await ask("Name the new variant (a copy of the current response)", { input: "" }); if (name) changeVariant("add", name); };
+    $("vrename").onclick = async () => { const old = e.active || "Default"; const name = await ask("Rename variant '" + old + "'", { input: old }); if (name && name !== old) changeVariant("rename", old, name); };
+    $("vrm").onclick = async () => { const old = e.active || "Default"; if (await ask("Delete variant '" + old + "'? Its saved file is kept.", { yes: "Delete", danger: true })) changeVariant("rm", old); };
     root.querySelectorAll("[data-sub]").forEach((b) => (b.onclick = () => {   // R6B-09: a tab switch only shows / hides
       e.sub = b.dataset.sub; $("pbody").style.display = e.sub === "body" ? "" : "none"; $("phdr").style.display = e.sub === "headers" ? "" : "none";
       root.querySelectorAll("[data-sub]").forEach((x) => x.classList.toggle("on", x === b));
@@ -2703,6 +2720,68 @@
   }
 
   // ───────────── Paused call sheet (opens by itself) ─────────────
+  const formRows = (rows, id, valueLabel = "Value") => `<div id="${id}">${rows.map(([k, v]) =>
+    `<div class="hrow"><input type="text" aria-label="Name" value="${esc(k)}" placeholder="Name"><input type="text" aria-label="${valueLabel}" value="${esc(v)}" placeholder="${valueLabel}"><button class="b d" data-fdel aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")}</div><button class="b" data-fadd="${id}">+ Add</button>`;
+  const formValues = (id) => [...$(id).querySelectorAll(".hrow")].map((r) => [...r.querySelectorAll("input")].map((i) => i.value)).filter(([k]) => k !== "");
+  function wireFormRows(scope) {
+    scope.querySelectorAll("[data-fdel]").forEach((b) => b.onclick = () => b.parentElement.remove());
+    scope.querySelectorAll("[data-fadd]").forEach((b) => b.onclick = () => {
+      const box = $(b.dataset.fadd), d = document.createElement("div"); d.className = "hrow";
+      d.innerHTML = `<input type="text" aria-label="Name" placeholder="Name"><input type="text" aria-label="Value" placeholder="Value"><button class="b d" data-fdel aria-label="Remove">${ico("x", "sm")}</button>`;
+      box.appendChild(d); d.querySelector("[data-fdel]").onclick = () => d.remove(); d.querySelector("input").focus();
+    });
+  }
+  function renderPausedForm(p, isResp) {
+    const headers = readHeaders("phd"), raw = $("pb").value;
+    let url;
+    try { url = new URL($("pu").value); } catch (x) { url = null; }
+    const type = (headers.find(([k]) => k.toLowerCase() === "content-type") || ["", ""])[1].toLowerCase();
+    let kind = "none", fields = [];
+    if (/application\/x-www-form-urlencoded/.test(type)) { kind = "urlencoded"; fields = [...new URLSearchParams(raw).entries()]; }
+    else { try { const doc = JSON.parse(raw); if (doc && typeof doc === "object" && !Array.isArray(doc)) { kind = "json"; fields = Object.entries(doc); } } catch (x) {
+      if (!raw.trim() && /json/.test(type)) kind = "json";
+    } }
+    p.formKind = kind;
+    const jsonRows = fields.map(([k, v]) => { const t = v === null ? "null" : Array.isArray(v) || typeof v === "object" ? "json" : typeof v;
+      const value = t === "json" ? JSON.stringify(v) : v === null ? "" : String(v);
+      return `<div class="hrow"><input type="text" aria-label="JSON key" value="${esc(k)}" placeholder="Key"><select aria-label="Value type">${["string", "number", "boolean", "null", "json"].map((x) => `<option ${x === t ? "selected" : ""}>${x}</option>`).join("")}</select><input type="text" aria-label="JSON value" value="${esc(value)}" placeholder="Value"><button class="b d" data-jdel aria-label="Remove">${ico("x", "sm")}</button></div>`; }).join("");
+    $("ppf").innerHTML = `${isResp ? `<div class="btns">Status <input type="number" id="pfst" value="${esc($("pst").value)}" aria-label="Status code"></div>`
+      : `<div class="btns"><select id="pfm" aria-label="Method">${methodOpts($("pm").value)}</select><input type="text" id="pfpath" class="grow" aria-label="Path" value="${esc(url ? url.pathname : "")}" placeholder="Path"></div>
+         <h4>Query parameters</h4>${formRows(url ? [...url.searchParams.entries()] : [], "pfquery")}`}
+      <h4>Headers</h4>${headersHTML(headers, "pfhd")}
+      <h4>Body fields</h4>${kind === "json" ? `<div id="pfjson">${jsonRows}</div><button class="b" id="pfjadd">+ Add field</button>`
+        : kind === "urlencoded" ? formRows(fields, "pffields") : `<div class="sub">${raw.trim() ? "This body is not a JSON object or URL encoded form. Edit it in Body." : "No body fields. Edit the raw body to add one."}</div>`}`;
+    wireHeaders($("ppf")); wireFormRows($("ppf"));
+    $("ppf").querySelectorAll("[data-jdel]").forEach((b) => b.onclick = () => b.parentElement.remove());
+    if ($("pfjadd")) $("pfjadd").onclick = () => {
+      const d = document.createElement("div"); d.className = "hrow";
+      d.innerHTML = `<input type="text" aria-label="JSON key" placeholder="Key"><select aria-label="Value type">${["string", "number", "boolean", "null", "json"].map((x) => `<option>${x}</option>`).join("")}</select><input type="text" aria-label="JSON value" placeholder="Value"><button class="b d" data-jdel aria-label="Remove">${ico("x", "sm")}</button>`;
+      $("pfjson").appendChild(d); d.querySelector("[data-jdel]").onclick = () => d.remove(); d.querySelector("input").focus();
+    };
+  }
+  function applyPausedForm(p, isResp) {
+    try {
+      if (isResp) $("pst").value = $("pfst").value;
+      else { const url = new URL($("pu").value); url.pathname = $("pfpath").value; url.search = "";
+        formValues("pfquery").forEach(([k, v]) => url.searchParams.append(k, v)); $("pu").value = url.href; $("pm").value = $("pfm").value; }
+      const headers = readHeaders("pfhd"); $("pph").innerHTML = headersHTML(headers, "phd");
+      wireHeaders($("sheet"));
+      if (p.formKind === "urlencoded") $("pb").value = new URLSearchParams(formValues("pffields")).toString();
+      if (p.formKind === "json") {
+        const obj = {};
+        $("pfjson").querySelectorAll(".hrow").forEach((r) => { const key = r.querySelector("input").value, type = r.querySelector("select").value, val = r.querySelectorAll("input")[1].value;
+          if (!key) return;
+          if (type === "number") { const n = Number(val); if (!val.trim() || !Number.isFinite(n)) throw Error("Enter a valid number for " + key); obj[key] = n; }
+          else if (type === "boolean") { if (val !== "true" && val !== "false") throw Error("Use true or false for " + key); obj[key] = val === "true"; }
+          else if (type === "null") obj[key] = null;
+          else if (type === "json") obj[key] = JSON.parse(val);
+          else obj[key] = val;
+        });
+        $("pb").value = JSON.stringify(obj);
+      }
+      jsonCheck($("pb"), $("pjs")); return true;
+    } catch (x) { toast("Form: " + x.message, true); return false; }
+  }
   async function openPaused(id, auto = false) {
     try { pausedOpen = await api("paused_get", { id }); pausedOpen.sub = "body"; drawPaused(auto);
       if (/NEXT matching call/.test($("toast").textContent)) $("toast").style.display = "none"; }   // it has hit: the hint is stale
@@ -2721,10 +2800,11 @@
         ${isResp ? "" : `<div class="sub" id="pnext" style="margin:0 0 8px">${p.response_next
           ? "To change what the app <b>receives</b>, press Continue: the response pauses next."
           : `To change what the app <b>receives</b>, pause its response. <button class="lnk" id="presp">Pause the response too</button>`}</div>`}
-        <div class="seg"><button data-psub="body" class="${p.sub === "body" ? "on" : ""}">${isResp ? "Response body" : "Request body"}</button><button data-psub="headers" class="${p.sub === "headers" ? "on" : ""}">Headers</button></div>
+        <div class="seg"><button data-psub="body" class="${p.sub === "body" ? "on" : ""}">${isResp ? "Response body" : "Request body"}</button><button data-psub="headers" class="${p.sub === "headers" ? "on" : ""}">Headers</button><button data-psub="form" class="${p.sub === "form" ? "on" : ""}">Form</button></div>
         <div id="ppb" style="${p.sub === "body" ? "" : "display:none"}"><textarea id="pb" spellcheck="false" placeholder="No body" class="${(isResp ? p.resp_body : p.req_body) ? "" : "nobody"}" ${(isResp ? p.resp_body_editable : p.req_body_editable) ? "" : "readonly"}>${esc(isResp ? p.resp_body : p.req_body)}</textarea>
           <div class="btns">${(isResp ? p.resp_body : p.req_body) && (isResp ? p.resp_body_editable : p.req_body_editable) ? `<button class="b" id="pfmt">Format JSON</button>` : ""}<span class="sub" id="pjs"></span></div></div>
         <div id="pph" style="${p.sub === "headers" ? "" : "display:none"}">${headersHTML(isResp ? p.resp_headers : p.req_headers, "phd")}</div>
+        <div id="ppf" style="display:none"></div>
       </main>
       <footer><span class="sub" style="margin-right:auto">The app is waiting — continue within its timeout (~30–60 s).<br>
         ${q > 1 ? `<button class="lnk" id="pall">Resume all ${q}</button> · ` : ""}<button class="lnk" id="pbpoff">Turn off this breakpoint</button></span>
@@ -2734,11 +2814,14 @@
     const ta = $("pb"); jsonCheck(ta, $("pjs")); ta.oninput = () => jsonCheck(ta, $("pjs"));
     wireHeaders($("sheet"));
     // R6-02: a hidden paused sheet still owns unsent changes, so Esc cannot dismiss it while dirty.
-    sheetDirty = () => $("pb").value !== (isResp ? p.resp_body : p.req_body) ||
+    sheetDirty = () => (p.sub === "form" && !applyPausedForm(p, isResp)) || $("pb").value !== (isResp ? p.resp_body : p.req_body) ||
       JSON.stringify(readHeaders("phd")) !== JSON.stringify(isResp ? p.resp_headers : p.req_headers) ||
       (isResp ? $("pst").value !== String(p.status) : $("pm").value !== p.method || $("pu").value !== p.url);
     root.querySelectorAll("[data-psub]").forEach((b) => (b.onclick = () => {
-      $("ppb").style.display = b.dataset.psub === "body" ? "" : "none"; $("pph").style.display = b.dataset.psub === "headers" ? "" : "none";
+      if (p.sub === "form" && !applyPausedForm(p, isResp)) return;
+      p.sub = b.dataset.psub;
+      if (p.sub === "form") renderPausedForm(p, isResp);
+      $("ppb").style.display = p.sub === "body" ? "" : "none"; $("pph").style.display = p.sub === "headers" ? "" : "none"; $("ppf").style.display = p.sub === "form" ? "" : "none";
       root.querySelectorAll("[data-psub]").forEach((x) => x.classList.toggle("on", x === b));
     }));
     if ($("pfmt")) $("pfmt").onclick = () => { try { ta.value = JSON.stringify(JSON.parse(ta.value), null, 2); jsonCheck(ta, $("pjs")); } catch (x) { toast("Not JSON", true); } };
@@ -2751,6 +2834,7 @@
       if (next) openPaused(next.id);
     };
     $("pcont").onclick = () => {
+      if (p.sub === "form" && !applyPausedForm(p, isResp)) return;
       const original = isResp ? p.resp_body : p.req_body;
       const edits = { headers: readHeaders("phd") };
       if (ta.value !== original && !ta.readOnly) edits.body = ta.value;   // untouched body: bytes pass through as-is

@@ -334,8 +334,9 @@ def owned_mock_file(removed, remaining_rules, mocks_dir, current_rules_file=None
         for rule in rules:
             if not isinstance(rule, dict):
                 continue
-            for key in ("file", "body_file"):
-                ref = rule.get(key)
+            refs = [rule.get("file"), rule.get("body_file")]
+            refs.extend(v.get("file") for v in rule.get("variants", []) if isinstance(v, dict))
+            for ref in refs:
                 if isinstance(ref, str) and ref and os.path.realpath(os.path.expanduser(ref)) == real:
                     return True
         return False

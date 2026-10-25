@@ -108,6 +108,7 @@ rivis rules list | on NAME | off NAME | show NAME | rm NAME | edit
 rivis rules test URL [METHOD]                        # what each rule would do to this call; sends nothing
 rivis health | rollback [VERSION|--list]             # after an upgrade: is it working? / go back a version
 rivis rules add NAME match=REGEX action=ACTION [key=value ...]
+rivis rules variant NAME add|use|rm VARIANT [file=PATH]
 rivis scripts list | new NAME --lang py|js [--match REGEX] | on NAME | off NAME | edit NAME | rm NAME
 rivis throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]
               [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
@@ -133,6 +134,19 @@ Saved list filters are per project in `filters.json`; Alt+1 through Alt+9 toggle
 marks rules that the proxy skips as `SKIPPED` and prints the reason. Editing a rules file saves only after that
 validation succeeds. `breakpoint off NAME` reports an unknown name and shows the available names.
 An invalid `mock` URL pattern exits with a single validation error.
+
+For one Map Local endpoint, `rules variant NAME add success` copies the current response into a new saved
+file and makes it active. `add error file=/path/to/response.json` uses an existing file instead. Use
+`rules variant NAME use success` to switch the response served on the next matching call, or
+`rules variant NAME rm error` to remove a variant (its file is kept). The PowerShell command has the
+same syntax: `rivis.ps1 rules variant NAME add|use|rm VARIANT [file=PATH]`. The Map Local editor also
+adds, renames, deletes, and selects variants. Right-clicking an already mocked call can save its response
+as a new variant. A rule without variants keeps its existing behavior. Folder rules do not use variants.
+
+The paused-call sheet has a **Form** view beside Body and Headers. On requests it edits the method, path,
+query parameters, headers, and JSON or URL encoded body fields. On responses it edits status, headers, and
+JSON or URL encoded body fields. JSON fields keep their selected value type when switching views; Body remains
+available for raw text and other formats. Continue sends the current form edits through the breakpoint.
 
 ### Map Local folders and Proxyman import
 

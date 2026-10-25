@@ -14,6 +14,7 @@ system proxy, one CA per workstation, removed again with `off`.
   .\<cli>.ps1 projects list|use|show|new
   .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
   .\<cli>.ps1 rules add NAME match=REGEX action=ACTION [key=value ...]
+  .\<cli>.ps1 rules variant NAME add|use|rm VARIANT [file=PATH]
                                             manage hot-reloaded interception rules (json_patch: set='path=value' or set='{"path":value}')
   .\<cli>.ps1 scripts list|new NAME -Lang py|js [-Match REGEX]|on NAME|off NAME|edit NAME|rm NAME
   .\<cli>.ps1 throttle [off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]]
@@ -593,7 +594,7 @@ if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report"
   if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif (@($Rest).Count -and $Command -ne "throttle" -and
           -not ($Command -eq "tls" -and $Action -in @("allow","ignore")) -and
-          -not ($Command -eq "rules" -and $Action -eq "add") -and
+          -not ($Command -eq "rules" -and $Action -in @("add","variant")) -and
           -not ($Command -eq "rules" -and $Action -eq "test" -and @($Rest).Count -eq 1)) {
   $unexpected += @($Rest)
 }
@@ -784,6 +785,21 @@ switch ($Command) {
         $env:RIVIS_ACTIVE_PROJECT = $Project
         $env:RIVIS_RULE_CONFDIR = $ConfDir
         & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath rules add @addArgs
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      } finally {
+        [Environment]::SetEnvironmentVariable("RIVIS_ACTIVE_PROJECT", $previousProject)
+        [Environment]::SetEnvironmentVariable("RIVIS_RULE_CONFDIR", $previousConf)
+      }
+    } elseif ($subcommand -eq "variant") {
+      if (-not $Name -or @($Rest).Count -lt 2) { Die "usage: rules variant NAME add|use|rm VARIANT [file=PATH]" }
+      $python = Get-PythonCommand
+      $arguments = @("rules", "variant", $Name) + @($Rest)
+      $previousProject = [Environment]::GetEnvironmentVariable("RIVIS_ACTIVE_PROJECT")
+      $previousConf = [Environment]::GetEnvironmentVariable("RIVIS_RULE_CONFDIR")
+      try {
+        $env:RIVIS_ACTIVE_PROJECT = $Project
+        $env:RIVIS_RULE_CONFDIR = $ConfDir
+        & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath @arguments
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
       } finally {
         [Environment]::SetEnvironmentVariable("RIVIS_ACTIVE_PROJECT", $previousProject)

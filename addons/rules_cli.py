@@ -4,6 +4,7 @@
   rules_cli.py FILE rules on|off|show|rm NAME
   rules_cli.py FILE rules test URL [METHOD]     what each rule would do to this call (no traffic is sent)
   rules_cli.py FILE rules add NAME match=REGEX action=ACTION [key=value ...]
+  rules_cli.py FILE rules variant NAME add|use|rm VARIANT [file=PATH]
   rules_cli.py FILE rules edit
   rules_cli.py FILE mocks import-proxyman [PATH] [--dry-run]
   rules_cli.py FILE throttle off|lte|3g|edge|slow|<ms>ms[/<kbps>kbps] [match=REGEX] [loss=PCT]
@@ -350,6 +351,64 @@ def rules_cmd(path, args):
         return
     if cmd in ("allow-file", "disallow-file", "trusted-files"):
         return trust_cmd(path, cmd, args[1:])
+    if cmd == "variant":
+        if len(args) < 4 or len(args) > 5 or args[2] not in ("add", "use", "rm"):
+            die("usage: rules variant NAME add|use|rm VARIANT [file=PATH]")
+        r = find(cfg, args[1])
+        if r.get("action") != "map_local" or r.get("base"):
+            die("variants need a Map Local file rule")
+        action, name = args[2], args[3].strip()
+        if not name or len(name) > 64:
+            die("variant name must be 1..64 characters")
+        variants = r.get("variants") or [{"name": "Default", "file": r["file"],
+                                           "status": r.get("status", 200), "headers": r.get("headers", [])}]
+        selected = next((v for v in variants if v["name"] == name), None)
+        if action == "add":
+            if selected:
+                die("variant '%s' exists" % name)
+            if len(args) == 5:
+                if not args[4].startswith("file="):
+                    die("expected file=PATH")
+                new_file = os.path.abspath(os.path.expanduser(args[4][5:]))
+                if not os.path.isfile(new_file):
+                    die("file not found: %s" % new_file)
+            else:
+                from proxy_common import atomic_write_bytes
+                current = next((v for v in variants if v["name"] == r.get("active")), r)
+                source = os.path.expanduser(current["file"])
+                mock_dir = os.path.join(project_state(active_project(path)), "mocks")
+                os.makedirs(mock_dir, exist_ok=True)
+                stem = re.sub(r"[^A-Za-z0-9._-]", "-", r["name"] + "-" + name)[:55].strip(".") or "variant"
+                new_file = os.path.join(mock_dir, stem + ".json")
+                suffix = 2
+                while os.path.lexists(new_file):
+                    new_file = os.path.join(mock_dir, stem[:55] + "-" + str(suffix) + ".json")
+                    suffix += 1
+                with open(source, "rb") as fh:
+                    atomic_write_bytes(new_file, fh.read())
+            current = next((v for v in variants if v["name"] == r.get("active")), r)
+            variants.append({"name": name, "file": new_file, "status": current.get("status", r.get("status", 200)),
+                             "headers": current.get("headers", r.get("headers", []))})
+            r["active"] = name
+        elif action == "use":
+            if len(args) != 4 or not selected:
+                die("no such variant or unexpected file=PATH")
+            r["active"] = name
+        else:
+            if len(args) != 4 or not selected or len(variants) == 1:
+                die("cannot remove the last or an unknown variant")
+            variants.remove(selected)
+            if r.get("active", "Default") == name:
+                r["active"] = variants[0]["name"]
+        r["variants"] = variants
+        if action == "add" and len(args) == 5:
+            trust_local_files(path, {"file": new_file})
+        reason = proxy_rule_error(path, r)
+        if reason:
+            die("rule '%s' skipped by proxy: %s" % (r["name"], reason))
+        save(path, cfg)
+        print("%s: active variant %s" % (r["name"], r["active"]))
+        return
     if len(args) < 2:
         die("usage: rules %s NAME" % cmd)
     name = args[1]

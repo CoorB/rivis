@@ -258,6 +258,56 @@ class Ops(LiveCase):
         self.bad("mockfile_get", {"name": "ghost"}, "no rule")
         self.bad("mock", {"flow_id": "nope"}, "no longer")
 
+    def test_map_local_variants_select_saved_body_status_and_headers(self):
+        self.fetch("/json/small?variant=1")
+        fid = self.flow_id("variant=1")
+        name = self.panel.ok("mock", {"flow_id": fid})["name"]
+        self.widen_match(name, "/json/small")
+        self.panel.ok("mockvariant", {"name": name, "action": "add", "variant": "error"})
+        editor = self.panel.ok("mockfile_get", {"name": name})
+        self.assertEqual((editor["active"], editor["variants"]), ("error", ["Default", "error"]))
+        self.panel.ok("mockfile_put", {"name": name, "content": '{"failed":true}', "status": 503,
+                                       "headers": [["Content-Type", "application/json"], ["X-Variant", "error"]]})
+        response = wait_for(lambda: (lambda r: r if r.status == 503 else None)(self.fetch("/json/small")),
+                            8, 0.3, "active variant served")
+        self.assertEqual((response.json(), response.header("x-variant")), ({"failed": True}, "error"))
+        self.panel.ok("mockvariant", {"name": name, "action": "use", "variant": "Default"})
+        response = wait_for(lambda: (lambda r: r if r.status == 200 else None)(self.fetch("/json/small")),
+                            8, 0.3, "default variant served")
+        self.assertEqual(response.json(), SMALL_JSON)
+        self.panel.ok("mockvariant", {"name": name, "action": "rename", "variant": "error", "new_name": "empty"})
+        self.panel.ok("mockvariant", {"name": name, "action": "use", "variant": "empty"})
+        self.panel.ok("mockvariant", {"name": name, "action": "rm", "variant": "empty"})
+        self.assertEqual(self.panel.ok("mockfile_get", {"name": name})["active"], "Default")
+        self.bad("mockvariant", {"name": name, "action": "rm", "variant": "Default"}, "last")
+
+    def test_map_local_variant_from_call_and_every_file_is_confined(self):
+        self.fetch("/json/small?variant-call=1")
+        fid = self.flow_id("variant-call=1")
+        name = self.panel.ok("mock", {"flow_id": fid})["name"]
+        self.panel.ok("mock", {"flow_id": fid, "variant_name": "captured"})
+        rule = next(r for r in self.rules() if r["name"] == name)
+        self.assertEqual(rule["active"], "captured")
+        self.assertEqual(len(rule["variants"]), 2)
+        rule["variants"][0]["file"] = "/etc/hosts"
+        self.reset_state(rules=[rule])
+        skipped = wait_for(lambda: [x for x in self.panel.state()["skipped_rules"] if x["name"] == name],
+                           5, 0.2, "unsafe variant skipped")
+        self.assertIn("outside the project", skipped[0]["error"])
+
+    def test_map_local_variant_reference_keeps_a_shared_owned_mock_file(self):
+        self.fetch("/json/small?shared-variant=1")
+        name = self.panel.ok("mock", {"flow_id": self.flow_id("shared-variant=1")})["name"]
+        owned = next(r for r in self.rules() if r["name"] == name)["file"]
+        second = self.panel.ok("maplocal_add", {"host": "example.test", "path": "/other"})["name"]
+        cfg = self.inst.cfg()
+        rule = next(r for r in cfg["rules"] if r["name"] == second)
+        rule["variants"] = [{"name": "Default", "file": rule["file"]}, {"name": "shared", "file": owned}]
+        rule["active"] = "shared"
+        self.inst.write_cfg(cfg)
+        self.panel.ok("delete", {"name": name})
+        self.assertTrue(os.path.isfile(owned))
+
     def test_draft_mock_serves_nothing_until_save_and_delete_removes_its_file(self):
         # B-03: opening the editor and going Back must leave no active response or orphan mock file.
         path = "/json/small?draft=1"
