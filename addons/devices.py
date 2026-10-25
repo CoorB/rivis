@@ -144,6 +144,31 @@ def _android_records(state_root):
     return rec
 
 
+def ca_android_name(pem_path):
+    """The Android store's file name for the CA: <subject_hash_old>.0 (what `rivis android on` installs)."""
+    rc, out = _run(["openssl", "x509", "-inform", "PEM", "-subject_hash_old", "-noout", "-in", pem_path])
+    out = out.strip()
+    return out + ".0" if rc == 0 and re.fullmatch(r"[0-9a-f]{8}", out) else None
+
+
+def _system_wanted(state_root):
+    try:
+        with open(os.path.join(state_root, "android-system-ca")) as fh:
+            return {line.strip() for line in fh if line.strip()}
+    except OSError:
+        return set()
+
+
+def system_ca_present(adb, serial, name):
+    """Is the CA in this emulator's SYSTEM store on its current boot? addons/android/rivis_system_ca.sh records
+    "<boot id> <name>" after a verified injection; a restart changes the boot id (the tmpfs is gone by then)."""
+    if not name:
+        return False
+    _, out = _run([adb, "-s", serial, "shell", "cat /data/local/tmp/rivis-system-ca.boot; echo; cat /proc/sys/kernel/random/boot_id"])
+    lines = [x.strip() for x in out.splitlines() if x.strip()]
+    return len(lines) == 2 and lines[0] == "%s %s" % (lines[1], name)
+
+
 def avd_name(adb, serial, runner=None):
     """The AVD name of a running emulator. `adb emu avd name` sometimes answers empty right after a boot or a restart
     (R5B-01: the Devices tab then never matched the CLI's record and showed a set-up emulator as not set up), so retry
@@ -159,13 +184,14 @@ def avd_name(adb, serial, runner=None):
     return ""
 
 
-def android_devices(adb, want, state_root, proxy_port):
+def android_devices(adb, want, state_root, proxy_port, ca_name=None):
     if not adb:
         return None
     rc, out = _run([adb, "devices"])
     if rc != 0:
         return []
     records = _android_records(state_root)
+    system_wanted = _system_wanted(state_root)
     devices = []
     for line in out.splitlines():
         parts = line.split()
@@ -181,7 +207,10 @@ def android_devices(adb, want, state_root, proxy_port):
         devices.append({"id": s, "name": avd, "os": "Android %s" % release.strip(),
                         "play": btype.strip() == "user",       # Google Play images are 'user' builds: no adb root
                         "proxy": proxy, "proxy_ok": proxy == "10.0.2.2:%s" % proxy_port,
-                        "ca_ok": ca_ok, "ready": ca_ok and proxy == "10.0.2.2:%s" % proxy_port})
+                        "ca_ok": ca_ok, "ready": ca_ok and proxy == "10.0.2.2:%s" % proxy_port,
+                        # the system store (--system): asked for on this AVD, and present on its current boot
+                        "system_wanted": avd in system_wanted,
+                        "system_ok": bool(ca_ok and ca_name and system_ca_present(adb, s, ca_name))})
     return devices
 
 
@@ -219,6 +248,39 @@ def restore_android_proxy(adb, state_root, proxy_port):
         if now.strip() == target:
             restored.append((s, avd_name(adb, s)))
     return restored
+
+
+_SYSTEM_FAILED = {}         # serial → when putting the system store back last failed (retried after SYSTEM_RETRY)
+SYSTEM_RETRY = 600
+
+
+def restore_android_system_ca(adb, state_root, ca_name):
+    """The system store does not survive a restart. On an emulator with adb root (Google APIs image) that asked for it
+    (`android on --system`), put it back through the CLI's own tested path; a Google Play image cannot be rooted
+    after a normal start, so the Devices tab says it is gone instead. Returns [(serial, avd, ok)]."""
+    wanted = _system_wanted(state_root)
+    if not adb or not wanted or not ca_name:
+        return []
+    rc, out = _run([adb, "devices"])
+    if rc != 0:
+        return []
+    done = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or parts[1] != "device" or not SERIAL.match(parts[0]):
+            continue
+        s = parts[0]
+        avd = avd_name(adb, s)
+        if avd not in wanted or time.time() - _SYSTEM_FAILED.get(s, 0) < SYSTEM_RETRY or system_ca_present(adb, s, ca_name):
+            continue
+        _, btype = _run([adb, "-s", s, "shell", "getprop", "ro.build.type"])
+        if btype.strip() == "user":
+            continue
+        rc, _ = _run([CLI, "android", "on", "-s", s, "--system"], timeout=120)
+        if rc != 0:
+            _SYSTEM_FAILED[s] = time.time()
+        done.append((s, avd, rc == 0))
+    return done
 
 
 class Snapshot:
@@ -310,7 +372,7 @@ class Jobs:
         job["rc"], job["ended"] = p.returncode, time.time()
 
 
-def setup_argv(platform, target, consent=False):
+def setup_argv(platform, target, consent=False, system=False):
     """CLI command for one device or all of them. target: a UDID / emulator serial, or 'all'."""
     if platform == "ios":
         if target == "all":
@@ -322,7 +384,7 @@ def setup_argv(platform, target, consent=False):
         argv = [CLI, "android", "on"] + (["--all"] if target == "all" else ["-s", target])
         if target != "all" and not SERIAL.match(target or ""):
             raise ValueError("not an emulator serial")
-        return argv + (["--yes"] if consent else [])
+        return argv + (["--yes"] if consent else []) + (["--system"] if system else [])
     raise ValueError("platform must be ios or android")
 
 

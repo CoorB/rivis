@@ -507,6 +507,33 @@ class Commands(unittest.TestCase):
         self.bad("lan", "rm", "192.168.1.50", msg="not in the list")
         self.bad("lan", "allow", "127.0.0.1", msg="always allowed")
 
+    def test_android_system_store_parity(self):
+        """-System on a Google APIs (adb root) emulator: the CA in the system store too; off removes it again."""
+        emu = os.path.join(self.home, "emu")
+        os.makedirs(os.path.join(emu, "cacerts"))
+        for name, text in (("root", ""), ("avd", "Test_API_37")):
+            with open(os.path.join(emu, name), "w") as fh:
+                fh.write(text)
+        shim = os.path.join(self.home, "adbshim")
+        os.makedirs(shim)
+        os.symlink(os.path.join(harness.REPO, "tests", "fakes", "emulator_adb.py"), os.path.join(shim, "adb"))
+        env = dict(self.env, FAKE_EMU=emu, PATH=shim + os.pathsep + self.env["PATH"])
+        cmd = [PWSH, "-NoProfile", "-NonInteractive", "-File", os.path.join(harness.REPO, "rivis.ps1")]
+        cp = self.suite.run(cmd + ["android", "on", "-System"], home=self.home, env=env, timeout=120)
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertIn("also in the SYSTEM store", cp.stdout)
+        system = os.path.join(emu, "system")
+        self.assertEqual(len(os.listdir(system)), 1)
+        self.assertEqual(open(os.path.join(self.state, "android-system-ca")).read().split(), ["Test_API_37"])
+        cp = self.suite.run(cmd + ["android", "off"], home=self.home, env=env, timeout=120)
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertIn("CA removed from the system store", cp.stdout)
+        self.assertEqual(os.listdir(system), [])
+        open(os.path.join(emu, "system_fail"), "w").close()
+        cp = self.suite.run(cmd + ["android", "on", "-System"], home=self.home, env=env, timeout=120)
+        self.assertNotEqual(cp.returncode, 0)
+        self.assertIn("NOT in the system store", cp.stdout + cp.stderr)
+
     def test_scripts_new_list_on_off_rm(self):
         self.ok("scripts", "new", "hello", "-Lang", "py", "-Match", "/api")
         self.ok("scripts", "new", "jsone", "-Lang", "js")

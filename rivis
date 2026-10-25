@@ -63,7 +63,7 @@
 #   <cli> mocks import-proxyman [PATH] [--dry-run]  copy Proxyman Map Local rules and files into this project
 #   <cli> setup                            ios on --all + android on --all: every booted simulator and
 #                                 running emulator, in one go (each one is skipped if already done)
-#   <cli> android on|off [-s SERIAL | --all] [--manual] [--yes] [--strict] [--proxy-only]
+#   <cli> android on|off [-s SERIAL | --all] [--manual] [--yes] [--strict] [--proxy-only] [--system]
 #                                 CA + proxy on an emulator. Google APIs image (no Play Store): direct
 #                                 copy via adb root. Google Play image: drives the Settings screens itself,
 #                                 skips them when the emulator already trusts this CA (fingerprint check),
@@ -72,6 +72,10 @@
 #                                 Play-image setup without asking (scripts). The proxy is turned on only
 #                                 once the CA is verified (exit 2 = not done yet); --proxy-only turns it
 #                                 on anyway, for a CA installed by hand where Settings cannot be read
+#                                 --system: also put the CA in the emulator's SYSTEM store, for apps that
+#                                 trust only system certificates (a system CA does not bypass pinning).
+#                                 Google APIs image: via adb root; the running proxy puts it back after a
+#                                 restart. Google Play image: on the one-click Magisk boot, for that boot
 #   <cli> ios on|off [--udid UDID | --all] CA on a simulator (default: the booted one; --all: every booted one)
 #   <cli> net-reset [--dry-run|--auto]     clear stale local web/https/socks proxies on every network
 #                                         service — fixes "no internet after closing the proxy app"
@@ -1202,6 +1206,26 @@ avd_of() {   # avd_of SERIAL — the emulator's AVD name, or nothing
 }
 # Pilot 2026-10-21: "after a cold boot the proxy setting reverted". The AVDs `android on` pointed at this proxy are
 # listed here; the running proxy puts the setting back on a listed emulator that comes back without one. `off` unlists.
+# The system store (--system): a tmpfs over the image's store (+ the Conscrypt APEX on Android 14+), done by
+# addons/android/rivis_system_ca.sh as root. It never survives a restart; AVDs listed in android-system-ca get it back
+# from the running proxy when they have adb root (devices.restore_android_system_ca).
+android_system_mark() {   # android_system_mark SERIAL on|off
+  local avd f="$STATE_ROOT/android-system-ca"; avd=$(avd_of "$1"); [ -n "$avd" ] || return 0
+  { grep -vxF "$avd" "$f" 2>/dev/null; if [ "$2" = on ]; then printf '%s\n' "$avd"; fi; } > "$f.tmp" && mv "$f.tmp" "$f"
+}
+android_system_ca() {   # android_system_ca SERIAL inject|remove|status — prints the script's last line, 0 when it says ok/removed/present
+  local s="$1" what="$2" h out; h=$(ca_hash) || return 1
+  "$ADB" -s "$s" push "$SCRIPT_DIR/addons/android/rivis_system_ca.sh" /data/local/tmp/rivis_system_ca.sh >/dev/null 2>&1 || return 1
+  if [ "$what" = inject ]; then
+    "$ADB" -s "$s" push "$CA_PEM" /data/local/tmp/rivis-sys-ca.0 >/dev/null 2>&1 || return 1
+    out=$("$ADB" -s "$s" shell sh /data/local/tmp/rivis_system_ca.sh inject /data/local/tmp/rivis-sys-ca.0 "$h.0" 2>&1 | tr -d '\r' | tail -1)
+  else
+    out=$("$ADB" -s "$s" shell sh /data/local/tmp/rivis_system_ca.sh "$what" "$h.0" 2>&1 | tr -d '\r' | tail -1)
+  fi
+  "$ADB" -s "$s" shell rm -f /data/local/tmp/rivis_system_ca.sh >/dev/null 2>&1
+  printf '%s\n' "$out"
+  case "$out" in "rivis-system-ca: ok"|"rivis-system-ca: removed"|"rivis-system-ca: present") return 0 ;; *) return 1 ;; esac
+}
 android_proxy_mark() {   # android_proxy_mark SERIAL on|off
   local avd f="$STATE_ROOT/android-proxy"; avd=$(avd_of "$1"); [ -n "$avd" ] || return 0
   { grep -vxF "$avd" "$f" 2>/dev/null; if [ "$2" = on ]; then printf '%s\n' "$avd"; fi; } > "$f.tmp" && mv "$f.tmp" "$f"
@@ -1291,21 +1315,23 @@ ui_remove_ca() {   # prints "REMOVED KEPT": user-store "mitmproxy" entries remov
 
 cmd_android() {
   local action="${1:-}"; shift || true
-  local auto_ui=1 all=0 consent="" strict="" proxy_only=0
+  local auto_ui=1 all=0 consent="" strict="" proxy_only=0 system=0
   while [ $# -gt 0 ]; do case "$1" in
     -s) [ $# -ge 2 ] || die "android -s needs a serial"; SERIAL="$2"; shift ;; --all) all=1 ;; --manual) auto_ui=0 ;; --yes) consent=--yes ;;
     --proxy-only) proxy_only=1 ;;                   # CA installed by hand where Rivis cannot read Settings: proxy anyway
     --strict) strict=--strict ;;                    # Play images: restart back to normal at once (two restarts)
+    --system) system=1 ;;                           # the system store too (apps that trust only system CAs)
     --auto-ui) ;;                                   # the default now; still accepted
     *) die "android: unknown option $1" ;; esac; shift; done
-  case "$action" in on|off) ;; *) die "usage: $CLI android on|off [-s SERIAL | --all] [--manual] [--strict]" ;; esac
+  case "$action" in on|off) ;; *) die "usage: $CLI android on|off [-s SERIAL | --all] [--manual] [--strict] [--system]" ;; esac
+  [ "$system" = 1 ] && [ -n "$strict" ] && die "android: --system and --strict do not go together (on a Google Play image the system store lasts only for the temporary boot)"
   [ -x "$ADB" ] || die "adb not found"
   if [ "$all" = 1 ]; then
     [ -z "${SERIAL:-}" ] || die "android: pass -s or --all, not both"
     local e list failed=""; list=$("$ADB" devices | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
     [ -n "$list" ] || die "no running emulator (adb devices)"
     for e in $list; do
-      ( SERIAL="$e"; cmd_android "$action" $([ "$auto_ui" = 0 ] && echo --manual) $([ "$proxy_only" = 1 ] && echo --proxy-only) $consent $strict ) \
+      ( SERIAL="$e"; cmd_android "$action" $([ "$auto_ui" = 0 ] && echo --manual) $([ "$proxy_only" = 1 ] && echo --proxy-only) $([ "$system" = 1 ] && echo --system) $consent $strict ) \
         || failed="$failed $e"
     done
     # review R7: one emulator not done means the command is not done (the Devices tab and scripts read the exit code)
@@ -1324,6 +1350,7 @@ cmd_android() {
   case "$action" in
     on)
       local ca_ok=0                    # set only once the CA is verified on the emulator (review R7)
+      local sys_ok=""                  # --system: 1 verified, 0 failed
       if have_root "$s"; then
         info "$s: choosing adb-root path (root shell available)"
         "$ADB" -s "$s" push "$CA_PEM" "/data/local/tmp/$h.0" >/dev/null 2>&1 || die "push failed"
@@ -1331,6 +1358,12 @@ cmd_android() {
           && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0" || die "install failed"
         ca_history_add
         info "$s: CA installed in user store ($h.0)"; android_record "$s"; ca_ok=1
+        if [ "$system" = 1 ]; then
+          local sys_out; sys_out=$(android_system_ca "$s" inject) && sys_ok=1 || sys_ok=0
+          if [ "$sys_ok" = 1 ]; then android_system_mark "$s" on
+            info "$s: CA also in the SYSTEM store ($h.0) — apps that trust only system certificates see it. It is put back after a restart while $PRODUCT_NAME runs"
+          else echo "!! $s: could not add the CA to the system store (${sys_out:-no answer}); the user store and proxy are still set" >&2; fi
+        fi
       else
         # Google Play images refuse `adb root`. The CA has to go in through Settings once.
         info "$s: root shell unavailable; checking the current CA and Magisk path"
@@ -1354,13 +1387,20 @@ cmd_android() {
           /usr/bin/python3 -I "$SCRIPT_DIR/addons/android_settings_timeout.py" "$limit" "$SCRIPT_DIR/rivis" "$s" 0 || check_rc=$?
           [ "$check_rc" = 124 ] && { info "$s: CA trust check timed out after ${limit} s; proxy left off"; return 124; }
         fi
-        if [ "$auto_ui" = 1 ] && [ "$check_rc" = 0 ]; then
+        local need_system=0
+        if [ "$system" = 1 ] && ! android_system_ca "$s" status >/dev/null; then need_system=1; fi
+        if [ "$need_system" = 1 ] && [ -z "$magisk_dir" ]; then
+          echo "!! $s: the system store on a Google Play image needs one-click setup (Magisk), which is not available here — install $PRODUCT_NAME from the release zip, or use a Google APIs (non-Play) emulator" >&2
+          need_system=0; sys_ok=0
+        fi
+        if [ "$auto_ui" = 1 ] && [ "$check_rc" = 0 ] && [ "$need_system" = 0 ]; then
           info "$s: already trusts this CA — nothing to install"; android_record "$s"; ca_ok=1
           "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
         elif [ "$auto_ui" = 1 ] && [ -n "$magisk_dir" ] \
             && info "$s: choosing one-click Magisk path ($magisk_dir)" \
-            && run_android_magisk "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent $strict; then
+            && run_android_magisk "$s" "$CA_PEM" "$h.0" "$magisk_dir" "$STATE_ROOT" $consent $strict $([ "$need_system" = 1 ] && echo --system); then
           android_record "$s"; ca_ok=1   # one-click Play-image path (Proxyman's Magisk approach); it verifies and reports
+          if [ "$need_system" = 1 ]; then android_system_ca "$s" status >/dev/null && sys_ok=1 || sys_ok=0; fi
         elif [ "$auto_ui" = 1 ] && info "$s: one-click Magisk setup unavailable or failed (see reason above); choosing Settings route" \
             && android_settings_route "$s" "$magisk_dir"; then
           info "$s: CA installed in user store via Settings (verified by fingerprint)"; android_record "$s"; ca_ok=1
@@ -1391,6 +1431,7 @@ cmd_android() {
       if [ -z "$(port_owner "$PORT")" ]; then
         info "WARNING: nothing listens on :$PORT yet — run '$CLI start' or the emulator has no internet"
       fi
+      if [ "$sys_ok" = 0 ]; then die "$s: --system: the CA is NOT in the system store (user store and proxy are set)"; fi
       ;;
     off)
       # proxy first: it is what cuts the emulator's network if left behind
@@ -1399,7 +1440,17 @@ cmd_android() {
         || die "$s: could not verify the cleared proxy"
       case "$now" in ":0"|null) info "$s: proxy cleared" ;; "") die "$s: empty proxy result — could not verify it was cleared" ;; *) die "$s: proxy still set ($now)" ;; esac
       android_proxy_mark "$s" off
+      android_system_mark "$s" off
       if have_root "$s"; then
+        # the system store: only our tmpfs, and only when the CA in it is one this workstation recorded (review R3)
+        local sys_fp sys_h; sys_h=$(ca_hash 2>/dev/null)
+        if [ -n "$sys_h" ]; then
+          sys_fp=$("$ADB" -s "$s" shell cat "/system/etc/security/cacerts/$sys_h.0" 2>/dev/null | tr -d '\r' | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 | tr -d :)
+          if [ -n "$sys_fp" ] && ca_history_field 1 | grep -qixF "$sys_fp"; then
+            local rm_out; rm_out=$(android_system_ca "$s" remove) && info "$s: CA removed from the system store" \
+              || echo "!! $s: could not remove the CA from the system store (${rm_out:-no answer}); a restart removes it" >&2
+          fi
+        fi
         # Every mitmproxy CA has the same subject, so another workstation's CA has the SAME file name (<hash>.0):
         # a file is removed only when its SHA-256 is one this workstation recorded (review R3).
         local hashes hh f fp want removed=0 kept=""; hashes=$(ca_history_field 2); want=$(ca_history_field 1)

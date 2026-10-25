@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-click CA install on a Google Play emulator (no `adb root`), the way Proxyman 6.14 does it, minus the root shell.
 #
-#   android_magisk.sh SERIAL CA_PEM CA_NAME MAGISK_DIR STATE_DIR [--yes] [--strict]
+#   android_magisk.sh SERIAL CA_PEM CA_NAME MAGISK_DIR STATE_DIR [--yes] [--strict] [--system]
 #   android_magisk.sh SERIAL CA_PEM CA_NAME MAGISK_DIR STATE_DIR --restore     (back to the stock boot now)
 #
 #   1. Magisk's own scripts/host_patch.sh patches a COPY of the AVD's stock ramdisk.img, on the emulator itself.
@@ -12,14 +12,17 @@
 #      it next starts normally (from Android Studio, or `<cli> android off`, which runs --restore); no snapshot of it
 #      is ever saved. --strict: cold-boot it again from the stock ramdisk right away (two restarts, 2–4 minutes).
 #      Either way the CA stays (it lives in userdata).
+#   --system: the service also puts the CA in the SYSTEM store (addons/android/rivis_system_ca.sh), for apps that trust
+#      only system certificates. That part lasts only for this temporary boot: it is gone after the next normal start.
 # The SDK system image and the AVD config are never written. Patched ramdisks are cached per (stock image, Magisk,
 # Rivis files, CA) hash under STATE_DIR, so a second emulator from the same image skips step 1.
 # Magisk files come from MAGISK_DIR (installed by install.sh) and are verified against addons/android/magisk.pins.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 SERIAL="$1" CA_PEM="$2" CA_NAME="$3" MAGISK_DIR="$4" STATE_DIR="$5"; shift 5
-YES=""; STRICT=0; RESTORE=0
-for a in "$@"; do case "$a" in --yes) YES=--yes ;; --strict) STRICT=1 ;; --restore) RESTORE=1 ;; *) echo "android: unknown option $a" >&2; exit 2 ;; esac; done
+YES=""; STRICT=0; RESTORE=0; SYSTEM=0
+for a in "$@"; do case "$a" in --yes) YES=--yes ;; --strict) STRICT=1 ;; --restore) RESTORE=1 ;; --system) SYSTEM=1 ;; *) echo "android: unknown option $a" >&2; exit 2 ;; esac; done
+[ "$SYSTEM" = 1 ] && [ "$STRICT" = 1 ] && { echo "android: --system and --strict do not go together (the system store lasts only for the temporary boot)" >&2; exit 2; }
 ADB="${ADB:-adb}"
 PINS="$HERE/android/magisk.pins"
 product() { /usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2]) or sys.argv[3])' "$HERE/../product.json" "$1" "$2" 2>/dev/null || echo "$2"; }
@@ -114,6 +117,8 @@ $(if [ "$STRICT" = 1 ]; then echo "  • '$AVD' restarts twice: once with that c
 else echo "  • '$AVD' restarts once, with that copy, where a one-shot service copies the certificate into the
     user store as root. About a minute; the emulator window closes and reopens.
   • It stays on that temporary boot until it next starts normally (or: $CLI_NAME android off -s $SERIAL)."; fi)
+$([ "$SYSTEM" = 1 ] && echo "  • The service also puts the certificate in the SYSTEM store, for this boot only (a normal restart
+    drops it; run android on --system again).")
   • Nothing else gets root (not adb shell, not apps). The SDK image and the AVD settings are not changed.
 Use a test AVD only: no personal Google account or data.
 EOF
@@ -125,7 +130,7 @@ fi
 
 # ---- 1+2. patched ramdisk (cached) --------------------------------------------------------------------------------
 ca_sha=$(sha "$CA_PEM")
-files_sha=$(cat "$HERE/android/rivis_ca.rc" "$HERE/android/rivis_ca.sh" "$HERE/android/rivis_inject.sh" | shasum -a 256 | awk '{print $1}')
+files_sha=$(cat "$HERE/android/rivis_ca.rc" "$HERE/android/rivis_ca.sh" "$HERE/android/rivis_inject.sh" "$HERE/android/rivis_system_ca.sh" | shasum -a 256 | awk '{print $1}')
 key=$(printf '%s %s %s %s' "$(sha "$STOCK")" "$(pin MAGISK_APK_SHA256)" "$files_sha" "$ca_sha" | shasum -a 256 | awk '{print $1}')
 PATCHED="$CACHE/$key.img"
 if [ -s "$PATCHED" ] && [ "$(sha "$PATCHED")" = "$(cat "$PATCHED.sha256" 2>/dev/null)" ]; then
@@ -138,7 +143,7 @@ else
   echo "$CA_NAME" > "$tmp/rivis_ca.name"
   W=/data/local/tmp/rivis-magisk
   sh_ "rm -rf $W && mkdir -p $W" >/dev/null
-  for f in "$tmp/busybox" "$HOST_PATCH" "$HERE/android/rivis_ca.rc" "$HERE/android/rivis_ca.sh" "$HERE/android/rivis_inject.sh" "$tmp/rivis_ca.name"; do
+  for f in "$tmp/busybox" "$HOST_PATCH" "$HERE/android/rivis_ca.rc" "$HERE/android/rivis_ca.sh" "$HERE/android/rivis_inject.sh" "$HERE/android/rivis_system_ca.sh" "$tmp/rivis_ca.name"; do
     "$ADB" -s "$SERIAL" push "$f" "$W/" >/dev/null 2>&1 || die "could not copy $(basename "$f") to the emulator"
   done
   "$ADB" -s "$SERIAL" push "$APK" "$W/magisk.apk" >/dev/null 2>&1 && "$ADB" -s "$SERIAL" push "$CA_PEM" "$W/rivis_ca.0" >/dev/null 2>&1 \
@@ -156,6 +161,9 @@ else
 fi
 
 # ---- 3. boot the copy once ----------------------------------------------------------------------------------------
+# `emu kill` stops the emulator at once: without a sync this request never reaches its disk (device pass 2026-10-23)
+if [ "$SYSTEM" = 1 ]; then sh_ "echo 1 > /data/local/tmp/rivis-ca.want-system && sync" >/dev/null
+else sh_ "rm -f /data/local/tmp/rivis-ca.want-system && sync" >/dev/null; fi
 info "restarting '$AVD' with the temporary ramdisk…"
 "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1 || die "the emulator did not accept the stop command"
 gone || die "the emulator did not stop within 60 seconds"
@@ -166,13 +174,18 @@ st=""; for i in $(seq 1 60); do st=$(sh_ cat /data/local/tmp/rivis-ca.status); [
 sh_ rm -f /data/local/tmp/rivis-ca.status >/dev/null
 
 # ---- 4. done, or back to stock (--strict / on failure) ---------------------------------------------------------------
-if [ "$STRICT" = 1 ] || [ "$st" != "ok $CA_NAME" ]; then
+case "$st" in "ok $CA_NAME"|"ok $CA_NAME system"|"ok $CA_NAME system-failed") ok_st=1 ;; *) ok_st=0 ;; esac
+if [ "$STRICT" = 1 ] || [ "$ok_st" = 0 ]; then
   info "restarting '$AVD' normally…"
   restore_stock
 fi
 case "$st" in
-  "ok $CA_NAME")
+  "ok $CA_NAME"|"ok $CA_NAME system"|"ok $CA_NAME system-failed")
     info "$SERIAL: CA installed in the user store (one-shot root service: $st)"
+    case "$st" in
+      *" system") info "$SERIAL: CA also in the SYSTEM store for this boot (apps that trust only system certificates); a normal restart drops it — run android on --system again" ;;
+      *" system-failed") echo "!! $SERIAL: the CA is in the user store, but adding it to the system store failed on this emulator" >&2 ;;
+    esac
     [ "$STRICT" = 1 ] || info "'$AVD' runs on the temporary setup boot until its next normal start (now: $CLI_NAME android off -s $SERIAL)" ;;
   "") die "the one-shot service did not report back — CA not confirmed. Retry, or: $CLI_NAME android on --manual" ;;
   *) die "the one-shot service failed ($st) — CA not installed. Retry, or: $CLI_NAME android on --manual" ;;

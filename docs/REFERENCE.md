@@ -118,7 +118,7 @@ rivis start [--project-only] [--insecure] [--all] [--no-ios] [--no-open]
 rivis stop | restart | ui | status | cert # status exits 0 when running, 3 when not (for scripts and CI)
 rivis browser [URL | --current] [--browser chrome|edge|chromium|brave] [--fresh] [--list]   # web apps, see below
 rivis ios on|off [--udid UDID | --all]     # --all: every booted simulator
-rivis android on|off [-s emulator-5554 | --all] [--manual] [--yes] [--strict] [--proxy-only]   # Play images: one restart, like Proxyman (--strict: back to normal at once, 2–4 min)
+rivis android on|off [-s emulator-5554 | --all] [--manual] [--yes] [--strict] [--proxy-only] [--system]   # Play images: one restart, like Proxyman (--strict: back to normal at once, 2–4 min)
 rivis setup                                          # every booted simulator + running emulator
 rivis rules list | on NAME | off NAME | show NAME | rm NAME | edit
 rivis rules test URL [METHOD]                        # what each rule would do to this call; sends nothing
@@ -213,6 +213,19 @@ rivis rules add patch-user match='/user$' action=json_patch set='user.name=PATCH
 exits with status 2 (not done), so no emulator is left with a proxy it cannot use. After installing the CA by
 hand where Rivis cannot read the emulator's Settings, `--proxy-only` turns the proxy on anyway. `android off`
 removes only CAs whose SHA-256 this workstation recorded, never another workstation's "mitmproxy" CA.
+
+**System certificate (`--system`).** Apps that target Android 7 or later trust only the *system* certificate store unless
+their build says otherwise, so with the user store alone their HTTPS fails (most release builds). `android on --system`
+(or **Add to system store** in Tools → Devices) also puts the CA in the emulator's system store, the way Proxyman,
+Charles and HTTP Toolkit do: a temporary layer over the image's own store (on Android 14 and later also inside the
+Conscrypt module, for every running app); the system image itself is never written. A system certificate does not
+bypass certificate pinning.
+- **Google APIs image** (adb root): immediate. A restart drops the layer; while Rivis runs it puts it back by itself
+  within about 15 seconds of the emulator's boot.
+- **Google Play image**: done by the one-click (Magisk) restart, for that boot only. After the emulator's next normal
+  start, the Devices tab says it is gone; add it again.
+- `android off` removes it (only this workstation's CA, as above); on a Play image the normal restart removes it.
+Tested on Android 13 and Android 17 (API 37) emulators, Google APIs and Google Play images.
 
 ### Phones and tablets on the Wi-Fi (`--lan`)
 

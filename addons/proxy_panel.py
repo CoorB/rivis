@@ -1734,6 +1734,13 @@ class ProxyPanel:
         return dict(snap if have else {"pending": True}, job=job, browsers=devices.browsers(),
                     browser_job=self._browser_jobs.summary())
 
+    def _ca_android_name(self):
+        pem = os.path.join(os.path.expanduser(ctx.options.confdir), "mitmproxy-ca-cert.pem")
+        key = (pem, os.path.getmtime(pem) if os.path.exists(pem) else 0)
+        if getattr(self, "_ca_name_key", None) != key:
+            self._ca_name_key, self._ca_name = key, devices.ca_android_name(pem)
+        return self._ca_name
+
     def _devices_check(self):
         want = devices.ca_sha256(os.path.join(os.path.expanduser(ctx.options.confdir), "mitmproxy-ca-cert.pem"))
         pins = os.path.join(HERE, "android", "magisk.pins")
@@ -1742,11 +1749,15 @@ class ProxyPanel:
             version = next((l.split("=", 1)[1].strip() for l in open(pins) if l.startswith("MAGISK_VERSION=")), "")
         except OSError:
             pass
-        magisk = os.environ.get("RIVIS_MAGISK_DIR") or os.path.join(os.path.dirname(os.path.dirname(HERE)), "magisk-" + version)
+        # the same places the CLI looks: next to an installed copy, or a source checkout's pilot mirror
+        parent = os.path.dirname(os.path.dirname(HERE))
+        magisk = os.environ.get("RIVIS_MAGISK_DIR") or next(
+            (d for d in (os.path.join(parent, "magisk-" + version), os.path.join(parent, "pilot-mirror", "magisk", version))
+             if os.path.isdir(d)), os.path.join(parent, "magisk-" + version))
         adb = devices.adb_path()
         ios, ios_error = devices.ios_status(want)
         return {"ios": ios, "ios_error": ios_error,
-                "android": devices.android_devices(adb, want, STATE_ROOT, self._proxy_port()),
+                "android": devices.android_devices(adb, want, STATE_ROOT, self._proxy_port(), self._ca_android_name()),
                 "magisk": bool(version) and os.path.isdir(magisk)}
 
     # ── actions ───────────────────────────────────────────────────────────────
@@ -1856,7 +1867,8 @@ class ProxyPanel:
             self._untrusted.clear()     # the device is being set up: decrypt again from its next connection
             self._tls_drops.clear()
             try:
-                argv = devices.setup_argv(a.get("platform"), str(a.get("target") or ""), bool(a.get("consent")))
+                argv = devices.setup_argv(a.get("platform"), str(a.get("target") or ""), bool(a.get("consent")),
+                                          bool(a.get("system")) and a.get("platform") == "android")
                 label = "%s %s" % ({"ios": "iOS", "android": "Android"}[a["platform"]], a.get("name") or a.get("target"))
                 return {"id": self._device_jobs.start(argv, label, a["platform"], str(a.get("target") or ""))}
             except (ValueError, KeyError, RuntimeError) as e:
@@ -2928,6 +2940,13 @@ class ProxyPanel:
             except Exception as e:       # never take the proxy down over an emulator
                 ctx.log.warn(f"proxy_panel: emulator proxy check failed ({type(e).__name__}: {e})")
                 continue
+            try:      # the system store (android on --system) is gone after every restart: put it back where adb root allows
+                for serial, avd, ok in await asyncio.to_thread(devices.restore_android_system_ca, devices.adb_path(),
+                                                               STATE_ROOT, self._ca_android_name()):
+                    ctx.log.info(f"proxy_panel: {serial} ({avd}) restarted: CA {'put back in' if ok else 'could NOT be put back in'} its system store")
+                    self._devices.invalidate()
+            except Exception as e:
+                ctx.log.warn(f"proxy_panel: emulator system-store check failed ({type(e).__name__}: {e})")
             try:
                 for serial, avd in restored:
                     ctx.log.info(f"proxy_panel: {serial} ({avd}) had lost its proxy setting; set it back to this proxy")

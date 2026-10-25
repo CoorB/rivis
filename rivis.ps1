@@ -35,8 +35,9 @@ system proxy, one CA per workstation, removed again with `off`.
   .\<cli>.ps1 breakpoint URL-REGEX [-Request|-Response] [-Method M] | off [NAME] | list
   .\<cli>.ps1 mock NAME URL-REGEX
   .\<cli>.ps1 mocks import-proxyman [PATH] [-DryRun]
-  .\<cli>.ps1 android on|off [-Serial emulator-5554 | -All] [-ProxyOnly]
+  .\<cli>.ps1 android on|off [-Serial emulator-5554 | -All] [-ProxyOnly] [-System]
                                             Play images: the CA goes in by hand, then `android on -ProxyOnly`
+                                            -System: also the emulator's SYSTEM store (Google APIs images, adb root)
   .\<cli>.ps1 setup                         configure every running Android emulator (iOS is unavailable on Windows)
   .\<cli>.ps1 net-reset [-DryRun] | status | cert
   .\<cli>.ps1 doctor [-Json] [-NoNet] [-FixSafe [-Yes]]
@@ -75,6 +76,7 @@ param(
   [switch]$FixSafe,
   [switch]$Yes,
   [switch]$ProxyOnly,
+  [switch]$System,
   [switch]$Fresh,
   [switch]$Current,
   [switch]$List,
@@ -517,6 +519,14 @@ function Set-AndroidProxyMark($adb, $serial, [bool]$on) {
   $avd = ((& $adb -s $serial emu avd name 2>$null) -replace "`r","" | Where-Object { $_ -and $_ -ne "OK" } | Select-Object -First 1)
   if (-not ($avd -match '^[A-Za-z0-9._-]+$')) { return }
   $f = Join-Path $StateRoot "android-proxy"
+  $list = @(if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f | Where-Object { $_ -and $_ -ne $avd } })
+  if ($on) { $list += $avd }
+  Set-Content -LiteralPath $f -Value $list -Encoding ascii
+}
+function Set-AndroidSystemMark($adb, $serial, [bool]$on) {   # AVDs that asked for the system store (android-system-ca)
+  $avd = ((& $adb -s $serial emu avd name 2>$null) -replace "`r","" | Where-Object { $_ -and $_ -ne "OK" } | Select-Object -First 1)
+  if (-not ($avd -match '^[A-Za-z0-9._-]+$')) { return }
+  $f = Join-Path $StateRoot "android-system-ca"
   $list = @(if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f | Where-Object { $_ -and $_ -ne $avd } })
   if ($on) { $list += $avd }
   Set-Content -LiteralPath $f -Value $list -Encoding ascii
@@ -1157,14 +1167,14 @@ switch ($Command) {
       if (-not $emulators.Count) { Die "no running emulator. Physical devices need a separate approval." }
       $failed = @()
       foreach ($emulator in $emulators) {   # every emulator gets its turn; any one not done fails the command (review R7)
-        if ($ProxyOnly) { & $PSCommandPath android $Action -Serial $emulator -Project $Project -ProxyOnly }
-        else { & $PSCommandPath android $Action -Serial $emulator -Project $Project }
+        $extra = @(); if ($ProxyOnly) { $extra += "-ProxyOnly" }; if ($System) { $extra += "-System" }
+        & $PSCommandPath android $Action -Serial $emulator -Project $Project @extra
         if ($LASTEXITCODE -ne 0) { $failed += $emulator }
       }
       if ($failed.Count) { Die "android ${Action}: not done on $($failed -join ' ') (see above)" }
       break
     }
-    $adb = Find-Adb; $s = Pick-Serial $adb
+    $adb = Find-Adb; $s = Pick-Serial $adb; $systemFailed = ""
     if ($Action -eq "on") { Ensure-Ca }
     # `off` must work even when mitmproxy or the CA file is gone
     $h = if (Test-Path $CaCer) { Get-CaHash } else { "" }; $dst = "/data/misc/user/0/cacerts-added/$h.0"
@@ -1178,7 +1188,16 @@ switch ($Command) {
         & $adb -s $s shell "mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/$h.0 $dst && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0"; Run "install CA"
         Add-CaHistory $h
         Info "${s}: CA installed in user store ($h.0)"
+        if ($System) {      # the system store too (apps that trust only system CAs): addons\android\rivis_system_ca.sh
+          & $adb -s $s push (Join-Path $PSScriptRoot "addons\android\rivis_system_ca.sh") /data/local/tmp/rivis_system_ca.sh | Out-Null; Run "push system CA script"
+          & $adb -s $s push $CaPem /data/local/tmp/rivis-sys-ca.0 | Out-Null; Run "push CA"
+          $sysOut = ((& $adb -s $s shell sh /data/local/tmp/rivis_system_ca.sh inject /data/local/tmp/rivis-sys-ca.0 "$h.0") -replace "`r","" | Select-Object -Last 1)
+          & $adb -s $s shell rm -f /data/local/tmp/rivis_system_ca.sh | Out-Null
+          if ($sysOut -ne "rivis-system-ca: ok") { $systemFailed = "$sysOut" }
+          else { Set-AndroidSystemMark $adb $s $true; Info "${s}: CA also in the SYSTEM store ($h.0); a restart drops it - run this again (or let $ProductName put it back on macOS)" }
+        }
       } else {
+        if ($System) { $systemFailed = "this Google Play image has no adb root; on Windows the system store needs a Google APIs image" }
         & $adb -s $s push $CaCer /sdcard/Download/proxy-ca.crt | Out-Null; Run "push CA (proxy NOT enabled)"
         Add-CaHistory $h
         Info "$s is a Google Play image (no adb root). CA pushed to Downloads. On the emulator:"
@@ -1199,13 +1218,29 @@ switch ($Command) {
       Set-AndroidProxyMark $adb $s $true
       Info "${s}: proxy -> 10.0.2.2:$Port. Run a *Debug* variant (release builds pin TLS)."
       if (-not (Port-Owner $Port)) { Info "WARNING: nothing listens on :$Port yet - run '.\${Cli}.ps1 start' or the emulator has no internet" }
+      if ($systemFailed) { Die "${s}: -System: the CA is NOT in the system store ($systemFailed); user store and proxy are set" }
     } elseif ($Action -eq "off") {
       & $adb -s $s shell settings put global http_proxy :0; Run "clear proxy"
       $now = ((& $adb -s $s shell settings get global http_proxy) -replace "`r","").Trim(); Run "verify cleared proxy"
       if (-not $now) { Die "${s}: empty proxy result - could not verify it was cleared" }
       if ($now -notin @(":0", "null")) { Die "${s}: proxy still set ($now)" }
       Set-AndroidProxyMark $adb $s $false
+      Set-AndroidSystemMark $adb $s $false
       Info "${s}: proxy cleared"
+      if ($root -and $h) {   # the system store: only our tmpfs, and only when its CA is one this workstation recorded (review R3)
+        $tmp = [IO.Path]::GetTempFileName(); $sha = ""
+        try {
+          ((& $adb -s $s shell cat "/system/etc/security/cacerts/$h.0") -join "`n") -replace "`r","" | Set-Content -LiteralPath $tmp -Encoding ascii
+          $sha = Get-CertSha256 $tmp
+        } catch { $sha = "" } finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
+        if ($sha -and ((Get-CaHistoryShas) -contains $sha)) {
+          & $adb -s $s push (Join-Path $PSScriptRoot "addons\android\rivis_system_ca.sh") /data/local/tmp/rivis_system_ca.sh | Out-Null
+          $rmOut = ((& $adb -s $s shell sh /data/local/tmp/rivis_system_ca.sh remove "$h.0") -replace "`r","" | Select-Object -Last 1)
+          & $adb -s $s shell rm -f /data/local/tmp/rivis_system_ca.sh | Out-Null
+          if ($rmOut -eq "rivis-system-ca: removed") { Info "${s}: CA removed from the system store" }
+          else { Info "${s}: could not remove the CA from the system store ($rmOut); a restart removes it" }
+        }
+      }
       if ($root) {
         # F-07: also the CAs of earlier regenerations (state root ca-history, shared with the bash edition)
         $hashes = @(@($h) + @(Get-CaHistoryHashes) | Where-Object { $_ -match '^[0-9a-fA-F]+$' } | Select-Object -Unique)

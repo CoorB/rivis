@@ -9,6 +9,9 @@
   api37           present = Android 17's Settings layout: two "mitmproxy" lines per list entry (organization + name) and
                   the dialog's buttons in the bottom 12% of the screen; opened: one line per certificate opened
   tmp/<name>      files pushed to /data/local/tmp (a root install copies them into cacerts/)
+  system/<h>.0    the SYSTEM store tmpfs that rivis_system_ca.sh adds (gone after a "reboot": a new boot_id)
+  boot_id         this boot's id (default "boot-1"); mark: what rivis_system_ca.sh recorded ("<boot id> <name>")
+  system_fail     present = rivis_system_ca.sh inject fails
   log             every call
 Only what `rivis android off` uses is implemented; anything else answers nothing, exit 0."""
 import os
@@ -128,6 +131,38 @@ elif cmd.startswith("shell [ -e /data/misc/user/0/cacerts-added/") or cmd.starts
     f = re.search(r"cacerts-added/(\S+)", cmd).group(1)
     there = os.path.exists(os.path.join(D, "cacerts", f))
     sys.exit(0 if there != ("!" in cmd) else 1)
+elif cmd == "shell getprop ro.build.type":
+    print("userdebug" if os.path.exists(os.path.join(D, "root")) else "user")
+elif cmd.startswith("shell sh /data/local/tmp/rivis_system_ca.sh "):
+    act, rest = args[3], args[4:]
+    boot = read("boot_id", "boot-1").strip()
+    sysd = os.path.join(D, "system")
+    if not os.path.exists(os.path.join(D, "root")):
+        if act == "status":
+            print("rivis-system-ca: present" if read("mark").strip() == "%s %s" % (boot, rest[0]) else "rivis-system-ca: absent")
+        else:
+            print("rivis-system-ca: fail not-root")
+    elif act == "inject":
+        if os.path.exists(os.path.join(D, "system_fail")):
+            print("rivis-system-ca: fail zygote-123")
+        else:
+            os.makedirs(sysd, exist_ok=True)
+            open(os.path.join(sysd, rest[1]), "w").write(read("tmp/" + os.path.basename(rest[0])))
+            open(os.path.join(D, "mark"), "w").write("%s %s" % (boot, rest[1]))
+            print("rivis-system-ca: ok")
+    elif act == "remove":
+        if os.path.exists(os.path.join(sysd, rest[0])):
+            os.remove(os.path.join(sysd, rest[0]))
+            print("rivis-system-ca: removed")
+        else:
+            print("rivis-system-ca: absent")
+    elif act == "status":
+        print("rivis-system-ca: present" if os.path.exists(os.path.join(sysd, rest[0])) else "rivis-system-ca: absent")
+elif cmd.startswith("shell cat /data/local/tmp/rivis-system-ca.boot"):
+    print(read("mark").strip())
+    print(read("boot_id", "boot-1").strip())
+elif cmd.startswith("shell cat /system/etc/security/cacerts/"):
+    sys.stdout.write(read("system/" + os.path.basename(args[-1])))
 elif cmd.startswith("shell rm -f"):
     for a in re.findall(r"/data/misc/user/0/cacerts-added/(\S+)", cmd):
         try:

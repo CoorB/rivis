@@ -214,7 +214,7 @@ class MagiskRestarts(MagiskFixture):
             shutil.copy(os.path.join(REAL_MAGISK, f), self.magisk)
         sha = lambda b: hashlib.sha256(b).hexdigest()
         here = os.path.join(harness.REPO, "addons", "android")
-        files = b"".join(open(os.path.join(here, f), "rb").read() for f in ("rivis_ca.rc", "rivis_ca.sh", "rivis_inject.sh"))
+        files = b"".join(open(os.path.join(here, f), "rb").read() for f in ("rivis_ca.rc", "rivis_ca.sh", "rivis_inject.sh", "rivis_system_ca.sh"))
         stock = open(os.path.join(self.root, "sdk", "system-images", "android-36", "google_apis_playstore", "arm64-v8a",
                                   "ramdisk.img"), "rb").read()
         key = sha(("%s %s %s %s" % (sha(stock), pin("MAGISK_APK_SHA256"), sha(files), sha(open(self.ca, "rb").read()))).encode())

@@ -1118,7 +1118,13 @@
         : platform === "ios" ? (d.ready ? "Trusts the Rivis certificate" : "Certificate not trusted yet")
         : !d.ca_ok ? (d.play ? "Google Play image — certificate not installed yet" : "Certificate not installed yet")
         : !d.proxy_ok ? "Certificate OK — proxy not pointing at Rivis" : "Certificate and proxy set";
-      return `<div class="row"><div class="n">${esc(d.name)} <span class="sub">${esc(d.os)}</span><div class="sub"${failedHere ? ' role="alert"' : ''}>${esc(detail)}</div></div>
+      // the system store (apps that trust only system certificates): Google APIs images via adb root, put back after a
+      // restart while Rivis runs; Google Play images on the one-click restart, for that boot only
+      const sys = platform !== "android" || !d.ca_ok || settingUp ? ""
+        : d.system_ok ? `<div class="sub" data-sysstate="${esc(d.id)}">System store: on${d.play ? " (until its next normal restart)" : ""}</div>`
+        : `<div class="sub" data-sysstate="${esc(d.id)}" title="Apps that trust only system certificates (most release builds) do not see Rivis without it. It does not bypass certificate pinning.">${d.system_wanted ? "System store: gone after a restart" + (d.play ? "" : " — coming back") : "System store: off"}</div>`
+          + (d.system_wanted && !d.play ? "" : `<button class="lnk" data-dsetup="android" data-system="1" data-id="${esc(d.id)}" data-name="${esc(d.name)}" data-play="${d.play ? 1 : ""}" ${busy ? "disabled" : ""}>${d.system_wanted ? "Add it again" : "Add to system store"}</button>`);
+      return `<div class="row"><div class="n">${esc(d.name)} <span class="sub">${esc(d.os)}</span><div class="sub"${failedHere ? ' role="alert"' : ''}>${esc(detail)}</div>${sys}</div>
         ${d.ready ? `<span class="ok" title="Ready">${ico("check")}</span>`
           : settingUp ? `<button class="b" disabled aria-busy="true">${esc(job && job.step ? job.step : "Setting up…")}</button>`
           : `<button class="b p" data-dsetup="${platform}" data-id="${esc(d.id)}" data-name="${esc(d.name)}" data-play="${d.play && !d.ca_ok ? 1 : ""}" ${busy ? "disabled" : ""}>Set up</button>`}</div>`;
@@ -1131,12 +1137,15 @@
     };
     const consent = devConsent ? `
       <div class="card on" style="cursor:default;display:block">
-        <b>One-time setup for ${esc(devConsent.name === "all" ? "these Google Play emulators" : devConsent.name)}</b>
+        <b>${devConsent.system ? "System store for" : "One-time setup for"} ${esc(devConsent.name === "all" ? "these Google Play emulators" : devConsent.name)}</b>
         <div class="sub" style="margin:6px 0">${dev.magisk ? `Google Play images refuse adb root, so Rivis installs its certificate the way Proxyman does:
           Magisk (official release, checksum verified) patches a temporary copy of the ramdisk and the emulator restarts once
           with it, where a one-shot service copies the certificate. About a minute; the window closes and reopens. It stays on
           that temporary boot until its next normal start (or <code>rivis android off</code>). Nothing else gets root, and the
-          SDK image and AVD settings are not changed.`
+          SDK image and AVD settings are not changed.${devConsent.system ? ` The system store copy lasts for that boot only: after the
+          emulator's next normal start, add it again.` : ""}`
+          : devConsent.system ? `Google Play images refuse adb root, and the system store needs Rivis's one-click setup (Magisk), which this
+          copy does not have: install Rivis from the release zip, or use a Google APIs emulator (no Play Store), where it is a direct copy.`
           : `Google Play images refuse adb root. This copy of Rivis has no Magisk, so it will drive the emulator's Settings screens
           to install the certificate instead — up to four minutes; hands off the emulator while it runs.`}
           Use test emulators only (no personal Google account).</div>
@@ -1166,11 +1175,11 @@
         .then(() => setTimeout(devRefresh, 1500))));
     const start = (b, consentGiven) => {
       devStarting = { platform: b.dataset.dsetup, target: b.dataset.id, at: Date.now() }; devConsent = null; renderDev(m);
-      return run("device_setup", { platform: b.dataset.dsetup, target: b.dataset.id, name: b.dataset.name, consent: consentGiven },
+      return run("device_setup", { platform: b.dataset.dsetup, target: b.dataset.id, name: b.dataset.name, consent: consentGiven, system: !!b.dataset.system },
         "Setup started").then((ok) => { if (!ok) devStarting = null; devRefresh(); devLoop(); });
     };
     m.querySelectorAll("[data-dsetup]").forEach((b) => (b.onclick = () => {
-      if (b.dataset.dsetup === "android" && b.dataset.play) { devConsent = { b, name: b.dataset.name }; renderDev(m); return; }
+      if (b.dataset.dsetup === "android" && b.dataset.play) { devConsent = { b, name: b.dataset.name, system: !!b.dataset.system }; renderDev(m); return; }
       start(b, false);
     }));
     if (devConsent) {
