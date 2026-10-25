@@ -969,6 +969,7 @@ class ProxyRules:
                                                        {"Content-Type": "text/plain; charset=utf-8"})
                     flow.metadata["proxy_local"] = True
                     return
+                flow.metadata.setdefault("proxy_original_url", flow.request.pretty_url)   # what the app asked for
                 flow.request.url = new
                 self._fired(flow, r, modified=False)
             else:

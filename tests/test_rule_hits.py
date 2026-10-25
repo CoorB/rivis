@@ -115,6 +115,17 @@ class RuleHits(LiveCase):
         self.assertTrue(rows["reversed"].get("inert"))
         self.assertEqual(doc["method"], "GET")
 
+    def test_rule_test_explains_a_map_remote_against_the_url_the_app_asked_for(self):
+        # the call in the list shows where Map Remote sent it; the test must still explain the rule that sent it there
+        self.reset_state(rules=[self.rule("to-echo", "map_remote", "/remote", replace="/remote", **{"with": "/echo"})])
+        self.fetch("/remote?mr=1")
+        flow = wait_for(lambda: self.inst.flow_for("/echo?mr=1"), 5, 0.2, "rewritten call listed")
+        doc = self.panel.ok("rule_test", {"flow_id": flow["id"]})
+        rows = {r["name"]: r for r in doc["rules"]}
+        self.assertTrue(rows["to-echo"]["fires"], rows["to-echo"])
+        self.assertIn("/remote?mr=1", doc["url"])
+        self.assertIn("/echo?mr=1", doc.get("sent_to", ""))
+
     def test_rule_test_on_an_unknown_call_is_a_clear_400(self):
         code, doc, raw = self.panel.post("rule_test", {"flow_id": "no-such-flow"})
         self.assertEqual(code, 400, raw)

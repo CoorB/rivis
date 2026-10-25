@@ -868,8 +868,13 @@ class ProxyPanel:
         except (AttributeError, KeyError):
             confdir = None
         state_dir = os.path.dirname(os.path.abspath(os.path.expanduser(self.rules_path)))
-        rows = explain_rules(cfg.get("rules", []), state_dir, f.request.pretty_url, f.request.method, confdir)
-        return {"url": f.request.pretty_url, "method": f.request.method, "rules": rows}
+        # a Map Remote already changed the listed URL: explain the rules against the URL the app asked for
+        url = f.metadata.get("proxy_original_url") or f.request.pretty_url
+        rows = explain_rules(cfg.get("rules", []), state_dir, url, f.request.method, confdir)
+        doc = {"url": url, "method": f.request.method, "rules": rows}
+        if url != f.request.pretty_url:
+            doc["sent_to"] = f.request.pretty_url
+        return doc
 
     def script_status(self):
         for addon in self._addons():

@@ -2622,7 +2622,7 @@
     const btn = `<div class="btns" style="margin-top:0"><button class="b" id="ruletest" ${id ? "" : "disabled"} title="${id ? "Explain what each rule would do to the selected call" : "Select a call in the list first"}">Test against the selected call</button>${id ? "" : '<span class="sub">select a call in the list first</span>'}</div>`;
     if (!ruleTest || ruleTest.flowId !== id) return btn;
     const t = ruleTest.result;
-    return btn + `<div class="ruletest" aria-live="polite"><div class="sub"><b>${esc(t.method)}</b> ${esc(t.url)}</div>` +
+    return btn + `<div class="ruletest" aria-live="polite"><div class="sub"><b>${esc(t.method)}</b> ${esc(t.url)}${t.sent_to ? " · sent to " + esc(t.sent_to) : ""}</div>` +
       (t.rules.length ? t.rules.map((x) => `<div class="sub ${x.fires ? "fires" : x.inert ? "warn" : ""}">${x.fires ? ico("check", "sm") + "<b>" + esc(x.name) + "</b> fires: " + esc(x.effect) : (x.inert ? ico("warn", "sm") : "· ") + "<b>" + esc(x.name) + "</b> does not fire: " + esc(x.reason)}</div>`).join("") : '<div class="sub">No rules.</div>') + "</div>";
   }
   function wireRuleTest(m) {
