@@ -59,11 +59,18 @@ run_one() {
       --json-out "$RES/$name.json" ${KEXPR:+-k "$KEXPR"} "$m" > "$RES/$name.log" 2>&1
   printf '  %-34s rc=%s\n' "$m" "$?"
 }
+# time budgets (startup, 5,000 calls, proxy pauses) measure Rivis, not the other test processes: they run one at a time
+# after the parallel pool
+TIMED=" perf/test_budgets.py perf/test_gc_pauses.py ui/test_scale_ui.py ui/test_new_ui_port.py "
+LATER=""
 for m in $SORTED; do                      # rolling pool (bash 3.2 has no `wait -n`)
+  case "$TIMED" in *" $m "*) LATER="$LATER $m"; continue ;; esac
+  case "$m" in perf/*) LATER="$LATER $m"; continue ;; esac
   while [ "$(jobs -r | wc -l | tr -d ' ')" -ge "$JOBS" ]; do sleep 0.5; done
   run_one "$m" &
 done
 wait
+for m in $LATER; do run_one "$m"; done
 echo "wall clock: $(( $(date +%s) - START )) s"
 $PY "$HERE/hermetic.py" report "$RES" "$RES/before.snap"
 RC=$?
