@@ -1,9 +1,12 @@
 """Rotating, redacted Rivis diagnostics independent of mitmweb's in-memory event log."""
 import asyncio
+import gc
 import importlib
+import json
 import logging
 import os
 import sys
+import time
 
 from mitmproxy import ctx
 
@@ -41,6 +44,11 @@ class ProxyOperability:
     def __init__(self):
         self.writer = None
         self._rotate_task = None
+        self._perf_file = None
+        self._gc_starts = {}
+        self._gc_callback = None
+        self._perf_responses = 0
+        self._perf_force_at = int(os.environ.get("RIVIS_PERF_FORCE_GEN2_AT", "0"))
 
     def load(self, loader):
         loader.add_option("proxy_log_dir", str, os.path.join(STATE_ROOT, "logs"), "directory for rotating Rivis logs")
@@ -58,6 +66,22 @@ class ProxyOperability:
         self._check_mitmweb_log()
         try:
             loop = asyncio.get_running_loop()
+            trace_path = os.environ.get("RIVIS_PERF_TRACE")
+            if trace_path:
+                self._perf_file = open(trace_path, "a", buffering=1)
+                def gc_event(phase, info):
+                    generation = info["generation"]
+                    if phase == "start":
+                        self._gc_starts[generation] = time.perf_counter_ns()
+                    else:
+                        end = time.perf_counter_ns()
+                        start = self._gc_starts.pop(generation, end)
+                        self._perf_file.write(json.dumps({"kind": "gc", "generation": generation,
+                                                          "start_ns": start, "end_ns": end}) + "\n")
+                self._gc_callback = gc_event
+                gc.callbacks.append(gc_event)
+                loop.set_debug(True)
+                loop.slow_callback_duration = 0.15
             self._rotate_task = loop.create_task(self._rotate_loop())
         except RuntimeError:
             pass
@@ -66,6 +90,12 @@ class ProxyOperability:
         while True:
             await asyncio.sleep(15)
             self._check_mitmweb_log()
+
+    def response(self, flow):
+        if self._perf_force_at:
+            self._perf_responses += 1
+            if self._perf_responses == self._perf_force_at:
+                gc.collect(2)
 
     def _check_mitmweb_log(self):
         try:
@@ -77,6 +107,10 @@ class ProxyOperability:
             pass
 
     def done(self):
+        if self._gc_callback in gc.callbacks:
+            gc.callbacks.remove(self._gc_callback)
+        if self._perf_file is not None:
+            self._perf_file.close()
         if self._rotate_task is not None:
             self._rotate_task.cancel()
         self._check_mitmweb_log()

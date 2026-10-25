@@ -3237,8 +3237,23 @@ class ProxyPanel:
                 await self._test_hold(op)
                 self.set_header("Content-Type", "application/json")
                 if op == "flows_since":
-                    self.write(json.dumps(impl(self).flows_since(self.get_query_argument("epoch", ""),
-                                                                 self.get_query_argument("cursor", ""))))
+                    # A full list can contain thousands of calls. Converting and encoding it in one
+                    # event-loop turn holds up unrelated proxied requests for hundreds of milliseconds.
+                    import asyncio
+                    from mitmproxy.tools.web.app import flow_to_json
+                    view = ctx.master.view
+                    feed = getattr(view, "_rivis_feed", None)
+                    if feed is None:
+                        feed = view._rivis_feed = FlowFeed(view)
+                    full, flows, removed = feed.since(self.get_query_argument("epoch", ""),
+                                                      self.get_query_argument("cursor", ""))
+                    head = {"epoch": feed.epoch, "cursor": feed.seq, "full": full, "removed": removed}
+                    self.write(json.dumps(head)[:-1] + ',"flows":[')
+                    for start in range(0, len(flows), 16):
+                        batch = flows[start:start + 16]
+                        self.write(("," if start else "") + ",".join(json.dumps(flow_to_json(f)) for f in batch))
+                        await asyncio.sleep(0)
+                    self.write("]}")
                     return
                 self.write(json.dumps(impl(self).state()))
 
