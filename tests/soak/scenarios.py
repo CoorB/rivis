@@ -241,7 +241,7 @@ class Scenarios:
         ui.wait(lambda: self.seen("/api/user-manager/client-api/v2/users/me?compose=%d" % n) >= 1, 8, "the composed call to reach the server")
         # save it under a name (the prompt is answered by the dialog handler), then delete it
         name = "soak-c%d" % n
-        self.s.dialog_text = name
+        self.s.answer_with(name)
         t1 = ui.now_ms()
         ui.click(ui.P("#csaveas"))
         ui.wait_toast(r"Saved " + name, t1)

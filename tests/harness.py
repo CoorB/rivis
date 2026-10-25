@@ -665,6 +665,21 @@ def skip_unless(cond, reason):
     return unittest.skipUnless(cond, reason)
 
 
+# The panel asks its questions inside the page (#askdlg), not with the browser's confirm()/prompt() (pilot 2026-10-21:
+# a browser that suppresses dialogs made Clear and Delete look dead). A browser test that used to accept every dialog
+# adds this init script instead: it answers each question "yes", typing window.__rivisAnswer into a question that asks
+# for text when the test has set it.
+PANEL_AUTO_ANSWER_JS = """setInterval(() => {
+  const r = document.querySelector('#proxy-panel-host'), d = r && r.shadowRoot && r.shadowRoot.querySelector('#askdlg.open');
+  const yes = d && d.querySelector('#ask-yes');
+  if (!yes || yes.dataset.autoAnswered) return;
+  yes.dataset.autoAnswered = '1';
+  const field = d.querySelector('#ask-in');
+  if (field && window.__rivisAnswer != null) field.value = window.__rivisAnswer;
+  yes.click();
+}, 50);"""
+
+
 EXPECTED_FAIL_NOTE = "expected failure — see tests/FOUND-BUGS.md"
 
 

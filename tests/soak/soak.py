@@ -242,6 +242,7 @@ class Soak:
         self.ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin="http://127.0.0.1:%d" % self.inst.web_port)
         self.ctx.add_init_script("try { localStorage.setItem('rivis-welcome', 'done') } catch (e) {}")
         self.ctx.add_init_script(health.INIT_JS)
+        self.ctx.add_init_script(harness.PANEL_AUTO_ANSWER_JS)      # the panel's own questions, answered yes
         if cfg.trace:
             self.ctx.tracing.start(screenshots=True, snapshots=os.environ.get("SOAK_TRACE_SNAPSHOTS", "0") == "1", sources=False)
         self.page = self.ctx.new_page()
@@ -262,6 +263,11 @@ class Soak:
         for i in range(8):                                  # the call list only exists once there is a call
             self.inst.fetch("http://backbase-edge-sit.localhost:%d/api/user-manager/client-api/v2/users/me?i=%d" % (self.up.http_port, i))
         self.open_page()
+
+    def answer_with(self, text):
+        """The text the next panel question that asks for one is answered with (Save as…)."""
+        self.dialog_text = text
+        self.page.evaluate("t => { window.__rivisAnswer = t; }", text)
 
     def _dialog(self, d):
         try:

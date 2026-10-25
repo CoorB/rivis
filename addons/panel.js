@@ -393,6 +393,8 @@
     .welcome h3 .mark { width: 26px; height: 26px; border-radius: 8px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; }
     .welcome h3 .mark svg { width: 16px; height: 16px; stroke-width: 2.2; }
     .welcome p { margin: 6px 0 12px; color: var(--rv-text-2); line-height: 1.5; }
+    #askdlg { width: min(480px, calc(100vw - var(--open-w, 0px) - 32px)); }
+    #askdlg input { width: 100%; box-sizing: border-box; margin: 4px 0 2px; }
     .emptylist { position: fixed; z-index: 1; left: 0; top: calc(var(--hb, 80px) + 30px + var(--strip-h, 0px)); width: calc(100vw - var(--open-w, 0px)); bottom: 30px; pointer-events: none; display: none; align-items: center; justify-content: center; padding: 16px; overflow: hidden; }   /* placed over the call list by placeEmptyList() */
     .emptylist.open { display: flex; }
     .emptylist .box { pointer-events: auto; width: min(660px, 100%); text-align: center; padding: 8px 12px; }
@@ -446,6 +448,7 @@
   <div class="pause" id="help"><div class="sheet" id="hsheet"></div></div>
   <div class="welcome" id="welcome" role="dialog" aria-label="Coming from Proxyman?"></div><div class="wscrim" id="wscrim"></div>
   <div class="welcome" id="opendlg" role="alertdialog" aria-label="Open a file"></div><div class="wscrim" id="opscrim"></div>
+  <div class="welcome" id="askdlg" role="alertdialog" aria-label="Question"></div><div class="wscrim" id="askscrim"></div>
   <div class="emptylist" id="emptylist"></div>
   <div class="toast" id="toast"></div>
   <div class="lostbar" id="lostbar" role="alert"></div>
@@ -489,7 +492,7 @@
     if (!(auto && typing) && !$(id).contains(root.activeElement)) focusInto($(id).querySelector(".sheet") || $(id), prefer);
   };
   const closeSheet = (id) => { const was = $(id).classList.contains("open"); $(id).classList.remove("open"); if (was) giveBack(id); else returnTo[id] = null; };
-  const topSheet = () => ["help", "pause", "welcome", "opendlg"].map($).find((x) => x.classList.contains("open")) || null;
+  const topSheet = () => ["askdlg", "help", "pause", "welcome", "opendlg"].map($).find((x) => x.classList.contains("open")) || null;
   const trapTab = (e, box) => {      // Tab / Shift+Tab move through box's controls only, wrapping at either end
     const list = focusables(box); if (!list.length) return;
     const i = list.indexOf(deepActive()), n = list.length;
@@ -535,6 +538,32 @@
     });
   };
   $("opscrim").onclick = () => { if (openAsk) openAsk(); };
+  // Pilot 2026-10-21 ("the delete/clear button doesn't work"): once someone ticks the browser's "Prevent this page from
+  // creating additional dialogs", confirm() and prompt() answer "no" at once without showing anything, so Clear and
+  // Delete looked dead. Every question is asked inside the panel instead. ask() resolves true/false; with
+  // opts.input (the starting text) it resolves the typed text, or null when cancelled; with opts.choices
+  // ([[value, label, "p"|"d"|""], …], the last one focused) it resolves the chosen value, or null for Cancel.
+  let askDone = null;
+  const ask = (message, opts = {}) => new Promise((resolve) => {
+    if (askDone) askDone(null);                               // one question at a time: a new one cancels the old
+    const field = opts.input !== undefined;
+    const done = (v) => { askDone = null; closeSheet("askdlg"); resolve(field || opts.choices ? v : v === true); };
+    askDone = done;
+    const [head, ...rest] = String(message).split("\n\n");
+    $("askdlg").innerHTML = `<h3>${esc(head)}</h3>
+      ${rest.length ? `<div class="wbody">${rest.map((x) => `<p>${esc(x).replace(/\n/g, "<br>")}</p>`).join("")}</div>` : ""}
+      ${field ? `<input type="text" id="ask-in" spellcheck="false" aria-label="${esc(head)}">` : ""}
+      <div class="btns wfoot" style="justify-content:flex-end"><button class="b" id="ask-no">${esc(opts.no || "Cancel")}</button>
+        ${opts.choices ? opts.choices.map(([v, label, cls], i) => `<button class="b ${cls || ""}" data-ask="${i}"${i === opts.choices.length - 1 ? ' id="ask-yes"' : ""}>${esc(label)}</button>`).join("")
+          : `<button class="b ${opts.danger ? "d" : "p"}" id="ask-yes">${esc(opts.yes || "OK")}</button>`}</div>`;
+    if (field) $("ask-in").value = opts.input || "";
+    openSheet("askdlg", field ? "#ask-in" : "#ask-yes");
+    if (opts.choices) $("askdlg").querySelectorAll("[data-ask]").forEach((b) => (b.onclick = () => { askDone = null; closeSheet("askdlg"); resolve(opts.choices[b.dataset.ask][0]); }));
+    else $("ask-yes").onclick = () => done(field ? $("ask-in").value : true);
+    $("ask-no").onclick = () => done(null);
+    if (field) $("ask-in").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); $("ask-yes").click(); } };
+  });
+  $("askscrim").onclick = () => { if (askDone) askDone(null); };
   if (window.fetch && !window.fetch._rivisOpen) {
     const origFetch = window.fetch;
     const wrapped = function (input, init) {
@@ -1146,7 +1175,7 @@
     const r = await run("export", { flow_id: id, fmt, mask });
     if (!r) return;
     try { await navigator.clipboard.writeText(r.text); toast(fmt === "url" ? "URL copied" : "cURL copied" + (mask ? " (secrets masked)" : " — contains secrets!")); }
-    catch (e) { prompt("Copy:", r.text); }
+    catch (e) { ask("Copy this text", { input: r.text, yes: "Done", no: "Close" }); }
   }
 
   // ───────────── Collections (record → replay) ─────────────
@@ -1183,7 +1212,7 @@
     $("cstrict").onchange = () => run("coll_strict", { strict: $("cstrict").checked }, $("cstrict").checked ? "Strict replay on" : "Strict replay off");
     $("savematch").onclick = () => run("coll_match", { record_match: $("smatch").value }, "Replay match saved");
     m.querySelectorAll("[data-ci]").forEach((cb) => (cb.onchange = () => run("coll_replay", { name: c.items[cb.dataset.ci].name, enabled: cb.checked }, cb.checked ? "Replaying " + c.items[cb.dataset.ci].name : "Replay off")));
-    m.querySelectorAll("[data-cdel]").forEach((b) => (b.onclick = () => { const n = c.items[b.dataset.cdel].name; if (confirm("Delete collection '" + n + "'?")) { if (collOpen === n) collOpen = null; run("coll_delete", { name: n }, "Deleted " + n); } }));
+    m.querySelectorAll("[data-cdel]").forEach((b) => (b.onclick = async () => { const n = c.items[b.dataset.cdel].name; if (await ask("Delete collection '" + n + "'?", { yes: "Delete", danger: true })) { if (collOpen === n) collOpen = null; run("coll_delete", { name: n }, "Deleted " + n); } }));
     m.querySelectorAll("[data-cexp]").forEach((b) => (b.onclick = () => downloadHar("coll_export", c.items[b.dataset.cexp].name, "chsec")));
     m.querySelectorAll("[data-cview]").forEach((b) => (b.onclick = () => { const n = c.items[b.dataset.cview].name; collOpen = collOpen === n ? null : n; render(); }));
     $("cimp").onclick = async () => {
@@ -1192,7 +1221,7 @@
       let har; try { har = JSON.parse(await file.text()); } catch (e) { return toast("Not a valid HAR (JSON) file", true); }
       const name = $("chn").value.trim() || file.name.replace(/\.har$|\.json$/i, "").replace(/[^A-Za-z0-9._-]/g, "-");
       const overwrite = c.items.some((x) => x.name === name);
-      if (overwrite && !confirm("A collection named '" + name + "' already exists. Replace it?\n\nIts recorded calls will be lost.")) return;
+      if (overwrite && !await ask("A collection named '" + name + "' already exists. Replace it?\n\nIts recorded calls will be lost.", { yes: "Replace", danger: true })) return;
       run("coll_import", { name, har, overwrite }, (x) => "Imported " + x.count + " calls into " + name + (x.skipped_count ? " — left out " + x.skipped_count + " (failed calls / WebSocket upgrades)" : ""));
     };
     if (collOpen) api("coll_entries", { name: collOpen }).then((r) => {
@@ -1241,7 +1270,7 @@
     ${info("By default a HAR export replaces Authorization, cookies, API keys, JWTs and fields such as password, otp, pin and token with <redacted>. Tick this only for an export that stays on this machine; it resets after each download.")}</label></div>`;
   async function downloadHar(op, name, boxId) {
     const box = $(boxId), withSecrets = !!(box && box.checked);
-    if (withSecrets && !confirm("This HAR will contain tokens, cookies and passwords in clear text.\n\nKeep it on this machine — never attach it to a ticket or chat. Continue?")) return;
+    if (withSecrets && !await ask("Export with secrets?\n\nThis HAR will contain tokens, cookies and passwords in clear text.\n\nKeep it on this machine — never attach it to a ticket or chat.", { yes: "Export with secrets", danger: true })) return;
     const r = await run(op, { name, include_secrets: withSecrets });
     if (!r) return;
     if (box) box.checked = false;
@@ -1269,23 +1298,24 @@
       : emptyState("sess", "No saved sessions yet", "Name the capture above and <b>Save session</b>. Open brings it back into the list; HAR exports it.")}
       ${harSecretsBox("shsec")}
       <p class="sub">Stored in ${esc(state.project_state)}/sessions ${info("Open adds the saved calls to the list (you can choose to replace it first). Per-call notes and bookmarks: use the Comment tab and the Mark button on a call — they are saved with the session.")}</p>`;
-    $("ssave").onclick = () => {
+    $("ssave").onclick = async () => {
       const name = $("sn").value.trim(), overwrite = ss.some((x) => x.name === name);
-      if (overwrite && !confirm("A session named '" + name + "' already exists. Replace it?\n\nThe earlier capture will be lost.")) return;
+      if (overwrite && !await ask("A session named '" + name + "' already exists. Replace it?\n\nThe earlier capture will be lost.", { yes: "Replace", danger: true })) return;
       run("sess_save", { name, note: $("snote").value, visible_only: $("svis").checked,
         search_filter: $("svis").checked ? storeSearch() : "", overwrite }, (x) => "Saved " + x.count + " calls"); // R7A-05: mitmweb's search is separate from its view
     };
-    m.querySelectorAll("[data-sload]").forEach((b) => (b.onclick = () => {
+    m.querySelectorAll("[data-sload]").forEach((b) => (b.onclick = async () => {
       const x = ss[b.dataset.sload];
-      // two plain questions, so Cancel can always mean "do nothing" (it used to mean "add to the list")
-      // R8D-17: say exactly what each button does
-      let replace = confirm("Open '" + x.name + "'.\n\nOK = REPLACE the current list with this session.\nCancel = don't replace; next you can ADD it to the list instead, or stop.");
-      if (!replace && !confirm("ADD the calls of '" + x.name + "' to the current list?\n\nOK = add them to the calls already in the list.\nCancel = do nothing.")) return;
+      // R8D-17: say exactly what each button does; Cancel always means "do nothing"
+      const how = await ask("Open session '" + x.name + "'?\n\nReplace the calls in the list with this session's, or add its calls to them.",
+                            { choices: [["add", "Add to the list", ""], ["replace", "Replace the list", "p"]] });
+      if (!how) return;
+      const replace = how === "replace";
       run("sess_load", { name: x.name, replace }, (r) => "Opened " + r.count + " calls");
     }));
-    m.querySelectorAll("[data-sdel]").forEach((b) => (b.onclick = () => { const x = ss[b.dataset.sdel]; if (confirm("Delete session '" + x.name + "'?")) run("sess_delete", { name: x.name }, "Deleted"); }));
-    m.querySelectorAll("[data-note]").forEach((d) => (d.onclick = () => {
-      const x = ss[d.dataset.note]; const note = prompt("Note for " + x.name, x.note || "");
+    m.querySelectorAll("[data-sdel]").forEach((b) => (b.onclick = async () => { const x = ss[b.dataset.sdel]; if (await ask("Delete session '" + x.name + "'?", { yes: "Delete", danger: true })) run("sess_delete", { name: x.name }, "Deleted"); }));
+    m.querySelectorAll("[data-note]").forEach((d) => (d.onclick = async () => {
+      const x = ss[d.dataset.note]; const note = await ask("Note for " + x.name, { input: x.note || "", yes: "Save note" });
       if (note !== null) run("sess_note", { name: x.name, note }, "Note saved");
     }));
     m.querySelectorAll("[data-shar]").forEach((b) => (b.onclick = () => downloadHar("sess_har", ss[b.dataset.shar].name, "shsec")));
@@ -1315,7 +1345,7 @@
     };
     m.querySelectorAll("input[data-si]").forEach((c) => (c.onchange = () => run("script_toggle", { file: scripts[c.dataset.si].file, enabled: c.checked }, c.checked ? "Script on" : "Script off")));
     m.querySelectorAll("[data-sedit]").forEach((b) => (b.onclick = () => openScript(scripts[b.dataset.sedit].file)));
-    m.querySelectorAll("[data-sdelete]").forEach((b) => (b.onclick = () => { const s = scripts[b.dataset.sdelete]; if (confirm("Delete script '" + s.name + "' and its source file?")) run("script_delete", { file: s.file }, "Deleted " + s.file); }));
+    m.querySelectorAll("[data-sdelete]").forEach((b) => (b.onclick = async () => { const s = scripts[b.dataset.sdelete]; if (await ask("Delete script '" + s.name + "' and its source file?", { yes: "Delete", danger: true })) run("script_delete", { file: s.file }, "Deleted " + s.file); }));
   }
 
   async function openScript(file) {
@@ -1679,7 +1709,7 @@
     $("strash").onclick = async () => {
       const n = (mwStore() && mwStore().getState().flows.list.length) || 0;
       if (!n) return toast("The list is already empty");
-      if (!confirm(`Clear all ${n} calls from the list?\n\nSaved sessions, rules and scripts are not affected.`)) return;
+      if (!await ask(`Clear all ${n} calls from the list?\n\nSaved sessions, rules and scripts are not affected.`, { yes: "Clear all", danger: true })) return;
       try { const r = await fetchT("./clear", { method: "POST", credentials: "same-origin", headers: { "X-XSRFToken": xsrf() } }, NORMAL_MS, "clear"); if (!r.ok) throw new Error("HTTP " + r.status); toast("List cleared"); }
       catch (err) { toast("Could not clear the list: " + err.message, true); }
     };
@@ -1804,7 +1834,7 @@
       else if (k === "host") run("focus_host", { host: focused ? null : hostName }, focused ? "Showing all hosts" : "Showing only " + hostName);
       else if (k === "src") setSource(srcOn ? null : (src.app ? src.key : deviceKey(src)));
       else if (k === "tls" || k === "tlson") run("tls_host", { flow_id: id, host: hostName, decrypt: k === "tlson" }, (r) => r.message);
-      else if (k === "del" && confirm("Delete this call from the list?")) {
+      else if (k === "del" && await ask("Delete this call from the list?", { yes: "Delete", danger: true })) {
         try { const r = await fetchT("./flows/" + id, { method: "DELETE", credentials: "same-origin", headers: { "X-XSRFToken": xsrf() } }, NORMAL_MS, "delete"); if (!r.ok) throw new Error("HTTP " + r.status); toast("Call deleted"); }
         catch (err) { toast("Could not delete: " + err.message, true); }
       }
@@ -1921,7 +1951,7 @@
       if (!r) return;
       const label = $(idp + "-t").selectedOptions[0].textContent;
       try { await navigator.clipboard.writeText(r.text); toast("Copied as " + label + (mask ? " (secrets masked)" : " — contains secrets!")); }
-      catch (e) { prompt("Copy:", r.text); }
+      catch (e) { ask("Copy this text", { input: r.text, yes: "Done", no: "Close" }); }
     };
   }
 
@@ -2103,19 +2133,20 @@
     const saveAs = async (name) => {
       if (!name) return;
       const exists = names.includes(name), current = name === draft.name;
-      if (exists && !current && !confirm("A saved request named '" + name + "' already exists. Replace it?")) return;
+      if (exists && !current && !await ask("A saved request named '" + name + "' already exists. Replace it?", { yes: "Replace", danger: true })) return;
       const r = await run("compose_save", { name, spec: specOf(), overwrite: exists }, "Saved " + name);
       if (r) { draft.name = name; drawerTypingDirty = false; render(); }
     };
-    $("csave").onclick = () => (draft.name ? saveAs(draft.name) : saveAs(prompt("Save as (letters, digits . _ -):", "")));
-    $("csaveas").onclick = () => saveAs(prompt("Save as (letters, digits . _ -):", draft.name || ""));
+    const askName = (start) => ask("Save as\n\nLetters, digits and . _ - only.", { input: start, yes: "Save" });
+    $("csave").onclick = async () => (draft.name ? saveAs(draft.name) : saveAs(await askName("")));
+    $("csaveas").onclick = async () => saveAs(await askName(draft.name || ""));
     $("cren").onclick = async () => {
-      const next = prompt("New name:", draft.name); if (!next || next === draft.name) return;
+      const next = await ask("New name", { input: draft.name, yes: "Rename" }); if (!next || next === draft.name) return;
       const r = await run("compose_rename", { old: draft.name, new: next }, "Renamed to " + next);
       if (r) { draft.name = next; render(); }
     };
     $("cdel").onclick = async () => {
-      if (!confirm("Delete saved request '" + draft.name + "'?")) return;
+      if (!await ask("Delete saved request '" + draft.name + "'?", { yes: "Delete", danger: true })) return;
       const r = await run("compose_delete", { name: draft.name }, "Deleted " + draft.name);
       if (r) { draft.name = ""; render(); }
     };
@@ -2211,10 +2242,10 @@
       if (done && c.checked) breakpointOn();
     }));
     m.querySelectorAll("[data-rbedit]").forEach((b) => (b.onclick = () => openRuleForm("bp", bps[b.dataset.rbedit])));
-    m.querySelectorAll("[data-rbdel]").forEach((b) => (b.onclick = () => { const n = bps[b.dataset.rbdel].name; if (confirm("Delete breakpoint '" + n + "'?")) run("bp_delete", { name: n }, "Breakpoint removed"); }));
+    m.querySelectorAll("[data-rbdel]").forEach((b) => (b.onclick = async () => { const n = bps[b.dataset.rbdel].name; if (await ask("Delete breakpoint '" + n + "'?", { yes: "Delete", danger: true })) run("bp_delete", { name: n }, "Breakpoint removed"); }));
     m.querySelectorAll("input[data-rsi]").forEach((c) => (c.onchange = () => run("script_toggle", { file: scripts[c.dataset.rsi].file, enabled: c.checked }, c.checked ? "Script on" : "Script off")));
     m.querySelectorAll("[data-rsedit]").forEach((b) => (b.onclick = () => openScript(scripts[b.dataset.rsedit].file)));
-    m.querySelectorAll("[data-rsdel]").forEach((b) => (b.onclick = () => { const x = scripts[b.dataset.rsdel]; if (confirm("Delete script '" + x.name + "' and its source file?")) run("script_delete", { file: x.file }, "Deleted " + x.file); }));
+    m.querySelectorAll("[data-rsdel]").forEach((b) => (b.onclick = async () => { const x = scripts[b.dataset.rsdel]; if (await ask("Delete script '" + x.name + "' and its source file?", { yes: "Delete", danger: true })) run("script_delete", { file: x.file }, "Deleted " + x.file); }));
     if ($("rnetedit")) { $("rnetedit").onclick = () => openRuleForm("throttle"); $("rnetoff").onclick = () => run("profile", { id: "off" }, "Network throttle off"); }
     if ($("rnocache")) $("rnocache").onchange = () => run("nocache", { on: $("rnocache").checked }, "No caching " + ($("rnocache").checked ? "on" : "off"));
   }
@@ -2336,9 +2367,9 @@
   function wireRuleRows(m) {
     m.querySelectorAll("input[data-i]").forEach((c) => (c.onchange = () =>
       run("toggle", { name: state.rules[c.dataset.i].name, enabled: c.checked }, c.checked ? "Rule on" : "Rule off")));
-    m.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => {
+    m.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
       const n = state.rules[b.dataset.del].name;
-      if (confirm("Delete rule '" + n + "'?")) run("delete", { name: n }, (r) => r.message || "Deleted " + n);
+      if (await ask("Delete rule '" + n + "'?", { yes: "Delete", danger: true })) run("delete", { name: n }, (r) => r.message || "Deleted " + n);
     }));
     m.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => {
       const r = state.rules[b.dataset.edit];
@@ -2415,7 +2446,7 @@
       // F-02: warn about invalid JSON only for a JSON mock — an HTML / XML / text mock is saved as it is
       const ctype = ((headers.find((h) => String(h[0]).toLowerCase() === "content-type") || [])[1] || "").toLowerCase();
       const isJson = ctype ? /json/.test(ctype) : /\.json$/i.test(e.file || "");
-      if (isJson && !jsonCheck(ta, $("jsonok")) && !confirm("This is not valid JSON. Save anyway?")) return;
+      if (isJson && !jsonCheck(ta, $("jsonok")) && !await ask("This is not valid JSON. Save anyway?", { yes: "Save anyway" })) return;
       // R6B-09: an unchanged body is not sent again (the server keeps the file's bytes), and Save does not redraw
       // the editor: re-sending and re-rendering 20 MB blocked the page for ~8 s per Save
       const body = { name: e.name, status, headers };
@@ -3019,7 +3050,8 @@
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Enter" && !typing && !inPanel && !topSheet()) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
     if (e.key.toLowerCase() === "r" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !typing && !inPanel && !topSheet()) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
     if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey && !typing) { e.preventDefault(); e.stopPropagation(); openHelp("keys"); return; }
-    if (e.key === "Escape" && $("help").classList.contains("open")) { e.stopPropagation(); closeHelp(); }
+    if (e.key === "Escape" && $("askdlg").classList.contains("open")) { e.stopPropagation(); if (askDone) askDone(null); }
+    else if (e.key === "Escape" && $("help").classList.contains("open")) { e.stopPropagation(); closeHelp(); }
     else if (e.key === "Escape" && $("opendlg").classList.contains("open")) { e.stopPropagation(); if (openAsk) openAsk(); }
     else if (e.key === "Escape" && $("welcome").classList.contains("open")) { e.stopPropagation(); closeWelcome(); }
   }, true);

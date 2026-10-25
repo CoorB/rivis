@@ -337,11 +337,11 @@ class Collections(LiveCase):
 
 class SessionOpenCopy(unittest.TestCase):
     def test_open_confirm_says_what_ok_and_cancel_do(self):
-        # R8D-17: "Cancel to choose 'add' instead, or to stop" left it unclear what Cancel does.
+        # R8D-17: "Cancel to choose 'add' instead, or to stop" left it unclear what Cancel does. Since 0.9.10 the question
+        # is asked in the panel with one button per action, and Cancel only cancels.
         panel = open(os.path.join(os.path.dirname(__file__), "..", "addons", "panel.js")).read()
-        self.assertIn("OK = REPLACE the current list with this session.", panel)
-        self.assertIn("Cancel = don't replace; next you can ADD it to the list instead, or stop.", panel)
-        self.assertIn("OK = add them to the calls already in the list.", panel)
+        self.assertIn('choices: [["add", "Add to the list", ""], ["replace", "Replace the list", "p"]]', panel)
+        self.assertIn("if (!how) return;", panel)
         self.assertNotIn("Cancel to choose 'add' instead, or to stop.", panel)
 
 

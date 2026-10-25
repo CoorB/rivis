@@ -15,6 +15,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import harness                          # noqa: E402
 from harness import wait_for            # noqa: E402
 from test_ui import PW_REASON, UiBase   # noqa: E402
 
@@ -23,7 +24,7 @@ from test_ui import PW_REASON, UiBase   # noqa: E402
 class RulesTabEveryType(UiBase):
     def setUp(self):
         super().setUp()
-        self.page.on("dialog", lambda d: d.accept())            # the "Delete …?" confirms
+        self.page.add_init_script(harness.PANEL_AUTO_ANSWER_JS)   # the "Delete …?" questions
 
     def tearDown(self):
         for p in self.panel.state()["paused"]:

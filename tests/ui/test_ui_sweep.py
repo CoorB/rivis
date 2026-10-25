@@ -13,6 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import harness                          # noqa: E402
 from harness import wait_for            # noqa: E402
 from test_ui import PW_REASON, TABS, UiBase, shot   # noqa: E402
 
@@ -31,7 +32,7 @@ class UiSweep(UiBase):
     def setUp(self):
         super().setUp()
         self.server_errors = []
-        self.page.on("dialog", lambda d: d.accept())
+        self.page.add_init_script(harness.PANEL_AUTO_ANSWER_JS)   # every "Delete …?" / "Clear …?" answered yes
         self.page.on("response", lambda r: self.server_errors.append("%s %s" % (r.status, r.url))
                      if "/proxy/api/" in r.url and r.status >= 500 else None)
 
