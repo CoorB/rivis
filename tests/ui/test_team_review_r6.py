@@ -147,7 +147,9 @@ class ReviewR6(UiBase):
         self.select("r6proto=1")
         self.P("#fab").click()
         self.P('button[data-t="call"]').click()
-        wait_for(lambda: bool(seen), 20, 0.2, "built-in protobuf request")
+        # Playwright's sync API delivers page.on() events only while Python is inside a Playwright call: a plain
+        # bool(seen) loop never saw requests sent after click() returned (failed ~1 in 6, even alone; 2026-10-23)
+        wait_for(lambda: self.page.wait_for_timeout(50) or bool(seen), 20, 0.2, "built-in protobuf request")
         self.assertTrue(all("full=1" in url for url in seen), seen)
         fid = self.inst.flow_for("r6proto=1")["id"]
         path = "/flows/%s/request/content/Protocol%%20Buffer.json" % fid
