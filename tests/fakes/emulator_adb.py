@@ -6,6 +6,8 @@
   screen          what Settings shows: list | detail:<n> | confirm:<n>
   proxy           the global http_proxy setting (":0" when absent)
   avd             the AVD name `emu avd name` answers (absent = it answers nothing, as right after a boot)
+  api37           present = Android 17's Settings layout: two "mitmproxy" lines per list entry (organization + name) and
+                  the dialog's buttons in the bottom 12% of the screen; opened: one line per certificate opened
   tmp/<name>      files pushed to /data/local/tmp (a root install copies them into cacerts/)
   log             every call
 Only what `rivis android off` uses is implemented; anything else answers nothing, exit 0."""
@@ -50,10 +52,13 @@ def screen_xml():
     s = read("screen", "list").strip()
     if s == "list":
         rows = [node("User", 100)] + [node("mitmproxy", 300 + i * ROW) for i, _ in enumerate(users())]
+        if os.path.exists(os.path.join(D, "api37")):
+            rows = [node("User", 100)] + [node("mitmproxy", 300 + 2 * i * ROW + k * ROW // 2) for i, _ in enumerate(users()) for k in (0, 1)]
     elif s.startswith("detail:"):
         n = users()[int(s.split(":")[1])]
-        rows = [node("mitmproxy", 200), node(fingerprint(os.path.join(D, "user", n)), 400), node("Remove", 1800),
-                node("OK", 2000)]
+        low = 2161 if os.path.exists(os.path.join(D, "api37")) else 1800
+        rows = [node("mitmproxy", 200), node(fingerprint(os.path.join(D, "user", n)), 400), node("Remove", low),
+                node("OK", low + 200 if low == 1800 else low + ROW // 2 + 1)]
     else:
         rows = [node("Remove this certificate?", 600), node("OK", 2000)]
     return "<hierarchy>" + "".join(rows) + "</hierarchy>"
@@ -104,7 +109,10 @@ elif cmd.startswith("shell input tap"):
     text, top = tapped(int(args[-1]))
     s = read("screen", "list").strip()
     if s == "list" and text == "mitmproxy":
-        setscreen("detail:%d" % ((top - 300) // ROW))
+        i = (top - 300) // (2 * ROW if os.path.exists(os.path.join(D, "api37")) else ROW)
+        setscreen("detail:%d" % i)
+        with open(os.path.join(D, "opened"), "a") as fh:
+            fh.write("%d\n" % i)
     elif s.startswith("detail:") and text == "Remove":
         setscreen("confirm:" + s.split(":")[1])
     elif s.startswith("detail:") and text == "OK":

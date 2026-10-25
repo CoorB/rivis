@@ -101,6 +101,9 @@ elif cmd.startswith('shell input tap'):
         set_screen('trusted')
 elif cmd == 'shell input keyevent KEYCODE_HOME':
     pass
+elif cmd == 'shell input keyevent KEYCODE_BACK':   # Back closes the certificate dialog, as on a real device
+    if read('screen', 'initial') == 'fingerprint':
+        set_screen('trusted')
 elif cmd.startswith('emu avd name'):
     print('Test_Play\nOK')
 sys.exit(0)

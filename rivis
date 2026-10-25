@@ -1076,6 +1076,36 @@ ui_tap() {   # ui_tap SERIAL REGEX [N] — tap the Nth match (default 1st)
   done
   return 1
 }
+# The list entries showing TEXT on the last dumped screen, one "x y" (centre of its first line) per entry. Android 17's
+# Settings shows a certificate as two "mitmproxy" lines (organization, name): lines that touch belong to one entry
+# (device pass 2026-10-23: the check opened the same certificate twice and ran past its 45 s limit).
+ui_entries() {   # ui_entries SERIAL TEXT
+  "$ADB" -s "$1" shell cat /sdcard/proxy-ui.xml 2>/dev/null | /usr/bin/python3 -I -c '
+import re, sys
+want, prev = sys.argv[1], None
+for n in re.findall(r"<node [^>]*>", sys.stdin.read()):
+    t = re.search(r"\btext=\"([^\"]*)\"", n); d = re.search(r"content-desc=\"([^\"]*)\"", n)
+    b = re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", n)
+    if not b or want not in ((t.group(1) if t else None), (d.group(1) if d else None)):
+        continue
+    x1, y1, x2, y2 = map(int, b.groups())
+    if prev is not None and abs(y1 - prev) <= 2:
+        prev = y2
+        continue                      # the second line of the same entry
+    prev = y2
+    print((x1 + x2) // 2, (y1 + y2) // 2)' "$2"
+}
+# A dialog button (OK, Uninstall): tap it where it is. ui_tap scrolls first when a match sits in the bottom 12% of the
+# screen (a list row under the nav bar), and Android 17's certificate dialog keeps its buttons there.
+ui_tap_now() {   # ui_tap_now SERIAL REGEX
+  local s="$1" b; "$ADB" -s "$s" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1
+  b=$("$ADB" -s "$s" shell cat /sdcard/proxy-ui.xml 2>/dev/null | tr '>' '\n' | grep -E "(text|content-desc)=\"($2)\"" | head -1 \
+      | grep -oE 'bounds="\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]"' | grep -oE '[0-9]+' | tr '\n' ' ')
+  [ -n "$b" ] || return 1
+  set -- $b
+  "$ADB" -s "$s" shell input tap $(( ($1+$3)/2 )) $(( ($2+$4)/2 )); sleep 2
+}
+ui_close_dialog() { "$ADB" -s "$1" shell input keyevent KEYCODE_BACK >/dev/null 2>&1; sleep 1; }
 ui_screen_has() { "$ADB" -s "$1" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1; "$ADB" -s "$1" shell cat /sdcard/proxy-ui.xml | grep -qE "text=\"($2)\""; }
 open_credentials() {   # Settings → Security → More security → Encryption & credentials
   # NEW_TASK|CLEAR_TASK: a stale screen left on top of the Settings task would hijack the flow
@@ -1211,14 +1241,13 @@ ui_has_current_ca() {   # does the user store hold THIS CA? (an older "mitmproxy
   # times (~3 s each) before giving up, which made a fresh Play-emulator setup spend ~50 s here (2026-10-16).
   ui_list_mentions "$s" "mitmproxy" || return 1
   # only the entries that list shows: asking ui_tap for one more scrolled 12 times (~60 s), past the 45 s limit (A07)
-  local total; total=$("$ADB" -s "$s" shell cat /sdcard/proxy-ui.xml 2>/dev/null | tr '>' '\n' | grep -cE '(text|content-desc)="mitmproxy"')
-  [ "$total" -ge 1 ] 2>/dev/null || total=1
-  [ "$total" -le 5 ] || total=5
-  for n in $(seq 1 "$total"); do
-    ui_tap "$s" "mitmproxy" "$n" || return 1          # no Nth entry: not found
-    if ui_screen_has "$s" "$fp"; then ui_tap "$s" "OK"; return 0; fi
-    ui_tap "$s" "OK" || "$ADB" -s "$s" shell input keyevent KEYCODE_BACK
-  done
+  local entries pt; entries=$(ui_entries "$s" "mitmproxy" | head -5)
+  [ -n "$entries" ] || return 1
+  while read -r pt; do
+    "$ADB" -s "$s" shell input tap $pt; sleep 2
+    if ui_screen_has "$s" "$fp"; then ui_close_dialog "$s"; return 0; fi
+    ui_close_dialog "$s"
+  done <<< "$entries"
   return 1
 }
 ui_user_store_clean() {   # true when Trusted credentials → User lists no "mitmproxy" entry at all
@@ -1242,15 +1271,18 @@ ui_remove_ca() {   # prints "REMOVED KEPT": user-store "mitmproxy" entries remov
   fi
   sleep 1
   ui_list_mentions "$s" "mitmproxy" || { echo "0 0"; return 0; }     # nothing there (and no 12-scroll search)
-  total=$("$ADB" -s "$s" shell cat /sdcard/proxy-ui.xml 2>/dev/null | tr '>' '\n' | grep -cE '(text|content-desc)="mitmproxy"')
+  local pt; total=$(ui_entries "$s" "mitmproxy" | wc -l | tr -d ' ')
   [ "$total" -le 8 ] 2>/dev/null || total=8
   for k in $(seq 1 "$total"); do
-    ui_tap "$s" "mitmproxy" "$i" || return 1
+    "$ADB" -s "$s" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1
+    pt=$(ui_entries "$s" "mitmproxy" | sed -n "${i}p")
+    [ -n "$pt" ] || break                          # fewer entries than counted: done
+    "$ADB" -s "$s" shell input tap $pt; sleep 2
     if ui_screen_has "$s" "$fps"; then
-      ui_tap "$s" "Uninstall|REMOVE|Remove" && ui_tap "$s" "OK" || return 1
+      ui_tap_now "$s" "Uninstall|UNINSTALL|REMOVE|Remove" && ui_tap_now "$s" "OK" || return 1
       n=$((n+1))                                   # the list shrank: the next entry is now number $i
     else
-      ui_tap "$s" "OK" || "$ADB" -s "$s" shell input keyevent KEYCODE_BACK
+      ui_close_dialog "$s"
       i=$((i+1))
     fi
   done
