@@ -64,6 +64,20 @@ class InstallerBase(unittest.TestCase):
 
 
 class DryRun(InstallerBase):
+    def test_intel_architecture_uses_the_pinned_x86_64_release(self):
+        fakebin = os.path.join(self.home, "fake-intel-bin")
+        os.makedirs(fakebin)
+        uname = os.path.join(fakebin, "uname")
+        with open(uname, "w") as fh:
+            fh.write('#!/bin/sh\n[ "$1" = "-m" ] && { echo x86_64; exit 0; }\nexec /usr/bin/uname "$@"\n')
+        os.chmod(uname, 0o755)
+        env = self.suite.env(self.home, extra={"PATH": fakebin + ":/usr/bin:/bin:/usr/sbin:/sbin"})
+        out = self.ok("--dry-run", "--allow-official", env=env).stdout
+        self.assertIn("mitmproxy-12.2.3-macos-x86_64.tar.gz", out)
+        self.assertIn("x86_64", out)
+        pins = open(os.path.join(harness.REPO, "addons", "android", "magisk.pins")).read()
+        self.assertNotIn("MACOS_ARM64", pins)
+
     def test_dry_run_changes_nothing_in_home(self):
         before = snapshot(self.home)
         for args in (["--dry-run"], ["--dry-run", "--yes", "--no-rc"], ["--dry-run", "--skip-local-capture"],

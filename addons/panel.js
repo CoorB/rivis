@@ -105,6 +105,9 @@
     set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* private window */ } },
   };
   const DOC = document.documentElement;
+  const columnStyle = document.createElement("style");
+  columnStyle.textContent = '.flow-table table[data-rivis-hide-path="1"] .col-path, .flow-table table[data-rivis-hide-timestamp="1"] .col-timestamp { display: none; }';
+  document.head.appendChild(columnStyle);      // column visibility is functional even when the optional skin is off
 
   const host = document.createElement("div");
   host.id = "proxy-panel-host";
@@ -1802,6 +1805,91 @@
     const w = t.getBoundingClientRect().width;
     if (w) { setAttr(DOC, "data-narrow", w < 520 ? "1" : null); setAttr(DOC, "data-wide", w > 640 ? "1" : null); setAttr(DOC, "data-midlist", w < 760 ? "1" : null); }
   };
+  const columnBuiltins = ["path", "method", "status", "size", "time", "timestamp", "duration", "content_type", "source_app", "comment"];
+  const columnNames = { path: "Path", method: "Method", status: "Status", size: "Size", time: "Time",
+    timestamp: "Start time", duration: "Duration", content_type: "Content type", source_app: "Source app", comment: "Comment" };
+  let columns = ["path", "method", "status", "size", "time", "timestamp"];
+  const columnLabel = (id) => columnNames[id] || id.replace(/^request:/, "Request: ").replace(/^response:/, "Response: ");
+  const columnValue = (id, flow) => {
+    if (!flow) return "";
+    const req = flow.request || {}, res = flow.response || {};
+    if (id === "duration") {
+      const end = res.timestamp_end || req.timestamp_end, start = req.timestamp_start;
+      return end && start ? `${Math.round((end - start) * 1000)} ms` : "";
+    }
+    if (id === "source_app") { const src = sourceOfFlow(flow); return src ? (src.app || deviceName(src)) : ""; }
+    const header = id === "content_type" ? "content-type" : id.split(":").slice(1).join(":").toLowerCase();
+    const message = id === "content_type" || id.startsWith("response:") ? res : req;
+    const pairs = message.headers || [];
+    if (Array.isArray(pairs)) return (pairs.find((p) => String(p[0]).toLowerCase() === header) || [null, ""])[1];
+    return Object.entries(pairs).find(([k]) => k.toLowerCase() === header)?.[1] || "";
+  };
+  const customColumn = (id) => !["path", "method", "status", "size", "time", "timestamp", "comment"].includes(id);
+  let columnBusy = false;
+  function syncColumns() {
+    if (columnBusy) return;
+    const table = document.querySelector(".flow-table table"), head = table && table.querySelector("thead tr");
+    if (!head) return;
+    columnBusy = true;
+    try {
+      // path and start time stay in mitmweb's list when unchecked (the newest-first sort clicks "Start time"): hidden, not removed
+      table.dataset.rivisHidePath = columns.includes("path") ? "0" : "1";
+      table.dataset.rivisHideTimestamp = columns.includes("timestamp") ? "0" : "1";
+      const order = ["tls", "icon", ...columns, "path", "timestamp", "quickactions"].filter((id, i, a) => a.indexOf(id) === i);
+      const syncRow = (row, isHead) => {
+        const tag = isHead ? "th" : "td", cells = [...row.children].filter((c) => c.tagName === tag.toUpperCase());
+        if (!cells.some((c) => c.classList.contains("col-path"))) return;
+        for (const old of cells.filter((c) => c.dataset.rvColumn && !columns.includes(c.dataset.rvColumn))) old.remove();
+        const flow = isHead ? null : flowOf(row);
+        for (const id of columns.filter(customColumn)) {
+          let cell = [...row.children].find((c) => c.dataset.rvColumn === id);
+          if (!cell) { cell = document.createElement(tag); cell.dataset.rvColumn = id; cell.className = "col-rivis-extra"; row.appendChild(cell); }
+          const value = isHead ? columnLabel(id) : columnValue(id, flow);
+          if (cell.textContent !== String(value || "")) cell.textContent = value || "";
+          if (!isHead) cell.title = String(value || "");
+        }
+        const desired = order.map((id) => [...row.children].find((c) => c.dataset.rvColumn === id || c.classList.contains("col-" + id))).filter(Boolean);
+        desired.forEach((cell, i) => { if (row.children[i] !== cell) row.insertBefore(cell, row.children[i] || null); });
+      };
+      syncRow(head, true);
+      table.querySelectorAll("tbody tr").forEach((row) => syncRow(row, false));
+      const last = head.querySelector("th.col-quickactions") || head.lastElementChild;
+      if (last && !last.querySelector("#rivis-columns")) {
+        const b = document.createElement("button"); b.id = "rivis-columns"; b.type = "button"; b.textContent = "+";
+        b.title = "Customize columns"; b.setAttribute("aria-label", "Customize columns");
+        b.onclick = (e) => { e.stopPropagation(); chooseColumns(); };
+        last.appendChild(b);
+      }
+    } finally { columnBusy = false; }
+  }
+  async function chooseColumns() {
+    const action = await ask("Customize columns", { choices: [["toggle", "Show or hide"], ["move", "Reorder"], ["header", "Add header"]] });
+    if (!action) return;
+    let next = columns.slice();
+    if (action === "header") {
+      const side = await ask("Which headers?", { choices: [["request", "Request"], ["response", "Response"]] });
+      if (!side) return;
+      const name = await ask("Header name", { input: "x-request-id", yes: "Add" });
+      if (name === null) return;
+      const id = side + ":" + name.trim().toLowerCase();
+      if (!/^[a-z0-9!#$%&'*+.^_`|~-]{1,100}$/.test(name.trim()) || next.includes(id)) { toast("Enter a unique HTTP header name", true); return; }
+      next.push(id);
+    } else {
+      const items = action === "toggle" ? [...columnBuiltins, ...next.filter((x) => !columnBuiltins.includes(x))] : next;
+      const id = await ask(action === "toggle" ? "Show or hide a column" : "Move a column", { choices: items.map((x) =>
+        [x, `${next.includes(x) ? "✓ " : ""}${columnLabel(x)}`]) });
+      if (!id) return;
+      if (action === "toggle") next = next.includes(id) ? next.filter((x) => x !== id) : [...next, id];
+      else {
+        const way = await ask("Move " + columnLabel(id), { choices: [["left", "Earlier"], ["right", "Later"]] });
+        const i = next.indexOf(id), j = i + (way === "left" ? -1 : 1);
+        if (!way || j < 0 || j >= next.length) return;
+        [next[i], next[j]] = [next[j], next[i]];
+      }
+    }
+    try { const r = await api("columns_set", { columns: next }); columns = r.columns; syncColumns(); }
+    catch (e) { toast(e.message, true); }
+  }
   window.addEventListener("resize", () => { sizeBuckets(); placeBars(); });
   // Rows the virtual list builds while scrolling must never paint unstyled (raw https:// URLs, no badges): style them
   // right here, before the browser paints. This used to be a 60 ms debounce, which never fired while rows kept changing
@@ -1809,7 +1897,7 @@
   let restQueued = 0;
   new MutationObserver(() => {
     tagRows();
-    if (!restQueued) restQueued = requestAnimationFrame(() => { restQueued = 0; tagCells(); sizeBuckets(); placeBars(); });
+    if (!restQueued) restQueued = requestAnimationFrame(() => { restQueued = 0; tagCells(); syncColumns(); sizeBuckets(); placeBars(); });
   }).observe(document.body, { childList: true, subtree: true, characterData: true });
 
 
@@ -2904,7 +2992,7 @@
     if (u.installing) html = `Updating ${esc(name)} to ${esc(u.installing.version)}… It restarts by itself in about a minute, and this page reloads.`;
     else if (u.available && LS.get("rivis-update-later", "") !== u.available.version)
       html = `${esc(name)} ${esc(u.available.version)} is available.<button class="lnk" id="upd-notes">What's new</button>` +
-        `<button class="b p" id="upd-go">Update and restart</button><button class="lnk" id="upd-later">Later</button>`;
+        `<button class="b p" id="upd-go">Update to ${esc(u.available.version)}</button><button class="lnk" id="upd-later">Later</button>`;
     if (bar.dataset.html !== html) {
       bar.dataset.html = html; bar.innerHTML = html;
       if ($("upd-go")) $("upd-go").onclick = () => run("update_install", {}, "Updating… it restarts by itself in about a minute");
@@ -2976,12 +3064,12 @@
       pollState = api("state", undefined, 4000);       // aborted at 4 s, so a hung proxy never holds a connection
       const s = await pollState.finally(() => { pollState = null; });
       missed = 0; lostSince = 0; showLost(false);
-      state = s; badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow(); showAndroidRestored(s);
+      state = s; columns = s.columns || columns; badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow(); showAndroidRestored(s);
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
       // the call list (megabytes at a few thousand calls) is for the Tools drawer's own tabs: skip it while the drawer is
       // closed or the page is hidden (row tags come from mitmweb's own rows), and flowsById() fetches on demand
       if ($("drawer").classList.contains("open") && !document.hidden) await refreshFlows().catch(() => {});   // its own 10 s budget; never stalls the heartbeat
-      tagCells(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
+      tagCells(); syncColumns(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
       if (!pausedOpen && waiting.length && !$("pause").classList.contains("open")) openPaused(waiting[0].id, true);
       if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) { pausedOpen = null; closeSheet("pause"); }
@@ -3215,20 +3303,20 @@
     if (u.pending) sub = "Checking…";
     else if (!u.configured) sub = "Updates are not set up in this build.";
     else if (!u.installed) sub = "This copy runs from a source checkout — update it with git.";
-    else if (!u.signed_in) {
+    else if (!u.signed_in && (u.login || (u.error && /private.*sign in/i.test(u.error)))) {     // sign-in is only the fallback for a private repo
       const l = u.login || {};
       if (l.status === "waiting") {
         sub = "On GitHub, enter this code and click Authorize:";
         extra = `<div class="devcode">${esc(l.user_code)}</div><div class="btns" style="margin:0"><a class="b p" href="${esc(l.uri)}" target="_blank" rel="noopener">Open GitHub</a>` +
           `<button class="b" id="upd-copy">Copy code</button></div>`;
       } else {
-        sub = l.status === "error" ? `Sign-in failed: ${esc(l.error || "")}` : `Sign in once with your GitHub account (read-only access to ${esc(u.repo || "the releases")}).`;
+        sub = l.status === "error" ? `Sign-in failed: ${esc(l.error || "")}` : `This release repository needs GitHub sign-in.`;
         act = `<button class="b p" id="upd-login" ${l.status === "starting" ? "disabled" : ""}>Sign in with GitHub</button>`;
       }
     } else {
       sub = u.error ? `Version ${esc(v)} · check failed: ${esc(u.error)}` : u.available ? `Version ${esc(v)} · <b>${esc(u.available.version)} is available</b>` : `Version ${esc(v)} · up to date`;
-      act = (u.available && !u.installing ? `<button class="b p" id="upd-go2">Update and restart</button>` : "") +
-        `<button class="b" id="upd-check">Check now</button><button class="b" id="upd-logout">Sign out</button>`;
+      act = (u.available && !u.installing ? `<button class="b p" id="upd-go2">Update to ${esc(u.available.version)}</button>` : "") +
+        `<button class="b" id="upd-check">Check now</button>${u.signed_in ? '<button class="b" id="upd-logout">Sign out</button>' : ''}`;
       if (u.available && u.available.notes) extra = `<div class="updnotes">${esc(u.available.notes)}</div>`;
     }
     return `<div class="set"><div><b>Updates</b><span class="sub">${sub}</span>${extra}</div><div class="btns" style="margin:0">${act}</div></div>`;

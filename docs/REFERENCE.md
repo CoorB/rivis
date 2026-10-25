@@ -73,9 +73,11 @@ Resolution order is `--project ID`, `$<PREFIX>_PROJECT`, `current-project`, then
 ├── current-project
 ├── web-token                         # default web port login
 ├── web-token-<web-port>              # other web ports keep separate logins
+├── ui-session.key                    # signs this install's browser session cookie (private, 0600)
 ├── profiles/<id>/{project.json,rules.example.json}
 └── projects/<id>/
     ├── rules.json
+    ├── columns.json                  # visible call columns, in display order
     ├── mocks/
     ├── scripts/
     ├── collections/
@@ -84,6 +86,16 @@ Resolution order is `--project ID`, `$<PREFIX>_PROJECT`, `current-project`, then
 
 `status` reports the project running on the selected proxy and web ports. If your current selection differs, it
 also shows the selected project separately.
+
+The **+** at the end of the call-list header opens **Customize columns**. Show, hide, or reorder Path, Method,
+Status, Size, Time, Start time, Duration, Content type, Source app, and Comment, or add a request or response header
+by its name. The choice is saved per project in `columns.json`.
+
+After opening `rivis ui` once, the same browser stays signed in across restarts, so `http://127.0.0.1:<web-port>/`
+can be bookmarked (keep the same web port). The session cookie is HttpOnly, SameSite=Strict, valid for a year, and signed
+with `~/.rivis/ui-session.key`, a random key private to this install. A new browser, or another install, still needs the
+one-time `rivis ui` link. To sign every browser out, delete that file and restart: a new key is made and the old cookies
+stop working. The panel stays on loopback and keeps the same Host, XSRF, and origin checks.
 
 On first use, the project's example rules are copied to its state directory. A first run also copies legacy
 `~/.neo-mitm/` state into the NEO project when needed; it never moves or deletes the original.
@@ -122,6 +134,10 @@ rivis mocks import-proxyman [PATH] [--dry-run]
 rivis net-reset [--dry-run]
 rivis update [check|install|login|logout|status]     # signed updates when configured; otherwise install the new release zip
 ```
+
+An installed copy checks public GitHub releases without a sign-in. `rivis update login` is only needed if the
+repository is private. Every update still needs a manifest signed by a key shipped in `addons/release-signers` and
+an installer whose SHA-256 matches that manifest; a build without a release key cannot offer updates.
 
 For `throttle`, `loss=` applies only to that command; a later profile uses its own packet loss.
 Each throttle command resets the scope to the selected project's `throttle_match` (all calls for `default`); pass `match=REGEX` to override it. `throttle off` also restores that project scope.

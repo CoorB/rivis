@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""In-app updates from the product's private GitHub releases (standard library only).
+"""In-app updates from the product's public GitHub releases (standard library only).
 
   updater.py status                 JSON: current version, configured?, signed in?
   updater.py login                  sign in once with GitHub's device flow (terminal)
@@ -9,7 +9,8 @@
   updater.py download               download + verify the newer installer zip; prints its path
 
 Trust model
-- Sign-in: a GitHub App owned by the org (product.json "github_app_client_id"), device flow, client id only — no secret
+- Public releases are fetched without a token. Private repositories fall back to a GitHub App owned by the org
+  (product.json "github_app_client_id"), device flow, client id only — no secret
   is shipped. The token can do no more than BOTH the app (Contents: read on one repo) and the person allow. It is kept
   in the macOS Keychain (never a file, never a command line) and refreshed without a secret (device-flow tokens).
 - Updates: a release must carry rivis-update.json + rivis-update.json.sig, signed with the release key whose public
@@ -71,7 +72,7 @@ def installed_copy():
 
 
 def configured():
-    return bool(REPO and CLIENT_ID and has_release_key())
+    return bool(REPO and has_release_key())
 
 
 def has_release_key():
@@ -219,13 +220,20 @@ def access_token():
 
 # ── releases ──────────────────────────────────────────────────────────────────────────────────────────────────────
 def _api(path, token, accept="application/vnd.github+json"):
-    code, raw = _http(API + path, headers={"Authorization": "Bearer " + token, "Accept": accept,
-                                          "X-GitHub-Api-Version": "2022-11-28"}, timeout=120)
-    if code == 401:
+    headers = {"Accept": accept, "X-GitHub-Api-Version": "2022-11-28"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    code, raw = _http(API + path, headers=headers, timeout=120)
+    if code == 401 and token:
         token_delete()
         raise UpdateError("the GitHub sign-in is no longer valid — sign in again")
+    if code in (403, 429) and b"rate limit" in raw[:2000].lower():
+        raise UpdateError("GitHub's rate limit for update checks is reached — try again in an hour"
+                          + ("" if token else ", or sign in with GitHub for a higher limit" if CLIENT_ID else ""))
     if code in (403, 404):
-        raise UpdateError("GitHub refused access to %s (%s): is the app installed on it and do you have access?" % (REPO, code))
+        if not token and CLIENT_ID:
+            raise UpdateError("this release repository is private — sign in with GitHub to check updates")
+        raise UpdateError("GitHub refused access to %s (%s)" % (REPO, code))
     if code != 200:
         raise UpdateError("GitHub answered %s for %s" % (code, path))
     return raw
@@ -249,10 +257,16 @@ def check():
     """-> {"current", "available": None | {"version", "notes", "zip", "sha256", "asset_id", "url"}}"""
     if not configured():
         raise UpdateError("updates are not set up in this build")
-    token = access_token()
-    if not token:
-        raise UpdateError("not signed in to GitHub")
-    releases = json.loads(_api("/repos/%s/releases?per_page=20" % REPO, token))
+    token = None
+    try:
+        releases = json.loads(_api("/repos/%s/releases?per_page=20" % REPO, None))
+    except UpdateError as e:
+        if "repository is private" not in str(e):
+            raise
+        token = access_token()
+        if not token:
+            raise
+        releases = json.loads(_api("/repos/%s/releases?per_page=20" % REPO, token))
     cur = current_version()
     for rel in releases:
         if rel.get("draft"):
@@ -271,7 +285,8 @@ def check():
             return {"current": cur, "available": None}
         return {"current": cur, "available": {"version": m["version"], "notes": str(m.get("notes", ""))[:4000],
                                               "zip": m["zip"], "sha256": m["sha256"],
-                                              "asset_id": assets[m["zip"]]["id"], "url": rel.get("html_url", "")}}
+                                              "asset_id": assets[m["zip"]]["id"], "url": rel.get("html_url", ""),
+                                              "private": bool(token)}}
     return {"current": cur, "available": None}
 
 
@@ -280,7 +295,7 @@ def download():
     info = check()["available"]
     if not info:
         raise UpdateError("already up to date")
-    token = access_token()
+    token = access_token() if info["private"] else None
     d = os.path.join(STATE, "updates", info["version"])
     os.makedirs(d, mode=0o700, exist_ok=True)
     data = _api("/repos/%s/releases/assets/%d" % (REPO, info["asset_id"]), token, "application/octet-stream")

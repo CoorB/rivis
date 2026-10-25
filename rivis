@@ -69,7 +69,7 @@
 #                                 sim/emulator trust, running state, host reachability, disk.
 #                                 --fix-safe does only safe, reversible fixes (asks y/N)
 #   <cli> bug-report [--output PATH]     create a redacted support bundle (no flows or tokens)
-#   <cli> update [check|install|login|logout|status]   signed in-app updates from the team's GitHub releases
+#   <cli> update [check|install|login|logout|status]   signed in-app updates from the public GitHub releases
 #   <cli> health                  is the running proxy answering, on the installed version? (exit 0 = yes)
 #   <cli> rollback [VERSION|--list]   go back to an earlier installed version and restart with the same options
 set -uo pipefail
@@ -644,8 +644,8 @@ warn_running_project() {
 }
 our_listeners() { local pid; for pid in $(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u); do our_mitmweb "$pid" && echo "$pid"; done; true; }
 # ───────────────────────── update ─────────────────────────
-# Signed updates from the team's private GitHub releases (addons/updater.py: device-flow sign-in, Keychain, signature +
-# SHA-256 checks). The install runs detached (addons/update_install.sh) because it stops and restarts this proxy.
+# Signed updates from the public GitHub releases (addons/updater.py: signature +
+# SHA-256 checks; device-flow sign-in only for a private repo). The install runs detached (addons/update_install.sh) because it stops and restarts this proxy.
 cmd_update() {
   local U=(/usr/bin/python3 -I "$SCRIPT_DIR/addons/updater.py") action="${1:-check}" out yes=0
   [ "${2:-}" = --yes ] && yes=1

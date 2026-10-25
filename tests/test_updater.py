@@ -33,6 +33,8 @@ class FakeGitHub:
         self.files = {}                 # asset name -> bytes
         self.token_grants = []          # bodies posted to /login/oauth/access_token
         self.pending = 1                # device polls answered "authorization_pending" before success
+        self.private = False
+        self.rate_limited = False
         outer = self
 
         class Storage(http.server.BaseHTTPRequestHandler):
@@ -77,8 +79,10 @@ class FakeGitHub:
 
             def do_GET(self):
                 outer.calls.append(("GET", self.path, {k.lower(): v for k, v in self.headers.items()}))
-                if self.headers.get("Authorization") not in ("Bearer tok-1", "Bearer tok-2"):
-                    return self.reply(401, {"message": "Bad credentials"})
+                if outer.rate_limited:
+                    return self.reply(403, {"message": "API rate limit exceeded for 203.0.113.9."})
+                if outer.private and self.headers.get("Authorization") not in ("Bearer tok-1", "Bearer tok-2"):
+                    return self.reply(404, {"message": "Not Found"})
                 if self.path.startswith("/repos/CoorB/rivis/releases?"):
                     names = sorted(outer.files)
                     return self.reply(200, [{"draft": False, "html_url": "https://example/rel",
@@ -175,7 +179,7 @@ class SignIn(UpdaterBase):
         self.assertFalse(os.path.exists(self.token_file))
 
     def test_an_expired_token_is_refreshed_without_a_secret(self):
-        self.sign_in(expires_at=time.time() - 10)
+        self.gh.private = True; self.sign_in(expires_at=time.time() - 10)
         self.publish()
         rc, j = self.upd("check")
         self.assertEqual(rc, 0, j)
@@ -186,11 +190,21 @@ class SignIn(UpdaterBase):
 
 
 class Check(UpdaterBase):
+    def test_public_release_needs_no_github_app_client_id(self):
+        path = os.path.join(self.tool, "product.json")
+        product = json.load(open(path)); product["github_app_client_id"] = ""
+        json.dump(product, open(path, "w"))
+        self.publish()
+        self.assertTrue(self.upd("status")[1]["configured"])
+        self.assertEqual(self.upd("check")[1]["available"]["version"], NEW)
+
     def test_a_newer_signed_release_is_offered_with_its_notes(self):
-        self.sign_in(); self.publish()
+        self.publish()
         rc, j = self.upd("check")
         self.assertEqual(rc, 0, j)
         self.assertEqual((j["current"], j["available"]["version"], j["available"]["notes"]), (self.current, NEW, "Faster everything."))
+        self.assertFalse(j["available"]["private"])
+        self.assertFalse(any(c[2].get("authorization") for c in self.gh.calls if c[0] == "GET"))
 
     def test_the_same_version_is_not_offered(self):
         self.sign_in(); self.publish(version=self.current)
@@ -201,6 +215,14 @@ class Check(UpdaterBase):
         rc, j = self.upd("check")
         self.assertEqual(rc, 1)
         self.assertIn("signature", j["error"])
+
+    def test_unsigned_public_release_is_never_downloaded(self):
+        self.gh.files = {"rivis-installer-9.9.9.zip": b"PK unsigned"}
+        self.assertIsNone(self.upd("check")[1]["available"])
+        rc, j = self.upd("download")
+        self.assertEqual(rc, 1)
+        self.assertIn("up to date", j["error"])
+        self.assertFalse(self.gh.blob_headers)
 
     def test_a_manifest_signed_by_another_key_is_refused(self):
         other = os.path.join(self.root, "other-key")
@@ -221,20 +243,38 @@ class Check(UpdaterBase):
         self.assertEqual([c for c in self.gh.calls if c[0] == "GET"], [], "it must not even ask GitHub")
 
     def test_not_signed_in_is_reported_and_nothing_is_fetched(self):
-        self.publish()
+        self.gh.private = True; self.publish()
         rc, j = self.upd("check")
-        self.assertEqual((rc, j["error"]), (1, "not signed in to GitHub"))
+        self.assertEqual(rc, 1)
+        self.assertIn("private", j["error"])
+
+    def test_anonymous_rate_limit_is_not_mistaken_for_a_private_repository(self):
+        self.publish(); self.gh.rate_limited = True
+        rc, j = self.upd("check")
+        self.assertEqual(rc, 1)
+        self.assertIn("rate limit", j["error"])
+        self.assertNotIn("private", j["error"])
+
+    def test_private_repository_uses_sign_in_only_after_anonymous_access_fails(self):
+        self.gh.private = True; self.sign_in(); self.publish()
+        rc, j = self.upd("check")
+        self.assertEqual(rc, 0, j)
+        self.assertTrue(j["available"]["private"])
+        calls = [c[2].get("authorization") for c in self.gh.calls if c[0] == "GET"]
+        self.assertEqual(calls[0], None)
+        self.assertIn("Bearer tok-1", calls)
 
 
 class Download(UpdaterBase):
     def test_the_installer_is_verified_and_the_token_never_reaches_the_storage_host(self):
-        self.sign_in(); self.publish(zip_bytes=b"PK real bytes")
+        self.publish(zip_bytes=b"PK real bytes")
         rc, j = self.upd("download")
         self.assertEqual(rc, 0, j)
         self.assertEqual(open(j["path"], "rb").read(), b"PK real bytes")
         self.assertEqual(stat.S_IMODE(os.stat(j["path"]).st_mode), 0o600)
         self.assertTrue(self.gh.blob_headers, "the download should come from the storage host")
         self.assertTrue(all("authorization" not in h for h in self.gh.blob_headers), self.gh.blob_headers)
+        self.assertFalse(any(c[2].get("authorization") for c in self.gh.calls if c[0] == "GET"))
 
     def test_a_wrong_sha256_is_refused_and_nothing_is_kept(self):
         self.sign_in(); self.publish(zip_bytes=b"PK real bytes", sha="0" * 64)

@@ -43,7 +43,7 @@ Your Mac's system proxy is never changed, and nothing is reachable from outside 
 
 ## Install
 
-Mac with Apple Silicon. No admin password, nothing else to download. Apple's Command Line Tools must be installed
+Mac, Apple silicon or Intel. No admin password, nothing else to download. Apple's Command Line Tools must be installed
 (they are if you have Xcode; otherwise the installer tells you to run `xcode-select --install` once).
 
 1. Quit Proxyman, Charles or any other proxy app (while it runs it takes the simulator's traffic). If it leaves your

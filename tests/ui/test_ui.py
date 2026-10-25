@@ -519,11 +519,31 @@ class UiSmoke(UiBase):
         bar = page.locator("#proxy-panel-host #updatebar")
         wait_for(lambda: bar.is_visible(), 10, 0.2, "update banner")
         self.assertIn("9.9.9 is available", bar.inner_text())
+        self.assertEqual(page.locator("#proxy-panel-host #upd-go").inner_text(), "Update to 9.9.9")
         page.locator("#proxy-panel-host #upd-notes").click()             # What's new -> Settings shows the notes
         wait_for(lambda: "Faster everything." in self.panel_text(), 5, 0.2, "notes in Settings")
         page.locator("#proxy-panel-host #hclose").click()
         page.locator("#proxy-panel-host #upd-go").click()
         wait_for(lambda: installs, 5, 0.1, "update_install called")
+        self.assertEqual(self.errors, [])
+
+    def test_an_update_needs_no_github_sign_in_for_a_public_release(self):
+        import json as _json
+        def patch(route):
+            resp = route.fetch()
+            doc = resp.json()
+            doc["update"] = {"configured": True, "installed": True, "signed_in": False, "repo": "CoorB/rivis",
+                             "available": {"version": "9.9.9", "notes": "", "url": "x", "private": False},
+                             "installing": None, "login": None, "error": None}
+            route.fulfill(response=resp, body=_json.dumps(doc), headers={**resp.headers, "content-type": "application/json"})
+        self.page.route("**/proxy/api/state", patch)
+        page = self.open()
+        page.locator("#proxy-panel-host #fab").click()
+        page.locator("#proxy-panel-host #gear").click()
+        row = page.locator("#proxy-panel-host #set-updates")
+        wait_for(lambda: "Update to 9.9.9" in row.inner_text(), 10, 0.2, "update offered without a sign-in")
+        self.assertNotIn("Sign in with GitHub", row.inner_text())
+        self.assertNotIn("Sign out", row.inner_text())
         self.assertEqual(self.errors, [])
 
     def test_later_hides_the_banner_for_that_version(self):

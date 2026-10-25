@@ -280,6 +280,10 @@ input[type="checkbox"] { accent-color: var(--rv-accent); }
 .flow-table tr.intercepted td.col-quickactions > div { visibility: visible; }
 .flow-table td.col-timestamp { font-variant-numeric: tabular-nums; font-family: var(--rv-mono); font-size: 12px; color: var(--rv-text-2); white-space: nowrap; }
 .flow-table td.col-timestamp, .flow-table th.col-timestamp { width: 186px; min-width: 186px !important; }   /* "2026-10-15 13:46:20.552" in full */
+.flow-table .col-rivis-extra { min-width: 110px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-table table[data-rivis-hide-path="1"] .col-path, .flow-table table[data-rivis-hide-timestamp="1"] .col-timestamp { display: none; }
+.flow-table #rivis-columns { width: 23px; height: 23px; border: 1px solid var(--rv-border); border-radius: 5px;
+  background: var(--rv-surface); color: var(--rv-text); cursor: pointer; font-size: 17px; line-height: 18px; }
 .flow-table .quickaction { color: var(--rv-text-3); }
 .flow-table .quickaction .fa { color: var(--rv-text-3) !important; }
 

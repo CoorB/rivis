@@ -12,6 +12,7 @@ hot-reloads it. If anything here fails it only logs a warning — capture and ru
 Tested on mitmproxy 12.2.3. Re-test after any mitmproxy upgrade (already a security-review step).
 """
 import json
+import hashlib
 import importlib
 import math
 import mimetypes
@@ -103,6 +104,23 @@ HAR_BODY_LIMIT = 4 * 1024 * 1024
 MOCK_BINARY_PREVIEW = 16 * 1024
 # panel ops whose work (disk read, HAR build, redaction) runs on a worker thread so live traffic and the panel keep flowing
 OFF_LOOP_OPS = ("sess_har",)
+COLUMN_BUILTINS = ("path", "method", "status", "size", "time", "timestamp", "duration", "content_type", "source_app", "comment")
+COLUMN_NATIVE = ("path", "method", "status", "size", "time", "timestamp", "comment")
+COLUMN_DEFAULT = ("path", "method", "status", "size", "time", "timestamp")
+
+
+def checked_columns(value):
+    if not isinstance(value, list) or len(value) > 24:
+        raise PanelError("columns must be a list of at most 24 names")
+    seen = set()
+    for name in value:
+        if not isinstance(name, str) or (name not in COLUMN_BUILTINS and not re.fullmatch(
+                r"(?:request|response):[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}", name)):
+            raise PanelError("invalid column name")
+        if name.lower() in seen:
+            raise PanelError("duplicate column name")
+        seen.add(name.lower())
+    return value
 
 
 def wildcard_regex(host, path, literal_query=False):
@@ -685,6 +703,7 @@ class ProxyPanel:
             "script_status": self.script_status(),
             "retention": self.retention_state(),
             "update": self.update_state(),
+            "columns": self.columns(),
             "version": self.product_version(),
             "system_proxy": self.system_proxy_state(),
             "untrusted": self.untrusted_state(),
@@ -843,7 +862,7 @@ class ProxyPanel:
     def _update_check(self):
         rc, st = self._updater("status")
         out = dict(st if rc == 0 else {}, available=None, error=None if rc == 0 else st.get("error"))
-        if rc == 0 and st.get("configured") and st.get("signed_in") and st.get("installed"):
+        if rc == 0 and st.get("configured") and st.get("installed"):
             rc, j = self._updater("check")
             if rc == 0:
                 out["available"] = j.get("available")
@@ -851,6 +870,34 @@ class ProxyPanel:
                 out["error"] = j.get("error")
                 out["signed_in"] = self._updater("status")[1].get("signed_in", False)   # a revoked sign-in is forgotten
         return out
+
+    @staticmethod
+    def session_secret():
+        path = os.path.join(STATE_ROOT, "ui-session.key")
+        try:
+            with open(path) as fh:
+                key = fh.read().strip()
+            if not re.fullmatch(r"[0-9a-f]{64}", key):
+                raise ValueError("bad key")
+        except (OSError, ValueError):
+            key = secrets.token_hex(32)
+            atomic_write_text(path, key + "\n", 0o600)
+        return hashlib.sha256(b"rivis-ui-session-v1\0" + key.encode()).digest()
+
+    def columns(self):
+        try:
+            with open(os.path.join(STATE_DIR, "columns.json")) as fh:
+                return checked_columns(json.load(fh)["columns"])
+        except (OSError, ValueError, KeyError, TypeError, PanelError):
+            return list(COLUMN_DEFAULT)
+
+    def _apply_columns(self):
+        cols = self.columns()
+        # path and start time always stay in mitmweb's list (the list sorts newest first by start time); panel.js hides them
+        native = (["tls", "icon", "path"] + [c for c in cols if c in COLUMN_NATIVE and c not in ("path", "timestamp")]
+                  + ["timestamp"])            # mitmweb adds the quick-actions column itself
+        if list(getattr(ctx.options, "web_columns", None) or []) != native:
+            ctx.options.update(web_columns=native)
 
     def _update_login_flow(self):
         import time
@@ -1659,6 +1706,11 @@ class ProxyPanel:
         if op == "update_check":
             self._update.invalidate()
             return {"update": self.update_state()}
+        if op == "columns_set":
+            cols = checked_columns(a.get("columns"))
+            atomic_json(os.path.join(STATE_DIR, "columns.json"), {"columns": cols})
+            self._apply_columns()
+            return {"columns": cols}
         if op == "update_login_start":
             import threading
             if not (self._update_login and self._update_login.get("status") == "waiting"):
@@ -2734,14 +2786,6 @@ class ProxyPanel:
         }
 
     # ── wiring into mitmweb ───────────────────────────────────────────────────
-    @staticmethod
-    def _show_start_time_column():
-        """The list opens newest first (panel.js sorts "Start time" descending), and mitmweb can only sort by a column
-        it shows. Set here, not in the launchers, so it also reaches an instance already running when this reloads."""
-        cols = list(getattr(ctx.options, "web_columns", None) or [])    # mitmweb-only option
-        if cols and "timestamp" not in cols:
-            ctx.options.update(web_columns=cols + ["timestamp"])
-
     def running(self):
         try:
             self.active_project = ctx.options.proxy_project
@@ -2757,7 +2801,7 @@ class ProxyPanel:
             self._start_android_watch()
             self._restore_view_choice(vf)
             self._register()
-            self._show_start_time_column()
+            self._apply_columns()
             from mitmproxy import contentviews
             contentviews.add(Utf8TextView())        # by name: a hot reload replaces it
         except Exception as e:   # never take mitmweb down
@@ -2796,6 +2840,10 @@ class ProxyPanel:
         app = getattr(ctx.master, "app", None)
         if app is None:
             return   # mitmdump / mitmproxy console: no web UI
+        # mitmweb picks a new cookie signing key on every start, and rivis a new web password, so a signed-in browser
+        # lost its session at each restart. Sign with a key private to this install (0600, in the state root) instead:
+        # the same browser stays signed in, another install's key signs nothing this one accepts.
+        app.settings["cookie_secret"] = self.session_secret()
         app._proxy_panel_impl = self          # hot reload: routes stay, implementation swaps
         if getattr(app, "_proxy_panel_routes", False):
             return
@@ -2812,12 +2860,12 @@ class ProxyPanel:
             return {f"http://{h}" for h in allowed_hosts() if ":" in h.rsplit("]", 1)[-1]}
 
         class ProxyIndex(webapp.IndexHandler):
-            # F-19: mitmweb's ?token= login would set a ~13-month cookie; keep the login to this browser session.
+            # The web password is private to this install. Its signed cookie can survive browser and proxy restarts.
             def set_signed_cookie(self, name, value, expires_days=None, **kw):
                 kw.pop("expires", None)
                 kw.setdefault("httponly", True)
                 kw.setdefault("samesite", "Strict")
-                return super().set_signed_cookie(name, value, expires_days=None, **kw)
+                return super().set_signed_cookie(name, value, expires_days=365, **kw)
 
             set_secure_cookie = set_signed_cookie
 
@@ -2971,7 +3019,7 @@ class ProxyPanel:
                     self.set_status(403); return
                 self.set_header("Cache-Control", "no-store")
                 self.set_header("Referrer-Policy", "no-referrer")
-                self.set_secure_cookie(f"mitmproxy-auth-{ctx.options.web_port}", "y", expires_days=None,
+                self.set_secure_cookie(f"mitmproxy-auth-{ctx.options.web_port}", "y", expires_days=365,
                                        httponly=True, samesite="Strict")
                 self.redirect("/")
 
