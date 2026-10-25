@@ -1443,6 +1443,7 @@
     if (line) { const m = line.textContent.match(/\b([1-5])\d\d\b/); setAttr(line, "data-s", m ? m[1] : null); }
     paintURLs();
     paintJSONBody();
+    syncBodyFind();
     footerLabels();
   }
   // Attributes only (never children), so it is cheap and does not re-trigger the row observer below.
@@ -1606,6 +1607,190 @@
       if (ranges.length) CSS.highlights.set(cssName[kind], new Highlight(...ranges));
       else CSS.highlights.delete(cssName[kind]);
     });
+  }
+  // Body tools live beside React's <pre>; ranges paint text without changing the content view it owns.
+  let bodyQuery = "", bodyTree = LS.get("rivis-body-tree", "0") === "1", bodyPre = null, bodyText = "", bodyMode = "", bodyMatches = [], bodyAt = -1;
+  const bodyHighlight = () => { if (window.CSS && CSS.highlights) { CSS.highlights.delete("rv-find"); CSS.highlights.delete("rv-find-now"); } };
+  function bodyRanges(el, query) {
+    if (!query || !window.Highlight || !window.CSS || !CSS.highlights) return [];
+    const nodes = [], walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) =>
+      n.parentElement.closest(".rv-tree-copy") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+    let full = "", node;
+    while ((node = walker.nextNode())) { nodes.push({ node, start: full.length }); full += node.nodeValue; }
+    const hits = [], lower = full.toLowerCase(), needle = query.toLowerCase();
+    for (let at = lower.indexOf(needle); at >= 0; at = lower.indexOf(needle, at + Math.max(1, needle.length))) {
+      const end = at + needle.length, first = nodes.findLast ? nodes.findLast((n) => n.start <= at) : nodes.filter((n) => n.start <= at).pop();
+      const last = nodes.findLast ? nodes.findLast((n) => n.start < end) : nodes.filter((n) => n.start < end).pop();
+      if (!first || !last) continue;
+      const range = document.createRange(); range.setStart(first.node, at - first.start); range.setEnd(last.node, end - last.start);
+      hits.push(range);
+    }
+    return hits;
+  }
+  function bodyShowMatch() {
+    bodyHighlight();
+    const view = document.querySelector(".flow-detail .contentview"), counter = view && view.querySelector(".rv-find-count");
+    if (counter) counter.textContent = bodyQuery ? `${bodyMatches.length ? bodyAt + 1 : 0} of ${bodyMatches.length}` : "";
+    if (!bodyMatches.length || !window.Highlight || !window.CSS || !CSS.highlights) return;
+    CSS.highlights.set("rv-find", new Highlight(...bodyMatches));
+    CSS.highlights.set("rv-find-now", new Highlight(bodyMatches[bodyAt]));
+    const range = bodyMatches[bodyAt], parent = range.startContainer.parentElement;
+    if (parent) {
+      for (let p = parent.closest("details"); p; p = p.parentElement && p.parentElement.closest("details")) p.open = true;
+      parent.scrollIntoView({ block: "center", inline: "nearest" });
+    }
+  }
+  function bodySearch(reset = true) {
+    const view = document.querySelector(".flow-detail .contentview"), pre = view && view.querySelector("pre"), tree = view && view.querySelector(".rv-tree");
+    bodyMatches = []; bodyHighlight();
+    if (!view || !pre || !bodyQuery) { bodyAt = -1; bodyShowMatch(); return; }
+    if (bodyTree && tree && !tree.hidden && tree.dataset.ready === "1") bodyTreeOpen(tree, bodyQuery);
+    bodyMatches = bodyRanges(bodyTree && tree && !tree.hidden && tree.dataset.ready === "1" ? tree : pre, bodyQuery);
+    if (bodyTree && tree && tree.dataset.ready === "1") bodyMatches.forEach((range) => {
+      for (let p = range.startContainer.parentElement.closest("details"); p; p = p.parentElement && p.parentElement.closest("details")) p.open = true;
+    });
+    bodyAt = bodyMatches.length ? (reset ? 0 : Math.min(Math.max(bodyAt, 0), bodyMatches.length - 1)) : -1;
+    bodyShowMatch();
+  }
+  function bodyStep(by) { if (!bodyMatches.length) return; bodyAt = (bodyAt + by + bodyMatches.length) % bodyMatches.length; bodyShowMatch(); }
+  const bodyPath = (base, key, array) => array ? `${base}[${key}]` : /^[A-Za-z_$][\w$]*$/.test(key) ? `${base}.${key}` : `${base}[${JSON.stringify(key)}]`;
+  function bodyTreeNode(value, key, path, array, depth) {
+    const branch = value !== null && typeof value === "object", kind = Array.isArray(value) ? "array" : "object";
+    const el = document.createElement(branch ? "details" : "div"); el.className = "rv-tree-node"; el.dataset.path = path;
+    if (branch && depth < 2 && Object.keys(value).length <= 100) el.open = true;     // a big array starts folded
+    const row = document.createElement(branch ? "summary" : "div"); row.className = "rv-tree-row";
+    if (key !== null) { const k = document.createElement("span"); k.className = "rv-tree-key"; k.textContent = array ? String(key) : key; row.appendChild(k); }
+    const val = document.createElement("span"); val.className = branch ? "rv-tree-count" : value === null || typeof value === "boolean" ? "rv-tree-lit" : typeof value === "number" ? "rv-tree-num" : "rv-tree-str";
+    val.textContent = branch ? `${Array.isArray(value) ? "[" : "{"}${Object.keys(value).length}${Array.isArray(value) ? "]" : "}"}` : JSON.stringify(value);
+    row.appendChild(val);
+    for (const label of ["Copy path", "Copy JSON"]) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "rv-tree-copy"; b.title = label; b.setAttribute("aria-label", `${label} ${path}`); b.textContent = label === "Copy path" ? "$" : "{}";
+      b.onclick = (e) => { e.stopPropagation(); e.preventDefault(); navigator.clipboard.writeText(label === "Copy path" ? path : JSON.stringify(value)).then(() => toast(label === "Copy path" ? "Path copied" : "JSON copied"), () => toast("Could not copy")); };
+      row.appendChild(b);
+    }
+    el.appendChild(row);
+    // children are built when their branch first opens: a 2 MB body as a full tree was a million elements and froze the page
+    // …and 200 at a time, behind a "Show N more" row (searching builds only as far as a match)
+    const entries = branch ? Object.entries(value) : [];
+    let done = 0, more = null;
+    const lone = new Map();                                      // items past `done` built alone, for a search match
+    const make = (i) => { const [child, item] = entries[i], n = bodyTreeNode(item, child, bodyPath(path, child, kind === "array"), kind === "array", depth + 1); n._rvIndex = i; return n; };
+    const build = (upTo = done + 200) => {
+      const end = Math.min(entries.length, Math.max(upTo, done + 1)), frag = document.createDocumentFragment();
+      for (; done < end; done++) frag.appendChild(lone.get(done) || make(done));
+      for (const i of [...lone.keys()]) if (i < done) lone.delete(i);
+      if (more) more.remove();
+      const after = [...lone.keys()].sort((a, b) => a - b)[0];
+      if (after === undefined) el.appendChild(frag); else el.insertBefore(frag, lone.get(after));
+      el.dataset.built = "1";
+      if (done < entries.length) {
+        more = document.createElement("button"); more.type = "button"; more.className = "rv-tree-more";
+        more.textContent = `Show ${Math.min(200, entries.length - done)} more of ${entries.length - done}`;
+        more.onclick = (e) => { e.preventDefault(); build(); bodySearch(false); };
+        const first = [...lone.keys()].sort((a, b) => a - b)[0];
+        el.insertBefore(more, first === undefined ? null : lone.get(first));      // right after the items built in a row
+      }
+    };
+    el._rvEntries = entries; el._rvArray = kind === "array";
+    el._rvOne = (i) => {                                          // build just item i (a search hit far down a big array)
+      if (i < done || lone.has(i)) return;
+      const n = make(i), next = [...lone.keys()].filter((j) => j > i).sort((a, b) => a - b)[0];
+      lone.set(i, n); el.insertBefore(n, next === undefined ? more : lone.get(next));
+    };
+    if (branch) {                                                 // small folded branches near the top are built anyway: search and copy reach them
+      el._rvBuild = build;
+      if (el.open || (depth <= 3 && entries.length <= 20)) build();
+      el.addEventListener("toggle", () => { if (el.open && !el.dataset.built) build(); });
+    }
+    return el;
+  }
+  // Tree search looks in the parsed body, then opens (and builds) only the branches that hold a match.
+  function bodyTreeOpen(tree, query) {
+    const needle = query.toLowerCase(), want = new Set(), root = tree.firstElementChild;
+    if (!root || root._rvData === undefined) return;
+    const walk = (value, path, array) => {
+      if (want.size >= 200) return;                              // opens the first 200 matches: enough to read, quick on 2 MB
+      if (value === null || typeof value !== "object") return;
+      Object.entries(value).forEach(([k, v]) => {
+        const p = bodyPath(path, k, array), leaf = v === null || typeof v !== "object";
+        if (k.toLowerCase().includes(needle) || (leaf && JSON.stringify(v).toLowerCase().includes(needle))) want.add(p);
+        if (!leaf) walk(v, p, Array.isArray(v));
+      });
+    };
+    walk(root._rvData, "$", Array.isArray(root._rvData));
+    want.forEach((p) => {
+      let el = root;
+      const under = (c) => c.classList.contains("rv-tree-node") && (p === c.dataset.path || p.startsWith(c.dataset.path + ".") || p.startsWith(c.dataset.path + "["));
+      while (el && el.dataset.path !== p) {
+        let next = null;
+        if (el.tagName === "DETAILS" && el._rvBuild) {
+          if (!el.dataset.built) el._rvBuild();
+          next = [...el.children].find(under);
+          if (!next) {                                            // past what is built: build as far as this child
+            const holds = (cp) => p === cp || p.startsWith(cp + ".") || p.startsWith(cp + "[");
+            const i = el._rvEntries.findIndex(([k]) => holds(bodyPath(el.dataset.path, k, el._rvArray)));
+            if (i >= 0) { el._rvOne(i); next = [...el.children].find(under); }
+          }
+          el.open = true;
+        }
+        el = next;
+      }
+    });
+  }
+  function syncBodyFind() {
+    const view = document.querySelector(".flow-detail .contentview"), controls = view && view.querySelector(":scope > .controls"), pre = view && view.querySelector("pre");
+    if (!view || !controls || !pre) { bodyPre = null; bodyHighlight(); return; }
+    let tools = controls.querySelector(":scope > .rv-body-tools");
+    if (!tools) {
+      tools = document.createElement("span"); tools.className = "rv-body-tools";
+      tools.innerHTML = '<input class="rv-body-find" type="search" placeholder="Find in body" aria-label="Find in body"><span class="rv-find-count" aria-live="polite"></span><button type="button" class="rv-find-prev" title="Previous match" aria-label="Previous match">▲</button><button type="button" class="rv-find-next" title="Next match" aria-label="Next match">▼</button><button type="button" class="rv-tree-toggle" aria-pressed="false">Tree</button>';
+      controls.appendChild(tools);
+      const field = tools.querySelector("input"); field.value = bodyQuery;
+      let typed = 0;
+      field.oninput = () => { bodyQuery = field.value; clearTimeout(typed); typed = setTimeout(bodySearch, 150); };
+      field.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); bodyStep(e.shiftKey ? -1 : 1); } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); field.value = bodyQuery = ""; bodySearch(); } };
+      tools.querySelector(".rv-find-prev").onclick = () => bodyStep(-1);
+      tools.querySelector(".rv-find-next").onclick = () => bodyStep(1);
+      tools.querySelector(".rv-tree-toggle").onclick = () => { bodyTree = !bodyTree; LS.set("rivis-body-tree", bodyTree ? "1" : "0"); syncBodyFind(); };
+    }
+    // two ways a body is only partly on screen: Rivis clips one over VIEW_SOURCE_LIMIT ("showing first …"), and mitmweb
+    // draws a long one a screenful at a time behind "Show more". The tree reads the whole body from the proxy instead.
+    const label = (controls.querySelector("h5") || {}).textContent || "", json = /json/i.test(label), clipped = /showing first/i.test(label);
+    const more = [...view.querySelectorAll("button")].some((b) => /show more/i.test(b.textContent));
+    const toggle = tools.querySelector(".rv-tree-toggle"); toggle.hidden = !json; toggle.setAttribute("aria-pressed", String(bodyTree));
+    let note = view.querySelector(":scope > .rv-body-note");
+    if (!note) { note = document.createElement("div"); note.className = "rv-body-note"; controls.after(note); }
+    const partial = clipped || (more && !(json && bodyTree));
+    note.textContent = !partial ? "" : json ? "Searching the shown part — Tree searches the whole body." : "Searching the shown part — show the full body to search all.";
+    note.hidden = !partial;
+    let tree = view.querySelector(":scope > .rv-tree");
+    if (!tree) { tree = document.createElement("div"); tree.className = "rv-tree"; pre.after(tree); }
+    const side = (location.hash.replace(/^#\/?/, "").split("?")[0].split("/")[2] || "").toLowerCase(), id = selectedFlow();
+    const src = id && /^(request|response)$/.test(side) ? `./flows/${encodeURIComponent(id)}/${side}/content.data` : "";
+    const content = pre.textContent, mode = `${src}/${json}/${clipped}/${bodyTree}`, changed = pre !== bodyPre || content !== bodyText || bodyMode !== mode;
+    if (!changed) return;
+    const fresh = bodyMode !== mode;
+    bodyPre = pre; bodyText = content; bodyMode = mode;
+    if (!fresh && tree.dataset.ready === "1") { pre.hidden = true; bodySearch(false); return; }   // "Show more" grew the <pre>: the tree has it all
+    tree.replaceChildren(); tree.dataset.ready = "0";
+    tree.hidden = !json || !bodyTree; pre.hidden = false;
+    if (json && bodyTree) {
+      if (clipped) tree.textContent = "Tree is available for JSON up to 2 MB. Use the text view for this body.";
+      else if (!src) tree.textContent = "This body cannot be shown as a tree.";
+      else {
+        tree.textContent = "Loading the tree…";
+        fetchT(src, { credentials: "same-origin" }, NORMAL_MS, "body").then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); }).then((text) => {
+          if (bodyMode !== mode || !tree.isConnected) return;               // another call or tab since
+          tree.replaceChildren();
+          if (new Blob([text]).size > 2 * 1024 * 1024) { tree.textContent = "Tree is available for JSON up to 2 MB. Use the text view for this body."; return; }
+          try { const data = JSON.parse(text), top = bodyTreeNode(data, null, "$", false, 0); top._rvData = data; tree.appendChild(top); tree.dataset.ready = "1"; }
+          catch (e) { tree.textContent = "This body cannot be parsed as JSON."; return; }
+          pre.hidden = true; bodySearch();
+        }).catch((e) => { if (bodyMode === mode) tree.textContent = "Could not load the body for the tree: " + e.message; });
+      }
+    }
+    pre.hidden = tree.dataset.ready === "1";
+    bodySearch();
   }
   // list width buckets for theme.css: narrow (< 520px) drops size; wide (> 640px) shows the word chips
   const sizeBuckets = () => {
@@ -3080,6 +3265,10 @@
         if (back && back.id === "back") back.click(); else if (!drawerTypingDirty) { if (back) back.click(); else closeDrawer(); } // R6-03
         return;
       }
+    }
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.code === "KeyF" && t && t.closest && t.closest(".flow-detail") && skinOn()) {
+      const field = document.querySelector(".flow-detail .rv-body-find");
+      if (field) { e.preventDefault(); e.stopPropagation(); field.focus(); field.select(); return; }
     }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.code === "KeyF" && skinOn() && host.hasAttribute("data-sbar") && root.activeElement !== sq()) { e.preventDefault(); e.stopPropagation(); focusSearch(); return; }   // a second press lets the browser's find-in-page open
     if (e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && CHORDS[e.code]) { e.preventDefault(); e.stopPropagation(); CHORDS[e.code][1](); return; }

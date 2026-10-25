@@ -110,6 +110,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, doc)
         if p == "/json/small":
             return self._send(200, SMALL_JSON)
+        if p == "/json/long":
+            # a long JSON body (about 1 MB at n=12000): mitmweb shows it a screenful at a time behind "Show more"
+            n = int((q.get("n") or ["12000"])[0])
+            return self._send(200, {"accounts": [{"id": i, "name": "account %d" % i, "balance": i * 3} for i in range(n)]})
+        if p == "/json/find":
+            return self._send(200, {"products": [{"id": i, "sku": "FINDME"} for i in range(12)], "meta": {"source": "fixture"}})
         if p == "/closing":
             # a gateway that ends the connection after its answer (the UAT edge does this on about half its calls)
             return self._send(200, {"closing": True}, headers=[("Connection", "close"), ("Keep-Alive", "timeout=5")])
