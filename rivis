@@ -11,11 +11,12 @@
 #   * one CA per workstation (~/.mitmproxy), installed only on sims/emulators,
 #     and `off` removes it again.
 #
-#   <cli> [--project ID] start [--insecure] [--project-only] [--all] [--no-ios] [--no-open] [--background]
+#   <cli> [--project ID] start [--insecure] [--verify-upstream] [--project-only] [--all] [--no-ios] [--no-open] [--background]
 #                                 mitmweb: proxy 127.0.0.1:8080, UI 127.0.0.1:8083 (opens logged in)
 #                                 --background keep running after this Terminal window closes
 #                                              (like an app; '<cli> stop' ends it, log in ~/.rivis/logs)
-#                                 --insecure   disable upstream TLS verification (--dev alias)
+#                                 --insecure   disable upstream TLS verification (--dev alias; this is the default)
+#                          --verify-upstream   verify upstream certificates against this Mac's trust store
 #                                 --project-only show only the active project's hosts (--neo-only alias)
 #                                 --all        also show DNS/UDP rows (hidden by default)
 #                                 --no-ios     regular proxy only (Android emulator)
@@ -454,13 +455,13 @@ check_capture_filter() {
 }
 
 cmd_start() {
-  local insecure=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0 private_hosts="" upstream="" upstream_set=0 bg=0 fwd=() lan=0
+  local insecure=1 verify_set=0 ios=1 filter="CoreSimulator" project_only=0 open_ui=1 show_all=0 private_hosts="" upstream="" upstream_set=0 bg=0 fwd=() lan=0
   local start_explicit="${RIVIS_START_PROJECT_EXPLICIT:-0}"
   [ -n "${RIVIS_START_PROJECT_EXPLICIT+x}" ] || { [ "$PROJECT_SOURCE" != argument ] || [ -n "${RIVIS_START_PROJECT_SOURCE:-}" ] || start_explicit=1; }
   local a; for a in "$@"; do [ "$a" = --background ] || fwd+=("$a"); done
   while [ $# -gt 0 ]; do case "$1" in
     --background) bg=1 ;;
-    --insecure|--dev) insecure=1 ;; --no-ios) ios=0 ;; --ios-filter) [ $# -ge 2 ] || die "--ios-filter needs a value"; filter="$2"; shift ;;
+    --insecure|--dev) insecure=1; verify_set=1 ;; --verify-upstream) insecure=0; verify_set=1 ;; --no-ios) ios=0 ;; --ios-filter) [ $# -ge 2 ] || die "--ios-filter needs a value"; filter="$2"; shift ;;
     --allow-private-hosts) [ $# -ge 2 ] || die "--allow-private-hosts needs a regex"; private_hosts="$2"; shift ;;
     --upstream) [ $# -ge 2 ] || die "--upstream needs an http://host:port URL"; upstream="$2"; upstream_set=1; shift ;;
     --project-only|--neo-only) project_only=1 ;; --no-open) open_ui=0 ;; --all) show_all=1 ;; --lan) lan=1 ;;
@@ -566,6 +567,12 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
   # setting of its own. Scoping capture to simulator processes keeps us off the
   # system proxy (forbidden) and leaves every Mac app — Teams, browser, VPN — untouched.
   [ "$ios" = 1 ] && args+=(--mode "local:$filter")
+  # Upstream certificates are NOT verified by default (owner's decision 2026-10-25), because Proxyman does not verify
+  # them either — its maintainers call that inherent to how a capturing proxy works — and a team that used Proxyman
+  # on these environments for years hit refusals here: non-prod servers reached through /etc/hosts entries serve
+  # internal or long-expired certificates. A debugging proxy that refuses the server under test is useless.
+  # `--verify-upstream` (or RIVIS_VERIFY_UPSTREAM=1) puts the check back, and then this Mac's whole trust store counts.
+  if [ "$verify_set" = 0 ] && [ "$(env_value VERIFY_UPSTREAM 0)" != 0 ]; then insecure=0; fi
   [ "$insecure" = 1 ] && args+=(--set ssl_insecure=true)
   # Upstream HTTPS is checked against what this Mac trusts (root store + roots IT/MDM or the user trusted), like Safari
   # and Proxyman. mitmproxy alone knows only its bundled list, so on a TLS-inspecting network every call failed.
@@ -614,7 +621,11 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
     fi
   fi
   [ "$ios" = 1 ] && info "iOS    local capture of processes matching '$filter' (no system proxy)"
-  [ "$insecure" = 1 ] && info "TLS    upstream verification OFF"
+  if [ "$insecure" = 1 ]; then
+    info "TLS    upstream certificates are not verified (as in Proxyman) — --verify-upstream checks them"
+  else
+    info "TLS    upstream certificates verified against this Mac's trust store"
+  fi
   info "upstream proxy: ${upstream:-direct}"
   if [ "$show_all" = 1 ]; then info "view   everything (incl. DNS/UDP)"
   elif [ "$project_only" = 1 ]; then info "view   $PROJECT_LABEL HTTP calls only — everything else still proxied, just hidden"

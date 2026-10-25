@@ -124,7 +124,7 @@ class PanelError(unittest.TestCase):
         fh.write("127.0.0.1 localhost\n127.0.0.1 edge.hostsfile.rivis-test\n")
         fh.close()
         cls.hosts = fh.name
-        cls.inst = Instance(cls.suite, "hosts-f3", start_args=(), extra_env={
+        cls.inst = Instance(cls.suite, "hosts-f3", start_args=("--verify-upstream",), extra_env={
             "RIVIS_HOSTS_FILE": cls.hosts,
             "SHIM_PRE_ADDON": os.path.join(os.path.dirname(os.path.abspath(__file__)), "fakes", "dns_flip.py")}).start()
 

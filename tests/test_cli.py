@@ -1194,7 +1194,10 @@ class StartArgv(CliBase):
         self.assertIn("http2=false", line)
         self.assertNotIn("0.0.0.0", line)
         self.assertNotIn("local:", line)                       # --no-ios: no local capture
-        self.assertNotIn("ssl_insecure", line)
+        self.assertIn("ssl_insecure=true", line)               # 0.9.10: upstream certificates are not verified
+        strict, _ = self.start_argv("--no-ios", "--verify-upstream")
+        self.assertNotIn("ssl_insecure", strict)                # --verify-upstream puts the check back
+        self.assertIn("ssl_verify_upstream_trusted_ca=", strict)   # and then this Mac's trust store is used
         self.assertIn("web_open_browser=false", line)
         self.assertNotIn("web_password=", line)
         self.assertIn("proxy_auth_token_file=" + os.path.join(self.state, "web-token"), line)

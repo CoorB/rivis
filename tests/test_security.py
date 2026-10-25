@@ -2,6 +2,7 @@
 private file modes, no secrets in argv, nothing written outside the state dirs."""
 import json
 import os
+import tempfile
 import re
 import shutil
 import socket
@@ -302,8 +303,9 @@ class DnsRebindingInsecureHttps(LiveCase):
 
 
 class SecurePageRequestsOnPrivateAddresses(LiveCase):
-    """A trusted upstream certificate keeps the old same-origin HTTPS behavior without --insecure."""
-    INSTANCE_KW = {"start_args": (), "allow_private": False}
+    """A trusted upstream certificate keeps the old same-origin HTTPS behaviour — now behind --verify-upstream,
+    since 0.9.10 does not verify upstream certificates by default."""
+    INSTANCE_KW = {"start_args": ("--verify-upstream",), "allow_private": False}
 
     @classmethod
     def make_instance(cls):
@@ -320,6 +322,94 @@ class SecurePageRequestsOnPrivateAddresses(LiveCase):
                             headers={"Sec-Fetch-Site": "same-origin"})
         self.assertEqual(r.status, 200)
         self.assertTrue(self.up.hits_for(path))
+
+
+class PageRequestsOnPrivateAddressesWithoutVerification(LiveCase):
+    """The price of not verifying upstream certificates by default (0.9.10), kept deliberately.
+
+    Without the check, nothing proves which server a name resolved to, so a WEB PAGE's own HTTPS calls to a private
+    address stay inside the private-host boundary and are refused unless the host is allowed. An app's calls are
+    never affected: they carry no Sec-Fetch-Site header, and simulator capture runs in local mode.
+    """
+    INSTANCE_KW = {"start_args": (), "allow_private": False}
+
+    @classmethod
+    def make_instance(cls):
+        inst = super().make_instance()
+        inst.extra_env["RIVIS_EXTRA_TRUST"] = cls.up.cert      # trusted, and still refused: the check is off
+        return inst
+
+    def setUp(self):
+        self.up.reset_hits()
+
+    def test_a_pages_https_call_to_a_private_address_is_refused_and_says_how_to_allow_it(self):
+        path = "/json/small?secure=2"
+        r = self.inst.fetch("https://localhost:%d%s" % (self.up.https_port, path),
+                            headers={"Sec-Fetch-Site": "same-origin"})
+        self.assertEqual(r.status, 403, r.text[:300])
+        self.assertIn("rivis", r.text.lower())                 # the page names the way to allow the host
+        self.assertEqual(self.up.hits_for(path), [], "the private address was reached anyway")
+
+    def test_an_apps_call_to_the_same_address_is_not_affected(self):
+        path = "/json/small?secure=3"
+        r = self.inst.fetch("https://localhost:%d%s" % (self.up.https_port, path))
+        self.assertEqual(r.status, 200, r.text[:300])
+        self.assertTrue(self.up.hits_for(path))
+
+
+class PageRequestsToAHostsFileAddress(LiveCase):
+    """0.9.10: a private address this Mac's own hosts file gives a host counts as declared, like a project host.
+
+    The team reaches its internal web apps through hosts-file lines, and a page's own calls there must work with no
+    flag (owner's decision 2026-10-25). Nothing else is relaxed: a private address that only DNS returned is still
+    refused, because from here it cannot be told apart from a page rebinding its name into the network.
+    """
+    INSTANCE_KW = {"start_args": (), "allow_private": False}
+
+    @classmethod
+    def setUpClass(cls):
+        fh = tempfile.NamedTemporaryFile("w", suffix="-hosts", delete=False)
+        fh.write("127.0.0.1 localhost\n127.0.0.1 declared.hostsfile.rivis-test\n")
+        fh.close()
+        cls.hosts = fh.name
+        super().setUpClass()
+
+    @classmethod
+    def make_instance(cls):
+        inst = super().make_instance()
+        inst.extra_env["RIVIS_HOSTS_FILE"] = cls.hosts
+        # the scratch hosts file is not read by the OS resolver, so the name is resolved by the test resolver
+        inst.extra_env["SHIM_PRE_ADDON"] = os.path.join(harness.REPO, "tests", "fakes", "dns_flip.py")
+        return inst
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        os.unlink(cls.hosts)
+
+    def setUp(self):
+        self.up.reset_hits()
+
+    def test_a_pages_call_to_a_hosts_file_address_is_captured(self):
+        path = "/json/small?declared=1"
+        r = self.inst.fetch("https://declared.hostsfile.rivis-test:%d%s" % (self.up.https_port, path),
+                            headers={"Sec-Fetch-Site": "same-origin"})
+        self.assertEqual(r.status, 200, r.text[:300])
+        self.assertTrue(self.up.hits_for(path), "the declared internal host was not reached")
+
+    def test_the_localhost_line_every_mac_ships_does_not_count_as_declared(self):
+        path = "/json/small?declared=2"
+        r = self.inst.fetch("https://localhost:%d%s" % (self.up.https_port, path),
+                            headers={"Sec-Fetch-Site": "same-origin"})
+        self.assertEqual(r.status, 403, r.text[:300])
+        self.assertEqual(self.up.hits_for(path), [])
+
+    def test_a_cross_site_page_is_refused_even_for_a_declared_host(self):
+        path = "/json/small?declared=3"
+        r = self.inst.fetch("https://declared.hostsfile.rivis-test:%d%s" % (self.up.https_port, path),
+                            headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"})
+        self.assertEqual(r.status, 403, r.text[:300])
+        self.assertEqual(self.up.hits_for(path), [])
 
 
 class DnsRebindingPlainHttp(LiveCase):

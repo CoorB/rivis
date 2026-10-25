@@ -68,15 +68,45 @@ class RootStoreAsMacOSTrustsIt(unittest.TestCase):
         self.assertEqual(got, [pems["AA"], pems["CC"]])
 
 
+class UpstreamNotVerifiedByDefault(unittest.TestCase):
+    """0.9.10, the owner's decision of 2026-10-25: a server certificate never blocks a call.
+
+    Proxyman does not verify the upstream chain at all — its maintainers call that inherent to a capturing proxy —
+    and the team hit refusals here that Proxyman had never shown them: non-prod hosts reached through /etc/hosts
+    entries serve internal or long-expired certificates. Rivis now behaves the same way, and `--verify-upstream`
+    (tested by CorporateRootTrusted below) puts the check back for anyone who wants it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.suite = harness.Suite.get()
+        cls.untrusted = cls.suite.upstream()            # a self-signed server nothing trusts
+        cls.inst = harness.Instance(cls.suite, "tlsdefault", start_args=()).start()   # no flags at all
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.inst.stop()
+
+    def test_a_server_nothing_trusts_is_captured_instead_of_refused(self):
+        r = self.inst.fetch("https://localhost:%d/json/small?dflt=1" % self.untrusted.https_port)
+        self.assertEqual(r.status, 200, r.text[:300])
+        self.assertIn("alice", r.text)                  # the real answer, not a Rivis error page
+        paths = [f["request"]["path"] for f in self.inst.flows()]
+        self.assertIn("/json/small?dflt=1", paths)      # and the call is in the list, decrypted
+
+    def test_the_start_banner_says_certificates_are_not_verified(self):
+        self.assertRegex(self.inst.log(), re.compile(r"not verified", re.I))
+
+
 class CorporateRootTrusted(unittest.TestCase):
-    """No --insecure: the upstream's certificate chains to a root only 'the Mac' trusts (RIVIS_EXTRA_TRUST)."""
+    """--verify-upstream: the upstream's certificate chains to a root only 'the Mac' trusts (RIVIS_EXTRA_TRUST)."""
 
     @classmethod
     def setUpClass(cls):
         cls.suite = harness.Suite.get()
         cls.up = cls.suite.upstream()                   # its self-signed cert stands in for the corporate root
         cls.other = cls.suite.upstream()                # a second server nobody trusts
-        cls.inst = harness.Instance(cls.suite, cls.__name__.lower(), start_args=(),
+        cls.inst = harness.Instance(cls.suite, cls.__name__.lower(), start_args=("--verify-upstream",),
                                     extra_env={"RIVIS_EXTRA_TRUST": cls.up.cert}).start()
 
     @classmethod

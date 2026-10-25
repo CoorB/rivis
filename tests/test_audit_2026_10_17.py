@@ -682,7 +682,7 @@ class Tls(unittest.TestCase):
     """Without --insecure (what testers run): an upstream with a cert no one trusts must give a clear error."""
 
     def test_untrusted_upstream_cert_gives_a_clear_502_and_https_by_ip_validates(self):
-        inst = Instance(S, "tlsstrict", start_args=()).start()
+        inst = Instance(S, "tlsstrict", start_args=("--verify-upstream",)).start()
         try:
             r = inst.fetch(UP.url("/echo?strict", tls=True))
             print("STRICT", r.status, r.body[:300])

@@ -127,7 +127,7 @@ class UpstreamTlsR10(unittest.TestCase):
     def setUpClass(cls):
         cls.suite = Suite.get()
         cls.up = cls.suite.upstream()
-        cls.inst = Instance(cls.suite, "r10tls", start_args=()).start()
+        cls.inst = Instance(cls.suite, "r10tls", start_args=("--verify-upstream",)).start()
 
     @classmethod
     def tearDownClass(cls):

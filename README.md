@@ -127,12 +127,13 @@ instance using this installation before removing its add-ons, and leaves saved p
 2. A call answers **403 Private upstream destinations are blocked**: that server is on a private (VPN) address and the
    call is plain HTTP or comes from a web page. Add the app's domain to your project (`rivis projects use <app>`), or
    start with `--allow-private-hosts 'REGEX'`. Apps' HTTPS calls are never blocked.
-3. HTTPS calls fail with **502 … could not verify the HTTPS certificate**: the 502 body says why. If the server sends
-   an incomplete chain, an expired, self-signed or wrong-host certificate (often a dev server; browsers fetch a missing
-   intermediate themselves, Rivis does not), run `rivis tls ignore add HOST` and `rivis tls mode ignore` to pass that
-   host through undecrypted, or start with `--insecure`. If it fails for every site on your company network, Rivis
-   trusts what your Mac trusts: install IT's root certificate in Keychain Access (or start with
-   `RIVIS_EXTRA_TRUST=/path/root.pem`).
+3. **Server certificates do not block your calls.** Rivis does not verify the certificate the server sends, the same
+   as Proxyman, so a test server with an expired, self-signed, wrong-host or incomplete-chain certificate is captured
+   like any other. Start with `--verify-upstream` (or `RIVIS_VERIFY_UPSTREAM=1`) to have it checked against your
+   Mac's trust store; then a call that fails answers **502 … could not verify the HTTPS certificate**, and the body
+   says why, which address answered, and whether that address came from your hosts file. With the check on, install
+   IT's root in Keychain Access (or `RIVIS_EXTRA_TRUST=/path/root.pem`) if your company inspects HTTPS, or pass one
+   host through undecrypted with `rivis tls ignore add HOST` and `rivis tls mode ignore`.
 4. A server requires a **client certificate** (mTLS): give Rivis that certificate for the host, in the panel
    (Tools → Network → Client certificates) or with `rivis tls client-cert add HOST FILE.p12 --password-stdin`.
    Rivis then sends it to the server, and the calls stay readable. Or leave the host undecrypted

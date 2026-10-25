@@ -802,6 +802,12 @@ class ProxyRules:
                 unsafe.append(address)
         if unsafe and await self._named_project_server(flow, host):
             return
+        if unsafe and not self._cross_site_page(flow) and self._hosts_file_address(host, unsafe):
+            # The address comes from this Mac's own hosts file, so the user put it there deliberately, and an
+            # internal web app's own calls must work without a flag (owner's decision 2026-10-25). DNS cannot rebind
+            # onto such an address and no web page can write that file. A cross-site page is still refused, so this
+            # opens nothing to other origins, and the connection is still pinned below.
+            unsafe = []
         if unsafe:
             ctx.log.warn(f"proxy_rules: refused private upstream {host} -> {', '.join(sorted(unsafe))}; "
                          "use --allow-private-hosts for an intentional local test service")
@@ -886,6 +892,26 @@ class ProxyRules:
             return False
         mode = getattr(flow.client_conn, "proxy_mode", None)
         return getattr(mode, "type_name", "regular") == "regular"   # local (simulator) capture is not a listener
+
+    # macOS ships these two names in /etc/hosts, so a line for them says nothing about what the user wants reached.
+    SYSTEM_HOSTS_NAMES = ("localhost", "broadcasthost")
+
+    @classmethod
+    def _hosts_file_address(cls, host, addresses):
+        """True when every private address resolved for `host` is one this Mac's hosts file gives it, and the host is
+        not one of the names every Mac's hosts file already contains."""
+        if not addresses or str(host).lower().rstrip(".") in cls.SYSTEM_HOSTS_NAMES:
+            return False
+        for address in addresses:
+            entry = proxy_common.hosts_entry(host, address)
+            if not entry:
+                return False
+            try:
+                if ipaddress.ip_address(str(entry["ip"]).strip("[]")) != ipaddress.ip_address(str(address).strip("[]")):
+                    return False
+            except ValueError:
+                return False
+        return True
 
     def _trusted_name(self, name):
         """A hostname (never an IP literal) the user or the project allows on private addresses."""

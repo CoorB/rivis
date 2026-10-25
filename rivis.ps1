@@ -5,7 +5,7 @@ this PC's Wi-Fi/Ethernet address for phones and tablets, each allowed first), ne
 system proxy, one CA per workstation, removed again with `off`.
 (No iOS Simulator exists on Windows — iOS testing stays on the Macs.)
 
-  .\<cli>.ps1 start [-Insecure] [-ProjectOnly] [-NoOpen] [-Project ID] [-Lan]
+  .\<cli>.ps1 start [-Insecure] [-VerifyUpstream] [-ProjectOnly] [-NoOpen] [-Project ID] [-Lan]
                                             mitmweb: proxy 127.0.0.1:8080, UI http://127.0.0.1:8083
                                             -Lan: phones/tablets on this Wi-Fi too (allow each one first)
   .\<cli>.ps1 lan [list] | allow IP [NAME] | rm IP   phones and tablets allowed to use the proxy
@@ -67,6 +67,7 @@ param(
   [ValidateSet("py","js")][string]$Lang = "",
   [double]$Loss,
   [Alias("Dev")][switch]$Insecure,
+  [switch]$VerifyUpstream,
   [Alias("NeoOnly")][switch]$ProjectOnly,
   [switch]$NoOpen,
   [switch]$DryRun,
@@ -726,7 +727,11 @@ switch ($Command) {
       foreach ($ip in $lanIps) { $margs += @("--mode", ($proxyMode -replace '@\d+$', "@${ip}:$Port")) }
       $margs += @("--set","proxy_lan=true")
     }
-    if ($Insecure) { $margs += @("--set","ssl_insecure=true"); Info "TLS: upstream verification OFF" }
+    # Not verified by default, as in Proxyman and as the bash CLI does (owner's decision 2026-10-25); -VerifyUpstream
+    # puts the check back, and an explicit -Insecure beats RIVIS_VERIFY_UPSTREAM.
+    $verify = $VerifyUpstream.IsPresent -or (-not $Insecure.IsPresent -and (Config-Env "VERIFY_UPSTREAM" "0") -ne "0")
+    if ($verify) { Info "TLS: upstream certificates verified against this machine's trust store" }
+    else { $margs += @("--set","ssl_insecure=true"); Info "TLS: upstream certificates are not verified (as in Proxyman) - -VerifyUpstream checks them" }
     if ($ProjectOnly -and $ProjectConfig.hosts) {
       $escapedHosts = $ProjectConfig.hosts.Replace('\','\\').Replace("'","\'")
       $margs += @("--set","view_filter=~http & (~d '$escapedHosts')"); Info "view: $($ProjectConfig.label) calls only"
