@@ -1,5 +1,7 @@
 """Shared per-rule load check for the proxy and CLI (R5A-02)."""
 import re
+import os
+from urllib.parse import urlsplit
 
 from proxy_common import ACTION_REQUIREMENTS, ACTIONS, rule_file_path, user_regex
 
@@ -95,6 +97,15 @@ def compile_rule(source, state_dir, fallback_name=None, confdir=None):
         # local files: confine to the project state dir (symlinks resolved) unless the
         # user trusted that file on this machine, or skip the rule with this error.
         rule["file"] = rule_file_path(state_dir, rule["file"], "map_local file", (confdir,))
+        if rule.get("base") is not None or os.path.isdir(rule["file"]):
+            base = rule.get("base")
+            parsed = urlsplit(base) if isinstance(base, str) else None
+            if not parsed or parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.query or parsed.fragment:
+                raise ValueError("map_local folder needs base=http(s)://host/path/")
+            if not base.endswith("/"):
+                raise ValueError("map_local folder base must end with /")
+            if not os.path.isdir(rule["file"]):
+                raise ValueError("map_local folder not found: %s" % rule["file"])
     if "headers" in rule:
         headers = rule["headers"]
         if isinstance(headers, dict):

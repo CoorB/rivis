@@ -49,6 +49,7 @@
 #                                 pause matching calls in the UI to edit them, then Continue
 #                                 (no arguments: list them; off without NAME: remove all)
 #   <cli> mock NAME URL-REGEX              save the last matching response and Map-Local it
+#   <cli> mocks import-proxyman [PATH] [--dry-run]  copy Proxyman Map Local rules and files into this project
 #   <cli> setup                            ios on --all + android on --all: every booted simulator and
 #                                 running emulator, in one go (each one is skipped if already done)
 #   <cli> android on|off [-s SERIAL | --all] [--manual] [--yes] [--strict] [--proxy-only]
@@ -959,6 +960,7 @@ cmd_mock() {
 }
 
 cmd_rules()    { ensure_rules; warn_running_project; RIVIS_ACTIVE_PROJECT="$PROJECT" RIVIS_RULE_CONFDIR="$CONFDIR" /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" rules "$@"; } # R5A-02: same file guard as proxy load
+cmd_mocks()    { ensure_rules; warn_running_project; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" mocks "$@"; }
 cmd_scripts()  {
   ensure_rules
   # R1A-03: last_errors is runtime state, so list asks this instance's authenticated panel while it is available.
@@ -1646,6 +1648,7 @@ case "${1:-}" in
   compose)   shift; cmd_compose "$@" ;;
   breakpoint) shift; cmd_breakpoint "$@" ;;
   mock)      shift; cmd_mock "$@" ;;
+  mocks)     shift; cmd_mocks "$@" ;;
   doctor)    shift; cmd_doctor "$@" ;;
   bug-report) shift; cmd_bug_report "$@" ;;
   update)    shift; cmd_update "$@" ;;

@@ -28,6 +28,7 @@ system proxy, one CA per workstation, removed again with `off`.
                                             replay a request saved in the panel's Compose tab
   .\<cli>.ps1 breakpoint URL-REGEX [-Request|-Response] [-Method M] | off [NAME] | list
   .\<cli>.ps1 mock NAME URL-REGEX
+  .\<cli>.ps1 mocks import-proxyman [PATH] [-DryRun]
   .\<cli>.ps1 android on|off [-Serial emulator-5554 | -All] [-ProxyOnly]
                                             Play images: the CA goes in by hand, then `android on -ProxyOnly`
   .\<cli>.ps1 setup                         configure every running Android emulator (iOS is unavailable on Windows)
@@ -1024,6 +1025,16 @@ switch ($Command) {
     if ($Method) { $arguments += @("--method",$Method) }
     $python = Get-PythonCommand
     & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath breakpoint @arguments
+    exit $LASTEXITCODE
+  }
+  "mocks" {
+    if ($Action -ne "import-proxyman") { Die "usage: ${Cli}.ps1 mocks import-proxyman [PATH] [-DryRun]" }
+    Ensure-Rules
+    $python = Get-PythonCommand
+    $arguments = @("import-proxyman")
+    if ($Name) { $arguments += $Name }
+    if ($DryRun) { $arguments += "--dry-run" }
+    & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath mocks @arguments
     exit $LASTEXITCODE
   }
   "mock" {

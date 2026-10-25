@@ -53,6 +53,7 @@ import socket
 import sys
 import time
 import ipaddress
+from urllib.parse import unquote, urlsplit
 
 from mitmproxy import ctx, flowfilter, http
 from mitmproxy.net.http import status_codes
@@ -76,6 +77,55 @@ DNS_TIMEOUT = 10        # seconds for the private-address guard's own lookup
 PROFILES = PROFILE_VALUES
 DEFAULT_FILE = os.path.join(STATE_ROOT, "projects", "default", "rules.json")
 _UNSET = object()
+
+
+def folder_mock_path(rule, url):
+    """Choose a file under a Map Local directory; None means the server should answer."""
+    base = urlsplit(rule["base"])
+    request = urlsplit(url)
+    prefix = base.path or "/"
+    if (request.scheme.lower(), request.netloc.lower()) != (base.scheme.lower(), base.netloc.lower()) or not (
+            request.path.startswith(prefix) or request.path == prefix.rstrip("/")):
+        return None, ""
+    rest = unquote(request.path[len(prefix):] if request.path.startswith(prefix) else "")
+    parts = rest.split("/")
+    if rest.startswith("/") or "\\" in rest or "\x00" in rest or any(p in (".", "..") for p in parts):
+        raise ValueError("unsafe Map Local folder path")
+    root = os.path.realpath(rule["file"])
+    choices = [rest, rest + ".json", os.path.join(rest, "index.json"), parts[-1]]
+    for relative in choices:
+        if not relative:
+            continue
+        candidate = os.path.realpath(os.path.join(root, relative))
+        if not candidate.startswith(root + os.sep):
+            raise ValueError("Map Local file escapes folder")
+        if os.path.isfile(candidate):
+            return candidate, rest
+    return None, rest
+
+
+def http_mock(raw):
+    """Parse Proxyman's saved HTTP response, or return None for an ordinary file."""
+    if not raw.startswith(b"HTTP/"):
+        return None
+    head, separator, body = raw.partition(b"\r\n\r\n")
+    if not separator:
+        head, separator, body = raw.partition(b"\n\n")
+    if not separator:
+        raise ValueError("HTTP mock has no header/body separator")
+    lines = head.replace(b"\r\n", b"\n").split(b"\n")
+    match = re.fullmatch(rb"HTTP/\d(?:\.\d)?\s+(\d{3})(?:\s+[^\r\n]*)?", lines[0])
+    if not match:
+        raise ValueError("bad HTTP mock status line")
+    headers = []
+    for line in lines[1:]:
+        if b":" not in line:
+            raise ValueError("bad HTTP mock header")
+        key, value = line.split(b":", 1)
+        headers.append([key.decode("ascii"), value.strip().decode("latin-1")])
+    headers = without_hop_headers(headers)
+    headers = [pair for pair in headers if pair[0].lower() not in ("content-length", "transfer-encoding", "content-encoding")]
+    return int(match.group(1)), headers, body
 
 
 def _parse_throttle(spec, manual=None):
@@ -941,15 +991,26 @@ class ProxyRules:
             await asyncio.sleep(sample / 2000 + ((size * 8 / 1000) / up if up else 0))
         for r in self._matching(flow, {"respond", "map_local"}):
             try:
+                status = int(r.get("status", 200))
                 if r["action"] == "map_local":
                     path = os.path.expanduser(r["file"])
+                    if os.path.isdir(path):
+                        path, rest = folder_mock_path(r, flow.request.pretty_url)
+                        if path is None:
+                            _tag(flow, "map-local folder: no file for " + rest)
+                            self._record(r, changed=False, reason="map-local folder: no file for " + rest)
+                            continue
                     with open(path, "rb") as f:
                         body = f.read()
                     ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+                    saved = http_mock(body)
                 else:
                     body = self._body(r)
                     ctype = "application/json"
+                    saved = None
                 headers = [list(pair) for pair in without_hop_headers(r.get("headers") or [])]   # mocks saved before 0.9.10 kept them
+                if saved:
+                    status, headers, body = saved
                 if not any(k.lower() == "content-type" for k, _v in headers):
                     headers.insert(0, ["Content-Type", ctype])
                 origin = flow.request.headers.get("Origin")
@@ -970,7 +1031,7 @@ class ProxyRules:
                     else:
                         headers.append(["Vary", "Origin"])
                 headers = http.Headers([(k.encode("ascii"), v.encode("utf-8")) for k, v in headers])
-                flow.response = http.Response.make(int(r.get("status", 200)), body, headers)
+                flow.response = http.Response.make(status, body, headers)
                 _no_body_for(flow.response)
                 flow.metadata["proxy_local"] = True     # answered locally: collections must not record it
                 self._fired(flow, r, modified=False)

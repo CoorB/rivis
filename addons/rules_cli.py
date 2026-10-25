@@ -5,6 +5,7 @@
   rules_cli.py FILE rules test URL [METHOD]     what each rule would do to this call (no traffic is sent)
   rules_cli.py FILE rules add NAME match=REGEX action=ACTION [key=value ...]
   rules_cli.py FILE rules edit
+  rules_cli.py FILE mocks import-proxyman [PATH] [--dry-run]
   rules_cli.py FILE throttle off|lte|3g|edge|slow|<ms>ms[/<kbps>kbps] [match=REGEX] [loss=PCT]
   rules_cli.py FILE nocache on|off|status       strip conditional request headers, force fresh responses
 
@@ -183,7 +184,7 @@ def validate(r):
             out = probe
         if out != probe and remote_url_problem(out):
             die("map_remote with=%r turns a URL into something unusable: %s" % (r["with"], remote_url_problem(out)))
-    if a == "map_local" and not os.path.isfile(os.path.expanduser(r["file"])):
+    if a == "map_local" and not os.path.exists(os.path.expanduser(r["file"])):
         die("file not found: %s" % r["file"])
 
 
@@ -217,7 +218,7 @@ def trust_cmd(path, cmd, args):
     if len(args) != 1:
         die("usage: rules %s PATH" % cmd)
     if cmd == "allow-file":
-        if not os.path.isfile(os.path.abspath(os.path.expanduser(args[0]))):
+        if not os.path.exists(os.path.abspath(os.path.expanduser(args[0]))):
             die("file not found: %s" % args[0])
         try:
             real = set_trusted_file(state_dir, os.path.abspath(os.path.expanduser(args[0])))
@@ -640,6 +641,16 @@ if __name__ == "__main__":
     _lock = None if what == "rules" and rest and rest[0] == "edit" else acquire_lock(path)
     if what == "rules":
         rules_cmd(path, rest)
+    elif what == "mocks" and rest and rest[0] == "import-proxyman":
+        from proxyman_import import import_proxyman
+        arguments = rest[1:]
+        if len([x for x in arguments if x != "--dry-run"]) > 1 or any(x.startswith("--") and x != "--dry-run" for x in arguments):
+            die("usage: mocks import-proxyman [PATH] [--dry-run]")
+        source = next((x for x in arguments if x != "--dry-run"), None)
+        try:
+            print(import_proxyman(path, source, dry_run="--dry-run" in arguments))
+        except (OSError, ValueError) as e:
+            die("Proxyman import: %s" % e)
     elif what == "throttle":
         throttle_cmd(path, rest)
     elif what == "nocache":

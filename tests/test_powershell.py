@@ -72,6 +72,12 @@ class PowerShellSource(unittest.TestCase):
         self.assertIn('& $PSCommandPath android on -All', self.src)
         self.assertIn('iOS: unavailable on Windows', self.src)
 
+    def test_proxyman_import_parity(self):
+        block = self.src[self.src.index('  "mocks" {'):self.src.index('  "mock" {')]
+        self.assertIn('import-proxyman', block)
+        self.assertIn('$RulesPath mocks @arguments', block)
+        self.assertIn('if ($DryRun)', block)
+
     def test_rules_cli_runs_when_fcntl_is_unavailable(self):
         script = """import builtins, runpy, sys
 original_import = builtins.__import__
@@ -175,6 +181,16 @@ class Commands(unittest.TestCase):
         if msg:
             self.assertIn(msg, cp.stdout + cp.stderr)
         return cp
+
+    def test_proxyman_import_parity_with_bash(self):
+        source = os.path.join(harness.REPO, "tests", "fixtures", "proxyman")
+        self.ok("rules", "list")
+        dry = self.ok("mocks", "import-proxyman", source, "-DryRun")
+        self.assertIn("dry-run: imported 4, skipped 1", dry)
+        self.assertEqual(self.cfg()["rules"], [])
+        actual = self.ok("mocks", "import-proxyman", source)
+        self.assertIn("imported 4, skipped 1", actual)
+        self.assertEqual({r["name"] for r in self.cfg()["rules"]}, {"wild", "regex", "folder", "exact"})
 
     def test_trusted_files_parity_with_the_bash_cli(self):
         mine = os.path.join(self.home, "Desktop", "mock.json")

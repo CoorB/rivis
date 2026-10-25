@@ -2163,7 +2163,7 @@
   const ACTION_NAME = { map_local: "Map Local", map_remote: "Map Remote", respond: "Fixed reply", status: "Force status", delay: "Delay", json_patch: "Edit JSON", set_header: "Header", block: "Block", drop: "Block" };
   function describe(r) {
     const a = r.action;
-    if (a === "map_local") return "answers from a saved response" + (r.status ? " (" + r.status + ")" : "");
+    if (a === "map_local") return r.base ? "Map Local folder → " + tilde(r.file) : "answers from a saved response" + (r.status ? " (" + r.status + ")" : "");
     if (a === "respond") return "answers with " + r.status;
     if (a === "status") return "changes the status to " + r.status;
     if (a === "delay") return "waits " + r.ms + " ms first";
@@ -2210,12 +2210,17 @@
     m.innerHTML = (state.rules_error ? `<div class="banner bad"><b>${ico("warn", "sm")} rules.json has an error:</b> ${esc(state.rules_error)}</div>` : "") + (skipped.length ? `<div class="banner bad" style="display:block"><b>${ico("warn", "sm")} ${skipped.length} rule(s) skipped</b>${skipped.map((r) => `<div class="sub">${esc(r.name)} — ${esc(r.error)}</div>`).join("")}</div>` : "") +
       `<h4>New rule</h4><div class="btns" style="margin-top:0"><select id="rtype" aria-label="Rule type">${RULE_TYPES.map(([id, label]) => `<option value="${id}">${esc(label)}</option>`).join("")}</select>
         <button class="b p" id="rnew">New</button>${info("Every kind of rule lives here: replies, status, JSON edits, delays, headers, Map Remote, blocks, Map Local, breakpoints, scripts and network conditions.")}</div>` +
+      `<div class="btns"><button class="b" id="rfolderopen">Add Map Local folder</button><button class="b" id="rimport">Import from Proxyman…</button></div>
+       <form id="rfolderform" style="display:none"><div class="btns"><input id="rfoldername" type="text" placeholder="Rule name" aria-label="Rule name" required>
+       <input id="rfolderbase" type="url" placeholder="https://api.example.com/v1/" aria-label="URL prefix" required>
+       <input id="rfolderpath" type="text" placeholder="Folder path" aria-label="Folder path" required>
+       <button class="b p" type="submit">Add folder</button></div></form>` +
       ruleTestHTML() + section("Rules", state.rules.length) + (state.rules.length ? state.rules.map((r, i) => `
       <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
         <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(ACTION_NAME[r.action] || r.action)}</span>${outside.includes(r.name) ? `<span class="tag" title="Reads a file outside the project. Allowed only for files you trusted on this machine (${esc(state.product.cli)} rules trusted-files). Edit it in your own editor.">external file</span>` : ""}</div>
           <div class="sub">${esc(r.method ? r.method + " " : "")}${esc(pretty(r))} — ${esc(describe(r))}</div>
           ${(state.rule_warnings || {})[r.name] ? `<div class="sub rule-hits warn" role="alert">${ico("warn", "sm")} ${esc(state.rule_warnings[r.name])}</div>` : ""}${hitHTML(r)}</div>
-        ${outside.includes(r.name) ? "" : `<button class="b" data-edit="${i}">Edit</button>`}
+        ${outside.includes(r.name) || (r.action === "map_local" && r.base) ? "" : `<button class="b" data-edit="${i}">Edit</button>`}
         <button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
         : emptyState("rules", "No rules yet", "Pick a type above and click <b>New</b>, or select a call and use <b>This call</b> — Map Local, a forced status, a block or a delay all become rules here.")) +
       section("Breakpoints", bps.length) + (bps.length ? bps.map((b, i) => `
@@ -2237,6 +2242,12 @@
     wireRuleRows(m);
     wireRuleTest(m);
     $("rnew").onclick = () => openRuleForm($("rtype").value);
+    $("rfolderopen").onclick = () => { $("rfolderform").style.display = "block"; $("rfoldername").focus(); };
+    $("rfolderform").onsubmit = async (event) => {
+      event.preventDefault();
+      await run("maplocal_folder_add", { name: $("rfoldername").value.trim(), base: $("rfolderbase").value.trim(), folder: $("rfolderpath").value.trim() }, "Map Local folder added");
+    };
+    $("rimport").onclick = () => run("proxyman_import", {}, (r) => r.summary);
     m.querySelectorAll("input[data-rbi]").forEach((c) => (c.onchange = async () => {
       const done = await run("bp_update", { name: bps[c.dataset.rbi].name, enabled: c.checked }, c.checked ? null : "Breakpoint off");
       if (done && c.checked) breakpointOn();

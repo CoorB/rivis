@@ -116,6 +116,7 @@ rivis tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PA
 rivis compose list | send NAME [--var name=value] [--no-wait]
 rivis breakpoint [REGEX [--request|--response] [--method M] | off [NAME]]   # no arguments: list; paused calls: Continue in the UI
 rivis mock NAME URL-REGEX
+rivis mocks import-proxyman [PATH] [--dry-run]
 rivis net-reset [--dry-run]
 rivis update [check|install|login|logout|status]     # signed updates when configured; otherwise install the new release zip
 ```
@@ -127,6 +128,29 @@ Each throttle command resets the scope to the selected project's `throttle_match
 marks rules that the proxy skips as `SKIPPED` and prints the reason. Editing a rules file saves only after that
 validation succeeds. `breakpoint off NAME` reports an unknown name and shows the available names.
 An invalid `mock` URL pattern exits with a single validation error.
+
+### Map Local folders and Proxyman import
+
+A folder rule reads the matching file on every request. The `match` regex selects full URLs; `base` is the URL
+prefix removed before looking inside `file`. A request for `/v1/cards?view=full` under the rule below tries
+`cards`, `cards.json`, `cards/index.json`, then the last path segment `cards`. Missing files go to the real server.
+Paths and symlinks cannot escape the folder. A file beginning with an HTTP status line supplies its saved status,
+headers and body; connection and transfer headers are removed.
+
+```json
+{"name":"cards-folder","enabled":true,"action":"map_local","match":"^https://api.example.com/v1/.*$","base":"https://api.example.com/v1/","file":"/path/to/project/mocks/cards"}
+```
+
+`rivis rules add cards-folder match='^https://api.example.com/v1/.*$' action=map_local base='https://api.example.com/v1/' file=/path/to/project/mocks/cards`
+adds the same rule. A folder outside the project needs `rivis rules allow-file PATH` on that machine. The Rules
+tab can add, switch, and delete folder rules.
+
+`rivis mocks import-proxyman` reads Proxyman's `MapLocalFiles-RuleTree` from its default application data folder.
+Pass a RuleTree file or its containing folder to import a team copy; relative mock paths resolve beside that file.
+It copies mock files and folders into the active project's `mocks/`, preserves methods and enabled state, and
+renames clashing rules with `-2`, `-3`, and so on. `--dry-run` reports the planned imports without writing.
+The Rules tab offers **Import from Proxyman…** for the default local RuleTree. Proxyman's published export
+instructions do not specify a file schema; this importer accepts exports that use the same RuleTree JSON shape.
 
 For Map Remote, `match` selects calls, `replace` is the URL regex to replace, and `with` is the replacement URL.
 For example, to send a call from one local server to another:

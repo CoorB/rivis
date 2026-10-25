@@ -1710,6 +1710,28 @@ class ProxyPanel:
             self.engine_check(r)
             cfg["rules"].append(r)
             self.save_cfg(cfg)
+        elif op == "maplocal_folder_add":
+            name = str(a.get("name") or "").strip()
+            base = str(a.get("base") or "").strip()
+            folder = os.path.abspath(os.path.expanduser(str(a.get("folder") or "").strip()))
+            if not SAFE_NAME.fullmatch(name):
+                raise PanelError("name must use letters, numbers, dots, dashes or underscores")
+            if any(r.get("name") == name for r in cfg["rules"]):
+                raise PanelError("a rule with that name exists")
+            if not os.path.isdir(folder):
+                raise PanelError("folder not found: " + folder)
+            r = {"name": name, "enabled": True, "action": "map_local", "file": folder, "base": base,
+                 "match": "^" + re.escape(base) + ".*$"}
+            self.engine_check(r)
+            cfg["rules"].append(r)
+            self.save_cfg(cfg)
+        elif op == "proxyman_import":
+            from proxyman_import import import_proxyman
+            try:
+                summary = import_proxyman(self.rules_path)
+            except (OSError, ValueError) as exc:
+                raise PanelError("Proxyman import: %s" % exc)
+            return {"summary": summary}
         elif op == "update":        # Rules tab: edit one rule in place (same name, action and list position; its files stay)
             old = self.find(cfg, a["name"])
             new = dict(a["rule"])
