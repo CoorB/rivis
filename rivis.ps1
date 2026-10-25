@@ -52,6 +52,7 @@ param(
   [string]$Label = "",
   [string]$Hosts = "",
   [string]$Output = "",
+  [string]$FromCurl = "",
   [string]$Upstream = "",
   [ValidateSet("chrome","edge","chromium","brave")][string]$Browser = "",
   [Alias("-method")][string]$Method = "",
@@ -974,6 +975,13 @@ switch ($Command) {
     Write-Host $tlsNote
   }
   "compose" {
+    if ($FromCurl) {
+      if ($Action -or $Name) { Die "compose -FromCurl FILE|-" }
+      $python = Get-PythonCommand
+      & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\compose_cli.py") from-curl $FromCurl
+      if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      break
+    }
     $sub = if ($Action) { $Action.ToLowerInvariant() } else { "list" }
     $composeDir = Join-Path $ProjectState "composer"
     if ($sub -eq "list") {

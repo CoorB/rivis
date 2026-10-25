@@ -114,6 +114,7 @@ rivis throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|
 rivis nocache on|off|status                          # No Caching: always fresh content, never an empty 304
 rivis tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
 rivis compose list | send NAME [--var name=value] [--no-wait]
+rivis compose --from-curl FILE|-                     # parse a copied cURL command into Compose JSON; sends nothing
 rivis breakpoint [REGEX [--request|--response] [--method M] | off [NAME]]   # no arguments: list; paused calls: Continue in the UI
 rivis mock NAME URL-REGEX
 rivis mocks import-proxyman [PATH] [--dry-run]
@@ -124,6 +125,10 @@ rivis update [check|install|login|logout|status]     # signed updates when confi
 For `throttle`, `loss=` applies only to that command; a later profile uses its own packet loss.
 Each throttle command resets the scope to the selected project's `throttle_match` (all calls for `default`); pass `match=REGEX` to override it. `throttle off` also restores that project scope.
 `throttle` and `rules list` show the active manual latency, jitter, bandwidth, loss and response delay values.
+The Compose tab can import a copied cURL command with **Paste cURL…**. `rivis compose --from-curl -`
+reads standard input; `rivis.ps1 compose -FromCurl FILE|-` provides the same JSON on Windows.
+The response contains `spec` (method, URL, headers and body) and `ignored` (unsupported flags).
+Saved list filters are per project in `filters.json`; Alt+1 through Alt+9 toggle the first nine when a text field is not focused.
 `rules add`, `rules on` and `rules edit` check enabled rules against the proxy's load validation. `rules list`
 marks rules that the proxy skips as `SKIPPED` and prints the reason. Editing a rules file saves only after that
 validation succeeds. `breakpoint off NAME` reports an unknown name and shows the available names.

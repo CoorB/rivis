@@ -985,6 +985,11 @@ cmd_tls() {
   /usr/bin/python3 -I "$SCRIPT_DIR/addons/tls_cli.py" "$RULES" "$@"
 }
 cmd_compose() {
+  if [ "${1:-}" = "--from-curl" ]; then
+    [ $# -eq 2 ] || die "compose --from-curl FILE|-"
+    /usr/bin/python3 -I "$SCRIPT_DIR/addons/compose_cli.py" from-curl "$2"
+    return
+  fi
   [ $# -gt 0 ] || set -- list
   local sub="$1"; shift
   case "$sub" in

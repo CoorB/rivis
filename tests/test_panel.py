@@ -619,6 +619,33 @@ class Ops(LiveCase):
         self.bad("codegen", {"flow_id": fid, "target": "cobol"}, "unknown")
         self.bad("codegen", {"spec": "nope", "target": "curl"})
 
+    def test_saved_filters_panel_ops_persist_and_validate(self):
+        self.assertEqual(self.panel.ok("filters_list", {})["filters"], [])
+        self.panel.ok("filters_save", {"name": "Errors", "filter": "~c 500"})
+        self.panel.ok("filters_save", {"name": "Posts", "filter": "~m POST"})
+        self.assertEqual([r["name"] for r in self.panel.state()["saved_filters"]], ["Errors", "Posts"])
+        self.panel.ok("filters_save", {"old": "Errors", "name": "Server errors"})
+        self.panel.ok("filters_order", {"names": ["Posts", "Server errors"]})
+        self.assertEqual([r["name"] for r in self.panel.ok("filters_list", {})["filters"]], ["Posts", "Server errors"])
+        with open(self.inst.path("filters.json")) as fh:
+            self.assertEqual(json.load(fh)[0]["name"], "Posts")
+        for body in ({"name": "bad/", "filter": "~m GET"}, {"name": "Invalid", "filter": "~d ("},
+                     {"name": "Posts", "filter": "~m GET"}):
+            self.bad("filters_save", body)
+        self.bad("filters_order", {"names": ["Posts", "Posts"]})
+        self.panel.ok("filters_delete", {"name": "Posts"})
+        self.panel.ok("filters_delete", {"name": "Server errors"})
+        self.assertEqual(self.panel.ok("filters_list", {})["filters"], [])
+
+    def test_curl_import_panel_op_builds_draft_without_sending(self):
+        before = len(self.inst.flows())
+        doc = self.panel.ok("compose_from_curl", {"command": "curl -X PATCH -H 'X-A: b' -d 'x=1' https://example.test/x"})
+        self.assertEqual(doc["spec"]["method"], "PATCH")
+        self.assertEqual(doc["spec"]["headers"], [["X-A", "b", True]])
+        self.assertEqual(doc["spec"]["body"], "x=1")
+        self.assertEqual(len(self.inst.flows()), before)
+        self.bad("compose_from_curl", {"command": "curl -H bad https://example.test"})
+
     def test_compose_save_load_rename_delete_vars_and_get(self):
         spec = {"method": "POST", "url": "{{base}}/echo", "headers": [["X-A", "1"]], "body_mode": "json", "body": '{"a":1}'}
         self.panel.ok("compose_vars", {"vars": {"base": self.up.url("")}})

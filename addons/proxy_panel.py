@@ -63,6 +63,7 @@ import proxy_redact
 import devices
 importlib.reload(devices)
 from proxy_compose import ComposerStore, normalize_request, normalize_url
+from curl_import import parse_curl
 from proxy_rule_validation import compile_rule, explain_rules, map_remote_warning
 from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, find_jwts)
 import proxy_source        # helpers only (summaries, the list-filter clause); the add-on itself is loaded by the CLI
@@ -687,6 +688,7 @@ class ProxyPanel:
             "sources": proxy_source.summarize(self.all_flows(), self._listed),
             "tls": tls,
             "composer": self.composer_state(),
+            "saved_filters": self.filters_list(),
             "codegen_targets": [{"id": k, "name": v} for k, v in TARGETS],
         }
 
@@ -1304,6 +1306,23 @@ class ProxyPanel:
     # per project and applied again at the next start; start's own --all / --project-only still win.
     def _view_file(self):
         return os.path.join(project_state(self.active_project), "view.json")
+
+    def _filters_file(self):
+        return os.path.join(project_state(self.active_project), "filters.json")
+
+    def filters_list(self):
+        try:
+            with open(self._filters_file()) as fh:
+                rows = json.load(fh)
+        except FileNotFoundError:
+            return []
+        if not isinstance(rows, list) or len(rows) > 30 or any(not isinstance(row, dict) or
+                not isinstance(row.get("name"), str) or not isinstance(row.get("filter"), str) for row in rows):
+            raise PanelError("filters.json is invalid")
+        return rows
+
+    def _save_filters(self, rows):
+        atomic_json(self._filters_file(), rows)
 
     def _save_view_choice(self):
         try:
@@ -2102,7 +2121,6 @@ class ProxyPanel:
             self._write_view_filter()
             self._save_view_choice()
         elif op == "filter_check":     # the list filter is evaluated here: an invalid one closes mitmweb's websocket, so the panel asks first
-            from mitmproxy import flowfilter
             text = str(a.get("filter") or "").strip()
             if not text:                   # empty = no filter, which is always valid
                 return {"ok": True}
@@ -2111,6 +2129,51 @@ class ProxyPanel:
             except ValueError as e:
                 return {"ok": False, "error": str(e).replace("Invalid filter expression: ", "")[:200]}
             return {"ok": True}
+        elif op == "filters_list":
+            return {"filters": self.filters_list()}
+        elif op == "filters_save":
+            name, value, old = a.get("name"), a.get("filter"), a.get("old")
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9 ._-]{1,40}", name) or name != name.strip():
+                raise PanelError("filter name: 1–40 letters, digits, spaces or . _ -")
+            rows = self.filters_list()
+            if old is not None and old not in [row["name"] for row in rows]:
+                raise PanelError("saved filter not found")
+            if any(row["name"] == name and row["name"] != old for row in rows):
+                raise PanelError("filter name already exists")
+            if old is None:
+                if len(rows) >= 30:
+                    raise PanelError("maximum 30 saved filters")
+                if not isinstance(value, str) or not value.strip():
+                    raise PanelError("filter is empty")
+                try:
+                    flowfilter.parse(value)
+                except ValueError as e:
+                    raise PanelError("invalid filter: %s" % e)
+                rows.append({"name": name, "filter": value.strip()})
+            else:
+                for row in rows:
+                    if row["name"] == old:
+                        row["name"] = name
+            self._save_filters(rows)
+            return {"filters": rows}
+        elif op == "filters_delete":
+            rows = self.filters_list()
+            remaining = [row for row in rows if row["name"] != a.get("name")]
+            if len(remaining) == len(rows):
+                raise PanelError("saved filter not found")
+            self._save_filters(remaining)
+            return {"filters": remaining}
+        elif op == "filters_order":
+            rows = self.filters_list()
+            names = a.get("names")
+            if not isinstance(names, list) or len(names) != len(rows) or set(names) != set(row["name"] for row in rows):
+                raise PanelError("filter order must contain each saved filter once")
+            by_name = {row["name"]: row for row in rows}
+            rows = [by_name[name] for name in names]
+            self._save_filters(rows)
+            return {"filters": rows}
+        elif op == "compose_from_curl":
+            return parse_curl(a.get("command"))
         elif op == "focus_host":       # "show only this host" / clear it
             host = a.get("host") or None
             if host is not None and not (isinstance(host, str) and HOST_NAME.fullmatch(host)):
@@ -2223,7 +2286,6 @@ class ProxyPanel:
                      (self.show_dns or isinstance(f, http.HTTPFlow) or
                       (self._tls_tunnels and getattr(f, "type", "") == "tcp"))]
             if a.get("visible_only"):
-                from mitmproxy import flowfilter
                 search = a.get("search_filter", "")
                 if not isinstance(search, str):
                     raise PanelError("current filter must be text")

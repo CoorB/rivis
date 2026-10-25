@@ -185,6 +185,10 @@
     .fstrip .fchip button:hover { background: color-mix(in srgb, var(--rv-accent) 22%, transparent); }
     .fstrip .cnt2 { margin-left: auto; font-variant-numeric: tabular-nums; }
     .fstrip .lnk { font-size: 12px; }
+    .fstrip .saved { border: 1px solid var(--rv-border-strong); border-radius: var(--rv-r-pill); background: var(--rv-surface); color: var(--rv-text); white-space: nowrap; cursor: pointer; padding: 2px 7px; }
+    .fstrip .saved.on { background: var(--rv-accent-soft); color: var(--rv-accent-text); }
+    .fstrip .savedmenu { display: inline-flex; gap: 3px; }
+    .fstrip .savedmenu button { border: 0; background: transparent; color: var(--rv-accent-text); cursor: pointer; font-size: 11px; }
     :host([data-sbrow]) .fstrip { padding-left: calc(var(--sb-w, 200px) + 16px); }
     :host([data-sbrow]) .sbar, :host([data-sbrow]) .sbox { height: 26px; }
     :host([data-sbrow]) .sbox input#sq { height: 22px; }
@@ -422,7 +426,7 @@
   <div class="brand" id="brand"><span class="mark">${ico("mark")}</span><b id="bname">Rivis</b><span class="proj" id="bproj"></span>
     <button class="ib" id="btheme" title="Theme">${ico("auto")}</button><button class="ib" id="bhelp" title="Help, shortcuts and settings  (?)">${ico("help")}</button></div>
   <div class="sbar" id="sbar"><div class="sbox" id="sbox">${ico("search", "sm")}<input id="sq" type="text" placeholder="Filter: host, path or ~filter" aria-label="Filter calls: host or part of a URL, or a ~filter expression" spellcheck="false" autocomplete="off" autocapitalize="off">
-      <button class="ib" id="sclear" hidden aria-label="Clear filter" title="Clear filter (Esc)">${ico("x", "sm")}</button><kbd>${/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "") ? "⌘F" : "Ctrl F"}</kbd></div>
+      <button class="ib" id="sclear" hidden aria-label="Clear filter" title="Clear filter (Esc)">${ico("x", "sm")}</button><button class="ib" id="ssave" aria-label="Save filter" title="Save filter">☆</button><kbd>${/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "") ? "⌘F" : "Ctrl F"}</kbd></div>
     <button class="ib" id="strash" aria-label="Clear all calls" title="Clear all calls from the list">${ico("trash")}</button></div>
   <div class="spop" id="spop" role="status"></div>
   <div class="fstrip" id="fstrip"></div>
@@ -552,7 +556,7 @@
     const [head, ...rest] = String(message).split("\n\n");
     $("askdlg").innerHTML = `<h3>${esc(head)}</h3>
       ${rest.length ? `<div class="wbody">${rest.map((x) => `<p>${esc(x).replace(/\n/g, "<br>")}</p>`).join("")}</div>` : ""}
-      ${field ? `<input type="text" id="ask-in" spellcheck="false" aria-label="${esc(head)}">` : ""}
+      ${field ? (opts.multiline ? `<textarea id="ask-in" rows="8" spellcheck="false" aria-label="${esc(head)}"></textarea>` : `<input type="text" id="ask-in" spellcheck="false" aria-label="${esc(head)}">`) : ""}
       <div class="btns wfoot" style="justify-content:flex-end"><button class="b" id="ask-no">${esc(opts.no || "Cancel")}</button>
         ${opts.choices ? opts.choices.map(([v, label, cls], i) => `<button class="b ${cls || ""}" data-ask="${i}"${i === opts.choices.length - 1 ? ' id="ask-yes"' : ""}>${esc(label)}</button>`).join("")
           : `<button class="b ${opts.danger ? "d" : "p"}" id="ask-yes">${esc(opts.yes || "OK")}</button>`}</div>`;
@@ -561,7 +565,7 @@
     if (opts.choices) $("askdlg").querySelectorAll("[data-ask]").forEach((b) => (b.onclick = () => { askDone = null; closeSheet("askdlg"); resolve(opts.choices[b.dataset.ask][0]); }));
     else $("ask-yes").onclick = () => done(field ? $("ask-in").value : true);
     $("ask-no").onclick = () => done(null);
-    if (field) $("ask-in").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); $("ask-yes").click(); } };
+    if (field && !opts.multiline) $("ask-in").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); $("ask-yes").click(); } };
   });
   $("askscrim").onclick = () => { if (askDone) askDone(null); };
   if (window.fetch && !window.fetch._rivisOpen) {
@@ -1868,11 +1872,29 @@
     drawStrip();
   }
   let sqTimer = null;
+  let savedMenu = -1;
+  const savedRows = () => (state && state.saved_filters) || [];
+  const applySaved = (i) => {
+    const row = savedRows()[i]; if (!row) return;
+    const input = sq(); input.value = input.value.trim() === row.filter ? "" : row.filter;
+    sbSync(); clearTimeout(sqTimer); commitSearch(input.value); drawStrip();
+  };
+  const saveFilter = async () => {
+    const value = sq().value.trim(); if (!value) return toast("Type a filter first", true);
+    try {
+      const valid = await api("filter_check", { filter: toFilter(value) });
+      if (!valid.ok) return toast(valid.error || "Invalid filter", true);
+      const name = await ask("Name this filter\n\nUp to 40 letters, digits, spaces or . _ -", { input: value.slice(0, 40), yes: "Save" });
+      if (!name) return;
+      const r = await api("filters_save", { name, filter: value }); state.saved_filters = r.filters; savedMenu = -1; drawStrip(); toast("Filter saved");
+    } catch (e) { toast(e.message, true); }
+  };
   const sbSync = () => {
     const v = sq().value; $("sclear").hidden = !v; $("sbox").classList.toggle("has", !!v);
   };
   function wireSearch() {
     const input = sq();
+    $("ssave").onclick = saveFilter;
     input.addEventListener("input", () => {
       sbSync(); lastTyped = input.value; clearTimeout(sqTimer);
       if (!input.value.trim()) { spop(examplesHTML()); }
@@ -1912,6 +1934,7 @@
   // chips for everything that hides calls, so "my call vanished" has a visible answer (and a one-click undo)
   function drawStrip() {
     const el = $("fstrip"), st = mwStore();
+    const saved = savedRows();
     const chips = [];
     if (state) {
       const label = (state.project && state.project.label) || state.view_project;
@@ -1923,12 +1946,25 @@
     const searching = !!(st && storeSearch());
     let counts = "";
     if (st) { try { const f = st.getState().flows; counts = searching ? `${f.view.length} of ${f.list.length} calls match` : ""; } catch (e) { /* cosmetic */ } }
-    const sig = JSON.stringify([chips, searching, counts]);
-    const show = chips.length > 0 || searching || host.hasAttribute("data-sbrow");   // R6B-05: the strip carries the filter box
+    const sig = JSON.stringify([chips, searching, counts, saved, savedMenu, storeSearch()]);
+    const show = chips.length > 0 || searching || saved.length > 0 || host.hasAttribute("data-sbrow");   // R6B-05: the strip carries the filter box
     if (drawStrip._sig !== sig) {
       drawStrip._sig = sig;
       el.innerHTML = (chips.length ? `<span>Showing</span>` : "") + chips.map(([k, t]) => `<span class="fchip"><span title="${esc(t)}">${esc(t)}</span><button data-un="${k}" aria-label="Show everything again: ${esc(t)}" title="Remove this limit">${ico("x", "sm")}</button></span>`).join("") +
+        saved.map((row, i) => `<span><button class="saved ${sq().value.trim() === row.filter ? "on" : ""}" data-saved="${i}" title="Alt+${i + 1}: ${esc(row.filter)}">${esc(row.name)}</button><button class="lnk" data-smenu="${i}" aria-label="Options for ${esc(row.name)}">⋯</button>${savedMenu === i ? `<span class="savedmenu"><button data-sact="rename" data-si="${i}">Rename</button><button data-sact="delete" data-si="${i}">Delete</button><button data-sact="left" data-si="${i}" ${i ? "" : "disabled"}>←</button><button data-sact="right" data-si="${i}" ${i < saved.length - 1 ? "" : "disabled"}>→</button></span>` : ""}</span>`).join("") +
         (counts ? `<span class="cnt2">${esc(counts)} · <button class="lnk" data-un="search">Clear filter</button></span>` : "");
+      el.querySelectorAll("[data-saved]").forEach((b) => (b.onclick = () => applySaved(Number(b.dataset.saved))));
+      el.querySelectorAll("[data-smenu]").forEach((b) => (b.onclick = () => { const i = Number(b.dataset.smenu); savedMenu = savedMenu === i ? -1 : i; drawStrip(); }));
+      el.querySelectorAll("[data-sact]").forEach((b) => (b.onclick = async () => {
+        const i = Number(b.dataset.si), row = savedRows()[i], act = b.dataset.sact; if (!row) return;
+        try {
+          let r;
+          if (act === "rename") { const name = await ask("Rename filter", { input: row.name, yes: "Rename" }); if (!name || name === row.name) return; r = await api("filters_save", { old: row.name, name }); }
+          else if (act === "delete") { if (!await ask("Delete saved filter '" + row.name + "'?", { yes: "Delete", danger: true })) return; r = await api("filters_delete", { name: row.name }); }
+          else { const names = savedRows().map((x) => x.name), j = act === "left" ? i - 1 : i + 1; [names[i], names[j]] = [names[j], names[i]]; r = await api("filters_order", { names }); }
+          state.saved_filters = r.filters; savedMenu = -1; drawStrip();
+        } catch (e) { toast(e.message, true); }
+      }));
       el.querySelectorAll("[data-un]").forEach((b) => (b.onclick = () => {
         const k = b.dataset.un;
         if (k === "search") { sq().value = ""; sbSync(); commitSearch(""); }
@@ -2291,7 +2327,7 @@
     const subs = [["params", "Params"], ["headers", "Headers"], ["body", "Body"], ["vars", "Variables"]];
     m.innerHTML = `
       <div class="btns" style="margin-top:0"><select id="cs" class="grow" aria-label="Saved requests"><option value="">Saved requests…</option>${names.map((n) => `<option ${n === draft.name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
-        <button class="b" id="cload">Load</button><button class="b" id="cnew">New</button></div>
+        <button class="b" id="cload">Load</button><button class="b" id="cnew">New</button><button class="b" id="cpaste">Paste cURL…</button></div>
       <div class="btns" style="margin-top:4px"><button class="b sm" id="csave">Save</button><button class="b sm" id="csaveas">Save as…</button>
         <button class="b sm" id="cren" ${names.includes(draft.name) ? "" : "disabled"}>Rename</button>
         <button class="b sm d" id="cdel" ${names.includes(draft.name) ? "" : "disabled"}>Delete</button></div>
@@ -2310,6 +2346,11 @@
     $("cu").oninput = () => { draft.url = $("cu").value; rowsFromUrl(); if (composeSub === "params") drawSection(); };
     root.querySelectorAll("[data-cs]").forEach((b) => (b.onclick = () => { composeSub = b.dataset.cs; if (composeSub !== "vars") varRows = null; render(); }));
     $("cnew").onclick = () => { draft = newDraft(); composeSub = "params"; render(); };
+    $("cpaste").onclick = async () => {
+      const command = await ask("Paste cURL command", { input: "", multiline: true, yes: "Import" }); if (!command) return;
+      try { const r = await api("compose_from_curl", { command }); loadDraft(r.spec, ""); render(); if (r.ignored.length) toast("Ignored: " + r.ignored.join(", ")); else toast("cURL loaded into Compose"); }
+      catch (e) { toast(e.message, true); }
+    };
     $("cload").onclick = async () => {
       const name = $("cs").value; if (!name) return toast("Pick a saved request first", true);
       const r = await run("compose_load", { name }); if (!r) return;
@@ -3272,6 +3313,7 @@
     }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.code === "KeyF" && skinOn() && host.hasAttribute("data-sbar") && root.activeElement !== sq()) { e.preventDefault(); e.stopPropagation(); focusSearch(); return; }   // a second press lets the browser's find-in-page open
     if (e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && CHORDS[e.code]) { e.preventDefault(); e.stopPropagation(); CHORDS[e.code][1](); return; }
+    if (e.altKey && !e.shiftKey && !e.metaKey && !e.ctrlKey && /^Digit[1-9]$/.test(e.code) && !typing && !topSheet()) { const i = Number(e.code.slice(5)) - 1; if (savedRows()[i]) { e.preventDefault(); e.stopPropagation(); applySaved(i); } return; }
     if (topSheet() && !inPanel && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) { e.stopPropagation(); return; }   // a modal sheet is up: list keys wait
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Enter" && !typing && !inPanel && !topSheet()) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }
     if (e.key.toLowerCase() === "r" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !typing && !inPanel && !topSheet()) { e.preventDefault(); e.stopPropagation(); repeatSelected(); return; }

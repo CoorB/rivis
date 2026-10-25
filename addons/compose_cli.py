@@ -20,6 +20,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 from proxy_common import PRODUCT
 from proxy_compose import ComposerStore
+from curl_import import parse_curl
 
 
 def die(msg):
@@ -131,6 +132,19 @@ def main(argv):
     if not argv:
         die(__doc__)
     cmd, args = argv[0], list(argv[1:])
+    if cmd == "from-curl":
+        if len(args) != 1:
+            die("usage: compose --from-curl FILE|-")
+        try:
+            if args[0] == "-":
+                source = sys.stdin.read()
+            else:
+                with open(args[0], encoding="utf-8") as fh:
+                    source = fh.read()
+            print(json.dumps(parse_curl(source), ensure_ascii=False))
+        except (OSError, ValueError) as exc:
+            die(str(exc))
+        return
     directory = option(args, "--dir")
     if not directory:
         die("--dir is required")
