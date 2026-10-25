@@ -479,6 +479,34 @@ class Commands(unittest.TestCase):
         self.bad("tls", "client-cert", "rm", "*.example.test", msg="no client certificate")
         self.bad("tls", "client-cert", "add", "https://x.test", crt, "-Key", key, msg="host name")
 
+    def test_lan_parity_with_bash(self):
+        log = os.path.join(self.suite.shimlog, "mitm-argv.log")
+        open(log, "w").close()
+        env = dict(self.env, SHIM_DRYRUN="1")
+        cmd = [PWSH, "-NoProfile", "-NonInteractive", "-File", os.path.join(harness.REPO, "rivis.ps1")]
+        sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+        import proxy_lan
+        ips = proxy_lan.lan_addresses()
+        if ips:
+            cp = self.suite.run(cmd + ["start", "-NoOpen", "-Lan"], home=self.home, env=env, timeout=120)
+            self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+            argv = self.suite.shim_log("mitm-argv.log")
+            self.assertIn("regular@%s:%s" % (ips[0], env["RIVIS_PORT"]), argv)
+            self.assertIn("proxy_lan=true", argv)
+            self.assertIn("proxy_lan.py", argv)
+            self.assertNotIn("0.0.0.0", argv)
+            self.assertIn("LAN    phones and tablets", cp.stdout)
+        open(log, "w").close()
+        plain = self.suite.run(cmd + ["start", "-NoOpen"], home=self.home, env=env, timeout=120)
+        self.assertEqual(plain.returncode, 0, plain.stdout + plain.stderr)
+        self.assertNotIn("proxy_lan=true", self.suite.shim_log("mitm-argv.log"))
+        self.assertIn("no devices allowed", self.ok("lan"))
+        self.assertIn("allowed 192.168.1.50 (Lab iPad)", self.ok("lan", "allow", "192.168.1.50", "Lab iPad"))
+        self.assertIn("192.168.1.50", self.bash("lan", "list"))
+        self.ok("lan", "rm", "192.168.1.50")
+        self.bad("lan", "rm", "192.168.1.50", msg="not in the list")
+        self.bad("lan", "allow", "127.0.0.1", msg="always allowed")
+
     def test_scripts_new_list_on_off_rm(self):
         self.ok("scripts", "new", "hello", "-Lang", "py", "-Match", "/api")
         self.ok("scripts", "new", "jsone", "-Lang", "js")

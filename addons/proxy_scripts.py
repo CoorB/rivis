@@ -822,6 +822,8 @@ class ProxyScripts:
         return msg.get("result")
 
     async def _run(self, flow, hook):
+        if flow.metadata.get("rivis_local_page"):     # the LAN setup page or a refused device (proxy_lan)
+            return
         await self._reload()
         response_side = hook == "on_response"
         if response_side and flow.metadata.get("proxy_local"):

@@ -15,7 +15,8 @@ Never ask a reporter to reproduce against a production system.
 ## Supported security baseline
 
 Rivis is a local developer/QA interception tool. Its proxy and web UI bind to loopback; device support is limited
-to simulators/emulators; state is owner-only; rules and scripts are trusted local code. Captured requests can
+to simulators/emulators unless the operator starts it with `--lan`, which also binds the proxy (never the web UI) to
+the workstation's own Wi-Fi/Ethernet address and refuses every client until it is allowed on the workstation; state is owner-only; rules and scripts are trusted local code. Captured requests can
 contain credentials and personal data, so sessions, collections, mocks, composer variables, logs, and bug reports
 must be handled as sensitive workstation data. The UI session grants rule and script control and is therefore
 equivalent to local code execution by design.

@@ -8,8 +8,10 @@ into mitmweb; the installed mitmproxy is never modified.
 
 ## Security boundaries
 
-- Proxy and web UI bind to `127.0.0.1` only. Android emulators reach host loopback at `10.0.2.2`; physical
-  devices are intentionally rejected.
+- Proxy and web UI bind to `127.0.0.1` only. Android emulators reach host loopback at `10.0.2.2`. Physical
+  devices are rejected unless you start with `--lan` (opt-in): then the proxy, never the web UI, also binds this
+  Mac's own Wi-Fi/Ethernet address(es) (never `0.0.0.0`, never a VPN tunnel), and every device is refused until it
+  is allowed on this Mac. See [Phones and tablets on the Wi-Fi](#phones-and-tablets-on-the-wi-fi---lan).
 - The tool never enables a macOS or Windows system proxy. On macOS, `net-reset` clears a dead loopback setting only
   when Rivis previously observed Rivis or Proxyman listening there and that process has exited; an unknown setting is left alone. On Windows it
   reports unanswered proxy settings for manual inspection.
@@ -211,6 +213,32 @@ rivis rules add patch-user match='/user$' action=json_patch set='user.name=PATCH
 exits with status 2 (not done), so no emulator is left with a proxy it cannot use. After installing the CA by
 hand where Rivis cannot read the emulator's Settings, `--proxy-only` turns the proxy on anyway. `android off`
 removes only CAs whose SHA-256 this workstation recorded, never another workstation's "mitmproxy" CA.
+
+### Phones and tablets on the Wi-Fi (`--lan`)
+
+For a real iPhone, iPad or Android phone on the same Wi-Fi as this Mac:
+
+1. `rivis stop`, then `rivis start --lan`. Rivis prints the address to use, e.g. `Wi-Fi proxy 192.168.1.20:8080`.
+   It listens there in addition to `127.0.0.1`; the web UI stays on `127.0.0.1`. (If macOS asks whether mitmweb may
+   accept incoming connections, allow it.)
+2. Open **Tools → Devices → Phones and tablets**. Scan the QR code with the phone's camera: it opens the setup page
+   (`http://<this Mac>:<port>/`) with the steps and the certificate. No proxy is needed for that page.
+3. On the phone, set the Wi-Fi proxy to manual with that server and port. The phone now shows up under **Waiting to
+   be allowed**, with how many of its calls were refused. Choose **Allow** (and **Rename** it if you like).
+4. Install the certificate from the setup page. iOS: install the downloaded profile, then turn on full trust in
+   Settings → General → About → Certificate Trust Settings. Android: Settings → Security → Encryption &
+   credentials → Install a certificate → CA certificate. On a phone this is the user store, which debug builds can
+   trust (network security config); the system store needs root.
+
+Its calls then show with the device's name (kind *Phone or tablet* in the Source menu, so **Show only this device**
+works), and rules, Map Local and breakpoints apply to them like any other call. Once the proxy is set, the setup page
+is also at `http://rivis.setup/`.
+
+Allowed devices are kept by IP address in `~/.rivis/lan-devices.json` (0600). Until a device is allowed, every call
+it makes is refused (HTTP 403, with a page that says what to do) and never reaches a server, so nobody else on the
+network can use this Mac as a proxy. From a terminal: `rivis lan` (list), `rivis lan allow IP [NAME]`,
+`rivis lan rm IP`; changes apply from the next call, no restart. A phone that gets a new address from the router has
+to be allowed again. When you are done, turn the phone's Wi-Fi proxy off and remove the certificate.
 
 ### Web apps (`rivis browser`)
 

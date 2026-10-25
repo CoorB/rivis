@@ -508,6 +508,21 @@ class ProxyPanel:
             self._client_cert_rows = (version, client_certs.entries(store))
         return self._client_cert_rows[1]
 
+    # Phones and tablets on the Wi-Fi (`rivis start --lan`, proxy_lan.py): the panel lists who is allowed, who is
+    # waiting, and the setup link + QR code.
+    @staticmethod
+    def _lan():
+        try:
+            return ctx.master.addons.get("proxylan")
+        except (AttributeError, KeyError, TypeError):
+            return None
+
+    def lan_state(self):
+        lan = self._lan()
+        if lan is None:
+            return {"on": False, "addresses": [], "setup_urls": [], "qr": [], "devices": [], "pending": []}
+        return lan.state()
+
     def untrusted_state(self):
         now = time.monotonic()
         return [{"host": h, "since": wall} for h, (t, wall) in sorted(self._untrusted.items(), key=lambda x: -x[1][0])
@@ -766,6 +781,7 @@ class ProxyPanel:
             "system_proxy": self.system_proxy_state(),
             "untrusted": self.untrusted_state(),
             "client_certs": self.client_certs_state(),
+            "lan": self.lan_state(),
             "android_restored": list(getattr(ctx.master, "_rivis_android_restored", [])),
             "flow_count": len(self.all_flows()),
             "stream_large_bodies": str(ctx.options.stream_large_bodies),
@@ -1813,6 +1829,25 @@ class ProxyPanel:
             except client_certs.CertError as e:
                 raise PanelError(str(e))
             return {}
+        if op in ("lan_allow", "lan_rm", "lan_dismiss"):
+            lan = self._lan()
+            if lan is None:
+                raise PanelError("the phone list is not available in this proxy")
+            ip = str(a.get("ip") or "")
+            try:
+                if op == "lan_allow":
+                    name = a.get("name")
+                    if name is not None and not isinstance(name, str):
+                        raise ValueError("the name must be text")
+                    return {"device": lan.allow(ip, name)}
+                if op == "lan_rm":
+                    if not lan.devices.remove(ip):
+                        raise ValueError("%s is not in the list" % ip)
+                    return {}
+                lan.dismiss(ip)
+                return {}
+            except (ValueError, OSError) as e:
+                raise PanelError(str(e))
         if op == "untrusted_retry":     # "Decrypt again": the device has been set up since
             self._untrusted.clear()
             self._tls_drops.clear()

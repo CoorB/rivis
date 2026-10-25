@@ -773,6 +773,8 @@ class ProxyRules:
         not checked, so all page-started requests need the same boundary. Simulator capture and the panel's own
         Repeat/Compose may reach private addresses: on a VPN the app's servers often resolve to them.
         """
+        if flow.metadata.get("rivis_local_page"):     # the LAN setup page or a refused device (proxy_lan)
+            return
         # R7B-02: the rules file is re-read here, at the first hook of every call and before mitmweb's own intercept
         # step: a 1 s stat throttle let the first calls after `rules add` / `breakpoint` slip through unblocked or
         # unpaused while the CLI already said ON. One stat per call costs microseconds.
@@ -935,6 +937,8 @@ class ProxyRules:
 
     # ── request side ─────────────────────────────────────────────
     async def request(self, flow: http.HTTPFlow):
+        if flow.metadata.get("rivis_local_page"):     # the LAN setup page or a refused device (proxy_lan)
+            return
         self._reload()
         self.calls_seen += 1
         if self.hits:
@@ -1059,6 +1063,8 @@ class ProxyRules:
 
     # ── response side ────────────────────────────────────────────
     def responseheaders(self, flow: http.HTTPFlow):
+        if flow.metadata.get("rivis_local_page"):     # the LAN setup page or a refused device (proxy_lan)
+            return
         if self.no_cache and not flow.metadata.get("proxy_local"):
             _no_cache_response(flow)       # here, not in response: streamed bodies send their headers right after
         if (flow.response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower() == "text/event-stream":
@@ -1067,6 +1073,8 @@ class ProxyRules:
             flow.metadata["proxy_sse_stream"] = True
 
     async def response(self, flow: http.HTTPFlow):
+        if flow.metadata.get("rivis_local_page"):     # the LAN setup page or a refused device (proxy_lan)
+            return
         if flow.metadata.get("proxy_sse_stream"):
             return                         # R4B-01: streamed bytes are unavailable for response edits.
         if flow.response.stream:

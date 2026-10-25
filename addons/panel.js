@@ -45,7 +45,7 @@
   const OP_NAMES = { mock: "Map Local", maplocal_add: "Map Local", bp_add: "Breakpoint", bp_update: "Breakpoint", bp_delete: "Breakpoint",
     retry: "Repeat", retry_get: "Edit & Repeat", focus_host: "Show only this host", tls_host: "TLS decryption", tls_set: "TLS decryption",
     tls_update: "TLS decryption", view: "view filter", source: "source filter", delete: "delete", sess_save: "session save", sess_load: "session load",
-    sess_har: "HAR export", client_cert_add: "client certificate", client_cert_rm: "client certificate", compose_send: "Compose send", codegen: "Copy as code", export: "Copy", update_install: "update" };
+    sess_har: "HAR export", client_cert_add: "client certificate", client_cert_rm: "client certificate", lan_allow: "allow device", lan_rm: "remove device", lan_dismiss: "ignore device", compose_send: "Compose send", codegen: "Copy as code", export: "Copy", update_install: "update" };
   const selectedFlow = () => {   // mitmweb keeps the selection in the hash: #/flows/<id>/<tab>
     const p = location.hash.replace(/^#\/?/, "").split("?")[0].split("/");
     return p[0] === "flows" && p[1] ? p[1] : null;
@@ -608,7 +608,7 @@
   }
   // ── sources (proxy_source.py): which device / app sent a call. Keys are "<kind>|<device>|<app id>"; a key ending in
   // "|" is a whole device. mitmweb's flow JSON has no metadata, so rows map through client_conn.id → key.
-  const KIND_NAME = { ios: "iOS Simulator", android: "Android emulator", browser: "Web browser", mac: "This Mac", unknown: "Unknown" };
+  const KIND_NAME = { ios: "iOS Simulator", android: "Android emulator", phone: "Phone or tablet (Wi-Fi)", browser: "Web browser", mac: "This Mac", unknown: "Unknown" };
   const sourceRows = () => (state && state.sources && state.sources.list) || [];
   const sourceOfFlow = (f) => {
     const key = f && f.client_conn && state && state.sources && state.sources.by_conn[f.client_conn.id];
@@ -1149,7 +1149,8 @@
       ${consent}${log}
       ${section("ios", "iOS Simulators", dev.ios, esc(dev.ios_error || "Xcode command-line tools are not installed (xcrun simctl)."))}
       ${section("android", "Android emulators", dev.android, "adb was not found. Install Android Studio (SDK platform-tools) to use emulators.")}
-      <div class="sub" style="margin-top:10px">Same from a terminal: <code>rivis setup</code>. Physical phones need a separate approval.</div>
+      <div class="sub" style="margin-top:10px">Same from a terminal: <code>rivis setup</code>.</div>
+      ${lanSectionHTML()}
       <h4>Web browser</h4>
       <div class="sub">For web apps: a separate browser window with its own profile, pointed at Rivis. Your normal browser, the Mac's proxy settings and the keychain are not touched.</div>
       ${(dev.browsers || []).length ? `<div class="btns"><input type="text" id="dburl" class="grow" value="${esc(devUrl)}" placeholder="Web app URL (optional), e.g. https://app.example.com" aria-label="Web app URL" spellcheck="false" autocomplete="off">
@@ -1157,6 +1158,7 @@
         ${bj ? `<pre class="devlog" style="font-size:11.5px;white-space:pre-wrap;margin:6px 0 0"${bj.rc ? ' role="alert"' : ""}>${esc(bj.running ? "Opening…" : (bj.rc ? "Could not open: " : "") + bj.lines.join("\n"))}</pre>` : ""}
         <div class="sub">Same from a terminal: <code>rivis browser [URL]</code>.</div>`
         : `<div class="sub">No Chrome, Edge, Chromium or Brave found in Applications (Firefox is not supported yet).</div>`}`;
+    wireLanSection(m);
     const url = $("dburl");
     if (url) url.oninput = () => { devUrl = url.value; };
     m.querySelectorAll("[data-dbrowser]").forEach((b) => (b.onclick = () =>
@@ -1177,6 +1179,49 @@
     }
   }
   devLoop();
+  // Phones and tablets on the Wi-Fi (`rivis start --lan`): who may use the proxy, who is waiting, and how to set one up.
+  function lanSectionHTML() {
+    const lan = (state && state.lan) || { on: false, devices: [], pending: [], addresses: [], setup_urls: [], qr: [] };
+    const cli = esc(product().cli || "rivis");
+    if (!lan.on) return `<h4 id="lansec">Phones and tablets (Wi-Fi)</h4>
+      <div class="sub">Off. To capture a real phone or tablet on this Wi-Fi, restart with <code>${cli} stop</code>, then <code>${cli} start --lan</code>.
+        Each device must then be allowed here; every other device on the network is refused.</div>`;
+    const ago = (t) => { const s = Math.max(0, Math.round(Date.now() / 1000 - t)); return s < 60 ? s + " s ago" : Math.round(s / 60) + " min ago"; };
+    const [ip, port] = (lan.addresses[0] || ":").split(":");
+    return `<h4 id="lansec">Phones and tablets (Wi-Fi)</h4>
+      <div class="lanbox" style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+        ${lan.qr[0] ? `<div class="lanqr" style="background:#fff;border-radius:8px;line-height:0;width:148px">${lan.qr[0].replace(/width="\d+" height="\d+"/, 'width="148" height="148"')}</div>` : ""}
+        <div class="n" style="min-width:220px;flex:1">
+          <div><b>1.</b> On the phone, scan the code with the camera (or open <code>${esc(lan.setup_urls[0] || "")}</code>) for the steps and the certificate.</div>
+          <div style="margin-top:6px"><b>2.</b> Set its Wi-Fi proxy to manual: server <code id="lanip">${esc(ip)}</code>, port <code id="lanport">${esc(port)}</code>.</div>
+          <div style="margin-top:6px"><b>3.</b> Allow it below when it shows up.</div>
+          ${lan.addresses.length > 1 ? `<div class="sub" style="margin-top:6px">This Mac is on several networks: also ${lan.addresses.slice(1).map((a) => `<code>${esc(a)}</code>`).join(", ")}</div>` : ""}
+        </div></div>
+      ${lan.pending.length ? `<div class="sub" style="margin-top:8px"><b>Waiting to be allowed</b> — refused until you allow them</div>` +
+        lan.pending.map((d) => `<div class="row" data-lanwait="${esc(d.ip)}"><div class="n">${esc(d.name)} <code>${esc(d.ip)}</code>
+          <div class="sub">${esc(d.count)} call${d.count === 1 ? "" : "s"} refused · last ${esc(ago(d.last))}${d.ua ? " · " + esc(d.ua.slice(0, 90)) : ""}</div></div>
+          <button class="b p" data-lanallow="${esc(d.ip)}" data-name="${esc(d.name)}">Allow</button><button class="b" data-landismiss="${esc(d.ip)}">Ignore</button></div>`).join("") : ""}
+      <div class="sub" style="margin-top:8px"><b>Allowed</b></div>
+      ${lan.devices.length ? lan.devices.map((d) => `<div class="row" data-lanok="${esc(d.ip)}"><div class="n">${esc(d.name)} <code>${esc(d.ip)}</code>
+          <div class="sub">Its calls show as “${esc(d.name)}” (Source menu: Phone or tablet)</div></div>
+          <button class="b" data-lanrename="${esc(d.ip)}" data-name="${esc(d.name)}">Rename</button>
+          <button class="b d" data-lanrm="${esc(d.ip)}" data-name="${esc(d.name)}" aria-label="Remove ${esc(d.name)}">${ico("x", "sm")}</button></div>`).join("")
+        : '<div class="sub">None yet.</div>'}
+      <div class="sub" style="margin-top:6px">Same from a terminal: <code>${cli} lan</code>, <code>${cli} lan allow IP [NAME]</code>, <code>${cli} lan rm IP</code>.</div>`;
+  }
+  function wireLanSection(m) {
+    m.querySelectorAll("[data-lanallow]").forEach((b) => (b.onclick = () =>
+      run("lan_allow", { ip: b.dataset.lanallow, name: b.dataset.name }, (x) => "Allowed " + x.device.name + " (" + x.device.ip + ")").then(devRefresh)));
+    m.querySelectorAll("[data-landismiss]").forEach((b) => (b.onclick = () => run("lan_dismiss", { ip: b.dataset.landismiss }).then(devRefresh)));
+    m.querySelectorAll("[data-lanrename]").forEach((b) => (b.onclick = async () => {
+      const name = await ask("Name for " + b.dataset.lanrename + "\n\nShown on its calls; up to 40 characters.", { input: b.dataset.name, yes: "Rename" });
+      if (name && name.trim()) run("lan_allow", { ip: b.dataset.lanrename, name: name.trim() }, "Renamed to " + name.trim()).then(devRefresh);
+    }));
+    m.querySelectorAll("[data-lanrm]").forEach((b) => (b.onclick = async () => {
+      if (await ask("Remove " + b.dataset.name + " (" + b.dataset.lanrm + ")?\n\nIts calls are refused from now on.", { yes: "Remove", danger: true }))
+        run("lan_rm", { ip: b.dataset.lanrm }, "Removed " + b.dataset.name).then(devRefresh);
+    }));
+  }
 
   // ───────────── Copy URL / cURL ─────────────
   async function copyExport(id, fmt) {

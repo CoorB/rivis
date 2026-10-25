@@ -16,6 +16,7 @@ Where the process comes from:
     calls read "unknown"; capture itself is never touched.
   - regular mode (Android emulators via 10.0.2.2, `rivis browser`, Mac tools): the client's (ip, port) is on loopback,
     so `lsof` names the process holding the other end of that socket.
+  - a phone or tablet on the Wi-Fi (`rivis start --lan`): its address, named as it was allowed (lan-devices.json)
 Then the pid is classified from its executable path / argv / environment:
   qemu-system-* -avd NAME           → android, device = the AVD (the app inside it: best effort over adb, see below)
   …/CoreSimulator/Devices/<UDID>/…/X.app/X   → ios, device = the simulator's name, app = the bundle's display name
@@ -48,9 +49,9 @@ except ImportError:          # unit tests import the parsing helpers with the sy
     ctx = None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-KINDS = ("ios", "android", "browser", "mac", "unknown")
-KIND_LABEL = {"ios": "iOS Simulator", "android": "Android emulator", "browser": "Web browser", "mac": "This Mac",
-              "unknown": "Unknown"}
+KINDS = ("ios", "android", "phone", "browser", "mac", "unknown")
+KIND_LABEL = {"ios": "iOS Simulator", "android": "Android emulator", "phone": "Phone or tablet (Wi-Fi)",
+              "browser": "Web browser", "mac": "This Mac", "unknown": "Unknown"}
 SIM_APP = re.compile(r"/CoreSimulator/Devices/([0-9A-Fa-f-]{36})/data/Containers/Bundle/Application/[0-9A-Fa-f-]{36}/([^/]+\.app)/")
 SIM_RUNTIME = re.compile(r"/(?:Library/Developer/CoreSimulator/Volumes/|Platforms/iPhoneSimulator\.platform/|"
                          r"Library/Developer/CoreSimulator/Profiles/Runtimes/)")
@@ -70,6 +71,22 @@ try:
     _ms._rivis_stream_process = _STREAM
 except ImportError:
     pass
+
+
+class _NoLan:
+    @staticmethod
+    def get(ip):
+        return None
+
+
+def _lan_devices():
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import proxy_lan
+        return proxy_lan.Devices()
+    except Exception:          # never take attribution down over the phone list
+        return _NoLan()
 
 
 def clean(text, limit=80):
@@ -433,6 +450,7 @@ class Attributor:
         self._adb = (0.0, {})         # AVD → serial
         self._pkgs = {}               # serial → (expires, uid → [packages])
         self.browser_root = os.path.join(os.path.expanduser("~"), ".rivis", "browser")
+        self.lan = _lan_devices()         # phones allowed with `--lan` (read only when the file changes)
         self._snap_lock = threading.Lock()
         self._snap = {}               # proxy port → (monotonic time the snapshot STARTED, {client port: pid} or None)
         self.scan = SocketScan() if sys.platform == "darwin" else None
@@ -579,6 +597,10 @@ class Attributor:
         port it connected to; since = monotonic time the connection was accepted."""
         try:
             pid = stream[0] if stream else None
+            if pid is None and peer and peer[0] and peer[0] not in LOOPBACK and not str(peer[0]).startswith("127."):
+                ip = str(peer[0])[7:] if str(peer[0]).startswith("::ffff:") else str(peer[0])
+                dev = self.lan.get(ip)
+                return make_source("phone", dev["name"] if dev else ip, "", ident=ip)
             if pid is None and peer and peer[0] in LOOPBACK and peer[1]:
                 pid = self.loopback_owner(peer[0], int(peer[1]), sock_port, time.monotonic() if since is None else since)
             if not pid:

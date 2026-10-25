@@ -28,6 +28,7 @@ stream as they arrive; see the [Rules section](REFERENCE.md#rules) for the editi
 | In Proxyman you did | In Rivis |
 |---|---|
 | **Certificate → Install on iOS Simulator / Android Emulator** | **Tools → Devices**: each booted simulator and running emulator with a **Set up** button (Google Play emulators ask once to restart). Terminal: `rivis setup`. |
+| **Certificate → Install on iOS / Android physical device** | `rivis start --lan`, then **Tools → Devices → Phones and tablets**: scan the QR code on the phone for the setup page and certificate, set its Wi-Fi proxy to the address shown, and **Allow** it. Unlike Proxyman, a device that has not been allowed is refused. |
 | **Map Local** (answer a call from a saved response) | On the call: **This call → Map Local this call…**; or the **Map Local** tab to add one by host and path. Edits body, status and headers; one mock per endpoint. |
 | **Breakpoint** | **This call → Breakpoint** (Request / Response). A matching call pauses and a sheet opens by itself with Continue / Skip / Abort. Manage all breakpoints in the **Breakpoints** tab. |
 | **Network Conditions** (throttle) | **Tools → Network** tab → traffic profiles (3G, LTE, high-latency VPN, packet loss, or a manual profile with your own latency / bandwidth / loss). Can be limited to URLs matching a pattern (a regex, e.g. `neo\.sa` for your API host). |

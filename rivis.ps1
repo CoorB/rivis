@@ -1,11 +1,14 @@
 <#
 <ProductName> — project-aware Proxyman replacement for Windows: mitmproxy + Android emulator.
-Same security conditions as the macOS script: proxy on 127.0.0.1 only, never the Windows
+Same security conditions as the macOS script: proxy on 127.0.0.1 only (with -Lan, opt-in, also on
+this PC's Wi-Fi/Ethernet address for phones and tablets, each allowed first), never the Windows
 system proxy, one CA per workstation, removed again with `off`.
 (No iOS Simulator exists on Windows — iOS testing stays on the Macs.)
 
-  .\<cli>.ps1 start [-Insecure] [-ProjectOnly] [-NoOpen] [-Project ID]
+  .\<cli>.ps1 start [-Insecure] [-ProjectOnly] [-NoOpen] [-Project ID] [-Lan]
                                             mitmweb: proxy 127.0.0.1:8080, UI http://127.0.0.1:8083
+                                            -Lan: phones/tablets on this Wi-Fi too (allow each one first)
+  .\<cli>.ps1 lan [list] | allow IP [NAME] | rm IP   phones and tablets allowed to use the proxy
   .\<cli>.ps1 stop | ui | status | cert
   .\<cli>.ps1 browser [URL] [-Browser chrome|edge|chromium|brave] [-Fresh] [-List]   (-Current: macOS CLI only)
                                             web apps: a separate browser window with its own profile, pointed
@@ -82,6 +85,7 @@ param(
   [string[]]$Var = @(),
   [string]$Key = "",
   [switch]$PasswordStdin,
+  [switch]$Lan,
   [Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest = @()
 )
 $ErrorActionPreference = "Stop"
@@ -250,6 +254,15 @@ function Write-Usage([string]$only = "") {
   else { $lines | ForEach-Object { Write-Host $_ } }
 }
 
+function Get-LanAddresses {   # private IPv4 addresses on Wi-Fi / Ethernet adapters (never a VPN or virtual switch)
+  if (Get-Command Get-NetIPAddress -ErrorAction SilentlyContinue) {
+    return @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+      Where-Object { $_.InterfaceAlias -match '^(Wi-?Fi|WLAN|Ethernet)' -and $_.IPAddress -match '^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)' } |
+      ForEach-Object { $_.IPAddress })
+  }
+  $python = Get-PythonCommand
+  return @(& $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\proxy_lan.py") (Join-Path $StateRoot "lan-devices.json") addresses)
+}
 function Get-PythonCommand {
   foreach ($candidate in @("py","python3","python")) {
     $command = Get-Command $candidate -ErrorAction SilentlyContinue
@@ -598,6 +611,7 @@ if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report"
   if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif (@($Rest).Count -and $Command -ne "throttle" -and
           -not ($Command -eq "tls" -and $Action -in @("allow","ignore","client-cert")) -and
+          -not ($Command -eq "lan" -and $Action -eq "allow") -and
           -not ($Command -eq "rules" -and $Action -in @("add","variant")) -and
           -not ($Command -eq "rules" -and $Action -eq "test" -and @($Rest).Count -eq 1)) {
   $unexpected += @($Rest)
@@ -677,14 +691,23 @@ switch ($Command) {
     $url = "http://127.0.0.1:$WebPort/"
     $bootstrapUrl = New-UiBootstrap
     $proxyMode = if ($chosenUpstream -eq "direct") { "regular@$Port" } else { "upstream:$chosenUpstream@$Port" }
+    $lanIps = @()
+    if ($Lan) {
+      $lanIps = @(Get-LanAddresses)
+      if (-not $lanIps.Count) { Die "-Lan: this PC has no Wi-Fi or Ethernet address on a private network (connect to the Wi-Fi the phone uses)" }
+    }
     $margs = @("--listen-host","127.0.0.1","--mode",$proxyMode,
               "--set","web_host=127.0.0.1","--set","web_port=$WebPort","--set","web_open_browser=false",
               "-s",(Join-Path $PSScriptRoot "addons\proxy_auth.py"),
               "--set","proxy_auth_token_file=$TokenPath","--set","proxy_bootstrap_file=$BootstrapPath",
               "--set","confdir=$ConfDir","--set","connection_strategy=lazy",
               "--set",("http2=" + $(if ((Config-Env "HTTP2" "0") -eq "1") { "true" } else { "false" })), "--set",("stream_large_bodies=" + (Config-Env "STREAM_LARGE_BODIES" "64m")),
-              "-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_source.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_retention.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_operability.py"),
+              "-s",(Join-Path $PSScriptRoot "addons\proxy_lan.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_source.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_retention.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_operability.py"),
               "--set",("proxy_remember_ui=" + $(if ((Config-Env "REMEMBER_UI" "0") -eq "1") { "true" } else { "false" })),"--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project","--set","proxy_max_flows=$MaxFlows","--set","proxy_log_dir=$(Join-Path $StateRoot 'logs')")
+    if ($lanIps.Count) {
+      foreach ($ip in $lanIps) { $margs += @("--mode", ($proxyMode -replace '@\d+$', "@${ip}:$Port")) }
+      $margs += @("--set","proxy_lan=true")
+    }
     if ($Insecure) { $margs += @("--set","ssl_insecure=true"); Info "TLS: upstream verification OFF" }
     if ($ProjectOnly -and $ProjectConfig.hosts) {
       $escapedHosts = $ProjectConfig.hosts.Replace('\','\\').Replace("'","\'")
@@ -692,6 +715,10 @@ switch ($Command) {
     }
     else { $margs += @("--set","view_filter=~http") }
     Info "proxy  127.0.0.1:$Port   (Android emulator: 10.0.2.2:$Port)"
+    if ($lanIps.Count) {
+      Info ("LAN    phones and tablets on this Wi-Fi: Wi-Fi proxy " + (($lanIps | ForEach-Object { "${_}:$Port" }) -join " or ") + ", then allow each")
+      Info "       device in Tools -> Devices (.\${Cli}.ps1 lan allow IP); every other device is refused. Setup page + QR code there."
+    }
     Info "upstream proxy: $chosenUpstream"
     Info "project $Project ($($ProjectConfig.label))"
     Info "rules  $RulesPath  (${Cli}.ps1 rules list)"
@@ -1001,6 +1028,12 @@ switch ($Command) {
     Write-Host $message
     if ($tls.mode -ne "all" -and -not @($tls[$tls.mode]).Count) { Write-Host "note: mode is $($tls.mode) but the $($tls.mode) list is empty$(if ($tls.mode -eq 'allow') { ' - nothing would be decrypted' })" }
     Write-Host $tlsNote
+  }
+  "lan" {   # the phones and tablets allowed to use the proxy (-Lan)
+    $python = Get-PythonCommand
+    $lanArgs = @($(if ($Action) { $Action } else { "list" })) + @($(if ($Name) { $Name })) + @($Rest)
+    & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\proxy_lan.py") (Join-Path $StateRoot "lan-devices.json") @lanArgs
+    exit $LASTEXITCODE
   }
   "compose" {
     if ($FromCurl) {
