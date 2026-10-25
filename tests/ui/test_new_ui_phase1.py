@@ -43,6 +43,33 @@ class NewMainWindow(UiBase):
     def toast(self):
         return self.page.locator("#toast").inner_text()
 
+    def test_window_fills_viewport_in_chromium_and_webkit(self):
+        self.open_new()
+        for engine in ("chromium", "webkit"):
+            browser = self.browser if engine == "chromium" else self.pw.webkit.launch()
+            try:
+                for width, height in ((1280, 790), (1440, 900)):
+                    with self.subTest(engine=engine, viewport=(width, height)):
+                        context = browser.new_context(viewport={"width": width, "height": height})
+                        try:
+                            page = context.new_page()
+                            page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))
+                            page.goto("http://127.0.0.1:%d/rivis/" % self.inst.web_port)
+                            page.locator("#status").wait_for()
+                            status = page.locator("#status").bounding_box()
+                            calls = page.locator("#list").bounding_box()
+                            self.assertLessEqual(abs(status["y"] + status["height"] - height), 4, status)
+                            self.assertLess(status["height"], 40, status)
+                            layout = page.evaluate("""() => ({main: document.querySelector('.rv-main').getBoundingClientRect().height,
+                                detail: document.querySelector('#detail').getBoundingClientRect().height,
+                                rows: getComputedStyle(document.querySelector('.rv-main')).gridTemplateRows})""")
+                            self.assertGreater(calls["height"], 200, (calls, layout))
+                        finally:
+                            context.close()
+            finally:
+                if engine == "webkit":
+                    browser.close()
+
     # ── list and live feed ────────────────────────────────────────────────────────────────────────────────────────────
     def test_calls_show_live_without_a_reload_and_the_status_bar_counts_them(self):
         self.open_new()

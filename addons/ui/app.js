@@ -951,6 +951,15 @@
   }
 
   // ── shortcuts (Proxyman's) ───────────────────────────────────────────────────────────────────────────────────────
+  document.addEventListener("rivis-command", (e) => {
+    const detail = e.detail;
+    if (["map", "remote", "block", "bp", "scripts", "net", "nocache"].includes(detail)) openTool(detail);
+    else if (detail === "clear") clearAll();
+    else if (detail === "follow") setFollow(!S.follow);
+    else if (detail === "filter" || detail === "sources") { const input = $(detail === "filter" ? "q" : "sq"); input.focus(); input.select(); }
+    else if (detail === "record") $("tb-record").click();
+    else if (detail === "classic") location.href = "../";
+  });
   addEventListener("keydown", (e) => {
     const mod = isMac ? e.metaKey : e.ctrlKey, typing = e.target.closest && e.target.closest("input, textarea, select, [contenteditable]");
     if (!$("dialog").hidden) return;

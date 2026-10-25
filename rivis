@@ -28,8 +28,9 @@
 #                                              in Tools → Devices. Off by default
 #   <cli> lan [list] | allow IP [NAME] | rm IP   the phones and tablets allowed to use the proxy (--lan)
 #   <cli> projects list|use ID|show ID|new ID --label L --hosts REGEX
-#   <cli> ui [--new] | stop | restart | status | cert
-#                                 ui --new: the new main window, laid out like Proxyman (preview; the classic view stays)
+#   <cli> ui [--new] [--url] | stop | restart | status | cert
+#                                 ui --new: the new main window; --url prints its one-time login link
+#   <cli> app [--build]             open the native macOS window; --build only builds the app
 #   <cli> browser [URL | --current] [--browser chrome|edge|chromium|brave] [--fresh] [--list]
 #                                 web apps: a separate browser window with its own profile, pointed at the
 #                                 proxy and trusting only this CA. Your normal browser, the system proxy
@@ -825,15 +826,36 @@ cmd_restart() { # R4A-01: replay saved project and flags after an upgrade, for t
   RIVIS_START_PROJECT_SOURCE="$START_PROJECT_SOURCE" RIVIS_START_PROJECT_EXPLICIT="$START_PROJECT_EXPLICIT" "$0" "${START_ARGS[@]}"
 }
 
-cmd_ui() {   # ui [--new]: --new opens the new main window (UI overhaul phase 1) instead of the classic view
-  local next=""
-  case "${1:-}" in --new) next="?next=rivis" ;; "") ;; *) die "usage: $CLI ui [--new]" ;; esac
+cmd_ui() {   # ui [--new] [--url]: generate the same one-time login link for either view
+  local next="" print_url=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --new) [ -z "$next" ] || die "usage: $CLI ui [--new] [--url]"; next="?next=rivis" ;;
+      --url) [ "$print_url" = 0 ] || die "usage: $CLI ui [--new] [--url]"; print_url=1 ;;
+      *) die "usage: $CLI ui [--new] [--url]" ;;
+    esac
+  done
   [ -n "$(port_owner "$WEB_PORT")" ] || die "mitmweb is not running — $CLI start"
   [ -f "$TOKEN_FILE" ] || die "no token file — restart with $CLI start"
   local bootstrap
   bootstrap=$(openssl rand -hex 16) || die "could not generate a one-time UI login"
   atomic_private_text "$BOOTSTRAP_FILE" "$bootstrap" || die "could not save one-time UI login"
-  open "http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap$next"
+  local url="http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap$next"
+  if [ "$print_url" = 1 ]; then printf '%s\n' "$url"; else open "$url"; fi
+}
+
+cmd_app() {
+  [ "$(uname -s)" = Darwin ] || die "the native window is macOS only — use $CLI ui --new"
+  [ $# -eq 0 ] || { [ $# -eq 1 ] && [ "$1" = --build ]; } || die "usage: $CLI app [--build]"
+  local app="$STATE_ROOT/app/Rivis.app" source="$SCRIPT_DIR/addons/macapp/RivisApp.swift"
+  # rebuild when the binary is older than the source (an update brings a new source; the .app folder's own date never changes)
+  if [ "${1:-}" = --build ] || [ ! -x "$app/Contents/MacOS/Rivis" ] || [ "$source" -nt "$app/Contents/MacOS/Rivis" ]; then
+    bash "$SCRIPT_DIR/addons/macapp/build.sh" "$STATE_ROOT/app" >/dev/null || die "could not build the native window"
+  fi
+  [ "${1:-}" = --build ] && { printf '%s\n' "$app"; return 0; }
+  # the window asks this same CLI for its login link and starts Rivis with it, with the PATH it runs under (the installer's
+  # launcher puts the bundled mitmproxy on it)
+  open --env "RIVIS_CLI=$SCRIPT_DIR/$CLI" --env "PATH=$PATH" "$app"
 }
 
 # browser — a separate Chrome/Edge window for web apps (HTTP Toolkit / Proxyman's "open a browser with the proxy").
@@ -1770,6 +1792,7 @@ case "${1:-}" in
   net-reset) shift; cmd_net_reset "$@" ;;
   status)    cmd_status ;;
   ui)        shift; cmd_ui "$@" ;;
+  app)       shift; cmd_app "$@" ;;
   browser)   shift; cmd_browser "$@" ;;
   stop)      cmd_stop ;;
   restart)   cmd_restart ;;

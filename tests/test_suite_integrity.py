@@ -14,7 +14,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-RESERVED = {n for n in dir(unittest.TestCase) if not n.startswith("__")} - {
+RESERVED = {n for n in dir(unittest.TestCase) if not n.startswith("_")} - {
     "setUp", "tearDown", "setUpClass", "tearDownClass", "run", "debug", "id", "shortDescription", "maxDiff", "longMessage"}
 
 

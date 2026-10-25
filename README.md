@@ -86,6 +86,8 @@ rivis start --upstream http://proxy.company:3128  # forward calls through an HTT
 rivis start --upstream direct  # return to a direct connection
 rivis ui                   # reopen the browser tab
 rivis ui --new             # preview: the new main window, laid out like Proxyman
+rivis app                  # open the same view in a native Mac window
+rivis app --build          # rebuild the Mac window and print its path
 rivis browser URL          # web apps: open a separate Chrome/Edge window that goes through Rivis
 rivis browser --current    # the same, for the page open in your browser's front tab
 rivis status               # is it running?

@@ -611,6 +611,7 @@ class Release(unittest.TestCase):
     def test_contains_the_tool_with_the_right_layout_and_modes(self):
         top = os.path.basename(self.tarball)[:-7]
         for rel in ("rivis", "rivis.ps1", "neo-mitm", "product.json", "VERSION", "addons/proxy_rules.py", "addons/panel.js", "addons/js_host.mjs",
+                    "addons/ui/index.html", "addons/ui/app.css", "addons/macapp/RivisApp.swift", "addons/macapp/build.sh", "addons/macapp/Info.plist",
                     "projects/default/project.json"):
             self.assertIn(top + "/" + rel, self.names)
         with tarfile.open(self.tarball) as tf:
