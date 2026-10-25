@@ -11,6 +11,13 @@ from test_ui import PW_REASON, UiBase
 
 @unittest.skipIf(PW_REASON, PW_REASON or "")
 class FiltersCurlUi(UiBase):
+    def setUp(self):
+        """Saved filters live outside the rules file, so the harness reset does not clear them and they pile up over
+        the module's tests. The chip test counts chips, so every test here starts with an empty filter list."""
+        super().setUp()
+        for row in self.panel.state()["saved_filters"]:
+            self.panel.ok("filters_delete", {"name": row["name"]})
+
     def test_cycle5_suggested_filter_name_can_be_saved(self):
         self.open()
         self.P("#sq").fill("~m POST")
@@ -56,12 +63,17 @@ class FiltersCurlUi(UiBase):
         self.P("#ask-yes").click()
 
     def save(self, expression, name):
+        """Save one filter and wait for THAT name to be stored. The old version waited 400 ms for the dialog and then
+        for any chip, so a second save was never actually awaited: under the parallel suite the test moved on while
+        the save was still in flight and the chip count never reached two."""
         self.P("#sq").fill(expression)
         self.P("#ssave").click()
-        self.page.wait_for_timeout(400)
-        self.assertTrue(self.P("#ask-in").count(), self.P("#toast").text_content())
+        self.P("#ask-in").wait_for(timeout=10000)
         self.answer(name)
-        wait_for(lambda: self.P("[data-saved]").count() >= 1, 8, 0.1, "saved chip")
+        wait_for(lambda: any(x["name"] == name for x in self.panel.state()["saved_filters"]),
+                 15, 0.1, "filter %s saved" % name)
+        wait_for(lambda: self.P("[data-saved]").count() >= len(self.panel.state()["saved_filters"]),
+                 10, 0.1, "a chip for every saved filter")
 
     def test_saved_filter_chips_apply_rename_order_delete_shortcut_and_reload(self):
         self.open()

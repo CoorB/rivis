@@ -23,6 +23,21 @@ S = Suite.get()
 UP = S.upstream()
 
 
+def fd_headroom(want):
+    """Raise this process's open-file soft limit to `want`, never past the hard limit. 200 parallel calls need more
+    descriptors than the inherited default, and the suite runs four modules at once: EMFILE there says nothing about
+    Rivis (seen 2026-10-24, "OSError: [Errno 24] Too many open files" inside subprocess.Popen)."""
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft >= want:
+        return
+    target = want if hard in (resource.RLIM_INFINITY, -1) else min(want, hard)
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (ValueError, OSError):
+        pass
+
+
 def write_rules(inst, cfg):
     tmp = inst.rules_path + ".tmp"
     with open(tmp, "w") as fh:
@@ -587,6 +602,7 @@ class Conflicts(Base):
 
 class Load(Base):
     def test_200_parallel_calls_while_rules_hot_reload(self):
+        fd_headroom(1024)
         stop = threading.Event()
 
         def churn():

@@ -123,8 +123,13 @@ $([ "$SYSTEM" = 1 ] && echo "  • The service also puts the certificate in the 
 Use a test AVD only: no personal Google account or data.
 EOF
 if [ "$YES" != --yes ]; then
-  # from the terminal itself: adb calls read stdin and would swallow a piped answer
-  printf 'Continue? [y/N] '; { read -r ans < /dev/tty; } 2>/dev/null || ans=n
+  # from the terminal itself: adb calls read stdin and would swallow a piped answer. With no terminal on stdin or
+  # stdout nobody can answer, and reading /dev/tty would wait for a keystroke that never comes: decline instead.
+  if [ -t 0 ] || [ -t 1 ]; then
+    printf 'Continue? [y/N] '; { read -r ans < /dev/tty; } 2>/dev/null || ans=n
+  else
+    ans=n
+  fi
   case "$ans" in y|Y|yes|YES) ;; *) echo "android: cancelled — nothing changed. '$CLI_NAME android on --manual' prints the Settings steps instead" >&2; exit 3 ;; esac
 fi
 
