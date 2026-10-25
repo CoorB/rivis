@@ -379,6 +379,7 @@ final class RivisApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKU
         command("No Caching", "nocache", to: tools, key: "n", modifiers: [.command, .option])
         command("Scripting", "scripts", to: tools)
         command("Network", "net", to: tools)
+        command("Allow List", "allow", to: tools, key: "a", modifiers: [.command, .option])
 
         let windows = menu("Window")
         add("Minimize", to: windows, action: #selector(NSWindow.performMiniaturize(_:)), key: "m")

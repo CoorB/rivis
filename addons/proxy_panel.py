@@ -3187,7 +3187,7 @@ class ProxyPanel:
                 self.set_header("Referrer-Policy", "no-referrer")
                 self.set_secure_cookie(f"mitmproxy-auth-{ctx.options.web_port}", "y", expires_days=COOKIE_DAYS(),
                                        httponly=True, samesite="Strict")
-                self.redirect("/rivis/" if self.get_argument("next", "") == "rivis" else "/")   # `rivis ui --new`
+                self.redirect("/rivis/" if self.get_argument("next", "") == "rivis" else "/")
 
         class Api(webapp.RequestHandler):
             def _refuse_cross_site(self):

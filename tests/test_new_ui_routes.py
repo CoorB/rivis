@@ -1,5 +1,5 @@
 """UI overhaul phase 1: the new main window at /rivis/ (addons/ui). Served by proxy_panel.py next to mitmweb's page,
-behind the same login, only its own three files, with a strict content security policy; `rivis ui --new` opens it."""
+behind the same login, only its own files, with a strict content security policy; `rivis ui` opens it."""
 import http.cookiejar
 import os
 import sys
@@ -75,6 +75,15 @@ class NewUiRoutes(LiveCase):
         status, _, body, final = get(opener(), opened)
         self.assertEqual((status, final), (200, self.base() + "/rivis/"))
         self.assertNotEqual(self.suite.rivis("ui", "--old", home=self.inst.home, env=self.inst.env).returncode, 0)
+
+    def test_plain_ui_opens_the_new_window_and_classic_is_explicit(self):
+        for flags, suffix, landing in [((), "?next=rivis", "/rivis/"), (("--classic",), "", "/")]:
+            before = self.suite.shim_log("open.log")
+            cp = self.suite.rivis("ui", *flags, home=self.inst.home, env=self.inst.env)
+            self.assertEqual(cp.returncode, 0, cp.stderr)
+            opened = self.suite.shim_log("open.log")[len(before):].strip().splitlines()[-1]
+            self.assertTrue(opened.endswith(suffix), opened)
+            self.assertEqual(get(opener(), opened)[3], self.base() + landing)
 
 
 if __name__ == "__main__":

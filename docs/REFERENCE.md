@@ -329,11 +329,12 @@ before removing add-ons. It retains `~/.rivis` and `~/.mitmproxy` and prints sep
 
 ## Panel
 
-### New main window (preview)
+### Main window
 
-`rivis ui --new` (rivis.ps1: `ui -New`) opens the new main window at `http://127.0.0.1:<web port>/rivis/`, laid out
-like Proxyman: tool switches in the toolbar (lit when on; No Caching switches there, the other tools open in the
-classic view until their own windows exist), filter chips (All, HTTP, HTTPS, WebSocket, JSON, Form, XML, JS, CSS,
+`rivis ui` (rivis.ps1: `ui`) opens the main window at `http://127.0.0.1:<web port>/rivis/`. `rivis ui --classic`
+(PowerShell: `ui -Classic`) opens the classic view for this release; `ui --new` also opens the main window. `rivis start`
+opens the main window unless `--no-open` is supplied. Tool switches in the toolbar light up when on; No Caching
+switches there and the other tools open their windows. The page has filter chips (All, HTTP, HTTPS, WebSocket, JSON, Form, XML, JS, CSS,
 GraphQL, Document, Media, 1xx–5xx) and your saved filters, apps, devices and domains on the left, the call list in the
 middle, and the request and response side by side under it. The filter box takes plain text or a `~` filter; an
 invalid `~` filter is reported and never applied. The list keeps live without a reload; **Record** pauses it (new
@@ -343,7 +344,7 @@ for JSON bodies up to 2 MB, opens only what you open or what a search finds, and
 bodies show as hex; text is shown up to 512 KB. Right-click a call for Copy URL, Copy as cURL, Repeat, Map Local,
 Breakpoint, Show only this host and Delete. Columns are the project's (the same choice as the classic view's picker).
 Shortcuts: ⌥⌘F filter, ⌘F search in the body, ⌘K find a source, ⇧⌘L follow the newest, ⇧⌘⌫ clear all (asks
-first), ⌥⌘N No Caching, ⌥⌘L / ⌥⌘R / ⌥⌘B Map Local / Map Remote / Breakpoint, ⌥1–⌥9 saved filters, ↑ ↓ calls,
+first), ⌥⌘N No Caching, ⌥⌘A Allow List (hosts to decrypt), ⌥⌘L / ⌥⌘R / ⌥⌘B Map Local / Map Remote / Breakpoint, ⌥1–⌥9 saved filters, ↑ ↓ calls,
 ⌫ delete the selected call. The classic view stays as it is (**Classic view** in the toolbar).
 
 Open the mitmweb UI and click the **Tools** button at the right end of the toolbar. Tabs provide This call, Compose, Map Local,

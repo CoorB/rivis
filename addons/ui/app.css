@@ -161,8 +161,8 @@ button, input, select { font: inherit; color: inherit; }
 .rv-menu button:hover, .rv-menu button:focus { background: var(--rv-accent-soft); outline: none; }
 .rv-menu kbd { color: var(--rv-text-3); font: 11px var(--rv-font); }
 .rv-menu hr { border: 0; border-top: 1px solid var(--rv-border); margin: 4px 2px; }
-.rv-scrim { position: fixed; inset: 0; background: var(--rv-overlay); z-index: 60; }
-.rv-dialog { position: fixed; z-index: 61; left: 50%; top: 18%; transform: translateX(-50%); width: min(520px, 92vw); background: var(--rv-surface); border-radius: 10px; box-shadow: var(--rv-shadow-3); padding: 18px; }
+.rv-scrim { position: fixed; inset: 0; background: var(--rv-overlay); z-index: 2147483644; }
+.rv-dialog { position: fixed; z-index: 2147483645; left: 50%; top: 18%; transform: translateX(-50%); width: min(520px, 92vw); background: var(--rv-surface); border-radius: 10px; box-shadow: var(--rv-shadow-3); padding: 18px; }
 .rv-dialog h3 { margin: 0 0 8px; font-size: 15px; }
 .rv-dialog p { margin: 0 0 14px; color: var(--rv-text-2); }
 .rv-dialog .rv-btns { display: flex; justify-content: flex-end; gap: 8px; }
@@ -171,7 +171,7 @@ button, input, select { font: inherit; color: inherit; }
 .rv-btn { height: 30px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--rv-border-strong); background: var(--rv-surface); cursor: pointer; }
 .rv-btn.p { background: var(--rv-accent); border-color: var(--rv-accent); color: var(--rv-accent-fg); }
 .rv-btn.d { background: var(--rv-danger); border-color: var(--rv-danger); color: #fff; }
-.rv-toast { position: fixed; z-index: 70; left: 50%; bottom: 36px; transform: translateX(-50%); background: var(--rv-text); color: var(--rv-surface); padding: 8px 14px; border-radius: 8px; box-shadow: var(--rv-shadow-2); opacity: 0; pointer-events: none; transition: opacity 160ms; max-width: 80vw; }
+.rv-toast { position: fixed; z-index: 2147483646; left: 50%; bottom: 36px; transform: translateX(-50%); background: var(--rv-text); color: var(--rv-surface); padding: 8px 14px; box-shadow: var(--rv-shadow-2); opacity: 0; pointer-events: none; transition: opacity 160ms; max-width: 80vw; }
 .rv-toast.show { opacity: 1; }
 .rv-toast.err { background: var(--rv-danger); color: #fff; }
 

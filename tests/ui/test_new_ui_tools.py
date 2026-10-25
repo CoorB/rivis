@@ -62,6 +62,20 @@ class ToolWindows(UiBase):
     def toast(self):
         return self.page.locator("#toast").inner_text()
 
+    def test_allow_list_shortcut_opens_network_at_decrypt_hosts(self):
+        self.open_new()
+        self.page.locator('#q').focus()
+        self.page.keyboard.press(MOD + "+Alt+A")
+        w = self.win_open("net")
+        field = w.locator('[data-net-tls-add="allow"]')
+        self.assertTrue(field.is_visible())
+        self.assertTrue(field.evaluate("e => document.activeElement === e"))
+        self.assertTrue(field.evaluate("e => { const r=e.getBoundingClientRect(); return r.top>=0 && r.bottom<=innerHeight }"))
+        self.page.keyboard.press("Escape")
+        self.page.locator('#tscroll').focus()
+        self.page.keyboard.press("?")
+        self.assertIn("Allow List", self.page.locator("#dialog").inner_text())
+
     # ── Breakpoint ──────────────────────────────────────────────────────────────────────────────────────────────────
     def test_breakpoint_from_the_menu_then_the_paused_call_opens_by_itself_and_its_edit_reaches_the_app(self):
         self.open_new("/json/small?nbp=1")

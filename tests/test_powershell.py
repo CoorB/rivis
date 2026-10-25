@@ -42,7 +42,9 @@ class PowerShellSource(unittest.TestCase):
     def test_native_window_command_and_printable_ui_link(self):
         self.assertIn('[Alias("Url")][switch]$PrintUiUrl', self.src)
         self.assertIn('if ($PrintUiUrl) { Write-Output $uiUrl } else { Start-Process $uiUrl }', self.src)
-        self.assertIn('"app" { Die "the native window is macOS only — use rivis ui --new" }', self.src)
+        self.assertIn('"app" { Die "the native window is macOS only — use rivis ui" }', self.src)
+        self.assertIn('if (-not $Classic) { $uiUrl += "?next=rivis" }', self.src)
+        self.assertIn('$bootstrapUrl = (New-UiBootstrap) + "?next=rivis"', self.src)
 
     def test_start_keeps_its_token_until_the_first_process_exits(self):
         self.assertIn('RivisStart-', self.src)
@@ -188,7 +190,7 @@ class Commands(unittest.TestCase):
         return cp
 
     def test_native_window_is_mac_only(self):
-        self.bad("app", msg="the native window is macOS only — use rivis ui --new")
+        self.bad("app", msg="the native window is macOS only — use rivis ui")
 
     def test_proxyman_import_parity_with_bash(self):
         source = os.path.join(harness.REPO, "tests", "fixtures", "proxyman")

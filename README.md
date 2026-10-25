@@ -84,8 +84,9 @@ using the updated features. `rivis status` also reports a running version that d
 rivis start --background   # start (keeps running after you close Terminal)
 rivis start --upstream http://proxy.company:3128  # forward calls through an HTTP proxy; saved for later starts
 rivis start --upstream direct  # return to a direct connection
-rivis ui                   # reopen the browser tab
-rivis ui --new             # preview: the new main window, laid out like Proxyman
+rivis ui                   # reopen the new main window
+rivis ui --new             # same as plain ui
+rivis ui --classic         # classic view fallback for this release
 rivis app                  # open the same view in a native Mac window
 rivis app --build          # rebuild the Mac window and print its path
 rivis browser URL          # web apps: open a separate Chrome/Edge window that goes through Rivis
@@ -95,6 +96,9 @@ rivis stop                 # stop
 rivis restart              # restart with saved options; load a new `projects use` selection unless start used --project
 rivis --version            # which version you have
 ```
+
+`rivis start` opens the main window when ready; add `--no-open` to leave the browser closed.
+On Windows, `rivis.ps1 ui` opens the main window and `rivis.ps1 ui -Classic` opens the fallback view.
 
 Everything else is in the browser panel. The full command list is in [docs/REFERENCE.md](docs/REFERENCE.md).
 `rivis status` and `rivis doctor` show the saved upstream setting. On Windows, use

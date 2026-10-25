@@ -21,8 +21,8 @@
   function popupForm(w, title, value, label) {
     const box = document.createElement("form"); box.className = "rv-editor";
     box.innerHTML = `<label>${esc(title)} <input type="text" aria-label="${esc(title)}" value="${esc(value || "")}"></label> <button class="rv-btn p" type="submit">${esc(label || "Save")}</button> <button class="rv-btn" type="button">Cancel</button>`;
-    w.body.prepend(box); const input = box.querySelector("input"); input.focus();
-    return new Promise((resolve) => { const done = (v) => { box.remove(); resolve(v); }; box.onsubmit = (e) => { e.preventDefault(); done(input.value.trim()); }; box.querySelector("[type=button]").onclick = () => done(null); box.onkeydown = (e) => { if (e.key === "Escape") { e.stopPropagation(); done(null); } }; });
+    w.data.popupOpen = true; w.body.prepend(box); const input = box.querySelector("input"); input.focus();
+    return new Promise((resolve) => { const done = (v) => { w.data.popupOpen = false; box.remove(); resolve(v); }; box.onsubmit = (e) => { e.preventDefault(); done(input.value.trim()); }; box.querySelector("[type=button]").onclick = () => done(null); box.onkeydown = (e) => { if (e.key === "Escape") { e.stopPropagation(); done(null); } }; });
   }
 
   /* The device probe is separate from state. Keep the typed browser URL and local consent while it polls. */
@@ -36,7 +36,7 @@
     try { w.data.deviceState = await A.api("devices", {}); } catch (e) { w.data.deviceState = { error: e.message }; }
     if (!w.shown) return;
     const sig = JSON.stringify([w.data.deviceState, (A.state() || {}).lan, (A.state() || {}).untrusted]);
-    if (sig !== w.data.sig && document.activeElement !== w.body.querySelector("[data-browser-url]")) { w.data.sig = sig; drawDevices(w); }
+    if (sig !== w.data.sig && !w.data.popupOpen && document.activeElement !== w.body.querySelector("[data-browser-url]")) { w.data.sig = sig; drawDevices(w); }
     clearTimeout(w.data.timer);
     const d = w.data.deviceState || {};
     w.data.timer = setTimeout(() => probe(w), d.pending ? 600 : d.job && d.job.running ? 1500 : 4000);
@@ -113,7 +113,7 @@
   T.register("collections", {
     title: "Collections", width: 800, height: 610,
     render(w) { w.data.sig = null; w.data.open = w.data.open || null; drawCollections(w); },
-    onState(st, w) { if (w && JSON.stringify(st.collections) !== w.data.sig && !w.body.querySelector("input:focus, textarea:focus")) { w.data.sig = JSON.stringify(st.collections); drawCollections(w); if (w.data.open) loadEntries(w); } },
+    onState(st, w) { if (w && JSON.stringify(st.collections) !== w.data.sig && !w.data.popupOpen && !w.body.querySelector("input:focus, textarea:focus")) { w.data.sig = JSON.stringify(st.collections); drawCollections(w); if (w.data.open) loadEntries(w); } },
     dirty(w) { return !!((w.data.editing && w.data.editing !== w.data.savedForm) || w.data.importFile); },
   });
   function drawCollections(w) {
@@ -130,7 +130,7 @@
         <button class="rv-btn" data-item="${esc(x.name)}" data-action="entries">${w.data.open === x.name ? "Hide" : "Calls"}</button>
         <button class="rv-btn" data-item="${esc(x.name)}" data-action="har">HAR</button><button class="rv-btn" data-item="${esc(x.name)}" data-action="delete">Delete</button></div>
         ${w.data.open === x.name ? `<div class="rv-editor" data-entries>${w.data.entries ? entriesHTML(w.data.entries) : "Loading…"}</div>` : ""}`).join("") : ui.empty("No collections yet", "Name a journey, record it, then replay its responses."))
-      + `<h4>Import</h4><div class="rv-form"><input type="file" data-import-file accept=".har,application/json" aria-label="HAR file">${w.data.importFile ? `<span class="rv-win-hint">${esc(w.data.importFile.name)}</span>` : ""}<input type="text" data-field="importName" aria-label="Collection name" placeholder="Name" value="${esc(old.importName)}"><button class="rv-btn" data-action="import">Import HAR</button></div>`
+      + `<h4>Import</h4><div class="rv-form"><input type="file" data-import-file accept=".har,application/json" aria-label="HAR file">${w.data.importFile ? `<span class="rv-win-hint">Chosen: ${esc(w.data.importFile.name)} (choose again to change)</span>` : ""}<input type="text" data-field="importName" aria-label="Collection name" placeholder="Name" value="${esc(old.importName)}"><button class="rv-btn" data-action="import">Import HAR</button></div>`
       + harChoice() + note(`Stored in ${st.project_state || "this project's private folder"}/collections.`);
     w.body.oninput = () => { w.data.form = Object.fromEntries([...w.body.querySelectorAll("[data-field]")].map((x) => [x.dataset.field, x.value])); w.data.editing = JSON.stringify(w.data.form); };
     w.body.querySelector("[data-import-file]").onchange = (e) => { w.data.importFile = e.target.files[0] || null; };
@@ -165,7 +165,7 @@
   T.register("sessions", {
     title: "Sessions", width: 800, height: 590,
     render(w) { w.data.sig = null; w.data.form = w.data.form || { name: "", note: "", visible: false }; if (!w.data.savedForm) w.data.savedForm = JSON.stringify(w.data.form); drawSessions(w); },
-    onState(st, w) { if (w && JSON.stringify(st.sessions) !== w.data.sig && !w.data.choiceOpen && !w.body.querySelector("input:focus, textarea:focus")) { w.data.sig = JSON.stringify(st.sessions); drawSessions(w); } },
+    onState(st, w) { if (w && JSON.stringify(st.sessions) !== w.data.sig && !w.data.choiceOpen && !w.data.popupOpen && !w.body.querySelector("input:focus, textarea:focus")) { w.data.sig = JSON.stringify(st.sessions); drawSessions(w); } },
     dirty(w) { return !!(w.data.form && JSON.stringify(w.data.form) !== w.data.savedForm); },
   });
   function drawSessions(w) {
@@ -174,12 +174,23 @@
     w.body.innerHTML = `<h4>Save the current capture</h4><div class="rv-form"><input type="text" class="grow" data-sess-name aria-label="Session name" placeholder="Session name" value="${esc(f.name)}"></div>
       <div class="rv-form"><input type="text" class="grow" data-sess-note aria-label="Note" placeholder="Note (optional)" value="${esc(f.note)}"></div>
       <div class="rv-form"><label><input type="checkbox" data-sess-visible ${f.visible ? "checked" : ""}> Only calls matching the current search</label><button class="rv-btn p" data-action="save">Save session</button></div>
+      <h4>Open a capture file</h4><div class="rv-form"><input type="file" data-sess-file accept=".har,.mitm,.flow,application/json" aria-label="Open a capture file"></div>
       <h4>Saved sessions (${ss.length})</h4>` + (ss.length ? ss.map((x) => `<div class="rv-form"><span class="grow"><b>${esc(x.name)}</b> · ${esc(x.count)} calls · ${esc(stamp(x.created))}<br>${esc((x.hosts || []).slice(0, 3).join(", "))}
       <button class="rv-lnk" data-action="note" data-item="${esc(x.name)}">${x.note ? esc(x.note) : "Add a note…"}</button></span>
       <button class="rv-btn" data-action="load" data-item="${esc(x.name)}">Open</button><button class="rv-btn" data-action="har" data-item="${esc(x.name)}">HAR</button><button class="rv-btn" data-action="delete" data-item="${esc(x.name)}">Delete</button></div>`).join("") : ui.empty("No saved sessions yet", "Name the capture above and save it. Open brings the calls back into the list."))
       + harChoice() + note(`Stored in ${st.project_state || "this project's private folder"}/sessions.`);
     w.body.oninput = () => { f.name = w.body.querySelector("[data-sess-name]").value; f.note = w.body.querySelector("[data-sess-note]").value; f.visible = w.body.querySelector("[data-sess-visible]").checked; };
     w.body.onchange = w.body.oninput;
+    w.body.querySelector("[data-sess-file]").onchange = async (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      const count = Number(((A.state() || {}).flow_count) || 0);
+      const mode = count ? await captureChoice(w, count) : "keep";
+      if (mode) {
+        try { const result = await A.openCapture(file, mode); A.toast(mode === "replace" ? "Opened " + file.name : "Added " + (result.added || 0) + " calls from " + file.name); }
+        catch (error) { A.toast(error.message, true); }
+      }
+      e.target.value = "";
+    };
     w.body.onclick = (e) => sessAction(w, e.target.closest("[data-action]"));
     restore(w, key);
   }
@@ -206,12 +217,29 @@
     w.data.choiceOpen = true; w.body.prepend(box); box.querySelector("[data-choice=add]").focus();
     return new Promise((resolve) => { const done = (v) => { w.data.choiceOpen = false; box.remove(); resolve(v); }; box.querySelectorAll("[data-choice]").forEach((b) => b.onclick = () => done(b.dataset.choice === "cancel" ? null : b.dataset.choice)); box.onkeydown = (e) => { if (e.key === "Escape") { e.stopPropagation(); done(null); } }; });
   }
+  function captureChoice(w, count) {
+    const box = document.createElement("div"); box.className = "rv-editor"; box.setAttribute("role", "dialog"); box.setAttribute("aria-label", "Open capture file");
+    box.innerHTML = `<h4>Open this file?</h4>${note("You have " + count + " captured calls. Keep them and add the file, or replace them and lose the current list.")}
+      <div class="rv-form"><button type="button" class="rv-btn p" data-choice="add">Keep my calls and add the file</button><button type="button" class="rv-btn" data-choice="replace">Replace the list (lose ${count})</button><button type="button" class="rv-btn" data-choice="cancel">Cancel</button></div>`;
+    w.data.choiceOpen = true; w.body.prepend(box); box.querySelector('[data-choice="add"]').focus();
+    return new Promise((resolve) => { const done = (value) => { w.data.choiceOpen = false; box.remove(); resolve(value); }; box.querySelectorAll("[data-choice]").forEach((b) => b.onclick = () => done(b.dataset.choice === "cancel" ? null : b.dataset.choice === "add" ? "keep" : "replace")); box.onkeydown = (e) => { if (e.key === "Escape") { e.stopPropagation(); done(null); } }; });
+  }
 
   T.register("compare", {
     title: "Compare", width: 860, height: 620,
     render(w, opts) { if (opts && opts.left && opts.left !== w.data.left) { w.data.left = opts.left; w.data.result = null; } else if (!w.data.left && A.selected()) w.data.left = A.selected().id; w.data.right = w.data.right || ""; drawCompare(w); },
-    onState(st, w) { if (w) { const sig = A.recentFlows().map((f) => f.id).join("|"); if (sig !== w.data.sig && !w.body.querySelector("select:focus")) { w.data.sig = sig; drawCompare(w); } } },
+    onState(st, w) { if (w) { const sig = A.recentFlows().map((f) => f.id).join("|"); if (sig !== w.data.sig && !w.body.querySelector("select:focus")) { w.data.sig = sig; if (w.data.result) updateCompareChoices(w); else drawCompare(w); } } },
   });
+  function updateCompareChoices(w) {
+    const calls = A.recentFlows(), chosen = A.selected();
+    for (const id of [w.data.left, w.data.right]) { const f = id && A.flow(id); if (f && f.type === "http" && !calls.some((x) => x.id === id)) calls.unshift(f); }
+    const options = (value) => `<option value="">Choose a call…</option>` + calls.map((f) => `<option value="${esc(f.id)}" ${f.id === value ? "selected" : ""}>${esc(f.request.method + " " + A.urlOf(f))}</option>`).join("");
+    w.body.querySelectorAll("[data-compare]").forEach((s) => { s.innerHTML = options(w.data[s.dataset.compare]); });
+    const button = w.body.querySelector('[data-action="compare"]');
+    button.disabled = !(w.data.left && w.data.right && w.data.left !== w.data.right && calls.some((x) => x.id === w.data.left) && calls.some((x) => x.id === w.data.right));
+    const label = w.body.querySelector('[data-action="selected"]');
+    if (label && label.nextSibling) label.nextSibling.textContent = chosen ? chosen.request.method + " " + A.urlOf(chosen) : "No call selected";
+  }
   function drawCompare(w) {
     const calls = A.recentFlows(), key = focusKey(w), label = (f) => f ? f.request.method + " " + A.urlOf(f) : "";
     for (const id of [w.data.left, w.data.right]) { const f = id && A.flow(id); if (f && f.type === "http" && !calls.some((x) => x.id === id)) calls.unshift(f); }

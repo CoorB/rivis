@@ -52,6 +52,16 @@
     if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
     return j;
   }
+  async function openCapture(file, mode) {
+    const form = new FormData(); form.append("file", file);
+    const r = await http("../flows/dump?mode=" + encodeURIComponent(mode), {
+      method: "POST", headers: { "X-XSRFToken": xsrf() }, body: form }, 30000);
+    if (!r.ok) throw new Error((await r.text()).trim() || "Could not open the capture file (HTTP " + r.status + ")");
+    let answer = {};
+    try { answer = await r.json(); } catch (e) { /* a replacement may return an empty answer */ }
+    loadFlows(); pollState();
+    return answer;
+  }
 
   // ── model ────────────────────────────────────────────────────────────────────────────────────────────────────────
   const S = {
@@ -168,7 +178,7 @@
       case "method": return `<span class="rv-m rv-m-${esc(r.method)}">${esc(r.method)}</span>`;
       case "status":
         if (f.intercepted) return `<span class="rv-paused" title="Paused at a breakpoint: click to edit it">⏸ paused</span>`;
-        if (f.error && !s) return `<span class="rv-err" title="${esc(f.error.msg)}">failed</span>`;
+        if (f.error) return `<span class="rv-err" title="${esc(f.error.msg)}">${s ? esc(s.status_code) + " ✕ failed" : "failed"}</span>`;
         return s ? `<span class="rv-s${String(s.status_code)[0]}">${s.status_code}</span>` : `<span class="rv-muted">…</span>`;
       case "size": return esc(fmtBytes(size(f)));
       case "time": case "duration": return esc(fmtMs(duration(f)));
@@ -206,7 +216,12 @@
     rowsEl.innerHTML = html;
     const empty = $("empty");
     empty.hidden = n > 0;
-    if (!n) empty.innerHTML = S.order.length ? "No call matches the filter." : "No calls yet. Start the app on a simulator, emulator or device that is set up for Rivis. <button type=\"button\" class=\"rv-btn\" data-empty-dev>Set up a device</button>";
+    if (!n) {
+      const selected = S.source && (S.source.host || (S.state && S.state.sources && (S.state.sources.list || [])
+        .find((r) => r.key === S.source.key) || {}).app || (S.source.key || "").split("|")[1]);
+      empty.innerHTML = S.order.length ? "No call matches the filter" + (selected ? " for <b>" + esc(selected) + "</b>" : "") + "."
+        : "No calls yet. Start the app on a simulator, emulator or device that is set up for Rivis. <button type=\"button\" class=\"rv-btn\" data-empty-dev>Set up a device</button>";
+    }
   }
   $("empty").addEventListener("click", (e) => { if (e.target.closest("[data-empty-dev]")) window.RivisTools.open("devices"); });
   tscroll.addEventListener("scroll", () => drawList(false));
@@ -544,7 +559,7 @@
   const REQ_TABS = [["header", "Header"], ["query", "Query"], ["body", "Body"], ["cookies", "Cookies"], ["raw", "Raw"]];
   const RES_TABS = [["header", "Header"], ["body", "Body"], ["tree", "Tree"], ["raw", "Raw"]];
   const TREE_MAX = 2 * 1024 * 1024, TEXT_MAX = 512 * 1024, HEX_MAX = 4096;
-  const sigOf = (f) => f ? f.id + ":" + (f.response ? f.response.status_code + ":" + f.response.contentLength + ":" + (f.response.timestamp_end || 0) : "-") + ":" + (f.request.contentLength || 0) : "";
+  const sigOf = (f) => f ? f.id + ":" + (f.response ? f.response.status_code + ":" + f.response.contentLength + ":" + (f.response.timestamp_end || 0) : "-") + ":" + (f.request.contentLength || 0) + ":" + ((f.error && f.error.msg) || "") : "";
   function refreshDetailIfChanged() { const f = S.byId.get(S.sel); if (sigOf(f) !== D.sig) drawDetail(); }
   async function body(f, side) {
     const msg = f[side]; if (!msg) return { text: "", bytes: 0 };
@@ -590,7 +605,7 @@
       return;
     }
     const r = f.request, s = f.response, mySig = D.sig;
-    const sline = s ? `${s.status_code} ${esc(s.reason || "")}` : f.error ? `<span class="rv-err">${esc(f.error.msg)}</span>` : "waiting…";
+    const sline = f.error ? `<span class="rv-err">${s ? esc(s.status_code) + " · " : ""}Failed: ${esc(f.error.msg)}</span>` : s ? `${s.status_code} ${esc(s.reason || "")}` : "waiting…";
     req.innerHTML = paneHead("req", "Request", REQ_TABS, D.req) + `<div class="rv-pb" data-body="req" tabindex="0"><div class="rv-first">${esc(r.method)} ${esc(urlOf(f))} ${esc(r.http_version || "")}</div><div class="rv-dyn"></div></div>`;
     res.innerHTML = paneHead("res", `Response · ${sline}`, RES_TABS, D.res) + `<div class="rv-pb" data-body="res" tabindex="0"><div class="rv-dyn"></div></div>`;
     await Promise.all([fillPane(f, "req", mySig), fillPane(f, "res", mySig)]);
@@ -959,16 +974,22 @@
     else if (detail === "filter" || detail === "sources") { const input = $(detail === "filter" ? "q" : "sq"); input.focus(); input.select(); }
     else if (detail === "record") $("tb-record").click();
     else if (detail === "classic") location.href = "../";
+    else if (detail === "allow") openAllowList();
   });
+  function openAllowList() {
+    const w = window.RivisTools.open("net", { focus: '[data-net-tls-add="allow"]' });
+    if (w) { const field = w.body.querySelector('[data-net-tls-add="allow"]'); if (field) field.scrollIntoView({ block: "center" }); }
+  }
   addEventListener("keydown", (e) => {
     const mod = isMac ? e.metaKey : e.ctrlKey, typing = e.target.closest && e.target.closest("input, textarea, select, [contenteditable]");
     if (!$("dialog").hidden) return;
     if (mod && e.altKey && e.code === "KeyF") { e.preventDefault(); $("q").focus(); $("q").select(); return; }
     // a text field keeps its keys (review); ⌥⌘ tool chords type nothing, so they open their tool from anywhere, as in Proxyman
-    if (typing && !(mod && (e.code === "KeyK" || e.code === "KeyF")) && !(mod && e.altKey && /^Key[LRBXN]$/.test(e.code))) return;
+    if (typing && !(mod && (e.code === "KeyK" || e.code === "KeyF")) && !(mod && e.altKey && /^Key[ALRBXN]$/.test(e.code))) return;
     if (mod && e.shiftKey && (e.key === "Backspace" || e.key === "Delete")) { e.preventDefault(); clearAll(); return; }
     if (mod && e.shiftKey && e.code === "KeyL") { e.preventDefault(); setFollow(!S.follow); return; }
     if (mod && e.altKey && e.code === "KeyN") { e.preventDefault(); openTool("nocache"); return; }
+    if (mod && e.altKey && e.code === "KeyA") { e.preventDefault(); openAllowList(); return; }
     if (mod && e.altKey && e.code === "KeyL") { e.preventDefault(); openTool("map"); return; }
     if (mod && e.altKey && e.code === "KeyR") { e.preventDefault(); openTool("remote"); return; }
     if (mod && e.altKey && e.code === "KeyB") { e.preventDefault(); openTool("bp"); return; }
@@ -1039,7 +1060,7 @@
   const KEYS = [
     [`${MOD}K`, "Find or pin a domain in the sidebar"], [`${ALT}${MOD}F`, "Filter the list"], [`${SHIFT}${MOD}L`, "Auto-select the newest call (follow)"],
     [`${SHIFT}${MOD}⌫`, "Clear the list"], [`${ALT}${MOD}L`, "Map Local"], [`${ALT}${MOD}R`, "Map Remote"], [`${ALT}${MOD}B`, "Breakpoint"],
-    [`${ALT}${MOD}X`, "Block List"], [`${ALT}${MOD}N`, "No Caching"], [`${ALT}1 … ${ALT}9`, "Saved filters"], [`${MOD}F`, "Search in the request or response body"],
+    [`${ALT}${MOD}X`, "Block List"], [`${ALT}${MOD}N`, "No Caching"], [`${ALT}${MOD}A`, "Allow List (hosts to decrypt)"], [`${ALT}1 … ${ALT}9`, "Saved filters"], [`${MOD}F`, "Search in the request or response body"],
     ["↑ ↓", "Move through the list"], ["⌫", "Delete the selected call"], [`${MOD}↩`, "Continue a paused call · send in Edit and Repeat"], [`${MOD}S`, "Save in Map Local"], ["Esc", "Close the front window"],
   ];
   function showDialog(html, focusSel) {
@@ -1087,7 +1108,7 @@
   // what the tool windows may use: the server, the selection, the page's own dialogs. The state arrives every 2 s
   // (onState), and at once after a change (refresh).
   window.RivisApp = Object.freeze({
-    $, esc, api, toast, ask, copy, MOD, ALT, SHIFT, isMac,
+    $, esc, api, openCapture, toast, ask, copy, MOD, ALT, SHIFT, isMac,
     state: () => S.state, selected: () => (S.sel && S.byId.get(S.sel)) || null, flow: (id) => S.byId.get(id) || null,
     recentFlows: () => S.order.slice(-100).reverse().map((id) => S.byId.get(id)).filter((f) => f && f.type === "http"),
     currentFilter: () => {

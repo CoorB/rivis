@@ -17,6 +17,8 @@ MOD = "Meta" if sys.platform == "darwin" else "Control"
 class MoreWindows(UiBase):
     def setUp(self):
         super().setUp()
+        for saved in self.panel.state().get('sessions') or []:
+            self.panel.ok('sess_delete', {'name': saved['name']})
         self.context.grant_permissions(["clipboard-read", "clipboard-write"])
         self.page.on("dialog", lambda d: (self.errors.append(("browser dialog", d.type, d.message)), d.dismiss()))
 
@@ -240,6 +242,66 @@ class MoreWindows(UiBase):
         self.assertIn("after", w.locator("[data-compare-result]").inner_text())
         self.assertEqual(self.errors, [])
 
+    def test_compare_result_keeps_its_scroll_while_calls_arrive(self):
+        self.open_new()
+        self.fetch("/echo?diff=scroll-a")
+        self.fetch("/echo?diff=scroll-b")
+        w = self.more("compare")
+        options = w.locator('[data-compare="left"] option').evaluate_all("els => els.map(e => ({value:e.value, text:e.textContent}))")
+        w.locator('[data-compare="left"]').select_option(next(x["value"] for x in options if "scroll-a" in x["text"]))
+        w.locator('[data-compare="right"]').select_option(next(x["value"] for x in options if "scroll-b" in x["text"]))
+        w.locator('[data-action="compare"]').click()
+        result = w.locator("[data-compare-result]")
+        wait_for(lambda: "Summary" in result.inner_text(), 8, 0.1, "comparison")
+        result.evaluate("e => { window.__compareResultNode = e.firstElementChild }")
+        self.fetch("/echo?diff=stream")
+        wait_for(lambda: "stream" in w.locator('[data-compare="right"]').inner_text(), 8, 0.1, "new option")
+        self.assertTrue(result.evaluate("e => e.firstElementChild === window.__compareResultNode"))
+
+    def test_session_note_form_survives_state_refresh_with_submit_focused(self):
+        self.open_new()
+        w = self.more("sessions")
+        w.locator("[data-sess-name]").fill("note-focus")
+        w.locator('[data-action="save"]').click()
+        wait_for(lambda: bool(self.panel.state()["sessions"]), 8, 0.1, "saved")
+        w.locator('[data-action="note"]').click()
+        w.locator('.rv-editor input').fill("typing survives")
+        w.locator('.rv-editor button[type=submit]').focus()
+        self.panel.ok("sess_note", {"name": "note-focus", "note": "server refresh"})
+        self.page.evaluate("window.RivisApp.refresh()")
+        self.page.wait_for_timeout(700)
+        self.assertEqual(w.locator('.rv-editor input').input_value(), "typing survives")
+
+    def test_collections_import_file_hint_says_it_is_kept_after_redraw(self):
+        self.open_new()
+        w = self.more("collections")
+        w.locator("[data-import-file]").set_input_files({"name": "chosen.har", "mimeType": "application/json", "buffer": b"{}"})
+        w.locator('[data-action="import"]').focus()
+        self.panel.ok("coll_record", {"name": "refresh", "record_match": "."})
+        self.page.evaluate("window.RivisApp.refresh()")
+        wait_for(lambda: "Chosen: chosen.har" in w.inner_text(), 8, 0.1, "retained file hint")
+
+    def test_open_capture_file_asks_before_keep_replace_or_cancel(self):
+        import json
+        self.open_new("/echo?capture=file")
+        self.panel.ok("sess_save", {"name": "file-source", "overwrite": True})
+        har = self.panel.ok("sess_har", {"name": "file-source"})["har"]
+        data = json.dumps(har).encode()
+        self.fetch("/echo?capture=after")
+        before = len(self.inst.flows())
+        w = self.more("sessions")
+        w.locator("[data-sess-file]").set_input_files({"name": "capture.har", "mimeType": "application/json", "buffer": data})
+        wait_for(lambda: w.locator('[data-choice="add"]').count() == 1, 8, 0.1, "open choice")
+        self.assertEqual(len(self.inst.flows()), before)
+        w.locator('[data-choice="cancel"]').click()
+        self.assertEqual(len(self.inst.flows()), before)
+        w.locator("[data-sess-file]").set_input_files({"name": "capture.har", "mimeType": "application/json", "buffer": data})
+        w.locator('[data-choice="add"]').click()
+        wait_for(lambda: len(self.inst.flows()) > before, 8, 0.1, "added capture")
+        w.locator("[data-sess-file]").set_input_files({"name": "capture.har", "mimeType": "application/json", "buffer": data})
+        w.locator('[data-choice="replace"]').click()
+        wait_for(lambda: len(self.inst.flows()) == len(har["log"]["entries"]), 8, 0.1, "replaced capture")
+
     def test_devices_shortcut_absent_devices_and_consent(self):
         import json
         fake = {"ios": [], "android": [{"id": "emulator-5590", "name": "Pixel Play", "os": "Android 15", "ready": False,
@@ -268,6 +330,19 @@ class MoreWindows(UiBase):
         self.assertIn("adb was not found", w.inner_text())
         self.assertIn("rivis setup", w.inner_text())
         self.assertEqual(self.errors, [])
+
+    def test_device_rename_form_survives_a_probe_with_submit_focused(self):
+        self.open_new()
+        self.page.evaluate("""() => { window.RivisApp.state().lan = {on:true, devices:[{ip:'192.168.1.9', name:'Phone'}], pending:[], addresses:['192.168.1.2:8080']}; }""")
+        self.page.keyboard.press("Alt+" + MOD + "+D")
+        w = self.win_open("devices")
+        wait_for(lambda: w.locator('[data-lan="rename"]').count() == 1, 8, 0.1, "phone")
+        w.locator('[data-lan="rename"]').click()
+        w.locator('.rv-editor input').fill("New phone")
+        w.locator('.rv-editor button[type=submit]').focus()
+        self.page.evaluate("""() => { window.RivisApp.state().lan.pending = [{ip:'192.168.1.10', name:'Waiting', count:1}]; }""")
+        self.page.wait_for_timeout(4700)
+        self.assertEqual(w.locator('.rv-editor input').input_value(), "New phone")
 
 
 if __name__ == "__main__":

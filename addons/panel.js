@@ -426,7 +426,7 @@
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0ms !important; transition-duration: 0ms !important; } }
   </style>
   <button class="fab" id="fab" aria-label="Tools: Map Local, breakpoints, network conditions, scripts" title="Tools — Map Local, breakpoints, network conditions, scripts (Alt+Shift+P)"><span class="mark">${ico("sliders")}</span><span id="fablabel">Tools</span><span class="dot" id="fabdot" style="display:none"></span></button>
-  <div class="brand" id="brand"><span class="mark">${ico("mark")}</span><b id="bname">Rivis</b><span class="proj" id="bproj"></span>
+  <div class="brand" id="brand"><span class="mark">${ico("mark")}</span><b id="bname">Rivis</b><span class="proj" id="bproj"></span><a href="/rivis/" title="Open the new main window">New window</a>
     <button class="ib" id="btheme" title="Theme">${ico("auto")}</button><button class="ib" id="bhelp" title="Help, shortcuts and settings  (?)">${ico("help")}</button></div>
   <div class="sbar" id="sbar"><div class="sbox" id="sbox">${ico("search", "sm")}<input id="sq" type="text" placeholder="Filter: host, path or ~filter" aria-label="Filter calls: host or part of a URL, or a ~filter expression" spellcheck="false" autocomplete="off" autocapitalize="off">
       <button class="ib" id="sclear" hidden aria-label="Clear filter" title="Clear filter (Esc)">${ico("x", "sm")}</button><button class="ib" id="ssave" aria-label="Save filter" title="Save filter">☆</button><kbd>${/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "") ? "⌘F" : "Ctrl F"}</kbd></div>

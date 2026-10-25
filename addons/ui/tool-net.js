@@ -83,7 +83,7 @@
           return;
         }
         if (b.matches("[data-net-cc-add]")) { await addCert(w); return; }
-        if (b.matches("[data-net-settings]")) { window.open("../#rivis-tool=net", "rivis-classic"); return; }
+        if (b.matches("[data-net-settings]")) { A.$("tb-settings").click(); return; }
         if (b.matches("[data-net-cc-rm]")) {
           const host = b.dataset.netCcRm;
           if (await A.ask("Remove the client certificate of " + host + "?", "The next connection will no longer send it.", "Remove", true))
@@ -180,8 +180,8 @@
       ${lanHTML}
       <h4>What the list shows</h4><div class="rv-form"><label><input type="checkbox" data-net-project${st.project_only ? " checked" : ""}> Only ${esc((st.project || {}).label || "project")} calls</label>
         <label><input type="checkbox" data-net-dns${st.show_dns ? " checked" : ""}> Show background lookups (DNS)</label></div>
-      <div class="rv-form"><span class="rv-win-hint">These choices also appear in the Show menu. Theme and compact rows are in Settings.</span>
-        <button type="button" class="rv-btn" data-net-settings>Open classic view for Settings</button></div>`;
+      <div class="rv-form"><span class="rv-win-hint">These choices also appear in the Show menu. Theme is in Settings.</span>
+        <button type="button" class="rv-btn" data-net-settings>Open Settings</button></div>`;
   }
 
   async function applyManual(w) {

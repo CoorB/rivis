@@ -28,8 +28,8 @@
 #                                              in Tools → Devices. Off by default
 #   <cli> lan [list] | allow IP [NAME] | rm IP   the phones and tablets allowed to use the proxy (--lan)
 #   <cli> projects list|use ID|show ID|new ID --label L --hosts REGEX
-#   <cli> ui [--new] [--url] | stop | restart | status | cert
-#                                 ui --new: the new main window; --url prints its one-time login link
+#   <cli> ui [--new|--classic] [--url] | stop | restart | status | cert
+#                                 the new main window is default; --classic opens the fallback view
 #   <cli> app [--build]             open the native macOS window; --build only builds the app
 #   <cli> browser [URL | --current] [--browser chrome|edge|chromium|brave] [--fresh] [--list]
 #                                 web apps: a separate browser window with its own profile, pointed at the
@@ -544,7 +544,7 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
   local bootstrap; bootstrap=$(openssl rand -hex 16)
   atomic_private_text "$BOOTSTRAP_FILE" "$bootstrap" || die "could not save one-time UI login"
   local url="http://127.0.0.1:$WEB_PORT/"
-  local bootstrap_url="http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap"
+  local bootstrap_url="http://127.0.0.1:$WEB_PORT/proxy/bootstrap/$bootstrap?next=rivis"
   local mode="regular@$PORT"
   [ -z "$upstream" ] || [ "$upstream" = direct ] || mode="upstream:$upstream@$PORT"
   local lan_modes=() _ip
@@ -826,13 +826,13 @@ cmd_restart() { # R4A-01: replay saved project and flags after an upgrade, for t
   RIVIS_START_PROJECT_SOURCE="$START_PROJECT_SOURCE" RIVIS_START_PROJECT_EXPLICIT="$START_PROJECT_EXPLICIT" "$0" "${START_ARGS[@]}"
 }
 
-cmd_ui() {   # ui [--new] [--url]: generate the same one-time login link for either view
-  local next="" print_url=0 arg
+cmd_ui() {   # ui [--new|--classic] [--url]: generate a one-time login link
+  local next="?next=rivis" print_url=0 view="" arg
   for arg in "$@"; do
     case "$arg" in
-      --new) [ -z "$next" ] || die "usage: $CLI ui [--new] [--url]"; next="?next=rivis" ;;
-      --url) [ "$print_url" = 0 ] || die "usage: $CLI ui [--new] [--url]"; print_url=1 ;;
-      *) die "usage: $CLI ui [--new] [--url]" ;;
+      --new|--classic) [ -z "$view" ] || die "usage: $CLI ui [--new|--classic] [--url]"; view="$arg"; [ "$arg" = --classic ] && next="" ;;
+      --url) [ "$print_url" = 0 ] || die "usage: $CLI ui [--new|--classic] [--url]"; print_url=1 ;;
+      *) die "usage: $CLI ui [--new|--classic] [--url]" ;;
     esac
   done
   [ -n "$(port_owner "$WEB_PORT")" ] || die "mitmweb is not running — $CLI start"
@@ -845,7 +845,7 @@ cmd_ui() {   # ui [--new] [--url]: generate the same one-time login link for eit
 }
 
 cmd_app() {
-  [ "$(uname -s)" = Darwin ] || die "the native window is macOS only — use $CLI ui --new"
+  [ "$(uname -s)" = Darwin ] || die "the native window is macOS only — use $CLI ui"
   [ $# -eq 0 ] || { [ $# -eq 1 ] && [ "$1" = --build ]; } || die "usage: $CLI app [--build]"
   local app="$STATE_ROOT/app/Rivis.app" source="$SCRIPT_DIR/addons/macapp/RivisApp.swift"
   # rebuild when the binary is older than the source (an update brings a new source; the .app folder's own date never changes)

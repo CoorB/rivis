@@ -15,6 +15,14 @@ from test_new_ui_routes import get, opener
 
 @unittest.skipUnless(shutil.which("swiftc"), "swiftc is not on PATH")
 class MacAppBuild(unittest.TestCase):
+    def test_allow_list_menu_sends_the_window_command(self):
+        with open(os.path.join(REPO, 'addons', 'macapp', 'RivisApp.swift')) as source:
+            swift = source.read()
+        self.assertIn('command("Allow List", "allow", to: tools, key: "a", modifiers: [.command, .option])', swift)
+        with open(os.path.join(REPO, 'addons', 'ui', 'app.js')) as source:
+            script = source.read()
+        self.assertIn('else if (detail === "allow") openAllowList();', script)
+
     def test_local_navigation_and_download_names(self):
         with tempfile.TemporaryDirectory(prefix="rivis-window-policy-") as folder:
             main = os.path.join(folder, "main.swift")
@@ -157,9 +165,16 @@ class MacAppLinks(LiveCase):
 
     def test_classic_ui_url_is_one_line(self):
         before = self.suite.shim_log("open.log")
-        result = self.suite.rivis("ui", "--url", home=self.inst.home, env=self.inst.env)
+        result = self.suite.rivis("ui", "--classic", "--url", home=self.inst.home, env=self.inst.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(result.stdout, r"\Ahttp://127\.0\.0\.1:\d+/proxy/bootstrap/[0-9a-f]{32}\n\Z")
         self.assertEqual(self.suite.shim_log("open.log"), before)
         status, _, _, final = get(opener(), result.stdout.strip())
         self.assertEqual((status, final), (200, self.base() + "/"))
+
+    def test_plain_ui_url_opens_the_new_window(self):
+        result = self.suite.rivis("ui", "--url", home=self.inst.home, env=self.inst.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.strip().endswith("?next=rivis"))
+        status, _, _, final = get(opener(), result.stdout.strip())
+        self.assertEqual((status, final), (200, self.base() + "/rivis/"))
