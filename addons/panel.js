@@ -2604,8 +2604,20 @@
     }
     if (sp && !sp.fixed) proxyFixShown = false;
     const other = sp && sp.owner && !sp.ours;
-    if (other) bar.innerHTML = `<b>${esc(sp.owner)}</b> is your Mac's proxy (${esc(sp.host)}:${esc(sp.port)}): the iOS Simulator sends its calls there, not to ${esc(name)}. Quit ${esc(sp.owner)}; ${esc(name)} cleans up what it leaves behind.`;
-    bar.classList.toggle("open", !!other && !$("lostbar").classList.contains("open"));
+    if (other) { bar.innerHTML = `<b>${esc(sp.owner)}</b> is your Mac's proxy (${esc(sp.host)}:${esc(sp.port)}): the iOS Simulator sends its calls there, not to ${esc(name)}. Quit ${esc(sp.owner)}; ${esc(name)} cleans up what it leaves behind.`; bar.dataset.html = ""; }
+    else showTrustBar(bar, name);
+    bar.classList.toggle("open", (!!other || !!(state && (state.untrusted || []).length)) && !$("lostbar").classList.contains("open"));
+  };
+  // A simulator / emulator that does not trust the Rivis certificate refused its HTTPS: those hosts now pass through
+  // undecrypted (the app works, the calls are not listed). Say which, and how to set the device up.
+  const showTrustBar = (bar, name) => {
+    const hosts = (state && state.untrusted) || [];
+    const html = hosts.length ? `A simulator or emulator does not trust the ${esc(name)} certificate, so <b>${esc(hosts[0].host)}</b>${hosts.length > 1 ? ` and ${hosts.length - 1} more` : ""}
+      ${hosts.length > 1 ? "pass" : "passes"} through without being recorded. <button class="b sm" id="trust-setup">Set up devices</button><button class="lnk" id="trust-retry">Decrypt again</button>` : "";
+    if (bar.dataset.html === html) return;
+    bar.dataset.html = html; bar.innerHTML = html;
+    if ($("trust-setup")) $("trust-setup").onclick = () => { tab = "dev"; editing = null; if (!$("drawer").classList.contains("open")) setOpen(true); render(); };
+    if ($("trust-retry")) $("trust-retry").onclick = () => run("untrusted_retry", {}, "Decrypting again from the next connection");
   };
   // B15: the open Rules / Breakpoints / Map Local / Scripts tab follows changes made elsewhere (CLI, another browser tab,
   // the proxy's hit counts). Redraw only when that tab's data changed and nobody is typing; give focus back to the same

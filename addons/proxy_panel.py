@@ -21,6 +21,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import zlib
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
@@ -343,8 +344,21 @@ class FlowFeed:
         return False, flows, [i for i, n in self.removed.items() if n > cursor]
 
 
+# Pilot 2026-10-21: "I can't log in to the app while the tool is running". Rivis captures every simulator as soon as it
+# starts, but only a simulator / emulator that trusts the Rivis CA can talk HTTPS through it: on any other, every HTTPS
+# call failed at the handshake, the app said "Network error" and the call list showed nothing at all. Now a host the
+# client refuses the certificate for passes through undecrypted for a while (the app keeps working), and the panel says
+# which hosts and how to set the device up.
+UNTRUSTED_REFUSED = ("does not trust", "certificate unknown", "unknown ca", "bad certificate")   # the client said no
+UNTRUSTED_DROPPED = "disconnected during the handshake"      # iOS just hangs up: counts after a second time
+UNTRUSTED_WINDOW = 30          # seconds in which two dropped handshakes count
+UNTRUSTED_HOLD = 600           # seconds a refused host passes through before Rivis tries to decrypt it again
+
+
 class ProxyPanel:
     def __init__(self):
+        self._tls_drops = {}            # host -> monotonic times of recent dropped client handshakes
+        self._untrusted = {}            # host -> (monotonic time it started passing through, wall time)
         self._device_jobs = devices.Jobs()
         self._sysproxy_stale_since = 0.0        # see _system_proxy_check
         self._sysproxy = devices.Snapshot(self._system_proxy_check, 5)       # off the event loop (review R1)
@@ -387,6 +401,39 @@ class ProxyPanel:
             self.active_project = ctx.options.proxy_project
             self.view_project = self.active_project
             self.active_profile = project_profile(self.active_project)
+
+    def tls_failed_client(self, data):
+        conn = data.conn
+        host, err = (conn.sni or "").lower(), str(conn.error or "").lower()
+        if not host:
+            return
+        now = time.monotonic()
+        if not any(x in err for x in UNTRUSTED_REFUSED):
+            if UNTRUSTED_DROPPED not in err:
+                return
+            drops = [t for t in self._tls_drops.get(host, ()) if now - t < UNTRUSTED_WINDOW] + [now]
+            self._tls_drops[host] = drops[-5:]
+            if len(drops) < 2:
+                return
+        if host not in self._untrusted:
+            self._untrusted[host] = (now, time.time())
+            ctx.log.warn(f"proxy_panel: a client does not trust the {PRODUCT['name']} certificate for {host}; its HTTPS "
+                         f"passes through undecrypted for {UNTRUSTED_HOLD // 60} min (set the device up: Tools → Devices)")
+
+    def tls_clienthello(self, data):
+        host = (data.client_hello.sni or "").lower()
+        hit = self._untrusted.get(host)
+        if hit is None:
+            return
+        if time.monotonic() - hit[0] < UNTRUSTED_HOLD:
+            data.ignore_connection = True
+        else:
+            del self._untrusted[host]
+
+    def untrusted_state(self):
+        now = time.monotonic()
+        return [{"host": h, "since": wall} for h, (t, wall) in sorted(self._untrusted.items(), key=lambda x: -x[1][0])
+                if now - t < UNTRUSTED_HOLD]
 
     def load(self, loader):
         loader.add_option("proxy_bootstrap_file", str, "", "one-time browser login nonce file")
@@ -624,6 +671,7 @@ class ProxyPanel:
             "update": self.update_state(),
             "version": self.product_version(),
             "system_proxy": self.system_proxy_state(),
+            "untrusted": self.untrusted_state(),
             "flow_count": len(self.all_flows()),
             "stream_large_bodies": str(ctx.options.stream_large_bodies),
             "ssl_insecure": bool(getattr(ctx.options, "ssl_insecure", False)),
@@ -1608,7 +1656,13 @@ class ProxyPanel:
                 return {"id": self._browser_jobs.start(argv, a.get("browser"), env=env)}
             except (ValueError, RuntimeError) as e:
                 raise PanelError(str(e))
+        if op == "untrusted_retry":     # "Decrypt again": the device has been set up since
+            self._untrusted.clear()
+            self._tls_drops.clear()
+            return {}
         if op == "device_setup":
+            self._untrusted.clear()     # the device is being set up: decrypt again from its next connection
+            self._tls_drops.clear()
             try:
                 argv = devices.setup_argv(a.get("platform"), str(a.get("target") or ""), bool(a.get("consent")))
                 label = "%s %s" % ({"ios": "iOS", "android": "Android"}[a["platform"]], a.get("name") or a.get("target"))
