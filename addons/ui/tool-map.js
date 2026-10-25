@@ -233,6 +233,8 @@
     async (f) => {
       const url = f.url.value.trim();
       if (!url) throw new Error("Enter the URL to answer");
+      if (/\s/.test(url) || !/^(?:https?:\/\/)?[\w*\[\].:?-]+(?:\/[^\s]*)?$/i.test(url))
+        throw new Error("Enter a valid HTTP or HTTPS URL, such as https://api.example.com/path/*");
       const parts = ui.splitUrl(url);
       const r = await A.api("maplocal_add", Object.assign(parts, { method: f.querySelector("#mlnm").value, status: f.status.value, literal_query: /\?[^#]*=/.test(url) }));
       A.toast(r.existing ? "Map Local " + r.name + " already exists — opened it" : "Map Local " + r.name + " added: edit its response");

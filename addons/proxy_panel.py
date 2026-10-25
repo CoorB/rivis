@@ -3026,6 +3026,15 @@ class ProxyPanel:
                          "app.js", "tools.js", "tool-bp.js", "tool-map.js", "tool-rules.js", "tool-scripts.js", "tool-net.js",
                          "tool-compose.js", "tool-more.js", "tree-worker.js")}}
 
+            def auth_fail(self, invalid_password):
+                if self.path_args != [""]:
+                    return
+                self.set_header("Content-Type", "text/html; charset=utf-8")
+                self.set_header("Cache-Control", "no-store")
+                self.write("<!doctype html><html><head><meta charset='utf-8'><title>Open Rivis</title></head>"
+                           "<body><h1>Open Rivis</h1><p>Run <code>rivis ui</code> on this computer, "
+                           "or open the Mac app, to sign in securely.</p></body></html>")
+
             def get(self, name):
                 if name not in self.FILES:
                     raise tornado.web.HTTPError(404)
@@ -3038,7 +3047,7 @@ class ProxyPanel:
                 if not name:
                     port = ctx.options.web_port
                     self.set_header("Content-Security-Policy",
-                                    "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                                    "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
                                     f"connect-src 'self' ws://127.0.0.1:{port} ws://localhost:{port}; frame-ancestors 'none'; "
                                     "base-uri 'none'; form-action 'none'")
                     self.set_header("Referrer-Policy", "no-referrer")

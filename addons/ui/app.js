@@ -103,14 +103,14 @@
     media: (f) => /^(image|video|audio|font)\//.test(ctype(f)),
   };
   const urlOf = (f) => {
-    const r = f.request, port = r.port && ![80, 443].includes(r.port) ? ":" + r.port : "";
+    const r = f.request, port = r.port && r.port !== (r.scheme === "https" ? 443 : 80) ? ":" + r.port : "";
     return r.scheme + "://" + (r.pretty_host || r.host) + port + r.path;
   };
   const hostOf = (f) => f.request.pretty_host || f.request.host || "";
   const srcKey = (f) => { const s = S.state && S.state.sources; return s && f.client_conn ? s.by_conn[f.client_conn.id] : null; };
   const duration = (f) => (f.response && f.response.timestamp_end && f.request.timestamp_start)
     ? (f.response.timestamp_end - f.request.timestamp_start) * 1000 : null;
-  const size = (f) => (f.response && f.response.contentLength != null ? f.response.contentLength : null);
+  const size = (f) => (f.request.contentLength || 0) + (f.response && f.response.contentLength || 0);
   const fmtMs = (ms) => ms == null ? "" : ms < 1000 ? Math.round(ms) + " ms" : (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + " s";
   const fmtBytes = (n) => n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
   const fmtTime = (ts) => { if (!ts) return ""; const d = new Date(ts * 1000); return d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0"); };
@@ -142,6 +142,7 @@
     }
     S.view = keep;
     drawList(true);
+    drawSources();
     drawStatus();
   }
 
@@ -173,7 +174,7 @@
       case "path": {
         const tags = (f.comment && /^(mock|rule|script)/.test(f.comment)) ? `<span class="rv-tag">${esc(f.comment.split(/\s/)[0])}</span>` : "";
         const note = userComment(f) ? `<span class="rv-cmt" title="${esc(userComment(f))}">💬</span>` : "";
-        return `<span class="rv-host">${esc(r.scheme + "://" + hostOf(f))}</span>${esc(r.path)}${tags}${note}`;
+        return `<span class="rv-host">${esc(urlOf(f).slice(0, -r.path.length))}</span>${esc(r.path)}${tags}${note}`;
       }
       case "method": return `<span class="rv-m rv-m-${esc(r.method)}">${esc(r.method)}</span>`;
       case "status":
@@ -464,6 +465,37 @@
     drawChips(); rebuildView();
   });
   $("saved").addEventListener("click", (e) => { const b = e.target.closest("[data-saved]"); if (b) applySaved(Number(b.dataset.saved)); });
+  $("saved").addEventListener("contextmenu", (e) => {
+    const chip = e.target.closest("[data-saved]"); if (!chip) return;
+    e.preventDefault(); closeMenu();
+    const rows = (S.state && S.state.saved_filters) || [], i = Number(chip.dataset.saved), row = rows[i];
+    if (!row) return;
+    const m = $("menu");
+    m.innerHTML = [["rename", "Rename"], ["delete", "Delete"], ["left", "Move left"], ["right", "Move right"]]
+      .map(([act, label]) => `<button role="menuitem" data-filter-act="${act}"${(act === "left" && !i) || (act === "right" && i === rows.length - 1) ? " disabled" : ""}>${label}</button>`).join("");
+    m.hidden = false;
+    m.style.left = Math.max(6, Math.min(e.clientX, innerWidth - m.offsetWidth - 6)) + "px";
+    m.style.top = Math.max(6, Math.min(e.clientY, innerHeight - m.offsetHeight - 6)) + "px";
+    m.querySelectorAll("[data-filter-act]").forEach((b) => { b.onclick = async () => {
+      const act = b.dataset.filterAct; closeMenu();
+      try {
+        let r;
+        if (act === "rename") {
+          const name = await askText("Rename filter", "", row.name); if (!name || name === row.name) return;
+          r = await api("filters_save", { old: row.name, name });
+        } else if (act === "delete") {
+          if (!await ask("Delete saved filter " + row.name + "?", "", "Delete", true)) return;
+          r = await api("filters_delete", { name: row.name });
+        } else {
+          const names = rows.map((x) => x.name), j = act === "left" ? i - 1 : i + 1;
+          [names[i], names[j]] = [names[j], names[i]];
+          r = await api("filters_order", { names });
+        }
+        S.state.saved_filters = r.filters; drawChips();
+      } catch (err) { toast(err.message, true); }
+    }; });
+    m.querySelector("button").focus();
+  });
   function applySaved(i) {
     const x = ((S.state && S.state.saved_filters) || [])[i];
     if (!x) return;
@@ -502,7 +534,9 @@
   // ── sources: devices and apps (proxy_source), then domains ───────────────────────────────────────────────────────
   function drawSources() {
     const q = $("sq").value.trim().toLowerCase();
-    const rows = (S.state && S.state.sources && S.state.sources.list) || [];
+    const counts = new Map(), unknown = ((S.state && S.state.sources && S.state.sources.list) || []).find((r) => r.kind === "unknown");
+    for (const id of S.order) { const f = S.byId.get(id); if (f) { const key = srcKey(f) || (unknown && unknown.key); if (key) counts.set(key, (counts.get(key) || 0) + 1); } }
+    const rows = ((S.state && S.state.sources && S.state.sources.list) || []).map((r) => Object.assign({}, r, { count: counts.get(r.key) || 0 }));
     const kinds = { ios: "iOS Simulator", android: "Android emulator", phone: "Phone or tablet", browser: "Web browser", mac: "This Mac", unknown: "Unknown" };
     const on = (src) => S.source && ((src.key && S.source.key === src.key) || (src.host && S.source.host === src.host));
     const hosts = new Map();
@@ -555,7 +589,7 @@
   const sourcesSoon = () => { clearTimeout(srcT); srcT = setTimeout(drawSources, 400); };
 
   // ── request | response ───────────────────────────────────────────────────────────────────────────────────────────
-  const D = { req: store.get("rivis-ui-req-tab", "header"), res: store.get("rivis-ui-res-tab", "body"), bodies: new Map(), sig: "" };
+  const D = { req: store.get("rivis-ui-req-tab", "header"), res: store.get("rivis-ui-res-tab", "body"), bodies: new Map(), images: [], sig: "" };
   const REQ_TABS = [["header", "Header"], ["query", "Query"], ["body", "Body"], ["tree", "Tree"], ["cookies", "Cookies"], ["raw", "Raw"]];
   const RES_TABS = [["header", "Header"], ["body", "Body"], ["tree", "Tree"], ["raw", "Raw"]];
   const TREE_MAX = 24 * 1024 * 1024, TEXT_MAX = 512 * 1024, HEX_MAX = 4096;
@@ -567,7 +601,7 @@
       worker.postMessage(text);
     });
   }
-  const sigOf = (f) => f ? f.id + ":" + (f.response ? f.response.status_code + ":" + f.response.contentLength + ":" + (f.response.timestamp_end || 0) : "-") + ":" + (f.request.contentLength || 0) + ":" + ((f.error && f.error.msg) || "") : "";
+  const sigOf = (f) => f ? f.id + ":" + (f.response ? f.response.status_code + ":" + f.response.contentLength + ":" + (f.response.timestamp_end || 0) : "-") + ":" + (f.request.contentLength || 0) + ":" + ((f.error && f.error.msg) || "") + ":" + JSON.stringify(f.websocket && f.websocket.messages_meta) : "";
   function refreshDetailIfChanged() { const f = S.byId.get(S.sel); if (sigOf(f) !== D.sig) drawDetail(); }
   async function body(f, side, forTree) {
     const msg = f[side]; if (!msg) return { text: "", bytes: 0 };
@@ -587,7 +621,7 @@
       const buf = all.buffer, size = msg.contentLength != null ? msg.contentLength : got;
       const text = new TextDecoder("utf-8", { fatal: false }).decode(buf.byteLength > TEXT_MAX ? buf.slice(0, TEXT_MAX) : buf);
       const head = new Uint8Array(buf, 0, Math.min(buf.byteLength, HEX_MAX));
-      return { text, bytes: Math.max(size, buf.byteLength), head, binary: isBinary(msg, text),
+      return { text, data: all, bytes: Math.max(size, buf.byteLength), head, binary: isBinary(msg, text),
                full: buf.byteLength > TEXT_MAX ? new TextDecoder().decode(buf) : text };
     })();
     D.bodies.set(k, p);
@@ -604,6 +638,7 @@
   }
   const findText = { req: "", res: "" };
   async function drawDetail() {
+    D.images.forEach((url) => URL.revokeObjectURL(url)); D.images = [];
     const f = S.byId.get(S.sel);
     D.sig = sigOf(f);
     const req = $("pane-req"), res = $("pane-res");
@@ -612,23 +647,43 @@
       res.innerHTML = paneHead("res", "Response", RES_TABS, D.res) + `<div class="rv-pb"><div class="rv-note">and its response, side by side.</div></div>`;
       return;
     }
+    if (!f.websocket && D.res === "messages") D.res = "body";
     const r = f.request, s = f.response, mySig = D.sig;
     const sline = f.error ? `<span class="rv-err">${s ? esc(s.status_code) + " · " : ""}Failed: ${esc(f.error.msg)}</span>` : s ? `${s.status_code} ${esc(s.reason || "")}` : "waiting…";
     req.innerHTML = paneHead("req", "Request", REQ_TABS, D.req) + `<div class="rv-pb" data-body="req" tabindex="0"><div class="rv-first">${esc(r.method)} ${esc(urlOf(f))} ${esc(r.http_version || "")}</div><div class="rv-dyn"></div></div>`;
-    res.innerHTML = paneHead("res", `Response · ${sline}`, RES_TABS, D.res) + `<div class="rv-pb" data-body="res" tabindex="0"><div class="rv-dyn"></div></div>`;
+    res.innerHTML = paneHead("res", `Response · ${sline}`, f.websocket ? RES_TABS.concat([["messages", "Messages"]]) : RES_TABS, D.res) + `<div class="rv-pb" data-body="res" tabindex="0"><div class="rv-dyn"></div></div>`;
     await Promise.all([fillPane(f, "req", mySig), fillPane(f, "res", mySig)]);
   }
   async function fillPane(f, side, mySig) {
     const el = document.querySelector(`[data-body="${side}"] .rv-dyn`); if (!el) return;
     const msg = side === "req" ? f.request : f.response, tab = side === "req" ? D.req : D.res;
+    if (side === "res" && tab === "messages" && f.websocket) {
+      el.innerHTML = `<div class="rv-note">Loading messages…</div>`;
+      try {
+        const r = await http("../flows/" + encodeURIComponent(f.id) + "/messages/content/Auto.json?lines=5000");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const messages = await r.json();
+        if (D.sig !== mySig || D.res !== tab) return;
+        el.innerHTML = messages.map((m) => `<div class="rv-ws-message"><div class="rv-note">${m.from_client ? "Sent →" : "Received ←"} · ${esc(fmtTime(m.timestamp))} · ${esc(m.description || m.view_name)}</div><pre>${esc(m.text)}</pre></div>`).join("")
+          + (!messages.length ? `<div class="rv-note">No messages yet.</div>` : "")
+          + (messages.length < f.websocket.messages_meta.count ? `<div class="rv-note">Showing the first ${messages.length} messages (up to 5000 lines).</div>` : "");
+      } catch (e) { if (D.sig === mySig) el.innerHTML = `<div class="rv-note rv-err">Could not load messages: ${esc(e.message)}</div>`; }
+      return;
+    }
     if (!msg) { el.innerHTML = `<div class="rv-note">${f.error ? "No response: " + esc(f.error.msg) : "No response yet."}</div>`; return; }
     if (tab === "header") { el.innerHTML = kvTable(msg.headers || []); return find(side, false); }
     if (tab === "query") { el.innerHTML = kvTable(queryRows(f)); return find(side, false); }
     if (tab === "cookies") { el.innerHTML = kvTable(cookieRows(f)); return find(side, false); }
+    if (msg.contentLength == null && /text\/event-stream/i.test(hdr(msg, "content-type"))) {
+      el.innerHTML = `<div class="rv-note">Streamed response: events were forwarded as they arrived and were not stored.</div>`;
+      return;
+    }
     el.innerHTML = `<div class="rv-note">Loading…</div>`;
+    const imageType = hdr(msg, "content-type").split(";")[0].trim().toLowerCase();
+    const previewImage = tab === "body" && /^image\//.test(imageType);
     let b;
-    try { b = await body(f, side === "req" ? "request" : "response", tab === "tree"); } catch (e) { if (D.sig === mySig) el.innerHTML = `<div class="rv-note rv-err">Could not load the body: ${esc(e.message)}</div>`; return; }
-    if (D.sig !== mySig) return;                 // another call was selected meanwhile
+    try { b = await body(f, side === "req" ? "request" : "response", tab === "tree" || previewImage); } catch (e) { if (D.sig === mySig) el.innerHTML = `<div class="rv-note rv-err">Could not load the body: ${esc(e.message)}</div>`; return; }
+    if (D.sig !== mySig || D[side] !== tab) return; // another call or tab was selected meanwhile
     if (tab === "raw") {
       const head = side === "req" ? `${msg.method} ${msg.path} ${msg.http_version}` : `${msg.http_version} ${msg.status_code} ${msg.reason || ""}`;
       el.innerHTML = `<pre>${esc(head + "\n" + (msg.headers || []).map(([k, v]) => k + ": " + v).join("\n") + "\n\n" + b.text)}</pre>` + clipNote(b);
@@ -643,6 +698,13 @@
       el.innerHTML = `<div class="rv-tree" role="tree"></div>`;
       const t = el.firstChild; t.append(treeNode(doc, "$", null, 0, true)); t.dataset.ready = "1";
       return find(side, false);
+    }
+    if (previewImage) {
+      if (b.bytes > TREE_MAX) { el.innerHTML = `<div class="rv-note">Image preview is limited to 24 MB (${esc(fmtBytes(b.bytes))}).</div>`; return; }
+      const url = URL.createObjectURL(new Blob([b.data], { type: imageType })); D.images.push(url);
+      el.innerHTML = `<img class="rv-image" alt="Captured image response" style="max-width:100%;height:auto">`;
+      el.firstChild.src = url;
+      return;
     }
     if (b.binary) {
       el.innerHTML = `<div class="rv-note">Binary body, ${esc(fmtBytes(b.bytes))} (${esc((hdr(msg, "content-type") || "no content type").split(";")[0])}). First ${esc(fmtBytes(b.head.length))} as hex:</div><pre>${esc(hexView(b.head))}</pre>`;
@@ -953,8 +1015,9 @@
     const st = S.state || {}, p = st.project || {};
     const port = (st.proxy && st.proxy.port) || (st.listen && st.listen.port) || "";
     const map = toolState("map"), bp = toolState("bp");
-    $("status").innerHTML = `<span><span class="rv-live${S.live ? "" : " off"}"></span>${S.live ? "Live" : "Reconnecting…"}</span>`
+    $("status").innerHTML = `<span><span class="rv-live${S.live && S.record ? "" : " off"}"></span>${!S.record ? "Paused" : S.live ? "Live" : "Reconnecting…"}</span>`
       + `<span><b>${S.view.length}</b> of ${S.order.length} calls</span>`
+      + (st.retention && st.retention.trimmed ? `<span>${st.retention.trimmed} older calls trimmed (keeps up to ${st.retention.limit})</span>` : "")
       + (S.held.size ? `<span><b>${S.held.size}</b> waiting — press Record</span>` : "")
       + (p.label ? `<span>Project <b>${esc(p.label)}</b></span>` : "")
       + (map.on ? `<span>Map Local on (${map.n})</span>` : "") + (bp.on ? `<span>${bp.n} breakpoint${bp.n === 1 ? "" : "s"}</span>` : "")

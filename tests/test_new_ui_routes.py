@@ -33,6 +33,13 @@ class NewUiRoutes(LiveCase):
         for path in ("/rivis/", "/rivis/app.js", "/rivis/app.css", "/rivis/tree-worker.js", "/proxy/tree-worker.js"):
             self.assertEqual(get(opener(), self.base() + path)[0], 403, path)
 
+    def test_direct_address_explains_how_to_sign_in(self):
+        status, _, body, _ = get(opener(), self.base() + "/rivis/")
+        self.assertEqual(status, 403)
+        self.assertIn(b"rivis ui", body)
+        self.assertIn(b"Mac app", body)
+        self.assertNotIn(b'id="rv-app"', body)
+
     def test_serves_its_three_files_and_nothing_else(self):
         op = opener()
         self.assertEqual(get(op, self.base() + "/?token=" + self.inst.password)[0], 200)

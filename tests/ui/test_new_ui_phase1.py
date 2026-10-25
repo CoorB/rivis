@@ -447,6 +447,153 @@ class NewMainWindow(UiBase):
         self.assertEqual(self.page.locator("#proxy-panel-host").locator("nav button.on").first.get_attribute("data-t"), "bp")
         self.assertNotIn("rivis-tool", self.page.evaluate("location.hash"))
 
+@unittest.skipIf(PW_REASON, PW_REASON or "")
+class CycleFive(UiBase):
+    open_new = NewMainWindow.open_new
+    rows = NewMainWindow.rows
+    wait_rows = NewMainWindow.wait_rows
+    def test_ports_distinguish_rows(self):
+        self.open_new('/echo?ports=1')
+        self.wait_rows('ports=1')
+        self.assertIn(':%d/echo' % self.up.http_port, self.rows('ports=1').inner_text())
+
+    def test_size_includes_request(self):
+        self.fetch('/echo?upload=1', method='POST', data=b'x' * 4096)
+        self.open_new('/text?other=1')
+        f = next(f for f in self.inst.flows() if 'upload=1' in f['request']['path'])
+        self.page.locator('#q').fill('upload=1')
+        self.wait_rows('upload=1')
+        expected = (f['request']['contentLength'] + f['response']['contentLength']) / 1024
+        self.assertIn('%.1f KB' % expected, self.rows('upload=1').inner_text())
+
+    def test_clear_refreshes_sidebar(self):
+        self.open_new('/text?clearcounts=1')
+        self.wait_rows('clearcounts=1')
+        wait_for(lambda: self.page.locator('[data-src-all] .rv-scount').inner_text() != '0', 5)
+        self.page.locator('#tb-clear').click()
+        self.page.locator('#dyes').click()
+        wait_for(lambda: self.rows().count() == 0, 5)
+        self.assertEqual(self.page.locator('[data-src-all] .rv-scount').inner_text(), '0')
+
+    def test_paused_has_no_live_dot(self):
+        self.open_new('/text?pause=1')
+        self.wait_rows('pause=1')
+        self.page.locator('#tb-record').click()
+        self.assertIn('Paused', self.page.locator('#status').inner_text())
+        self.assertEqual(self.page.locator('#status .rv-live.off').count(), 1)
+
+    def test_streamed_body_has_explanation(self):
+        self.open_new('/sse?ms=1')
+        self.wait_rows('/sse')
+        self.rows('/sse').click()
+        self.page.locator('#pane-res [data-tab=body]').click()
+        wait_for(lambda: 'Loading' not in self.page.locator('#pane-res').inner_text(), 5)
+        self.assertIn('stream', self.page.locator('#pane-res .rv-dyn').inner_text().lower())
+        self.assertNotIn('Could not load', self.page.locator('#pane-res').inner_text())
+
+    def test_invalid_map_url_is_explained(self):
+        self.open_new('/text?map=1')
+        self.page.locator('[data-tool=map]').click()
+        self.page.locator('[data-ml-new]').click()
+        self.page.locator('.rv-sheet input[name=url]').fill('garbage !!!')
+        self.page.locator('.rv-sheet button[type=submit]').click()
+        wait_for(lambda: bool(self.page.locator('[data-sh-err]').inner_text()), 5)
+        self.assertIn('URL', self.page.locator('[data-sh-err]').inner_text())
+
+    def test_saved_filters_have_management_menu(self):
+        self.panel.ok('filters_save', {'name': 'Cycle Five', 'filter': '~u echo'})
+        self.panel.ok('filters_save', {'name': 'Cycle Other', 'filter': '~u text'})
+        try:
+            self.open_new('/echo?filter=1')
+            chip = lambda name: self.page.locator('[data-saved]').filter(has_text=name)
+            chip('Cycle Five').click(button='right')
+            menu = self.page.locator('#menu')
+            self.assertTrue(menu.is_visible())
+            for action in ('Rename', 'Delete', 'Move left', 'Move right'):
+                self.assertIn(action, menu.inner_text())
+            menu.locator('[data-filter-act=right]').click()
+            wait_for(lambda: self.panel.state()['saved_filters'][-1]['name'] == 'Cycle Five', 5)
+            chip('Cycle Five').click(button='right')
+            menu.locator('[data-filter-act=rename]').click()
+            self.page.locator('#dtext').fill('Cycle Renamed')
+            self.page.locator('#dialog button[type=submit]').click()
+            wait_for(lambda: chip('Cycle Renamed').count() == 1, 5)
+            chip('Cycle Renamed').click(button='right')
+            menu.locator('[data-filter-act=delete]').click()
+            self.page.locator('#dyes').click()
+            wait_for(lambda: chip('Cycle Renamed').count() == 0, 5)
+        finally:
+            for name in ('Cycle Five', 'Cycle Other', 'Cycle Renamed'):
+                if any(r['name'] == name for r in self.panel.state()['saved_filters']):
+                    self.panel.ok('filters_delete', {'name': name})
+
+    def test_response_tabs_stay_on_one_line(self):
+        self.page.set_viewport_size({'width': 1440, 'height': 900})
+        self.open_new('/status/500?tabs=1')
+        self.wait_rows('tabs=1')
+        ys = self.page.locator('#pane-res .rv-tab').evaluate_all('(els) => els.map(e => e.getBoundingClientRect().y)')
+        self.assertLess(max(ys) - min(ys), 2)
+
+    def test_trimmed_calls_are_disclosed(self):
+        self.page.route('**/proxy/api/state', lambda r: self.retention_reply(r))
+        self.open_new('/text?trim=1')
+        self.wait_rows('trim=1')
+        wait_for(lambda: 'older calls trimmed' in self.page.locator('#status').inner_text(), 5)
+        self.assertIn('1538', self.page.locator('#status').inner_text())
+
+    def retention_reply(self, route):
+        response = route.fetch()
+        state = response.json()
+        state['retention'] = {'trimmed': 1538, 'limit': 5000}
+        route.fulfill(response=response, json=state)
+
+    def test_websocket_messages_are_visible(self):
+        from test_audit_2026_10_17 import Load
+        Load.test_websocket_passes_through(self)
+        self.open_new('/text?afterws=1')
+        self.wait_rows('/ws')
+        self.rows('/ws').click()
+        self.page.locator('#pane-res [data-tab=messages]').click(timeout=2000)
+        wait_for(lambda: 'hello-ws' in self.page.locator('#pane-res').inner_text(), 5)
+        self.assertIn('Sent', self.page.locator('#pane-res').inner_text())
+        self.assertIn('Received', self.page.locator('#pane-res').inner_text())
+
+    def test_image_body_is_previewed(self):
+        import base64
+        from test_audit_2026_10_17 import RawServer
+        png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8WQAAAAASUVORK5CYII=')
+        server = RawServer(b'HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: %d\r\nConnection: close\r\n\r\n' % len(png) + png)
+        try:
+            result = self.inst.fetch(server.url('/pixel?image=1'))
+            self.assertEqual(result.body, png)
+        finally:
+            server.close()
+        self.open_new('/text?afterimage=1')
+        self.wait_rows('/pixel?image=1')
+        self.rows('/pixel?image=1').click()
+        self.page.locator('#pane-res [data-tab=body]').click()
+        image = self.page.locator('#pane-res .rv-dyn img')
+        image.wait_for(timeout=3000)
+        wait_for(lambda: image.evaluate('(e) => e.complete && e.naturalWidth === 1'), 5)
+
+    def test_open_session_refreshes_sidebar(self):
+        self.open_new('/text?sessioncounts=1')
+        self.wait_rows('sessioncounts=1')
+        self.panel.ok('sess_save', {'name': 'cycle-five-counts'})
+        try:
+            self.page.locator('#tb-clear').click()
+            self.page.locator('#dyes').click()
+            wait_for(lambda: self.rows().count() == 0, 5)
+            wait_for(lambda: self.page.locator('[data-src-all] .rv-scount').inner_text() == '0', 5)
+            empty_state = self.panel.state()
+            self.page.route('**/proxy/api/state', lambda r: r.fulfill(json=empty_state))
+            self.panel.ok('sess_load', {'name': 'cycle-five-counts', 'mode': 'replace'})
+            self.wait_rows('sessioncounts=1')
+            self.assertEqual(self.page.locator('[data-src-all] .rv-scount').inner_text(),
+                             str(self.page.evaluate('window.__rivisUI.order.length')))
+        finally:
+            self.panel.ok('sess_delete', {'name': 'cycle-five-counts'})
+
 
 if __name__ == "__main__":
     unittest.main()
