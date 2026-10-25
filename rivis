@@ -1121,9 +1121,8 @@ android_settings_route() {
   return "$rc"
 }
 ca_fingerprint() { openssl x509 -in "$CA_PEM" -noout -fingerprint -sha256 | cut -d= -f2; }   # AA:BB:… as Settings shows it
-android_record() {   # android_record SERIAL — note "<avd>\t<CA sha256>" after a VERIFIED install (read by the Devices tab)
-  local avd f="$STATE_ROOT/android-ca" fp; fp=$(ca_fingerprint | tr -d ':') || return 0
-  local i q
+avd_of() {   # avd_of SERIAL — the emulator's AVD name, or nothing
+  local avd i q
   # R5B-01: `emu avd name` can answer empty right after a boot/restart; retry, then the emulator's own property
   for i in 1 2 3; do
     avd=$("$ADB" -s "$1" emu avd name 2>/dev/null | tr -d '\r' | awk 'NF && $0 != "OK" {print; exit}')
@@ -1134,6 +1133,17 @@ android_record() {   # android_record SERIAL — note "<avd>\t<CA sha256>" after
     avd=$("$ADB" -s "$1" shell getprop "$q" 2>/dev/null | tr -d '\r')
     [[ "$avd" =~ ^[A-Za-z0-9._-]+$ ]] || avd=""
   done
+  printf '%s' "$avd"
+}
+# Pilot 2026-10-21: "after a cold boot the proxy setting reverted". The AVDs `android on` pointed at this proxy are
+# listed here; the running proxy puts the setting back on a listed emulator that comes back without one. `off` unlists.
+android_proxy_mark() {   # android_proxy_mark SERIAL on|off
+  local avd f="$STATE_ROOT/android-proxy"; avd=$(avd_of "$1"); [ -n "$avd" ] || return 0
+  { grep -vxF "$avd" "$f" 2>/dev/null; if [ "$2" = on ]; then printf '%s\n' "$avd"; fi; } > "$f.tmp" && mv "$f.tmp" "$f"
+}
+android_record() {   # android_record SERIAL — note "<avd>\t<CA sha256>" after a VERIFIED install (read by the Devices tab)
+  local avd f="$STATE_ROOT/android-ca" fp; fp=$(ca_fingerprint | tr -d ':') || return 0
+  avd=$(avd_of "$1")
   [ -n "$avd" ] || { echo "!! $1: could not read the emulator's AVD name, so Tools → Devices may still show it as not set up (the CA IS installed)" >&2; return 0; }
   { grep -v "^$avd	" "$f" 2>/dev/null; printf '%s\t%s\n' "$avd" "$fp"; } > "$f.tmp" && mv "$f.tmp" "$f"
 }
@@ -1309,6 +1319,7 @@ cmd_android() {
       local now; now=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') \
         || die "$s: could not verify the proxy"
       [ "$now" = "10.0.2.2:$PORT" ] || die "$s: setting the proxy failed"
+      android_proxy_mark "$s" on
       info "$s: proxy → 10.0.2.2:$PORT. Run a *Debug* variant (release builds pin TLS)."
       if [ -z "$(port_owner "$PORT")" ]; then
         info "WARNING: nothing listens on :$PORT yet — run '$CLI start' or the emulator has no internet"
@@ -1320,6 +1331,7 @@ cmd_android() {
       local now; now=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') \
         || die "$s: could not verify the cleared proxy"
       case "$now" in ":0"|null) info "$s: proxy cleared" ;; "") die "$s: empty proxy result — could not verify it was cleared" ;; *) die "$s: proxy still set ($now)" ;; esac
+      android_proxy_mark "$s" off
       if have_root "$s"; then
         # Every mitmproxy CA has the same subject, so another workstation's CA has the SAME file name (<hash>.0):
         # a file is removed only when its SHA-256 is one this workstation recorded (review R3).

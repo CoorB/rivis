@@ -354,6 +354,9 @@ UNTRUSTED_DROPPED = "disconnected during the handshake"      # iOS just hangs up
 UNTRUSTED_WINDOW = 30          # seconds in which two dropped handshakes count
 UNTRUSTED_HOLD = 600           # seconds a refused host passes through before Rivis tries to decrypt it again
 
+# seconds between checks that the emulators `android on` set up still use this proxy (tests shorten it)
+ANDROID_WATCH_EVERY = float(os.environ.get("RIVIS_ANDROID_WATCH_SECONDS") or 15)
+
 
 class ProxyPanel:
     def __init__(self):
@@ -672,6 +675,7 @@ class ProxyPanel:
             "version": self.product_version(),
             "system_proxy": self.system_proxy_state(),
             "untrusted": self.untrusted_state(),
+            "android_restored": list(getattr(ctx.master, "_rivis_android_restored", [])),
             "flow_count": len(self.all_flows()),
             "stream_large_bodies": str(ctx.options.stream_large_bodies),
             "ssl_insecure": bool(getattr(ctx.options, "ssl_insecure", False)),
@@ -2604,6 +2608,7 @@ class ProxyPanel:
             m = re.search(r"~d '\^([^']*)\$'", vf)
             self.focused_host = m.group(1).replace("\\", "") if m else None
             self.source = self.source_from_filter(vf)        # a hot reload keeps the chosen device / app
+            self._start_android_watch()
             self._restore_view_choice(vf)
             self._register()
             self._show_start_time_column()
@@ -2611,6 +2616,35 @@ class ProxyPanel:
             contentviews.add(Utf8TextView())        # by name: a hot reload replaces it
         except Exception as e:   # never take mitmweb down
             ctx.log.warn(f"proxy_panel: not available ({type(e).__name__}: {e})")
+
+    def _start_android_watch(self):
+        import asyncio
+        old = getattr(ctx.master, "_rivis_android_watch", None)
+        if old is not None:
+            old.cancel()                 # a hot reload: one watch, on the new code
+        ctx.master._rivis_android_watch = asyncio.get_running_loop().create_task(self._android_watch())
+
+    async def _android_watch(self):
+        """Put the proxy back on an emulator `android on` set up when it comes back without one (cold boot, an older
+        Quick Boot snapshot, a wipe). adb runs off the event loop: a slow emulator must not stall the proxy."""
+        import asyncio
+        while True:
+            await asyncio.sleep(ANDROID_WATCH_EVERY)
+            try:
+                restored = await asyncio.to_thread(devices.restore_android_proxy, devices.adb_path(), STATE_ROOT,
+                                                   self._proxy_port())
+            except Exception as e:       # never take the proxy down over an emulator
+                ctx.log.warn(f"proxy_panel: emulator proxy check failed ({type(e).__name__}: {e})")
+                continue
+            try:
+                for serial, avd in restored:
+                    ctx.log.info(f"proxy_panel: {serial} ({avd}) had lost its proxy setting; set it back to this proxy")
+                    # on the master, not on self: a hot reload swaps the panel instance
+                    ctx.master._rivis_android_restored = (list(getattr(ctx.master, "_rivis_android_restored", []))
+                                                          + [{"serial": serial, "avd": avd, "at": time.time()}])[-5:]
+                    self._devices.invalidate()
+            except Exception as e:       # a reporting error must not end the watch
+                ctx.log.warn(f"proxy_panel: emulator proxy report failed ({type(e).__name__}: {e})")
 
     def _register(self):
         app = getattr(ctx.master, "app", None)

@@ -5,6 +5,7 @@
   user/<n>.pem    the Settings → Trusted credentials → User list, in order (Play path)
   screen          what Settings shows: list | detail:<n> | confirm:<n>
   proxy           the global http_proxy setting (":0" when absent)
+  avd             the AVD name `emu avd name` answers (absent = it answers nothing, as right after a boot)
   tmp/<name>      files pushed to /data/local/tmp (a root install copies them into cacerts/)
   log             every call
 Only what `rivis android off` uses is implemented; anything else answers nothing, exit 0."""
@@ -72,6 +73,8 @@ def setscreen(v):
 
 if cmd == "devices":
     print("List of devices attached\nemulator-5554\tdevice\n")
+elif cmd == "emu avd name" and read("avd").strip():
+    print(read("avd").strip() + "\r\nOK\r")
 elif cmd in ("root", "wait-for-device") or cmd.startswith("emu "):
     pass
 elif cmd == "shell id -u":

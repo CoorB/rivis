@@ -2603,6 +2603,13 @@
     }
     bar.classList.toggle("open", !!html && !$("lostbar").classList.contains("open"));
   };
+  // An emulator set up with `android on` came back without its proxy (cold boot): the proxy put it back; say so once.
+  let androidSeen = null;
+  const showAndroidRestored = (s) => {
+    const last = (s.android_restored || []).slice(-1)[0];
+    if (androidSeen === null) { androidSeen = last ? last.at : 0; return; }    // only what happens while the page is open
+    if (last && last.at > androidSeen) { androidSeen = last.at; toast(`${last.avd || last.serial} came back without its proxy setting — set it back`); }
+  };
   const showProxyBar = (sp) => {
     const bar = $("proxybar"), name = (state && state.product && state.product.name) || "Rivis";
     if (sp && sp.fixed && !proxyFixShown) {
@@ -2659,7 +2666,7 @@
       pollState = api("state", undefined, 4000);       // aborted at 4 s, so a hung proxy never holds a connection
       const s = await pollState.finally(() => { pollState = null; });
       missed = 0; lostSince = 0; showLost(false);
-      state = s; badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow();
+      state = s; badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow(); showAndroidRestored(s);
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
       // the call list (megabytes at a few thousand calls) is for the Tools drawer's own tabs: skip it while the drawer is
       // closed or the page is hidden (row tags come from mitmweb's own rows), and flowsById() fetches on demand

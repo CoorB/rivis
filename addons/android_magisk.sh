@@ -60,6 +60,15 @@ ABI=$(sh_ getprop ro.product.cpu.abi)
 if ps -ax -o args= 2>/dev/null | grep -F -- "-avd $AVD " | grep -q -- '-qt-hide-window'; then
   die "$AVD is running embedded in Android Studio (-qt-hide-window); Rivis cannot safely restart that Studio-owned emulator with -ramdisk. Start the AVD as a standalone emulator, then retry one-click setup; using Settings now"
 fi
+# Pilot 2026-10-21: an emulator Android Studio started in its own window was restarted here as a standalone process, so
+# Studio lost it ("it relaunched the emulator outside Android Studio"). Its parent process is Studio: refuse the same way.
+emu_pid=$(ps -ax -o pid=,args= 2>/dev/null | grep -F -- "-avd $AVD " | grep -v "grep " | awk 'NR == 1 {print $1}')
+if [ -n "$emu_pid" ]; then
+  emu_parent=$(ps -o ppid= -p "$emu_pid" 2>/dev/null | tr -d ' ')
+  if [ -n "$emu_parent" ] && ps -o args= -p "$emu_parent" 2>/dev/null | grep -qiE 'Android Studio|/studio( |$)'; then
+    die "$AVD was started by Android Studio; Rivis does not restart it (Studio would lose the emulator). Using Settings now — or close it in Studio, start it with the emulator command, and retry one-click setup"
+  fi
+fi
 
 # ---- boot helpers -------------------------------------------------------------------------------------------------
 CACHE="$STATE_DIR/android-ramdisk"; mkdir -p -m 700 "$CACHE"

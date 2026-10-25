@@ -120,6 +120,38 @@ class MagiskGuards(MagiskFixture):
         self.assertIn('cannot safely restart', r.stderr)
         self.assertFalse(self.touched_emulator())
 
+    def run_with_parent(self, parent_args):
+        """The AVD runs in its own window (no -qt-hide-window); its parent process is parent_args."""
+        fake_bin = os.path.join(self.root, 'fake-bin')
+        os.makedirs(fake_bin, exist_ok=True)
+        ps = os.path.join(fake_bin, 'ps')
+        open(ps, 'w').write('#!/bin/sh\n'
+                            'case "$*" in\n'
+                            '  *"-o pid=,args="*) echo "4242 qemu-system-aarch64 -avd Test_Play -port 5554" ;;\n'
+                            '  *"-o ppid= -p 4242"*) echo " 777" ;;\n'
+                            '  *"-o args= -p 777"*) echo "%s" ;;\n'
+                            '  *) echo "qemu-system-aarch64 -avd Test_Play -port 5554" ;;\n'
+                            'esac\n' % parent_args)
+        os.chmod(ps, 0o755)
+        env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, 'sdk'),
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, HOME=self.root,
+                   PATH=fake_bin + os.pathsep + os.environ.get('PATH', ''))
+        return subprocess.run(['/bin/bash', SCRIPT, 'emulator-5554', self.ca, 'c8750f0d.0', self.magisk, self.state, '--yes'],
+                              capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=30)
+
+    def test_an_emulator_android_studio_started_in_its_own_window_is_not_restarted(self):
+        # pilot 2026-10-21: "it relaunched the emulator outside Android Studio"
+        r = self.run_with_parent('/Applications/Android Studio.app/Contents/MacOS/studio')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('was started by Android Studio', r.stderr)
+        self.assertIn('Using Settings now', r.stderr)
+        self.assertFalse(self.touched_emulator())
+
+    def test_an_emulator_started_from_a_terminal_is_not_refused_for_that(self):
+        r = self.run_with_parent('-zsh')
+        self.assertNotIn('started by Android Studio', r.stderr)
+        self.assertIn('not installed', r.stderr)          # it went on to the next check (no Magisk files in this fixture)
+
     def test_only_emulator_serials_and_safe_ca_names(self):
         env = dict(os.environ, ADB=self.adb, FAKE_LOG=self.log)
         for serial, name, msg in (("R58M123", "c8750f0d.0", "not an Android Studio emulator"),

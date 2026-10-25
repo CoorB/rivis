@@ -492,6 +492,16 @@ function Save-Tls($cfg, $tls) {
 }
 
 # Native tools (adb, netsh) don't throw on failure in PowerShell 5.1 — check every call.
+# The AVDs `android on` pointed at this proxy (same file as the bash edition): the running proxy puts the setting back
+# on a listed emulator that comes back without one, e.g. after a cold boot. `android off` unlists it.
+function Set-AndroidProxyMark($adb, $serial, [bool]$on) {
+  $avd = ((& $adb -s $serial emu avd name 2>$null) -replace "`r","" | Where-Object { $_ -and $_ -ne "OK" } | Select-Object -First 1)
+  if (-not ($avd -match '^[A-Za-z0-9._-]+$')) { return }
+  $f = Join-Path $StateRoot "android-proxy"
+  $list = @(if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f | Where-Object { $_ -and $_ -ne $avd } })
+  if ($on) { $list += $avd }
+  Set-Content -LiteralPath $f -Value $list -Encoding ascii
+}
 function Run($what) { if ($LASTEXITCODE -ne 0) { Die "$what failed (exit $LASTEXITCODE)" } }
 
 function Pick-Serial($adb) {
@@ -1117,6 +1127,7 @@ switch ($Command) {
       & $adb -s $s shell settings put global http_proxy "10.0.2.2:$Port"; Run "set proxy"
       $now = ((& $adb -s $s shell settings get global http_proxy) -replace "`r","").Trim(); Run "verify proxy"
       if ($now -ne "10.0.2.2:$Port") { Die "${s}: setting the proxy failed" }
+      Set-AndroidProxyMark $adb $s $true
       Info "${s}: proxy -> 10.0.2.2:$Port. Run a *Debug* variant (release builds pin TLS)."
       if (-not (Port-Owner $Port)) { Info "WARNING: nothing listens on :$Port yet - run '.\${Cli}.ps1 start' or the emulator has no internet" }
     } elseif ($Action -eq "off") {
@@ -1124,6 +1135,7 @@ switch ($Command) {
       $now = ((& $adb -s $s shell settings get global http_proxy) -replace "`r","").Trim(); Run "verify cleared proxy"
       if (-not $now) { Die "${s}: empty proxy result - could not verify it was cleared" }
       if ($now -notin @(":0", "null")) { Die "${s}: proxy still set ($now)" }
+      Set-AndroidProxyMark $adb $s $false
       Info "${s}: proxy cleared"
       if ($root) {
         # F-07: also the CAs of earlier regenerations (state root ca-history, shared with the bash edition)

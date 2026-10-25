@@ -185,6 +185,42 @@ def android_devices(adb, want, state_root, proxy_port):
     return devices
 
 
+ANDROID_PROXY_LOST = ("", "null", ":0")      # http_proxy values that mean "no proxy at all"
+
+
+def restore_android_proxy(adb, state_root, proxy_port):
+    """Pilot 2026-10-21: "after a cold boot the proxy setting reverted and had to be fixed by hand". Put the proxy back on
+    every running emulator `android on` set up (state file android-proxy, one AVD per line; `android off` removes it)
+    that has come back with no proxy at all. One pointed at something else (another tool) is left alone.
+    Returns [(serial, avd)] restored."""
+    try:
+        with open(os.path.join(state_root, "android-proxy")) as fh:
+            wanted = {line.strip() for line in fh if line.strip()}
+    except OSError:
+        return []
+    if not adb or not wanted:
+        return []
+    rc, out = _run([adb, "devices"])
+    if rc != 0:
+        return []
+    target, restored = "10.0.2.2:%s" % proxy_port, []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or parts[1] != "device" or not SERIAL.match(parts[0]):
+            continue
+        s = parts[0]
+        if avd_name(adb, s) not in wanted:
+            continue
+        _, now = _run([adb, "-s", s, "shell", "settings", "get", "global", "http_proxy"])
+        if now.strip() not in ANDROID_PROXY_LOST:
+            continue
+        _run([adb, "-s", s, "shell", "settings", "put", "global", "http_proxy", target])
+        _, now = _run([adb, "-s", s, "shell", "settings", "get", "global", "http_proxy"])
+        if now.strip() == target:
+            restored.append((s, avd_name(adb, s)))
+    return restored
+
+
 class Snapshot:
     """The last result of a slow check (adb, xcrun, scutil, lsof), refreshed on a background thread.
 
