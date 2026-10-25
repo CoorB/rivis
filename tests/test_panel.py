@@ -13,6 +13,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
+sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+from proxy_common import forbidden_file
 from harness import Instance, LiveCase, Suite, free_port, raw_http, wait_for
 from upstream import JWT_FRESH, SMALL_JSON
 
@@ -24,7 +26,29 @@ def mode(path):
     return stat.S_IMODE(os.stat(path).st_mode)
 
 
-class Auth(LiveCase):
+class RestartHelpers:
+    def restart_on_same_port(self, new_password=True):
+        web_port = self.inst.web_port
+        self.inst.stop()
+        if new_password:       # rivis picks a new web password at every start (the harness pins one)
+            self.inst.password = "pw" + os.urandom(16).hex()
+        with patch.object(harness, "free_port", side_effect=[free_port(), web_port]):
+            self.inst.start()
+        self.__class__.panel = self.inst.panel
+
+    def open_through_ui_link(self):
+        old_panel = self.panel
+        before = self.suite.shim_log("open.log")
+        cp = self.suite.rivis("ui", home=self.inst.home, env=dict(self.inst.env))
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        opened = self.suite.shim_log("open.log")[len(before):].strip().splitlines()[-1]
+        old_panel.jar.clear()
+        self.assertEqual(old_panel.opener.open(opened, timeout=10).status, 200)
+        self.assertEqual(old_panel.get("/")[0], 200)
+        return old_panel, next(c for c in old_panel.jar if c.name == "mitmproxy-auth-%d" % self.inst.web_port)
+
+
+class Auth(RestartHelpers, LiveCase):
     def test_no_token_is_403_everywhere(self):
         port = self.inst.web_port
         for method, path, body in (("GET", "/proxy/api/state", None), ("GET", "/proxy/panel.js", None),
@@ -54,39 +78,18 @@ class Auth(LiveCase):
         auth = [x for x in cookies if x.startswith("mitmproxy-auth-%d=" % self.inst.web_port)]
         self.assertTrue(auth, cookies)
         self.assertIn("httponly", auth[0].lower())
-        self.assertIn("expires", auth[0].lower())
+        self.assertNotIn("expires", auth[0].lower())      # F-19: a browser-session cookie, not ~13 months (unless RIVIS_REMEMBER_UI=1)
+        self.assertNotIn("max-age", auth[0].lower())
         self.assertIn("samesite=strict", auth[0].lower())
 
-    def test_bookmarked_panel_reopens_after_restart_on_the_same_install(self):
-        """A signed-in browser stays signed in across a restart, although rivis picks a new web password at every start
-        (the harness pins one, so the test changes it). Without the install key file the old cookie dies with the process."""
-        old_panel, web_port = self.panel, self.inst.web_port
-        before = self.suite.shim_log("open.log")
-        cp = self.suite.rivis("ui", home=self.inst.home, env=dict(self.inst.env))
-        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
-        opened = self.suite.shim_log("open.log")[len(before):].strip().splitlines()[-1]
-        old_panel.jar.clear()
-        self.assertEqual(old_panel.opener.open(opened, timeout=10).status, 200)
-        self.assertEqual(old_panel.get("/")[0], 200)
-        key = os.path.join(self.inst.home, ".rivis", "ui-session.key")
-        self.assertEqual(mode(key), 0o600)
-        cookie = next(c for c in old_panel.jar if c.name == "mitmproxy-auth-%d" % web_port)
-        self.assertGreater(cookie.expires or 0, time.time() + 30 * 86400)     # long-lived, not a browser-session cookie
-        self.assertEqual(harness.Panel(web_port, "x").get("/")[0], 403)        # no cookie, no panel
-        self.inst.stop()
-        self.inst.password = "pw" + os.urandom(16).hex()
-        with patch.object(harness, "free_port", side_effect=[free_port(), web_port]):
-            self.inst.start()
-        self.__class__.panel = self.inst.panel
-        self.assertEqual(old_panel.get("/")[0], 200)
-        self.assertEqual(old_panel.get("/proxy/api/state")[0], 200)
-        self.inst.stop()                  # another install (or a deleted key) signs differently: the old cookie is worthless
-        os.remove(key)
-        self.inst.password = "pw" + os.urandom(16).hex()
-        with patch.object(harness, "free_port", side_effect=[free_port(), web_port]):
-            self.inst.start()
-        self.__class__.panel = self.inst.panel
+    def test_by_default_the_session_ends_with_the_proxy(self):
+        """Remembering a browser is opt-in: no key file, a session cookie, and a restart signs the browser out."""
+        old_panel, cookie = self.open_through_ui_link()
+        self.assertIsNone(cookie.expires)
+        self.assertFalse(os.path.exists(os.path.join(self.inst.home, ".rivis", "ui-session.key")))
+        self.restart_on_same_port()
         self.assertEqual(old_panel.get("/")[0], 403)
+        self.assertEqual(old_panel.get("/proxy/api/state")[0], 403)
 
     def test_dns_rebinding_host_header_is_refused(self):
         """FOUND-BUGS B2 (fixed): every UI route refuses a Host that is not a loopback name for this port (STANDARDS §2)."""
@@ -141,6 +144,28 @@ class Auth(LiveCase):
         code, doc, _ = self.panel.post("no_such_op", {})
         self.assertEqual(code, 400)
         self.assertIn("unknown op", doc["error"])
+
+
+class RememberedLogin(RestartHelpers, LiveCase):
+    """RIVIS_REMEMBER_UI=1: a signed-in browser stays signed in across restarts, so the panel link can be bookmarked."""
+    INSTANCE_KW = {"extra_env": {"RIVIS_REMEMBER_UI": "1"}}
+
+    def test_bookmarked_panel_reopens_after_restart_on_the_same_install(self):
+        """rivis picks a new web password at every start, so without the install key file the old cookie dies with the process."""
+        web_port = self.inst.web_port
+        old_panel, cookie = self.open_through_ui_link()
+        key = os.path.join(self.inst.home, ".rivis", "ui-session.key")
+        self.assertEqual(mode(key), 0o600)
+        self.assertIsNotNone(forbidden_file(key))                              # never served by a rule or a mock
+        self.assertGreater(cookie.expires or 0, time.time() + 30 * 86400)     # long-lived, not a browser-session cookie
+        self.assertEqual(harness.Panel(web_port, "x").get("/")[0], 403)        # no cookie, no panel
+        self.restart_on_same_port()
+        self.assertEqual(old_panel.get("/")[0], 200)
+        self.assertEqual(old_panel.get("/proxy/api/state")[0], 200)
+        self.inst.stop()                  # another install (or a deleted key) signs differently: the old cookie is worthless
+        os.remove(key)
+        self.restart_on_same_port()
+        self.assertEqual(old_panel.get("/")[0], 403)
 
 
 class Ops(LiveCase):

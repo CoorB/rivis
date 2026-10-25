@@ -534,6 +534,7 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
               --set "http2=$([ "$(env_value HTTP2 0)" = 1 ] && echo true || echo false)" --set "stream_large_bodies=$(env_value STREAM_LARGE_BODIES 64m)"
               -s "$AUTH_ADDON" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_source.py" -s "$SCRIPT_DIR/addons/proxy_panel.py" -s "$SCRIPT_DIR/addons/proxy_retention.py" -s "$SCRIPT_DIR/addons/proxy_operability.py"
               --set "proxy_auth_token_file=$TOKEN_FILE" --set "proxy_bootstrap_file=$BOOTSTRAP_FILE"
+              --set "proxy_remember_ui=$([ "$(env_value REMEMBER_UI 0)" = 1 ] && echo true || echo false)"
               --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT" --set "proxy_max_flows=$MAX_FLOWS" --set "proxy_log_dir=$STATE_ROOT/logs")
   [ -n "$private_hosts" ] && args+=(--set "proxy_private_hosts=$private_hosts")
   # local capture: the iOS Simulator shares the Mac network stack and has no proxy
@@ -564,6 +565,7 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
   fi
   [ "$show_all" = 1 ] && view=""
   [ -n "$view" ] && args+=(--set "view_filter=$view")
+  [ "$(env_value REMEMBER_UI 0)" != 1 ] || info "browser sign-in is remembered across restarts (${ENV_PREFIX}_REMEMBER_UI=1): delete $STATE_ROOT/ui-session.key to sign every browser out"
   info "proxy  127.0.0.1:$PORT   (Android emulator: 10.0.2.2:$PORT)"
   # Another tool (Proxyman, FRTMProxy) as system proxy = the simulator sends its traffic THERE;
   # local capture then only sees DNS rows. Seen 2026-10-14: Proxyman on :9091 stole every call.

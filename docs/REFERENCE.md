@@ -73,7 +73,7 @@ Resolution order is `--project ID`, `$<PREFIX>_PROJECT`, `current-project`, then
 ├── current-project
 ├── web-token                         # default web port login
 ├── web-token-<web-port>              # other web ports keep separate logins
-├── ui-session.key                    # signs this install's browser session cookie (private, 0600)
+├── ui-session.key                    # only with RIVIS_REMEMBER_UI=1: signs the remembered browser session (private, 0600)
 ├── profiles/<id>/{project.json,rules.example.json}
 └── projects/<id>/
     ├── rules.json
@@ -91,11 +91,13 @@ The **+** at the end of the call-list header opens **Customize columns**. Show, 
 Status, Size, Time, Start time, Duration, Content type, Source app, and Comment, or add a request or response header
 by its name. The choice is saved per project in `columns.json`.
 
-After opening `rivis ui` once, the same browser stays signed in across restarts, so `http://127.0.0.1:<web-port>/`
-can be bookmarked (keep the same web port). The session cookie is HttpOnly, SameSite=Strict, valid for a year, and signed
-with `~/.rivis/ui-session.key`, a random key private to this install. A new browser, or another install, still needs the
-one-time `rivis ui` link. To sign every browser out, delete that file and restart: a new key is made and the old cookies
-stop working. The panel stays on loopback and keeps the same Host, XSRF, and origin checks.
+By default the browser sign-in ends when the browser closes or the proxy restarts, and `rivis ui` opens a fresh one.
+**Off by default, opt in:** start with `RIVIS_REMEMBER_UI=1` (the same switch in the PowerShell CLI) and the browser that
+opened `rivis ui` stays signed in across restarts, so `http://127.0.0.1:<web-port>/` can be bookmarked (keep the same web
+port). The session cookie is then valid for a year, still HttpOnly and SameSite=Strict, and signed with
+`~/.rivis/ui-session.key`, a random key private to this install (created only when you opt in). A new browser, or another
+install, still needs the one-time `rivis ui` link. To sign every browser out, delete that file and restart. The panel stays
+on loopback and keeps the same Host, XSRF, and origin checks. `rivis start` says when remembering is on.
 
 On first use, the project's example rules are copied to its state directory. A first run also copies legacy
 `~/.neo-mitm/` state into the NEO project when needed; it never moves or deletes the original.
