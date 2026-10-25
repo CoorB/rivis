@@ -142,6 +142,12 @@ case "$1" in
 esac
 exec /usr/sbin/networksetup "$@"
 ''',
+    # the Mac's real system proxy (say, a Proxyman the owner has open) must never reach a test: "scutil --proxy" answers
+    # "none" (a test that needs a system proxy puts its own scutil first on PATH); everything else is the real scutil
+    "scutil": '''#!/bin/sh
+if [ "$1" = "--proxy" ]; then printf '<dictionary> {\\n  HTTPEnable : 0\\n  HTTPSEnable : 0\\n}\\n'; exit 0; fi
+exec /usr/sbin/scutil "$@"
+''',
     # SHIM_PRE_ADDON: a test-only add-on loaded first (e.g. a DNS stand-in); never set outside a test
     "mitmweb": "#!/bin/sh\nprintf '%%s\\n' \"mitmweb $*\" >> \"$SHIM_LOG/mitm-argv.log\"\n[ -n \"${SHIM_DRYRUN:-}\" ] && exit 0\n"
                "[ -n \"${SHIM_PRE_ADDON:-}\" ] && exec %s -s \"$SHIM_PRE_ADDON\" \"$@\"\nexec %s \"$@\"\n" % (REAL_MITMWEB, REAL_MITMWEB),

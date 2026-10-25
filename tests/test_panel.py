@@ -1362,6 +1362,18 @@ class LeftoverSystemProxyWhileRunning(LiveCase):
         self.assertEqual(self.changes(), [], "a live proxy must never be cleared")
 
 
+class SystemProxyIsolation(LiveCase):
+    """2026-10-23 run 4: the owner opened Proxyman during a full run; it took the Mac's system proxy, every test
+    instance read the real one (scutil), and the "another proxy app holds the Mac proxy" bar covered buttons in 11
+    browser tests. A test instance must see a Mac without a system proxy unless the test fakes one itself."""
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS system proxy")
+    def test_the_macs_own_system_proxy_never_reaches_a_test(self):
+        time.sleep(6)                                       # one background check (every 5 s) has run
+        sp = self.panel.state().get("system_proxy") or {}
+        self.assertFalse(sp.get("port"), "the real system proxy leaked into the test: %r" % sp)
+
+
 class InAppUpdates(LiveCase):
     def test_state_reports_version_and_update_status_without_blocking(self):
         doc = self.panel.state()
