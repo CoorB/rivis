@@ -2486,13 +2486,16 @@
     const p = pausedOpen, isResp = p.phase === "response";
     const q = state ? state.paused.length : 1;
     $("sheet").innerHTML = `
-      <header class="paused"><b>${ico("pause", "sm")} Paused at ${isResp ? "response" : "request"}${q > 1 ? ` · ${q} waiting` : ""}</b>
+      <header class="paused"><b>${ico("pause", "sm")} Paused at ${isResp ? "response — edit what the app receives" : "request — edit what the app sends"}${q > 1 ? ` · ${q} waiting` : ""}</b>
         <span class="sub" style="max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.method)} ${esc(p.url)}</span></header>
       <main>
         ${isResp ? `<div class="btns" style="margin-top:0">Status <input type="number" id="pst" value="${esc(p.status)}" style="width:80px"></div>`
                  : `<div class="btns" style="margin-top:0"><select id="pm">${methodOpts(p.method)}</select>
                     <input type="text" id="pu" class="grow" value="${esc(p.url)}"></div>`}
-        <div class="seg"><button data-psub="body" class="${p.sub === "body" ? "on" : ""}">Body</button><button data-psub="headers" class="${p.sub === "headers" ? "on" : ""}">Headers</button></div>
+        ${isResp ? "" : `<div class="sub" id="pnext" style="margin:0 0 8px">${p.response_next
+          ? "To change what the app <b>receives</b>, press Continue: the response pauses next."
+          : `To change what the app <b>receives</b>, pause its response. <button class="lnk" id="presp">Pause the response too</button>`}</div>`}
+        <div class="seg"><button data-psub="body" class="${p.sub === "body" ? "on" : ""}">${isResp ? "Response body" : "Request body"}</button><button data-psub="headers" class="${p.sub === "headers" ? "on" : ""}">Headers</button></div>
         <div id="ppb" style="${p.sub === "body" ? "" : "display:none"}"><textarea id="pb" spellcheck="false" placeholder="No body" class="${(isResp ? p.resp_body : p.req_body) ? "" : "nobody"}" ${(isResp ? p.resp_body_editable : p.req_body_editable) ? "" : "readonly"}>${esc(isResp ? p.resp_body : p.req_body)}</textarea>
           <div class="btns">${(isResp ? p.resp_body : p.req_body) && (isResp ? p.resp_body_editable : p.req_body_editable) ? `<button class="b" id="pfmt">Format JSON</button>` : ""}<span class="sub" id="pjs"></span></div></div>
         <div id="pph" style="${p.sub === "headers" ? "" : "display:none"}">${headersHTML(isResp ? p.resp_headers : p.req_headers, "phd")}</div>
@@ -2527,6 +2530,10 @@
       if (ta.value !== original && !ta.readOnly) edits.body = ta.value;   // untouched body: bytes pass through as-is
       if (isResp) edits.status = Number($("pst").value); else { edits.method = $("pm").value; edits.url = $("pu").value; }
       done("paused_continue", edits);
+    };
+    if ($("presp")) $("presp").onclick = async () => {
+      const r = await run("bp_add", { flow_id: p.id, request: true, response: true }, "The response of this call pauses too");
+      if (r) { p.response_next = true; $("pnext").innerHTML = "To change what the app <b>receives</b>, press Continue: the response pauses next."; }
     };
     $("pskip").onclick = () => done("paused_skip");
     $("pabort").onclick = () => done("paused_abort");

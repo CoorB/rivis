@@ -886,15 +886,19 @@ class ProxyPanel:
                 return {"limit": int(ctx.options.proxy_max_flows), "trimmed": int(getattr(addon, "trimmed", 0))}
         return {"limit": 5000, "trimmed": 0}
 
+    @staticmethod
+    def _bp_hits(bp, f, phase):
+        """Does breakpoint bp hold call f at phase ("request" / "response")?"""
+        if bp.get("enabled") is False or not bp.get(phase) or (bp.get("method") and bp["method"] != f.request.method):
+            return False
+        try:
+            return bool(user_regex(bp.get("match") or ".").search(f.request.pretty_url))
+        except re.error:
+            return False
+
     def release_held(self, cfg, changed):
         """A breakpoint that was deleted or switched off lets go of the calls it is holding (unless another still holds them)."""
-        def hits(bp, f, phase):
-            if bp.get("enabled") is False or not bp.get(phase) or (bp.get("method") and bp["method"] != f.request.method):
-                return False
-            try:
-                return bool(user_regex(bp.get("match") or ".").search(f.request.pretty_url))
-            except re.error:
-                return False
+        hits = self._bp_hits
         flows = []
         for f in self.all_flows():
             if not getattr(f, "intercepted", False) or not getattr(f, "request", None):
@@ -1961,7 +1965,9 @@ class ProxyPanel:
             out = {"id": f.id, "phase": "response" if f.response else "request",
                    "method": f.request.method, "url": f.request.pretty_url,
                    "req_headers": [[k, v] for k, v in f.request.headers.items(multi=True)],
-                   "req_body": body, "req_body_editable": ok}
+                   "req_body": body, "req_body_editable": ok,
+                   # pilot 2026-10-21: people typed the new RESPONSE into the request sheet; it says whether the response pauses next
+                   "response_next": not f.response and any(self._bp_hits(b, f, "response") for b in breakpoints(cfg))}
             if f.response:
                 rb, rok = self._text(f.response)
                 out.update(status=f.response.status_code,
