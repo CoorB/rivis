@@ -9,7 +9,7 @@ says so, and it is listed as waiting. The setup page, with the certificate and t
 from the QR code in the panel (http://<this Mac>:<port>/, no proxy needed yet) or, once the proxy is set, at
 http://rivis.setup/.
 
-  <state root>/lan-devices.json   [{"ip", "name", "added"}]   allowed devices (0600); re-read when it changes
+  <state root>/lan-devices.json   [{"ip", "mac", "name", "added", "last_seen"}]   allowed devices (0600)
   proxy_lan.py FILE list | allow IP [NAME] | rm IP | addresses
 
 Each call from an allowed device is shown with that device's name (proxy_source stamps it, kind "phone").
@@ -36,6 +36,8 @@ except ImportError:            # the CLI uses the file helpers with the system P
 SETUP_HOST = "rivis.setup"
 DEVICES_FILE = os.path.join(STATE_ROOT, "lan-devices.json")
 MAX_DEVICES, MAX_PENDING = 50, 20
+DEVICE_TTL = 7 * 86400
+MAC_CACHE_TTL = 5               # short: a device that just took over an allowed address must not inherit its verdict
 NAME_OK = re.compile(r"^[^\x00-\x1f\x7f|<>]{1,40}$")
 LAN_IFACE = re.compile(r"^(en|eth|bridge|wlan)\d+$")      # Wi-Fi / Ethernet; never utun (VPN), lo, awdl, llw, anpi
 
@@ -50,6 +52,31 @@ def is_loopback(ip):
         return ipaddress.ip_address(plain_ip(ip)).is_loopback
     except ValueError:
         return False
+
+
+def parse_arp(output):
+    """The MAC in `arp -n IP` (macOS prints octets without leading zeros: 0:1c:42:a:5e:6) or `arp -a IP` (Windows:
+    00-1c-42-0a-5e-06) output, normalised to 00:1c:42:0a:5e:06; None for "(incomplete)" or no entry."""
+    found = re.search(r"\bat\s+([0-9a-fA-F]{1,2}(?::[0-9a-fA-F]{1,2}){5})\b", output) \
+        or re.search(r"\b([0-9a-fA-F]{2}(?:-[0-9a-fA-F]{2}){5})\b", output)
+    return ":".join(x.zfill(2) for x in re.split("[:-]", found.group(1).lower())) if found else None
+
+
+def lookup_mac(ip):
+    # Test-only ARP fixture: live tests use this Mac's own Wi-Fi IP, which has no ARP entry.
+    fixture = os.environ.get("RIVIS_TEST_ARP_FILE")
+    if fixture is not None:
+        try:
+            with open(fixture) as fh:
+                return parse_arp("at " + str(json.load(fh).get(ip) or ""))
+        except (OSError, ValueError, AttributeError):
+            return None
+    argv = ["arp", "-a", ip] if sys.platform == "win32" else ["/usr/sbin/arp", "-n", ip]
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_arp(result.stdout) if result.returncode == 0 else None
 
 
 def lan_addresses(ifconfig=None):
@@ -106,6 +133,12 @@ class Devices:
         if stamp != self._stamp:
             self._stamp = stamp
             self._rows = self._read() if stamp else []
+        now = time.time()
+        keep = [r for r in self._rows if not isinstance(r.get("last_seen"), (int, float))
+                or now - r["last_seen"] < DEVICE_TTL]
+        if len(keep) != len(self._rows):
+            self._write(keep)
+            self._rows = keep
         return self._rows
 
     def _read(self):
@@ -120,7 +153,8 @@ class Devices:
                 ip = str(ipaddress.ip_address(plain_ip(r.get("ip"))))
             except (ValueError, AttributeError):
                 continue
-            rows.append({"ip": ip, "name": clean_name(r.get("name")), "added": r.get("added")})
+            rows.append({"ip": ip, "name": clean_name(r.get("name")), "added": r.get("added"),
+                         "mac": r.get("mac"), "last_seen": r.get("last_seen", r.get("added"))})
         return rows[:MAX_DEVICES]
 
     def get(self, ip):
@@ -140,9 +174,19 @@ class Devices:
         if len(rows) >= MAX_DEVICES:
             raise ValueError("at most %d devices; remove one first" % MAX_DEVICES)
         old = self.get(ip)
-        row = {"ip": ip, "name": clean_name(name or (old or {}).get("name")), "added": int(time.time())}
+        now = int(time.time())
+        row = {"ip": ip, "name": clean_name(name or (old or {}).get("name")), "added": now,
+               "last_seen": now, "mac": lookup_mac(ip)}
         self._write(rows + [row])
         return row
+
+    def seen(self, ip):
+        row = self.get(ip)
+        now = int(time.time())
+        if row is None or (row.get("last_seen") or 0) > now - 60:
+            return
+        rows = [dict(r, last_seen=now) if r["ip"] == ip else r for r in self.rows()]
+        self._write(rows)
 
     def remove(self, ip):
         ip = plain_ip(ip)
@@ -211,7 +255,9 @@ Then open <a href="%s">%s</a> to install the certificate.</div></body></html>"""
 class ProxyLan:
     def __init__(self):
         self.devices = Devices()
-        self.pending = {}          # ip → {"ip", "ua", "name", "first", "last", "count"}
+        self.pending = {}          # ip → {"ip", "mac", "ua", "name", "first", "last", "count"}
+        self._client_macs = {}      # client.id → (ip, mac)
+        self._mac_cache = {}        # ip → (time, fixture stamp, mac)
 
     def load(self, loader):
         loader.add_option("proxy_lan", bool, False,
@@ -231,29 +277,59 @@ class ProxyLan:
                 out.append((m.group(1), int(m.group(2))))
         return out
 
+    async def client_connected(self, client):
+        ip = plain_ip(client.peername[0]) if client.peername else ""
+        if not ip or is_loopback(ip):
+            return
+        fixture = os.environ.get("RIVIS_TEST_ARP_FILE")
+        try:
+            st = os.stat(fixture) if fixture is not None else None
+            stamp = (st.st_mtime_ns, st.st_size) if st else None
+        except OSError:
+            stamp = None
+        now = time.monotonic()
+        cached = self._mac_cache.get(ip)
+        if cached is None or now - cached[0] >= MAC_CACHE_TTL or cached[1] != stamp:
+            import asyncio            # arp runs off the event loop: one slow lookup must not stall every other call
+            cached = (now, stamp, await asyncio.to_thread(lookup_mac, ip))
+            self._mac_cache[ip] = cached
+        self._client_macs[client.id] = (ip, cached[2])
+
+    def client_disconnected(self, client):
+        self._client_macs.pop(client.id, None)
+
     def _allowed(self, flow):
         conn = flow.client_conn
         if getattr(getattr(conn, "proxy_mode", None), "type_name", "regular") == "local":
             return True                        # simulator capture on this Mac
         ip = plain_ip(conn.peername[0]) if conn.peername else ""
-        return is_loopback(ip) or self.devices.get(ip) is not None
+        if is_loopback(ip):
+            return True
+        row = self.devices.get(ip)
+        mac = self._client_macs.get(conn.id, (ip, None))[1]
+        allowed = row is not None and (not row.get("mac") or row["mac"] == mac)
+        if allowed:
+            self.devices.seen(ip)
+        return allowed
 
     def _note(self, flow):
         ip = plain_ip(flow.client_conn.peername[0]) if flow.client_conn.peername else "?"
         now = time.time()
         row = self.pending.get(ip)
+        mac = self._client_macs.get(flow.client_conn.id, (ip, None))[1]
         ua = flow.request.headers.get("user-agent", "")[:300]
         if row is None:
             if len(self.pending) >= MAX_PENDING:
                 oldest = min(self.pending.values(), key=lambda r: r["last"])
                 del self.pending[oldest["ip"]]
-            row = self.pending[ip] = {"ip": ip, "ua": "", "name": "Device", "first": now, "last": now, "count": 0}
+            row = self.pending[ip] = {"ip": ip, "mac": mac, "ua": "", "name": "Device", "first": now, "last": now, "count": 0}
             if ctx is not None:
                 ctx.log.warn(f"proxy_lan: {ip} is not allowed to use this proxy; allow it in Tools → Devices "
                              f"({PRODUCT['cli']} lan allow {ip})")
         if ua and (not row["ua"] or row["name"] == "Device"):
             row["ua"], row["name"] = ua, guess_name(ua)
         row["last"] = now
+        row["mac"] = mac
         row["count"] += 1
         return ip
 
@@ -319,12 +395,13 @@ class ProxyLan:
     def state(self):
         import qr
         lan = self.listen_addresses() if ctx.options.proxy_lan else []
-        allowed = {r["ip"] for r in self.devices.rows()}
+        allowed = {r["ip"]: r for r in self.devices.rows()}
         urls = ["http://%s:%d/" % a for a in lan]
         return {"on": bool(lan), "addresses": ["%s:%d" % a for a in lan], "setup_urls": urls,
                 "qr": [qr.svg(u, label="Set up a device: " + u) for u in urls[:3]],
                 "devices": self.devices.rows(),
-                "pending": sorted((dict(r) for ip, r in self.pending.items() if ip not in allowed),
+                "pending": sorted((dict(r) for ip, r in self.pending.items()
+                                   if ip not in allowed or (allowed[ip].get("mac") and allowed[ip]["mac"] != r["mac"])),
                                   key=lambda r: -r["last"])}
 
     def allow(self, ip, name=None):
@@ -358,7 +435,8 @@ def main(argv):
                 print("no devices allowed (a device that tries the proxy shows in Tools → Devices; or: %s lan allow IP [NAME])" % PRODUCT["cli"])
         elif cmd == "allow" and 1 <= len(args) <= 2:
             row = devices.allow(args[0], args[1] if len(args) > 1 else None)
-            print("allowed %s (%s) — from its next call, no restart" % (row["ip"], row["name"]))
+            print("allowed %s (%s), %s — from its next call, no restart" %
+                  (row["ip"], row["name"], row["mac"] or "MAC unknown"))
         elif cmd == "rm" and len(args) == 1:
             if not devices.remove(args[0]):
                 die("%s is not in the list" % args[0])

@@ -247,11 +247,16 @@ Its calls then show with the device's name (kind *Phone or tablet* in the Source
 works), and rules, Map Local and breakpoints apply to them like any other call. Once the proxy is set, the setup page
 is also at `http://rivis.setup/`.
 
-Allowed devices are kept by IP address in `~/.rivis/lan-devices.json` (0600). Until a device is allowed, every call
+Allowed devices are kept by IP address and, when the Mac can read it from ARP, MAC address in `~/.rivis/lan-devices.json`
+(0600). A different device that later gets the same IP address must be allowed again; approvals unused for 7 days expire.
+Until a device is allowed, every call
 it makes is refused (HTTP 403, with a page that says what to do) and never reaches a server, so nobody else on the
 network can use this Mac as a proxy. From a terminal: `rivis lan` (list), `rivis lan allow IP [NAME]`,
 `rivis lan rm IP`; changes apply from the next call, no restart. A phone that gets a new address from the router has
 to be allowed again. When you are done, turn the phone's Wi-Fi proxy off and remove the certificate.
+A device on the same Wi-Fi that copies an allowed device's MAC and IP address can still get in. MAC lookups are cached
+for up to 5 seconds, so a new device given an allowed device's address within those seconds is checked against the
+old answer.
 
 ### Web apps (`rivis browser`)
 

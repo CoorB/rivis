@@ -1217,11 +1217,11 @@
         </div></div>
       ${lan.pending.length ? `<div class="sub" style="margin-top:8px"><b>Waiting to be allowed</b> — refused until you allow them</div>` +
         lan.pending.map((d) => `<div class="row" data-lanwait="${esc(d.ip)}"><div class="n">${esc(d.name)} <code>${esc(d.ip)}</code>
-          <div class="sub">${esc(d.count)} call${d.count === 1 ? "" : "s"} refused · last ${esc(ago(d.last))}${d.ua ? " · " + esc(d.ua.slice(0, 90)) : ""}</div></div>
+          <div class="sub">${esc(d.mac || "MAC unknown")} · ${esc(d.count)} call${d.count === 1 ? "" : "s"} refused · last ${esc(ago(d.last))}${d.ua ? " · " + esc(d.ua.slice(0, 90)) : ""}</div></div>
           <button class="b p" data-lanallow="${esc(d.ip)}" data-name="${esc(d.name)}">Allow</button><button class="b" data-landismiss="${esc(d.ip)}">Ignore</button></div>`).join("") : ""}
       <div class="sub" style="margin-top:8px"><b>Allowed</b></div>
       ${lan.devices.length ? lan.devices.map((d) => `<div class="row" data-lanok="${esc(d.ip)}"><div class="n">${esc(d.name)} <code>${esc(d.ip)}</code>
-          <div class="sub">Its calls show as “${esc(d.name)}” (Source menu: Phone or tablet)</div></div>
+          <div class="sub">${esc(d.mac || "MAC unknown")} · Its calls show as “${esc(d.name)}” (Source menu: Phone or tablet)</div></div>
           <button class="b" data-lanrename="${esc(d.ip)}" data-name="${esc(d.name)}">Rename</button>
           <button class="b d" data-lanrm="${esc(d.ip)}" data-name="${esc(d.name)}" aria-label="Remove ${esc(d.name)}">${ico("x", "sm")}</button></div>`).join("")
         : '<div class="sub">None yet.</div>'}

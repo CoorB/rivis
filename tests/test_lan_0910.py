@@ -4,6 +4,7 @@ A client that connects from this Mac's own Wi-Fi/Ethernet address is, to the pro
 it is refused (with a page saying why) until it is allowed, then captured and shown with the device's name. The setup
 page with the certificate opens from http://<address>:<port>/ (the QR code) and from http://rivis.setup/."""
 import os
+import json
 import re
 import shutil
 import socket
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
@@ -42,6 +44,14 @@ class LanLive(LiveCase):
     INSTANCE_KW = {"start_args": ("--insecure", "--lan")}
 
     @classmethod
+    def make_instance(cls):
+        cls.arp_file = os.path.join(cls.suite.root, "lan-test-arp.json")
+        with open(cls.arp_file, "w") as fh:
+            json.dump({LAN[0]: "3a:1b:2c:4d:5e:6f"}, fh)
+        return Instance(cls.suite, "lanlive", extra_env={"RIVIS_TEST_ARP_FILE": cls.arp_file},
+                        **cls.INSTANCE_KW)
+
+    @classmethod
     def setUpClass(cls):
         super().setUpClass()
         cls.ip = LAN[0]
@@ -51,6 +61,13 @@ class LanLive(LiveCase):
         super().setUp()
         if os.path.exists(self.devices):
             os.unlink(self.devices)
+        self.set_mac("3a:1b:2c:4d:5e:6f")
+
+    def set_mac(self, mac):
+        tmp = self.arp_file + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({self.ip: mac} if mac else {}, fh)
+        os.replace(tmp, self.arp_file)
 
     def phone(self, url, extra=()):
         """A call through the proxy's Wi-Fi address: the proxy sees it come from this Mac's LAN address."""
@@ -87,6 +104,7 @@ class LanLive(LiveCase):
         self.assertEqual((pending[0]["ip"], pending[0]["name"]), (self.ip, "iPhone"))
         doc = self.panel.ok("lan_allow", {"ip": self.ip, "name": "QA iPhone 15"})
         self.assertEqual(doc["device"]["name"], "QA iPhone 15")
+        self.assertEqual(doc["device"]["mac"], "3a:1b:2c:4d:5e:6f")
         self.assertEqual(self.panel.state()["lan"]["pending"], [])
         status, body, rc, err = self.phone(self.up.url("/echo?phone=2", tls=True))
         self.assertEqual((rc, status), (0, 200), err)
@@ -152,6 +170,7 @@ class LanLive(LiveCase):
         self.assertIn("no devices allowed", self.suite.rivis("lan", home=home, env=env).stdout)
         cp = self.suite.rivis("lan", "allow", self.ip, "Pixel 8", home=home, env=env)
         self.assertEqual(cp.returncode, 0, cp.stderr)
+        self.assertIn("3a:1b:2c:4d:5e:6f", cp.stdout)
         self.assertIn("%s" % self.ip, self.suite.rivis("lan", "list", home=home, env=env).stdout)
         wait_for(lambda: self.phone(self.up.url("/echo?cli=1"))[0] == 200, 5, 0.2, "allowed from the CLI, no restart")
         self.assertEqual(os.stat(self.devices).st_mode & 0o777, 0o600)
@@ -159,6 +178,37 @@ class LanLive(LiveCase):
         self.assertNotEqual(self.suite.rivis("lan", "allow", "not-an-ip", home=home, env=env).returncode, 0)
         self.assertEqual(self.suite.rivis("lan", "rm", self.ip, home=home, env=env).returncode, 0)
         self.assertNotEqual(self.suite.rivis("lan", "rm", self.ip, home=home, env=env).returncode, 0)
+
+    def test_changed_or_unreadable_mac_is_refused_and_waiting(self):
+        self.panel.ok("lan_allow", {"ip": self.ip, "name": "Original"})
+        self.assertEqual(self.phone(self.up.url("/echo?mac=ok"))[0], 200)
+        self.set_mac("02:aa:bb:cc:dd:ee")
+        status, body, _, _ = self.phone(self.up.url("/echo?mac=changed"))
+        self.assertEqual(status, 403)
+        self.assertIn(b"not allowed yet", body)
+        self.assertEqual(self.up.hits_for("/echo?mac=changed"), [])
+        pending = self.panel.state()["lan"]["pending"]
+        self.assertEqual(pending[0]["mac"], "02:aa:bb:cc:dd:ee")
+        self.set_mac(None)
+        self.assertEqual(self.phone(self.up.url("/echo?mac=missing"))[0], 403)
+        self.assertIsNone(self.panel.state()["lan"]["pending"][0]["mac"])
+
+    def test_old_ip_only_row_still_works_and_expired_row_does_not(self):
+        with open(self.devices, "w") as fh:
+            json.dump({"devices": [{"ip": self.ip, "name": "Old", "added": 4102444800}]}, fh)
+        self.set_mac(None)
+        self.assertEqual(self.phone(self.up.url("/echo?old=1"))[0], 200)
+        with open(self.devices, "w") as fh:
+            json.dump({"devices": [{"ip": self.ip, "name": "Expired", "added": 1, "last_seen": 1}]}, fh)
+        self.assertEqual(self.phone(self.up.url("/echo?old=2"))[0], 403)
+        self.assertEqual(self.panel.state()["lan"]["devices"], [])
+
+    def test_cli_allow_reports_unknown_mac(self):
+        self.set_mac(None)
+        cp = self.suite.rivis("lan", "allow", self.ip, home=self.inst.home, env=self.inst.env)
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+        self.assertIn("MAC unknown", cp.stdout)
+        self.assertIsNone(self.panel.state()["lan"]["devices"][0]["mac"])
 
 
 @unittest.skipUnless(LAN, NO_LAN)
@@ -221,6 +271,35 @@ en9: flags=8863<UP> mtu 1500
                 d.allow(bad)
         self.assertTrue(d.remove("192.168.1.5"))
         self.assertFalse(d.remove("192.168.1.5"))
+
+    def test_mac_arp_parsing_without_leading_zeros(self):
+        """macOS's arp drops leading zeros in each octet; the stored MAC must still match a later lookup."""
+        self.assertEqual(proxy_lan.parse_arp("? (192.168.1.6) at 0:1c:42:a:5e:6 on en0 ifscope [ethernet]"), "00:1c:42:0a:5e:06")
+        self.assertEqual(proxy_lan.parse_arp("  192.168.1.6         00-1c-42-0a-5e-06     dynamic"), "00:1c:42:0a:5e:06")
+
+    def test_mac_arp_parsing(self):
+        self.assertEqual(proxy_lan.parse_arp("? (192.168.1.5) at 3a:1b:2c:4d:5e:6f on en0 ifscope [ethernet]"),
+                         "3a:1b:2c:4d:5e:6f")
+        self.assertIsNone(proxy_lan.parse_arp("? (192.168.1.9) at (incomplete) on en0 ifscope [ethernet]"))
+        self.assertIsNone(proxy_lan.parse_arp("arp: 192.168.1.77: no entry"))
+        self.assertEqual(proxy_lan.parse_arp("  192.168.1.5          3a-1b-2c-4d-5e-6f     dynamic"),
+                         "3a:1b:2c:4d:5e:6f")
+
+    def test_last_seen_is_written_at_most_once_per_minute_and_expires(self):
+        path = os.path.join(Suite.get().new_home("lan-expiry"), "lan-devices.json")
+        with patch.object(proxy_lan, "lookup_mac", return_value="3a:1b:2c:4d:5e:6f"), patch.object(proxy_lan.time, "time", return_value=1000000):
+            d = proxy_lan.Devices(path)
+            d.allow("192.168.1.5")
+        with patch.object(proxy_lan.time, "time", return_value=1000030):
+            d.seen("192.168.1.5")
+            self.assertEqual(d.get("192.168.1.5")["last_seen"], 1000000)
+        with patch.object(proxy_lan.time, "time", return_value=1000061):
+            d.seen("192.168.1.5")
+            self.assertEqual(d.get("192.168.1.5")["last_seen"], 1000061)
+        with patch.object(proxy_lan.time, "time", return_value=1000061 + 7 * 86400 + 1):
+            self.assertIsNone(d.get("192.168.1.5"))
+            with open(path) as fh:
+                self.assertEqual(json.load(fh)["devices"], [])
 
 
 DECODER = None
