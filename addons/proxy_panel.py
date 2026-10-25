@@ -1244,6 +1244,29 @@ class ProxyPanel:
         self._panel_view_filter = self.view_filter()
         ctx.options.update(view_filter=self._panel_view_filter)
 
+    # Pilot 2026-10-21: "the project-only view reset to all traffic after a restart". The choice made in the panel is kept
+    # per project and applied again at the next start; start's own --all / --project-only still win.
+    def _view_file(self):
+        return os.path.join(project_state(self.active_project), "view.json")
+
+    def _save_view_choice(self):
+        try:
+            atomic_json(self._view_file(), {"project_only": bool(self.project_only and self.view_project == self.active_project)})
+        except (OSError, ValueError) as e:
+            ctx.log.warn(f"proxy_panel: could not keep the view choice ({e})")
+
+    def _restore_view_choice(self, vf):
+        if vf != "~http" or self.project_only:       # --all, --project-only or a filter of its own: that was asked for
+            return
+        try:
+            with open(self._view_file()) as fh:
+                saved = json.load(fh)
+        except (OSError, ValueError):
+            return
+        if isinstance(saved, dict) and saved.get("project_only") is True and self.project_filter(self.view_profile):
+            self.project_only = True
+            self._write_view_filter()
+
     # ── paused (intercepted) calls ─────────────────────────────────────────────
     @staticmethod
     def all_flows():
@@ -1991,6 +2014,7 @@ class ProxyPanel:
                 self.view_project = self.active_project
             self.show_dns = bool(a.get("show_dns"))
             self._write_view_filter()
+            self._save_view_choice()
         elif op == "filter_check":     # the list filter is evaluated here: an invalid one closes mitmweb's websocket, so the panel asks first
             from mitmproxy import flowfilter
             text = str(a.get("filter") or "").strip()
@@ -2498,6 +2522,7 @@ class ProxyPanel:
             m = re.search(r"~d '\^([^']*)\$'", vf)
             self.focused_host = m.group(1).replace("\\", "") if m else None
             self.source = self.source_from_filter(vf)        # a hot reload keeps the chosen device / app
+            self._restore_view_choice(vf)
             self._register()
             self._show_start_time_column()
             from mitmproxy import contentviews
