@@ -708,6 +708,24 @@ class UiSmoke(UiBase):
         wait_for(lambda: page.locator("#proxy-panel-host").locator("#nocache").is_checked(), 8, 0.3, "CLI change shown")
         self.assertEqual(self.errors, [])
 
+    def test_a_switch_keeps_the_keyboard_after_its_change_redraws_the_tab(self):
+        """Full suite 2026-10-23 (the No caching keyboard test flaked): every panel change redraws its tab, which replaced
+        the switch under the keyboard, so a second Space did nothing until the user tabbed back to it."""
+        page = self.open()
+        page.locator("#fab").click()
+        page.locator("button[data-t=net]").click()
+        box = page.locator("#proxy-panel-host").locator("#nocache")
+        wait_for(lambda: box.count() == 1, 8, 0.2, "No caching switch shown")
+        box.focus()
+        for want in (True, False, True, False):
+            page.keyboard.press("Space")
+            wait_for(lambda: self.panel.state()["no_cache"] is want, 8, 0.2, "No caching saved %s" % want)
+            wait_for(lambda: page.locator("#proxy-panel-host").locator("#nocache").is_checked() is want, 8, 0.2, "switch shows it")
+            page.wait_for_timeout(300)
+            self.assertEqual(self.page.evaluate("document.querySelector('#proxy-panel-host').shadowRoot.activeElement && "
+                                                "document.querySelector('#proxy-panel-host').shadowRoot.activeElement.id"), "nocache")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

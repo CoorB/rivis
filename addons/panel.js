@@ -625,13 +625,22 @@
   };
   const tilde = (p) => { const h = state && state.home; return h && p && (p === h || String(p).startsWith(h + "/")) ? "~" + String(p).slice(h.length) : p; };
   const busy = new Set();
+  // the control in the open tab that has the keyboard, as a selector that finds it again after a redraw (or null)
+  const focusKey = () => {
+    const f = root.activeElement;
+    if (!f || !f.closest || !f.closest("#main")) return null;
+    return f.id ? "#" + CSS.escape(f.id)
+      : [...f.attributes].filter((a) => a.name.startsWith("data-")).map((a) => `[${a.name}="${CSS.escape(a.value)}"]`).join("") || null;
+  };
+  const refocus = (sel) => { if (!sel) return; const el = $("main").querySelector(sel); if (el && root.activeElement !== el) el.focus({ preventScroll: true }); };
   const run = async (op, body, ok) => {
     const key = op + JSON.stringify(body || {});
+    const again = focusKey();       // a change redraws its tab: the keyboard stays on the same control (a second Space works)
     const what = OP_NAMES[op] || op.replace(/_/g, " ");
     if (busy.has(key)) { toast(`Still waiting for the previous ${what}… (${product().name || "Rivis"} has not answered yet)`, true); return; }
     busy.add(key);
     const done = working(what);
-    try { const r = await api(op, body); if (r.state) state = r.state; done(); if (ok) toast(typeof ok === "function" ? ok(r) : ok); render(); return r; }
+    try { const r = await api(op, body); if (r.state) state = r.state; done(); if (ok) toast(typeof ok === "function" ? ok(r) : ok); Promise.resolve(render()).then(() => refocus(again)); return r; }
     catch (e) { toast(e.message, true); }
     finally { done(); busy.delete(key); }
   };
@@ -3151,12 +3160,8 @@
     if (sig === openTabSig) return;
     const field = root.activeElement;
     if (field && field.closest && field.closest("#main") && /^(INPUT|SELECT|TEXTAREA)$/.test(field.tagName) && field.type !== "checkbox") return;
-    let again = null;
-    if (field && field.closest && field.closest("#main")) {
-      again = field.id ? "#" + CSS.escape(field.id)
-        : [...field.attributes].filter((a) => a.name.startsWith("data-")).map((a) => `[${a.name}="${CSS.escape(a.value)}"]`).join("") || null;
-    }
-    render().then(() => { if (again) { const el = $("main").querySelector(again); if (el) el.focus({ preventScroll: true }); } });
+    const again = focusKey();
+    render().then(() => refocus(again));
   }
   let pointerHeld = false;                 // a mouse button is down somewhere in the panel (see poll)
   root.addEventListener("pointerdown", () => { pointerHeld = true; }, true);
@@ -3179,8 +3184,11 @@
       // Never redraw a tab under a held mouse button: the press and the release would land on different elements and the browser
       // drops the click. The next poll catches up.
       if ($("drawer").classList.contains("open") && tab === "net" && !editing && !pointerHeld) {
-        const field = root.activeElement;
-        if (!(field && field.closest && field.closest("#main") && /^(INPUT|SELECT|TEXTAREA)$/.test(field.tagName))) render();
+        const field = root.activeElement;     // a field being typed in is never redrawn; a switch is, and keeps the keyboard
+        if (!(field && field.closest && field.closest("#main") && /^(INPUT|SELECT|TEXTAREA)$/.test(field.tagName) && field.type !== "checkbox")) {
+          const again = focusKey();
+          Promise.resolve(render()).then(() => refocus(again));
+        }
       }
       if ($("drawer").classList.contains("open") && tab === "coll" && !editing && !pointerHeld && !root.activeElement && s.collections.recording) render();
       if ($("drawer").classList.contains("open") && !editing && !pointerHeld && (tab === "bp" || tab === "rules" || tab === "map" || tab === "scripts")) refreshOpenTab(s);
