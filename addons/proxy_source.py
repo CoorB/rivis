@@ -255,6 +255,36 @@ class SocketScan:
                 return True
         return False
 
+    def all_pids(self):
+        n = self.libc.proc_listallpids(None, 0)
+        if n <= 0:
+            return []
+        buf = (ctypes.c_int * (n + 256))()
+        got = self.libc.proc_listallpids(buf, ctypes.sizeof(buf))
+        return [pid for pid in buf[:max(0, got // ctypes.sizeof(ctypes.c_int))] if pid]
+
+    def owner(self, local_port, remote_port, first=(), budget=0.05):
+        """pid holding this loopback socket pair, or None. `first` is tried before a sweep of every pid, newest first:
+        a client that has just connected has the highest pid, so it is normally found in the first few checks.
+        Costs about a millisecond, where one lsof costs thirty — and lsof cannot see a process that has already
+        exited, which is why this runs while the connection is being accepted."""
+        if self.offset is None:
+            return None
+        end = time.monotonic() + budget
+        try:
+            pids = list(first) + sorted((p for p in self.all_pids() if p not in first), reverse=True)
+        except Exception:
+            return None
+        for pid in pids:
+            try:
+                if self.holds(pid, local_port, remote_port):
+                    return pid
+            except Exception:
+                continue
+            if time.monotonic() > end:
+                return None
+        return None
+
 
 def parse_procargs(raw):
     """KERN_PROCARGS2 → (argv, env). Layout: int argc, exec path, NUL padding, argc strings, then env strings."""
@@ -379,6 +409,15 @@ def avd_from_argv(argv):
     return ""
 
 
+def capture(pid):
+    """What classification needs about a client process, read while it is still alive: its path, argv and environment
+    (proc_pidpath + one sysctl, no subprocess). A short-lived client — curl, a one-shot CLI call, a request that fails
+    before connecting — is gone milliseconds later, and then none of this can be read and the call reads "Unknown".
+    """
+    argv, env = proc_args(pid)
+    return {"pid": pid, "path": proc_path(pid), "argv": argv, "env": env}
+
+
 def classify(pid, path, argv, env, sim_names, browser_root=""):
     """Pure: pid + its executable path / argv / env → a source. sim_names maps simulator UDID → name."""
     base = os.path.basename(path or "")
@@ -464,13 +503,16 @@ class Attributor:
         if self.scan is not None and self.scan.offset is not None:
             with self._lock:
                 recent = sorted(self._recent, key=self._recent.get, reverse=True)[:32]
-            for pid in recent:                       # nearly always: an app that already talked to us (µs, no lsof)
-                try:
-                    if self.scan.holds(pid, port, proxy_port):
-                        self._seen(pid)
-                        return pid
-                except Exception:
-                    break
+            # an app that already talked to us first (µs), then every pid, newest first. One lsof costs about thirty
+            # times this sweep, and a client that opens a connection per call (curl, a CLI tool) gave the old code one
+            # lsof per call: the snapshot is only reused by connections that started before it.
+            try:
+                pid = self.scan.owner(port, proxy_port, first=recent)
+            except Exception:
+                pid = None
+            if pid:
+                self._seen(pid)
+                return pid
         with self._snap_lock:
             started, table = self._snap.get(proxy_port, (-1.0, {}))
             if started < since:
@@ -504,13 +546,13 @@ class Attributor:
         self._sims = (time.time(), names)
         return names
 
-    def by_pid(self, pid):
-        path = proc_path(pid)
+    def by_pid(self, pid, snap=None):
+        path = (snap or {}).get("path") or proc_path(pid)
         with self._lock:
             hit = self._pid_cache.get(pid)
         if hit and hit[0] > time.time() and hit[1] == path:
             return hit[2]
-        argv, env = proc_args(pid)
+        argv, env = (snap["argv"], snap["env"]) if snap else proc_args(pid)
         names = self.sim_names() if ("CoreSimulator" in path or env.get("SIMULATOR_UDID")) else {}
         src = classify(pid, path, argv, env, names, self.browser_root)
         if src["kind"] == "ios" and src["id"] in SIM_SERVICES and src["id"] != "com.apple.mobilesafari":
@@ -592,20 +634,23 @@ class Attributor:
             return src
         return make_source("android", src["device"], pkgs[0], pkgs[0], src["pid"])
 
-    def resolve(self, stream, peer, sock_port, since=None):
+    def resolve(self, stream, peer, sock_port, since=None, snap=None):
         """stream = (pid, process_name) from local mode, or None; peer = the client's (ip, port); sock_port = the proxy
-        port it connected to; since = monotonic time the connection was accepted."""
+        port it connected to; since = monotonic time the connection was accepted; snap = a capture() taken while the
+        client was still connecting (see ClientSources.client_connected)."""
         try:
             pid = stream[0] if stream else None
             if pid is None and peer and peer[0] and peer[0] not in LOOPBACK and not str(peer[0]).startswith("127."):
                 ip = str(peer[0])[7:] if str(peer[0]).startswith("::ffff:") else str(peer[0])
                 dev = self.lan.get(ip)
                 return make_source("phone", dev["name"] if dev else ip, "", ident=ip)
-            if pid is None and peer and peer[0] in LOOPBACK and peer[1]:
+            if pid is None and snap and snap.get("pid"):
+                pid = snap["pid"]                     # read at accept time: the client may already be gone
+            elif pid is None and peer and peer[0] in LOOPBACK and peer[1]:
                 pid = self.loopback_owner(peer[0], int(peer[1]), sock_port, time.monotonic() if since is None else since)
             if not pid:
                 return UNKNOWN
-            src = self.by_pid(pid)
+            src = self.by_pid(pid, snap if snap and snap.get("pid") == pid else None)
             if src["kind"] == "unknown" and stream and stream[1]:
                 src = make_source("mac", "This Mac", os.path.basename(str(stream[1])), pid=pid)
             if src["kind"] == "android":
@@ -656,9 +701,14 @@ class ProxySource:
         stream = _STREAM.get()
         peer = tuple(client.peername[:2]) if client.peername else None
         sock_port = client.sockname[1] if client.sockname else None
+        # A short-lived client is gone before a queued lookup runs, and then the call reads "Unknown" (QA cycle 5:
+        # curl calls that failed before connecting). libproc can name the process holding this socket in about a
+        # millisecond, right here while it is certainly still alive, so take its details now and classify them off
+        # the event loop. Without libproc, or when the socket is not found, nothing changes: the pool looks it up.
+        snap = self._capture_now(stream, peer, sock_port)
         if self.lookup_slots.acquire(blocking=False):
             try:
-                fut = self.pool.submit(self.attributor.resolve, stream, peer, sock_port, time.monotonic())
+                fut = self.pool.submit(self.attributor.resolve, stream, peer, sock_port, time.monotonic(), snap)
             except RuntimeError:
                 self.lookup_slots.release()
                 fut = Future()
@@ -671,6 +721,21 @@ class ProxySource:
             fut.set_result(UNKNOWN)
         self.conns[client.id] = fut
         fut.add_done_callback(lambda f, cid=client.id: self._done(cid))
+
+    def _capture_now(self, stream, peer, sock_port):
+        scan = getattr(self.attributor, "scan", None)
+        if stream or scan is None or scan.offset is None or not peer or peer[0] not in LOOPBACK or not peer[1]:
+            return None
+        try:
+            with self.attributor._lock:
+                recent = sorted(self.attributor._recent, key=self.attributor._recent.get, reverse=True)[:16]
+            pid = scan.owner(int(peer[1]), sock_port, first=recent)
+            if not pid:
+                return None
+            self.attributor._seen(pid)
+            return capture(pid)
+        except Exception:
+            return None
 
     def _done(self, cid):
         if self.loop is not None:

@@ -379,6 +379,26 @@ class Live(LiveCase):
         self.assertIsNone(self.state()["source"])
         self.assertNotIn("rivis_source_key", self.panel.option("view_filter"))
 
+    def test_a_call_that_failed_before_connecting_still_names_the_program(self):
+        """QA cycle 5: a curl call refused upstream was listed under "Unknown" while the same curl's answered calls
+        read "This Mac - curl". The client exits as soon as it has the error, before a queued lookup can see its
+        socket, so the program is read while the connection is being accepted."""
+        dead, holder = harness.reserve_dead_port()
+        self.addCleanup(holder.close)
+        self.assertEqual(self.fetch("/json/small?ok=1").status, 200)
+        self.inst.fetch("http://127.0.0.1:%d/refused" % dead)          # curl again, answered by Rivis with an error
+        curl = "mac|This Mac|curl"
+
+        def both():
+            by_conn = self.state()["sources"]["by_conn"]
+            got = {f["request"]["path"]: by_conn.get(f["client_conn"]["id"]) for f in self.inst.flows()}
+            return got if got.get("/json/small?ok=1") and got.get("/refused") else None
+
+        got = wait_for(both, 15, 0.2, "both calls labelled")
+        self.assertEqual(got["/refused"], curl, got)
+        self.assertEqual(got["/json/small?ok=1"], curl, got)
+        self.assertEqual([r for r in self.state()["sources"]["list"] if r["kind"] == "unknown"], [])
+
     def test_a_burst_of_new_connections_keeps_every_source(self):
         # R8C-01: 400 calls, 60 at a time, each on its own connection: only 69 got a source
         with ThreadPoolExecutor(60) as pool:

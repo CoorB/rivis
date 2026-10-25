@@ -216,5 +216,67 @@ class Scale(NewUiBase):
         self.assertEqual(self.errors, [])
 
 
+@unittest.skipIf(PW_REASON, PW_REASON or "")
+class OpenAtTheFlowCap(NewUiBase):
+    """QA cycle 5 reported 23 s to open the window over a capture of about 6,000 calls. It did not reproduce — the
+    same measurement is a quarter of a second, including on the very commit it was reported against — but nothing
+    guarded the case it described, which Scale above does not cover: the DEFAULT flow cap, so the trim path runs; a
+    client that opens a connection per call, so every call is attributed; and calls still arriving while the window
+    opens. Budgets are generous; this catches a regression into seconds, not a few hundred milliseconds.
+    """
+    PREFILL, PER_CONNECTION, BUDGET_S = 5200, 150, 6.0      # past the 5000 cap, so the trim path runs
+
+    def prefill(self):
+        host = "127.0.0.1:%d" % self.up.http_port
+        conn = http.client.HTTPConnection("127.0.0.1", self.inst.proxy_port)
+        for i in range(self.PREFILL):
+            try:
+                conn.request("GET", "http://%s/json/small?p=%d" % (host, i), headers={"Host": host})
+                conn.getresponse().read()
+            except OSError:
+                conn = http.client.HTTPConnection("127.0.0.1", self.inst.proxy_port)
+        for i in range(self.PER_CONNECTION):        # its own connection each time: one attribution per call
+            self.fetch("/json/small?own=%d" % i)
+
+    def test_the_window_opens_quickly_at_the_flow_cap_with_calls_still_arriving(self):
+        self.prefill()
+        trimmed = self.panel.state()["retention"]
+        self.assertTrue(trimmed.get("trimmed"), "the capture must pass the flow cap, or this guards nothing: %s" % trimmed)
+        stop = threading.Event()
+        sent = []
+
+        def stream():
+            while not stop.is_set():
+                try:
+                    self.fetch("/json/small?live=%d" % len(sent))
+                    sent.append(1)
+                except Exception:                   # noqa: BLE001 - the stream is background noise, not the assertion
+                    pass
+                time.sleep(0.08)
+
+        feed = threading.Thread(target=stream, daemon=True)
+        feed.start()
+        self.addCleanup(lambda: (stop.set(), feed.join(5)))
+        try:
+            t = time.perf_counter()
+            self.page.add_init_script("try { localStorage.setItem('rivis-ui-welcome', 'done') } catch (e) {}")
+            self.page.goto("http://127.0.0.1:%d/?token=%s" % (self.inst.web_port, self.inst.password))
+            self.page.goto("http://127.0.0.1:%d/rivis/" % self.inst.web_port)
+            self.page.locator("#rv-app").wait_for(timeout=30000)
+            kept = len(self.inst.flows())
+            wait_for(lambda: self.page.evaluate("window.__rivisUI.order.length") >= kept * 0.9, 60, 0.2, "the list")
+            listed = time.perf_counter() - t
+            wait_for(lambda: " calls" in (self.page.locator("#status").inner_text() or ""), 60, 0.2, "the footer count")
+            footed = time.perf_counter() - t
+            wait_for(lambda: self.page.locator(".rv-tr").count() > 0, 60, 0.2, "rows on screen")
+            drawn = time.perf_counter() - t
+        finally:
+            stop.set()
+            feed.join(5)
+        self.assertLess(listed, self.BUDGET_S, "the list took %.1f s (footer %.1f s, rows %.1f s)" % (listed, footed, drawn))
+        self.assertLess(drawn, self.BUDGET_S, "the rows took %.1f s" % drawn)
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()
