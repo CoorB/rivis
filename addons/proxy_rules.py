@@ -788,8 +788,8 @@ class ProxyRules:
         if addresses is None:
             # answer it here: letting mitmproxy look the name up again would reopen the rebinding window (a name that
             # fails once, then resolves to a private address)
-            flow.response = http.Response.make(502, ("Rivis could not resolve %s.\n" % host).encode(),
-                                               {"Content-Type": "text/plain"})
+            text = proxy_common.upstream_conn_text("Name or service not known", host, flow.request.port)
+            flow.response = http.Response.make(502, text.encode(), {"Content-Type": "text/plain; charset=utf-8"})
             return
         unsafe = []
         for address in addresses:
@@ -1129,8 +1129,10 @@ class ProxyRules:
 
     def error(self, flow: http.HTTPFlow):
         msg = flow.error.msg if flow.error else None
-        text = upstream_tls_text(msg, flow.request.pretty_host if flow.request else "?", PRODUCT["cli"],
+        host = flow.request.pretty_host if flow.request else "?"
+        text = upstream_tls_text(msg, host, PRODUCT["cli"],
                                  self._failed_peers.pop((flow.client_conn.id, tuple(flow.server_conn.address or ())), None))
+        text = text or proxy_common.upstream_conn_text(msg, host, flow.request.port if flow.request else None)
         if text:
             table = _error_texts()
             if len(table) > 256:              # never grows: an entry is taken back as soon as its 502 page is built

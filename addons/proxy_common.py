@@ -59,6 +59,48 @@ def hosts_entry(host, ip=None):
     return first
 
 
+_CONN_KINDS = (   # (patterns in the OS/asyncio message, what it means, what to try) — the first match wins
+    (("nodename nor servname", "name or service not known", "getaddrinfo failed", "no address associated",
+      "temporary failure in name resolution", "errno 8]", "errno -2]", "errno -3]", "errno 11001]"),
+     "the name does not resolve: DNS on this Mac has no address for it",
+     "Check the spelling. Company and test hosts usually resolve only with the VPN connected; a host that only exists for "
+     "testing needs a line in your hosts file."),
+    (("connect call failed", "connection refused", "errno 61]", "errno 111]", "errno 10061]"),
+     "nothing is listening at that address (connection refused)",
+     "The server is down or on another port, or the address is wrong (an old hosts-file line, a stopped local server)."),
+    (("timed out", "timeouterror", "errno 60]", "errno 110]", "errno 10060]"),
+     "the server did not answer in time (connection timed out)",
+     "A firewall or a disconnected VPN usually causes this; also check that the address is still right."),
+    (("no route to host", "network is unreachable", "host is down", "errno 65]", "errno 51]", "errno 113]", "errno 64]"),
+     "there is no network route to that address",
+     "Connect the VPN or the network that reaches it, or check the address."),
+)
+
+
+def upstream_conn_text(message, host, port=None, ip=None):
+    """Plain words for an upstream connection that never got through (DNS, refused, timeout, unreachable): the host and
+    port, the addresses tried, the hosts-file line if that is where the address came from, and what to try. None for any
+    other error."""
+    if not isinstance(message, str):
+        return None
+    low = message.lower()
+    kind = next((k for k in _CONN_KINDS if any(p in low for p in k[0])), None)
+    if kind is None:
+        return None
+    where = "%s:%s" % (host, port) if port else str(host)
+    tried = [m.group(1) for m in re.finditer(r"\(\s*'([0-9a-fA-F:.]+)'\s*,\s*\d+", message)] or ([ip] if ip else [])
+    lines = ["Rivis could not reach %s: %s." % (where, kind[1])]
+    if tried:
+        lines.append("Address%s tried: %s." % ("es" if len(tried) > 1 else "", ", ".join(dict.fromkeys(tried))))
+    entry = hosts_entry(host)
+    if entry:
+        lines.append("Your hosts file gives this host its address: %s line %d: \"%s\". It is used instead of DNS: if that "
+                     "server is gone or moved, fix or remove the line." % (entry["path"], entry["line"], entry["text"]))
+    lines.append(kind[2])
+    lines.append("The app was answered 502 by Rivis. (System message: %s)" % message)
+    return "\n".join(lines) + "\n"
+
+
 def describe_connection(host, ip):
     """One or two sentences for a certificate error: the address actually connected to and, if the hosts file has a line
     for the host, whether that line is where the address came from. "" when no connection was made."""
