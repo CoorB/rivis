@@ -363,11 +363,20 @@ class Scenarios:
         ui.wait_toast(r"Network: ", t0)
         ui.wait(lambda: self.panel.state()["throttle"] == "lte-congested", 6, "throttle on")
         time.sleep(1.2)
-        url = "http://backbase-edge-sit.localhost:%d/api/soak-throttle/%d" % (self.up.http_port, n)
-        t = time.time()
-        self.inst.fetch(url)
-        slow_ms = (time.time() - t) * 1000
-        check(slow_ms >= 120, "the LTE profile did not slow a matching call (%.0f ms)" % slow_ms)
+        # LTE (congested) also drops 3% of calls, and a dropped call comes back in milliseconds: that is the profile
+        # working, not a missing delay (soak 2026-10-25 failed on one such call at 14 ms). Only a call that actually
+        # answered has to be slow; retry the few that the loss kills.
+        slow_ms = 0
+        for attempt in range(4):
+            url = "http://backbase-edge-sit.localhost:%d/api/soak-throttle/%d-%d" % (self.up.http_port, n, attempt)
+            t = time.time()
+            r = self.inst.fetch(url)
+            slow_ms = (time.time() - t) * 1000
+            if r.status:
+                break
+        else:
+            check(False, "LTE (congested) dropped four calls in a row (3%% loss expected)")
+        check(slow_ms >= 120, "the LTE profile did not slow a matching call (%.0f ms, status %s)" % (slow_ms, r.status))
         ui.pause()
         t1 = ui.now_ms()
         ui.click(ui.P("[data-prof=off]"))
