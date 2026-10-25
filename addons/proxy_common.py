@@ -94,11 +94,21 @@ def upstream_conn_text(message, host, port=None, ip=None):
         lines.append("Address%s tried: %s." % ("es" if len(tried) > 1 else "", ", ".join(dict.fromkeys(tried))))
     entry = hosts_entry(host)
     if entry:
-        lines.append("Your hosts file gives this host its address: %s line %d: \"%s\". It is used instead of DNS: if that "
-                     "server is gone or moved, fix or remove the line." % (entry["path"], entry["line"], entry["text"]))
+        lines.append(_hosts_advice(host, entry))
     lines.append(kind[2])
     lines.append("The app was answered 502 by Rivis. (System message: %s)" % message)
     return "\n".join(lines) + "\n"
+
+
+def _hosts_advice(host, entry):
+    prefix = 'Your hosts file gives this host its address: %s line %d: "%s".' % (entry["path"], entry["line"], entry["text"])
+    try:
+        loopback = ipaddress.ip_address(entry["ip"]).is_loopback
+    except ValueError:
+        loopback = False
+    if str(host).lower().rstrip(".") in ("localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback") and loopback:
+        return prefix + " This is the standard localhost loopback mapping; keep it. Check the local server and its certificate."
+    return prefix + " It is used instead of DNS: if that server is gone or moved, fix or remove the line."
 
 
 def describe_connection(host, ip):
@@ -109,8 +119,7 @@ def describe_connection(host, ip):
     text = "Connected to %s." % ip
     entry = hosts_entry(host, ip)
     if entry and _same_ip(entry["ip"], ip):
-        text += (" That address comes from your hosts file, %s line %d: \"%s\". It is used instead of DNS: if it is an "
-                 "old or wrong server, fix or remove that line." % (entry["path"], entry["line"], entry["text"]))
+        text += " " + _hosts_advice(host, entry)
     elif entry:
         text += (" Your hosts file (%s line %d) lists %s for this host, but that is not the address that answered."
                  % (entry["path"], entry["line"], entry["ip"]))

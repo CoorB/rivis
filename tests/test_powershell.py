@@ -39,6 +39,12 @@ class PowerShellSource(unittest.TestCase):
         for command in ("stop", "breakpoint", "mock", "setup"):
             self.assertRegex(self.src, r'(?m)^  "' + command + r'" \{', command)
 
+    def test_cycle5_status_reads_defaults_without_initializing_state(self):
+        block = self.src[self.src.index('  "status" {'):self.src.index('  "browser" {')]
+        self.assertNotIn("Ensure-Rules", block)
+        self.assertIn('Join-Path $ProfileDir "rules.example.json"', block)
+        self.assertIn("Read-RulesConfig $statusRulesPath", block)
+
     def test_native_window_command_and_printable_ui_link(self):
         self.assertIn('[Alias("Url")][switch]$PrintUiUrl', self.src)
         self.assertIn('if ($PrintUiUrl) { Write-Output $uiUrl } else { Start-Process $uiUrl }', self.src)

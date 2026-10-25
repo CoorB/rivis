@@ -2350,7 +2350,7 @@ class ProxyPanel:
             return {"filters": self.filters_list()}
         elif op == "filters_save":
             name, value, old = a.get("name"), a.get("filter"), a.get("old")
-            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9 ._-]{1,40}", name) or name != name.strip():
+            if not isinstance(name, str) or not re.fullmatch(r"[\w .-]{1,40}", name) or name != name.strip():
                 raise PanelError("filter name: 1–40 letters, digits, spaces or . _ -")
             rows = self.filters_list()
             if old is not None and old not in [row["name"] for row in rows]:

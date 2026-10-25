@@ -11,6 +11,36 @@ from test_ui import PW_REASON, UiBase
 
 @unittest.skipIf(PW_REASON, PW_REASON or "")
 class FiltersCurlUi(UiBase):
+    def test_cycle5_suggested_filter_name_can_be_saved(self):
+        self.open()
+        self.P("#sq").fill("~m POST")
+        self.P("#ssave").click()
+        self.P("#ask-in").wait_for()
+        name = self.P("#ask-in").input_value()
+        self.P("#ask-yes").click()
+        wait_for(lambda: any(x["name"] == name for x in self.panel.state()["saved_filters"]),
+                 5, 0.1, "suggested name saved")
+
+    def test_cycle5_invalid_and_duplicate_filter_names_keep_the_dialog(self):
+        self.open()
+        self.panel.ok("filters_save", {"name": "Existing", "filter": "~m GET"})
+        self.P("#sq").fill("~m POST")
+        self.P("#ssave").click()
+        for name, error in (("bad/name", "filter name:"), ("Existing", "already exists")):
+            self.answer(name)
+            self.page.wait_for_timeout(500)
+            self.assertTrue(self.P("#askdlg.open").count(), "failed save must keep the dialog")
+            self.assertEqual(self.P("#ask-in").input_value(), name)
+            self.assertIn(error, self.P("#askdlg").inner_text())
+        self.answer("Posts fixed")
+        wait_for(lambda: any(x["name"] == "Posts fixed" for x in self.panel.state()["saved_filters"]),
+                 5, 0.1, "corrected name saved")
+
+    def test_cycle5_arabic_filter_name_is_saved(self):
+        self.open()
+        self.save("~m POST", "طلبات")
+        self.assertTrue(any(x["name"] == "طلبات" for x in self.panel.state()["saved_filters"]))
+
     def test_invalid_filter_shows_parser_reason_in_classic_view(self):
         self.open()
         self.P("#sq").fill("~(")

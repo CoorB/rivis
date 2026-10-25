@@ -157,9 +157,9 @@ class ProxyCollections:
         except Exception:
             return os.path.join(STATE_ROOT, "projects", "default", "rules.json")
 
-    def _reload(self):
+    def _reload(self, force=False):
         now = time.monotonic()
-        if now - self.checked < 1.0:
+        if not force and now - self.checked < 1.0:
             return
         self.checked = now
         try:
@@ -191,7 +191,7 @@ class ProxyCollections:
                 ctx.log.info(f"proxy_collections: replaying {', '.join(replay)} ({sum(len(v) for v in self.index.values())} calls)")
 
     def request(self, flow: http.HTTPFlow):
-        self._reload()
+        self._reload(force=True)  # a strict/replay change must govern the very next request
         if flow.response or not self.index and not self.cfg.get("strict"):
             return
         r = flow.request

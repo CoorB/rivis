@@ -316,12 +316,19 @@ def _error_texts():
     return table
 
 
+def _error_page(status_code, text):
+    import html
+    reason = status_codes.RESPONSES.get(status_code, "Unknown")
+    return ("<html>\n<head><title>%d %s</title></head>\n<body>\n<h1>%d %s</h1>\n"
+            "<pre style=\"white-space: pre-wrap\">%s</pre>\n</body>\n</html>"
+            % (status_code, reason, status_code, reason, html.escape(text))).encode("utf-8", "replace")
+
+
 def _install_error_text():
     try:
         from mitmproxy.proxy.layers.http import _base
     except ImportError:
         return False
-    import html as _html
     import importlib as _importlib
     original = _base.format_error
 
@@ -329,10 +336,7 @@ def _install_error_text():
         text = _error_texts().pop(message, None)
         if text is None:
             return original(status_code, message)
-        reason = status_codes.RESPONSES.get(status_code, "Unknown")
-        return ("<html>\n<head><title>%d %s</title></head>\n<body>\n<h1>%d %s</h1>\n"
-                "<pre style=\"white-space: pre-wrap\">%s</pre>\n</body>\n</html>"
-                % (status_code, reason, status_code, reason, _html.escape(text))).encode("utf-8", "replace")
+        return _error_page(status_code, text)
 
     format_error._rivis_error_text = True
     installed = False
@@ -789,7 +793,7 @@ class ProxyRules:
             # answer it here: letting mitmproxy look the name up again would reopen the rebinding window (a name that
             # fails once, then resolves to a private address)
             text = proxy_common.upstream_conn_text("Name or service not known", host, flow.request.port)
-            flow.response = http.Response.make(502, text.encode(), {"Content-Type": "text/plain; charset=utf-8"})
+            flow.response = http.Response.make(502, _error_page(502, text), {"Content-Type": "text/html; charset=utf-8"})
             return
         unsafe = []
         for address in addresses:
@@ -1133,6 +1137,11 @@ class ProxyRules:
         text = upstream_tls_text(msg, host, PRODUCT["cli"],
                                  self._failed_peers.pop((flow.client_conn.id, tuple(flow.server_conn.address or ())), None))
         text = text or proxy_common.upstream_conn_text(msg, host, flow.request.port if flow.request else None)
+        if not text and msg and "peer closed connection" in msg.lower():
+            where = "%s:%s" % (host, flow.request.port) if flow.request else host
+            text = ("Rivis could not read the response from %s: the server closed the connection before the response was complete.\n"
+                    "Check the upstream server or gateway and retry. Rivis answered the app with 502.\n"
+                    "(System message: %s)\n" % (where, msg))
         if text:
             table = _error_texts()
             if len(table) > 256:              # never grows: an entry is taken back as soon as its 502 page is built

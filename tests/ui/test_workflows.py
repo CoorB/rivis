@@ -21,6 +21,18 @@ KMOD = "Meta" if sys.platform == "darwin" else "Control"
 
 @unittest.skipIf(PW_REASON, PW_REASON or "")
 class Workflows(UiBase):
+    def test_cycle5_classic_save_session_sends_request_and_creates_capture(self):
+        self.open()
+        self.tab("sess")
+        self.P("#sn").fill("cycle5-capture")
+        self.P("#snote").fill("Captured from classic")
+        self.P("#main").get_by_role("button", name="Save session", exact=True).click()
+        wait_for(lambda: any(x["name"] == "cycle5-capture" for x in self.panel.state()["sessions"]),
+                 5, 0.1, "session saved")
+        self.assertTrue(os.path.isfile(self.inst.path("sessions/cycle5-capture.flows")))
+        self.assertIn("cycle5-capture", self.P("#main").inner_text())
+        self.assertEqual(self.errors, [])
+
     # ── helpers ────────────────────────────────────────────────────────────────────────────────────
     def P(self, sel):
         return self.page.locator("#proxy-panel-host").locator(sel)

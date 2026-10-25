@@ -6,6 +6,8 @@ import os
 import sys
 import tempfile
 import unittest
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _paths  # noqa: F401,E402
@@ -19,6 +21,39 @@ with open(HOSTS, "w") as fh:
 
 class ConnectionErrors(LiveCase):
     INSTANCE_KW = {"extra_env": {"RIVIS_HOSTS_FILE": HOSTS}}
+
+    def test_cycle5_dns_failure_has_the_same_html_format_as_connection_errors(self):
+        result = self.inst.fetch("http://no-such-host-rivis.invalid/cycle5-format")
+        self.assertEqual(result.status, 502)
+        self.assertIn("text/html", dict((k.lower(), v) for k, v in result.headers)["content-type"])
+        self.assertIn(b"<html>", result.body)
+        self.assertIn(b"Rivis could not reach", result.body)
+
+    def test_cycle5_early_close_names_the_host_and_explains_the_failure(self):
+        class ShortBody(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "100")
+                self.end_headers()
+                self.wfile.write(b"short")
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), ShortBody)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            result = self.inst.fetch("http://127.0.0.1:%d/cycle5-short" % server.server_port)
+            self.assertEqual(result.status, 502)
+            self.assertIn(b"Rivis", result.body)
+            self.assertIn(("127.0.0.1:%d" % server.server_port).encode(), result.body)
+            self.assertIn(b"before the response was complete", result.body)
+            self.assertIn("before the response was complete", self.error_of("cycle5-short"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(3)
 
     def error_of(self, path):
         return wait_for(lambda: (self.inst.flow_for(path) or {}).get("error"), 5, 0.2, "the call's error")["msg"]

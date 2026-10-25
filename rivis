@@ -751,12 +751,12 @@ cmd_health() {
   # R8D-01: any HTTP request to the proxy becomes a row in the tester's call list (and in saved evidence), so the
   # proxy port is checked with a bare TCP connection; the panel answering below proves the same process serves.
   if /usr/bin/python3 -I -c 'import socket,sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 5).close()' "$PORT" 2>/dev/null
-  then echo "proxy :$PORT        accepts connections"
-  else echo "proxy :$PORT        DOES NOT ANSWER a test call"; bad=1; fi
+  then printf '%-19s %s\n' "proxy :$PORT" "accepts connections"
+  else printf '%-19s %s\n' "proxy :$PORT" "DOES NOT ANSWER a test call"; bad=1; fi
   state=$(ui_curl /proxy/api/state --max-time 8 2>/dev/null) || state=""
   running=$(printf '%s' "$state" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("version") or "")' 2>/dev/null)
-  if [ -n "$running" ]; then echo "panel :$WEB_PORT      answers ($PRODUCT_NAME $running)"
-  else echo "panel :$WEB_PORT      DOES NOT ANSWER"; bad=1; fi
+  if [ -n "$running" ]; then printf '%-19s %s\n' "web UI :$WEB_PORT" "answers ($PRODUCT_NAME $running)"
+  else printf '%-19s %s\n' "web UI :$WEB_PORT" "DOES NOT ANSWER"; bad=1; fi
   if [ -n "$running" ] && [ -n "$installed" ] && [ "$running" != "$installed" ]; then
     echo "version            running $running, installed $installed — run: $CLI restart"; bad=1
   fi
@@ -1679,7 +1679,8 @@ saved_upstream() {
   [ -f "$UPSTREAM_FILE" ] && cat "$UPSTREAM_FILE" || echo direct
 }
 cmd_status() {
-  ensure_rules
+  local status_rules="$RULES"
+  [ -f "$status_rules" ] || status_rules="$PROJECT_PROFILE/rules.example.json"
   local o; o=$(port_owner "$PORT"); echo "proxy :$PORT     ${o:-not listening}"
   local w; w=$(port_owner "$WEB_PORT"); echo "web UI :$WEB_PORT   ${w:-not listening}"
   warn_running_version # R4A-01
@@ -1708,8 +1709,8 @@ cmd_status() {
   [ -z "$state_json" ] || printf '%s' "$state_json" | /usr/bin/python3 -I -c 'import json,sys; s=[x for x in (json.load(sys.stdin).get("skipped_rules") or []) if isinstance(x, dict)]; s and print("WARNING: %d rule(s) skipped, not applied: %s. Details: %s rules list" % (len(s), "; ".join("%s (%s)" % (x.get("name", "?"), x.get("error", "invalid")) for x in s), sys.argv[1]))' "$CLI" 2>/dev/null # review 0.9.7 #11
   /usr/bin/python3 -I -c 'import json,sys; sys.path.insert(0,sys.argv[1]); from proxy_common import tls_config
 t=tls_config(json.load(open(sys.argv[2]))); n=len(t[t["mode"]]) if t["mode"]!="all" else 0
-print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n==1 else "s")) if t["mode"]!="all" else " (every host)"))' "$SCRIPT_DIR/addons" "$RULES" 2>/dev/null || echo "TLS decryption: unreadable rules file"
-  /usr/bin/python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); isinstance(c, dict) and c.get("no_cache") and print("No caching: on")' "$RULES" 2>/dev/null || true
+print("TLS decryption: %s%s" % (t["mode"], (" (%d host pattern%s)" % (n, "" if n==1 else "s")) if t["mode"]!="all" else " (every host)"))' "$SCRIPT_DIR/addons" "$status_rules" 2>/dev/null || echo "TLS decryption: unreadable rules file"
+  /usr/bin/python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); isinstance(c, dict) and c.get("no_cache") and print("No caching: on")' "$status_rules" 2>/dev/null || true
   [ "$PROJECT_ANDROID" = "[]" ] || echo "project Android packages: $PROJECT_ANDROID"
   [ "$PROJECT_IOS" = "[]" ] || echo "project iOS bundle IDs: $PROJECT_IOS"
   echo "macOS system https proxy: $sp"
@@ -1739,7 +1740,7 @@ if sel:
   systemextensionsctl list 2>/dev/null | grep -q "macos-redirector.*activated enabled" \
     && echo "local-capture extension: enabled" \
     || echo "local-capture extension: NOT enabled — System Settings → General → Login Items & Extensions → Network Extensions → Mitmproxy Redirector"
-  if /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" --script-dir "$PROJECT_STATE/scripts" list 2>/dev/null | grep -qE '^  (ON |off) .* js '; then
+  if /usr/bin/python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if any(s.get("lang")=="js" for s in c.get("scripts",[]) if isinstance(s,dict)) else 1)' "$status_rules" 2>/dev/null; then
     local node_path
     node_path=$(/usr/bin/python3 -I -c 'import runpy,sys; d=runpy.run_path(sys.argv[1]); print(d["find_node"]() or "")' "$SCRIPT_DIR/addons/proxy_scripts.py")
     [ -n "$node_path" ] || echo "scripts: Node.js not installed (brew install node or https://nodejs.org) — JS scripts disabled (Python scripts still work)"

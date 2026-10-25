@@ -446,7 +446,7 @@ class Scenarios:
         ui.select_all()
         ui.type(name)
         t0 = ui.now_ms()
-        ui.click(ui.P("#ssave"))
+        ui.click(ui.P("#sess-save"))
         ui.wait_toast(r"Saved \d+ calls", t0)
         ui.wait(lambda: any(x["name"] == name for x in self.panel.state()["sessions"]), 8, "the session to be listed")
         self.set_search("")

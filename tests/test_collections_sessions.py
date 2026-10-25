@@ -50,6 +50,21 @@ class Collections(LiveCase):
         wait_for(lambda: self.panel.state()["collections"]["recording"] == name, 5, 0.1, "recording flag")
         time.sleep(1.3)                  # the engine re-reads rules.json at most once a second
 
+    def test_cycle5_strict_takes_effect_on_the_next_call(self):
+        self.reset_state(collections=self.coll())
+        self.record("cycle5")
+        self.fetch("/json/small")
+        self.panel.ok("coll_stop")
+        self.panel.ok("coll_replay", {"name": "cycle5", "enabled": True})
+        self.panel.ok("coll_match", {"record_match": "json"})
+        self.fetch("/json/small")  # warm the engine's config cache before enabling strict replay
+        self.panel.ok("coll_strict", {"strict": True})
+        self.up.reset_hits()
+        result = self.fetch("/json/small?collection=absent2")
+        self.assertEqual(result.status, 404, result.text)
+        self.assertEqual(self.up.hits, [])
+        self.assertEqual(self.fetch("/json/small").status, 200)
+
     def test_default_record_match_is_the_project_hosts_only(self):
         self.reset_state(collections=self.coll(recording="c1"))
         time.sleep(1.2)

@@ -566,7 +566,22 @@
     if (field) $("ask-in").value = opts.input || "";
     openSheet("askdlg", field ? "#ask-in" : "#ask-yes");
     if (opts.choices) $("askdlg").querySelectorAll("[data-ask]").forEach((b) => (b.onclick = () => { askDone = null; closeSheet("askdlg"); resolve(opts.choices[b.dataset.ask][0]); }));
-    else $("ask-yes").onclick = () => done(field ? $("ask-in").value : true);
+    else $("ask-yes").onclick = async () => {
+      const value = field ? $("ask-in").value : true, button = $("ask-yes");
+      if (button.disabled) return;
+      if (opts.validate) {
+        button.disabled = true;
+        try { await opts.validate(value); }
+        catch (e) {
+          if (askDone !== done) return;
+          let error = $("ask-error");
+          if (!error) { error = document.createElement("p"); error.id = "ask-error"; error.setAttribute("role", "alert"); button.parentElement.before(error); }
+          error.textContent = e.message; button.disabled = false;
+          return;
+        }
+      }
+      if (askDone === done) done(value);
+    };
     $("ask-no").onclick = () => done(null);
     if (field && !opts.multiline) $("ask-in").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); $("ask-yes").click(); } };
   });
@@ -1360,7 +1375,7 @@
       <div class="btns" style="margin-top:0"><input type="text" id="sn" class="grow" placeholder="Session name, e.g. ticket-1234-repro"></div>
       <div class="btns"><input type="text" id="snote" class="grow" placeholder="Note (optional): what this capture shows"></div>
       <div class="btns"><label class="sub"><input type="checkbox" id="svis"> Only calls visible with the current filter</label>
-        <button class="b p" id="ssave">Save session</button></div>
+        <button class="b p" id="sess-save">Save session</button></div>
       <h4>Saved sessions (${ss.length})</h4>
       ${ss.length ? ss.map((x, i) => `
         <div class="row" style="align-items:flex-start"><div class="n"><div><b>${esc(x.name)}</b></div>
@@ -1370,7 +1385,7 @@
       : emptyState("sess", "No saved sessions yet", "Name the capture above and <b>Save session</b>. Open brings it back into the list; HAR exports it.")}
       ${harSecretsBox("shsec")}
       <p class="sub">Stored in ${esc(state.project_state)}/sessions ${info("Open adds the saved calls to the list (you can choose to replace it first). Per-call notes and bookmarks: use the Comment tab and the Mark button on a call — they are saved with the session.")}</p>`;
-    $("ssave").onclick = async () => {
+    $("sess-save").onclick = async () => {
       const name = $("sn").value.trim(), overwrite = ss.some((x) => x.name === name);
       if (overwrite && !await ask("A session named '" + name + "' already exists. Replace it?\n\nThe earlier capture will be lost.", { yes: "Replace", danger: true })) return;
       run("sess_save", { name, note: $("snote").value, visible_only: $("svis").checked,
@@ -2074,9 +2089,18 @@
     try {
       const valid = await api("filter_check", { filter: toFilter(value) });
       if (!valid.ok) return toast(valid.error || "Invalid filter", true);
-      const name = await ask("Name this filter\n\nUp to 40 letters, digits, spaces or . _ -", { input: value.slice(0, 40), yes: "Save" });
+      const base = value.replace(/[^\p{L}\p{N} ._-]/gu, " ").slice(0, 40).trim() || "Filter";
+      let suggestion = base, suffix = 2;
+      while (savedRows().some((row) => row.name === suggestion)) {
+        const tail = " " + suffix++; suggestion = base.slice(0, 40 - tail.length).trimEnd() + tail;
+      }
+      const name = await ask("Name this filter\n\nUp to 40 letters, digits, spaces or . _ -", {
+        input: suggestion, yes: "Save", validate: async (name) => {
+          const r = await api("filters_save", { name, filter: value }); state.saved_filters = r.filters;
+        }
+      });
       if (!name) return;
-      const r = await api("filters_save", { name, filter: value }); state.saved_filters = r.filters; savedMenu = -1; drawStrip(); toast("Filter saved");
+      savedMenu = -1; drawStrip(); toast("Filter saved");
     } catch (e) { toast(e.message, true); }
   };
   const sbSync = () => {

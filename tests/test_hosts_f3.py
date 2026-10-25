@@ -35,6 +35,15 @@ class FakeHosts(unittest.TestCase):
 
 
 class HostsLookup(FakeHosts):
+    def test_cycle5_standard_localhost_lines_are_kept(self):
+        for ip in ("127.0.0.1", "::1"):
+            with open(self.path, "w") as fh:
+                fh.write(ip + " localhost\n")
+            for text in (proxy_common.describe_connection("localhost", ip),
+                         proxy_common.upstream_conn_text("Connection refused", "localhost", 443, ip)):
+                self.assertIn("loopback", text)
+                self.assertNotIn("remove", text)
+
     def test_finds_the_line_and_ignores_comments(self):
         e = proxy_common.hosts_entry("backbase-identity-nfr.neo.sa")
         self.assertEqual((e["ip"], e["line"], e["path"]), ("10.16.209.88", 3, self.path))

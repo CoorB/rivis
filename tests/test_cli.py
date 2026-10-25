@@ -62,6 +62,27 @@ class CliBase(unittest.TestCase):
 
 
 class Help(CliBase):
+    def test_cycle5_status_and_health_do_not_create_rules(self):
+        self.stopped_status()
+        self.assertFalse(os.path.exists(self.rules_file()))
+        self.assertNotIn("unreadable rules", self.stopped_status().stdout)
+        self.cli("health")
+        self.assertFalse(os.path.exists(self.rules_file()))
+        self.assertFalse(os.path.exists(self.state), "read-only commands must not create project directories")
+
+    def test_cycle5_health_uses_aligned_web_ui_labels(self):
+        source = open(os.path.join(harness.REPO, "rivis")).read()
+        start = source.index("cmd_health() {")
+        end = source.index("\n}", start) + 2
+        body = source[start:end]
+        shell = (body + '\nour_listeners() { echo 123; }\n'
+                 'ui_curl() { echo \'{"version":"0.9.10"}\'; }\n'
+                 'PORT=18680; WEB_PORT=18683; SCRIPT_DIR=.; PRODUCT_NAME=Rivis; CLI=rivis; cmd_health\n')
+        r = subprocess.run(["/bin/bash", "-c", shell], capture_output=True, text=True)
+        lines = r.stdout.splitlines()
+        self.assertTrue(lines[1].startswith("web UI :18683"), r.stdout)
+        self.assertEqual(lines[0].index("DOES NOT"), lines[1].index("answers"), r.stdout)
+
     def test_review_m7_invalid_port_has_one_usage_error(self):
         env = dict(self.env, RIVIS_PORT="abc")
         r = self.cli("start", env=env)
@@ -208,6 +229,8 @@ class Projects(CliBase):
         self.ok("projects", "new", "p-flag", "--label", "F", "--hosts", "f")
         self.ok("projects", "new", "p-env", "--label", "E", "--hosts", "e")
         self.ok("projects", "new", "p-cur", "--label", "C", "--hosts", "c")
+        # Initialize isolated settings through an explicit mutation; status itself stays read-only.
+        self.ok("nocache", "on", "--project", "p-env")
         self.assertIn("project: default", self.stopped_status().stdout)
         self.ok("projects", "use", "p-cur")
         self.assertIn("project: p-cur", self.stopped_status().stdout)
@@ -221,6 +244,8 @@ class Projects(CliBase):
         # state is isolated per project
         self.assertTrue(os.path.isfile(self.rules_file("p-flag")))
         self.assertTrue(os.path.isfile(self.rules_file("p-env")))
+        self.assertTrue(self.cfg("p-env")["no_cache"])
+        self.assertFalse(self.cfg("p-flag").get("no_cache", False))
 
     def test_legacy_env_alias_is_a_fallback(self):
         self.ok("projects", "new", "p-leg", "--label", "L", "--hosts", "l")

@@ -9,6 +9,8 @@ import subprocess
 import sys
 import time
 import unittest
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
@@ -17,6 +19,39 @@ from upstream import SMALL_JSON, big_body
 
 
 class Actions(LiveCase):
+    def test_cycle5_head_matches_direct_curl_for_success_and_error(self):
+        for path in ("/json/small", "/not-found-cycle5"):
+            for option in (["-I"], ["-X", "HEAD"]):
+                url = self.up.url(path)
+                base = ["curl", "-sS", "--noproxy", "", "--max-time", "3", "-o", os.devnull, "-w", "%{http_code}"]
+                direct = subprocess.run(base + option + [url], capture_output=True, text=True)
+                proxied = subprocess.run(base + ["-x", "http://127.0.0.1:%d" % self.inst.proxy_port] + option + [url],
+                                         capture_output=True, text=True)
+                self.assertEqual((proxied.returncode, proxied.stdout), (direct.returncode, direct.stdout),
+                                 (path, option, direct.stderr, proxied.stderr))
+
+    def test_cycle5_head_501_matches_direct_curl(self):
+        class NoHead(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), NoHead)  # default HEAD: 501 + Content-Length, no body
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            url = "http://127.0.0.1:%d/json" % server.server_port
+            for option, expected_rc in ((["-I"], 0), (["-X", "HEAD"], 18)):
+                base = ["curl", "-sS", "--noproxy", "", "--max-time", "3", "-o", os.devnull, "-w", "%{http_code}"]
+                direct = subprocess.run(base + option + [url], capture_output=True, text=True)
+                proxied = subprocess.run(base + ["-x", "http://127.0.0.1:%d" % self.inst.proxy_port] + option + [url],
+                                         capture_output=True, text=True)
+                self.assertEqual((direct.returncode, direct.stdout), (expected_rc, "501"), direct.stderr)
+                self.assertEqual((proxied.returncode, proxied.stdout), (direct.returncode, direct.stdout), proxied.stderr)
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(3)
+
     def test_event_stream_arrives_before_upstream_finishes(self):
         # R4B-01: curl must see the first event while later events are still sleeping upstream.
         self.reset_state(rules=[self.rule("patch", "json_patch", "/sse", set={"x": 1}),

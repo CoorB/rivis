@@ -428,8 +428,8 @@ function Migrate-Legacy {
   Info "copied legacy ~/.neo-mitm state into $target (the original was left unchanged)"
 }
 
-function Read-RulesConfig {
-  try { $cfg = Get-Content -Raw $RulesPath | ConvertFrom-Json }
+function Read-RulesConfig($Path = $RulesPath) {
+  try { $cfg = Get-Content -Raw $Path | ConvertFrom-Json }
   catch { Die "invalid rules JSON in ${RulesPath}: $($_.Exception.Message)" }
   if ($null -eq $cfg.schema_version) { $cfg | Add-Member -NotePropertyName schema_version -NotePropertyValue 1 }
   elseif (($cfg.schema_version -isnot [int] -and $cfg.schema_version -isnot [long]) -or $cfg.schema_version -lt 0) { Die "rules.json schema_version must be a non-negative integer" }
@@ -1390,10 +1390,11 @@ switch ($Command) {
     exit $LASTEXITCODE
   }
   "status" {
-    Ensure-Rules
+    $statusRulesPath = $RulesPath
+    if (-not (Test-Path $statusRulesPath)) { $statusRulesPath = Join-Path $ProfileDir "rules.example.json" }
     Write-Host "project: $Project ($($ProjectConfig.label))"
     Write-Host "upstream proxy: $(Get-Upstream)"
-    $statusCfg = Read-RulesConfig
+    $statusCfg = Read-RulesConfig $statusRulesPath
     $statusTls = Get-Tls $statusCfg
     Write-Host ("TLS decryption: {0}{1}" -f $statusTls.mode, $(if ($statusTls.mode -eq "all") { " (every host)" } else { " ($(@($statusTls[$statusTls.mode]).Count) host pattern(s))" }))
     if ($statusCfg.no_cache -eq $true) { Write-Host "No caching: on" }
@@ -1410,7 +1411,7 @@ switch ($Command) {
         Write-Host "android ${e}: http_proxy=$((& adb -s $e shell settings get global http_proxy) -replace "`r",'')"
       }
     }
-    $cfg = Read-RulesConfig
+    $cfg = $statusCfg
     if (@($cfg.scripts | Where-Object { $_.enabled -ne $false -and $_.lang -eq "js" }).Count) {
       $nodeOverride = [Environment]::GetEnvironmentVariable("${EnvPrefix}_NODE")
       $nodeCandidates = @($nodeOverride, (Join-Path $HOME ".nvm\versions\node\current\bin\node.exe"),
