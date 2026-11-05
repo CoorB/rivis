@@ -780,6 +780,13 @@ if ($Command -notin $TermsOpen -and -not ($Command -in @("android","ios") -and $
       exit 10
     }
   }
+  # force update (addons\update_policy.py): a signed release can require a minimum version from a date on
+  if ((Test-Path (Join-Path $StateRoot "update-policy\manifest.json")) -or (Test-Path (Join-Path $StateRoot "update-policy\last-check"))) {
+    $py = Get-PythonCommand
+    $policy = (@(& $py.Exe @($py.Prefix) -I (Join-Path $PSScriptRoot "addons\update_policy.py") status 2>$null) -join " ").Trim()
+    if ($LASTEXITCODE -eq 11) { Write-Host "${Cli}: update required - $policy" -ForegroundColor Red; exit 11 }
+    if ($LASTEXITCODE -eq 12) { Write-Host "${Cli}: warning: $policy" -ForegroundColor Yellow }
+  }
 }
 
 switch ($Command) {

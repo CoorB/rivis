@@ -897,8 +897,11 @@ cmd_update() {
   while [ $# -gt 0 ]; do case "$1" in --yes) yes=1 ;; *) die "usage: $CLI update [check|install|login|logout|status] [--yes]" ;; esac; shift; done
   case "$action" in
     login|logout) "${U[@]}" "$action" ;;
-    status) "${U[@]}" status ;;
+    status) "${U[@]}" status
+            /usr/bin/python3 -I "$SCRIPT_DIR/addons/mitm_watch.py" status ;;
     check|install)
+      local pinned; pinned=$(mitmdump --version 2>/dev/null | sed -n 's/^[Mm]itmproxy:* *v*\([0-9.]*\).*/\1/p' | head -1)
+      [ -z "$pinned" ] || /usr/bin/python3 -I "$SCRIPT_DIR/addons/mitm_watch.py" check "$pinned" | sed 's/^/• /' || true
       out=$("${U[@]}" check) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error","update check failed"))' 2>/dev/null). To upgrade, download the new release zip from https://github.com/CoorB/rivis/releases and run its install.sh."
       local v notes; v=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; a=json.load(sys.stdin)["available"]; print(a["version"] if a else "")')
       if [ -z "$v" ]; then info "$PRODUCT_NAME $(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["current"])') is up to date"; return 0; fi
@@ -2134,11 +2137,12 @@ terms_gate() {   # terms_gate "$@" — runs before every command
     android|ios) case "${2:-}" in off|"") return 0 ;; esac ;;
   esac
   local rc; /usr/bin/python3 -I "$TERMS_PY" status >/dev/null 2>&1; rc=$?
-  [ "$rc" = 0 ] && return 0
+  [ "$rc" = 0 ] && { policy_gate "$@"; return 0; }
   [ "$rc" != 4 ] || die "this copy of $PRODUCT_NAME has no Terms of Use text ($SCRIPT_DIR/terms) — reinstall it from the official release"
   if [ -t 0 ] && [ -t 1 ]; then
     echo "$PRODUCT_NAME: before first use, read and agree to the Terms of Use."
     terms_prompt || exit 10
+    policy_gate "$@"
     return 0
   fi
   case "${1:-}" in
@@ -2148,6 +2152,15 @@ terms_gate() {   # terms_gate "$@" — runs before every command
   esac
   echo "$CLI: the Terms of Use have not been accepted on this Mac — run '$CLI terms' in a terminal, or agree in the $PRODUCT_NAME window" >&2
   exit 10
+}
+policy_gate() {   # force update (addons/update_policy.py): runs after the terms gate, for the same gated commands
+  [ -f "$STATE_ROOT/update-policy/manifest.json" ] || [ -f "$STATE_ROOT/update-policy/last-check" ] || return 0
+  local msg rc; msg=$(/usr/bin/python3 -I "$SCRIPT_DIR/addons/update_policy.py" status 2>/dev/null); rc=$?
+  case "$rc" in
+    11) echo "$CLI: update required — $msg" >&2; exit 11 ;;
+    12) echo "$CLI: warning: $msg" >&2 ;;
+  esac
+  return 0
 }
 terms_gate "$@"
 

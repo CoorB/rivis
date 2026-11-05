@@ -384,6 +384,25 @@ def _der_cert_dates(der):
     return _parse_asn1_time(before_tag, before), _parse_asn1_time(after_tag, after)
 
 
+def check_mitm_watch(rep):
+    """The last mitmproxy release / advisory check (cached by the running Rivis once a day; never fetched here)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import mitm_watch
+    except ImportError:
+        return
+    doc = mitm_watch.status()
+    line = mitm_watch.summary(doc)
+    if doc is None:
+        rep.add("Tooling", INFO, "mitmproxy updates: not checked yet", "the running Rivis checks once a day")
+    elif line and doc.get("advisories"):
+        rep.add("Tooling", WARN, "mitmproxy security advisories", line, "ask IT for a Rivis release with a fixed mitmproxy")
+    elif line:
+        rep.add("Tooling", INFO, "mitmproxy updates", line)
+    else:
+        rep.add("Tooling", OK, "mitmproxy updates", "no newer release (checked %s)" % doc.get("checked_at"))
+
+
 def check_ca(rep, confdir):
     sec = "Certificate"
     ca = os.path.join(confdir, "mitmproxy-ca-cert.pem")
@@ -1248,6 +1267,7 @@ def main(argv):
     rep = Report()
     rep.add("Proxy", INFO, "upstream proxy: %s" % args.upstream)
     check_mitmproxy_node(rep)
+    check_mitm_watch(rep)
     check_python(rep)
     check_ca(rep, args.confdir)
     check_sysext(rep)

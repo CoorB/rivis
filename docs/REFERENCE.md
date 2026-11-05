@@ -63,6 +63,20 @@ rivis terms status     # accepted / not accepted / changed since you agreed
 rivis terms show       # print the text
 ```
 
+## Required updates and the mitmproxy watch
+
+A release can require a minimum version: its signed update manifest names `min_version` and, optionally, the date
+it applies from (`required_after`). An older copy then warns (`rivis: warning: … is required from …`) and, from that
+date, refuses everything except `stop`, `status`, `android off`, `ios off`, `update` and `terms`; the proxy passes no
+traffic and the window says "Update required" until `rivis update` (or a new installer) brings a newer version. The
+requirement is inside the signed manifest and is verified every time it is read, so it cannot be changed by hand.
+`rivis update status` shows the current state.
+
+Once a day the running Rivis also checks for new mitmproxy releases and for security advisories published against the
+mitmproxy version it uses (PyPI's release data). It only reports: `rivis doctor`, `rivis update status` and the window
+say that mitmproxy X is out; a newer mitmproxy reaches you inside a Rivis update once IT has approved it. Nothing is
+downloaded or installed by the check.
+
 ## Projects
 
 Project profiles hold client-specific labels, host filters, collection/throttle defaults, device identifiers,

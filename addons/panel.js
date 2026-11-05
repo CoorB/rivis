@@ -3408,7 +3408,7 @@
       const s = await pollState.finally(() => { pollState = null; });
       missed = 0; lostSince = 0; showLost(false);
       state = s; columns = s.columns || columns;
-      if (window.RivisTermsGate) window.RivisTermsGate.seen(s.terms);      // the Terms of Use cover reads this poll
+      if (window.RivisTermsGate) window.RivisTermsGate.seen(s.terms, s.update_policy, s.mitm_watch);      // the Terms of Use cover reads this poll
       badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow(); showAndroidRestored(s);
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
       // the call list (megabytes at a few thousand calls) is for the Tools drawer's own tabs: skip it while the drawer is

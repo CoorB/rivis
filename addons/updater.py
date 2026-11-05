@@ -33,6 +33,8 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)           # run with python3 -I, which leaves the script's own directory off sys.path
+import update_policy  # noqa: E402  (force update: keeps the newest signed manifest)
 PRODUCT = json.load(open(os.path.join(ROOT, "product.json")))
 CLI = PRODUCT.get("cli", "rivis")
 REPO = PRODUCT.get("update_repo", "")
@@ -286,6 +288,7 @@ def check():
             raise
         releases = json.loads(_api("/repos/%s/releases?per_page=20" % REPO, token))
     cur = current_version()
+    newest = True
     for rel in releases:
         if rel.get("draft"):
             continue
@@ -295,16 +298,21 @@ def check():
         man = _api("/repos/%s/releases/assets/%d" % (REPO, assets[MANIFEST]["id"]), token, "application/octet-stream")
         sig = _api("/repos/%s/releases/assets/%d" % (REPO, assets[SIGNATURE]["id"]), token, "application/octet-stream")
         verify_signature(man, sig)
+        if newest:                 # the newest signed release says what is required (min_version / required_after)
+            update_policy.store(man, sig)
+            newest = False
         m = json.loads(man)
         if m.get("product") != CLI or not re.fullmatch(r"\d+\.\d+\.\d+", str(m.get("version", ""))) \
                 or not re.fullmatch(r"[0-9a-f]{64}", str(m.get("sha256", ""))) or m.get("zip") not in assets:
             raise UpdateError("the update manifest is incomplete — refusing it")
+        update_policy.record_check()
         if vkey(m["version"]) <= vkey(cur):
             return {"current": cur, "available": None}
         return {"current": cur, "available": {"version": m["version"], "notes": str(m.get("notes", ""))[:4000],
                                               "zip": m["zip"], "sha256": m["sha256"],
                                               "asset_id": assets[m["zip"]]["id"], "url": rel.get("html_url", ""),
                                               "private": bool(token)}}
+    update_policy.record_check()
     return {"current": cur, "available": None}
 
 

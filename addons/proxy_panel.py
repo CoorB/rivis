@@ -57,6 +57,10 @@ import client_certs
 importlib.reload(client_certs)
 import terms
 importlib.reload(terms)
+import update_policy
+importlib.reload(update_policy)
+import mitm_watch
+importlib.reload(mitm_watch)
 import proxy_source        # helpers only (summaries, the list-filter clause); the add-on itself is loaded by the CLI
 importlib.reload(proxy_source)
 import panel_mitmweb
@@ -194,6 +198,7 @@ class ProxyPanel:
         self._sysproxy = devices.Snapshot(self._system_proxy_check, 5)       # off the event loop (review R1)
         self._devices = devices.Snapshot(self._devices_check, 2)
         self._update = devices.Snapshot(self._update_check, 6 * 3600)        # signed in-app updates (addons/updater.py)
+        self._mitm = devices.Snapshot(self._mitm_check, 3600)                # mitmproxy releases (asks PyPI once a day)
         self._update_login = None                                            # the device-flow sign-in in progress
         self._update_installing = None
         self._browser_jobs = devices.Jobs("a browser is still starting — wait a moment")
@@ -717,6 +722,8 @@ class ProxyPanel:
             "product": PRODUCT,
             # the window covers everything with the terms until they are accepted (the proxy is locked meanwhile)
             "terms": {k: terms_state[k] for k in ("state", "title", "sha256")},
+            "update_policy": self.update_policy_state(),
+            "mitm_watch": self.mitm_watch_state(),
             "active_project": self.active_project,
             "active_project_label": (self.active_profile or {}).get("label") or self.active_project,
             "project_pinned": bool(getattr(ctx.options, "proxy_project_pinned", False)),
@@ -976,6 +983,39 @@ class ProxyPanel:
             if r.get("result") == "slow_down":
                 interval += 5
         self._update_login = {"status": "error", "error": "the code expired — sign in again"}
+
+    @staticmethod
+    def _mitm_check():
+        from mitmproxy import version as mitm_version
+        doc = mitm_watch.status()
+        if mitm_watch.due(doc) or (doc or {}).get("pinned") != mitm_version.VERSION:
+            doc = mitm_watch.check(mitm_version.VERSION)
+        return doc
+
+    def mitm_watch_state(self):
+        have, doc = self._mitm.get()          # never waits: the check runs on a background thread
+        if not have or not doc:
+            return None
+        return {"summary": mitm_watch.summary(doc), "pinned": doc.get("pinned"), "latest": doc.get("latest"),
+                "newer": bool(doc.get("newer")), "advisories": len(doc.get("advisories") or []),
+                "checked_at": doc.get("checked_at")}
+
+    def update_policy_state(self):
+        """Force update (update_policy.py), re-read at most once a minute: it verifies a signature each time."""
+        now = time.monotonic()
+        cached = getattr(self, "_policy_cache", None)
+        try:
+            st0 = os.stat(update_policy.MANIFEST)
+            key = (st0.st_mtime_ns, st0.st_size)
+        except OSError:
+            key = None
+        if cached is None or now - cached[0] >= 60 or cached[2] != key:
+            try:
+                st = update_policy.status()
+            except Exception as e:  # noqa: BLE001 - a broken policy file must not break the panel
+                st = {"state": "ok", "reason": "policy unreadable: %s" % e}
+            cached = self._policy_cache = (now, {k: st.get(k) for k in ("state", "reason", "min_version", "required_after")}, key)
+        return cached[1]
 
     def update_state(self):
         have, snap = self._update.get()

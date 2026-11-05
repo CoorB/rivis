@@ -126,10 +126,45 @@
       } else if (!box || !shownSha || shownSha === "missing") await show(st);
     } finally { busy = false; }
   }
-  window.RivisTermsGate = { seen };
+  // Force update: "required" covers the window like the terms (the proxy is locked too); "due" is a warning bar.
+  let bar = null;
+  function policy(p) {
+    p = p || {};
+    if (p.state === "required") {
+      if (shownSha !== "update") { message("Update required", (p.reason || "A newer Rivis is required.") + " Until then Rivis passes no traffic."); shownSha = "update"; }
+      return true;
+    }
+    if (shownSha === "update") close();
+    if (p.state === "due" && !bar) {
+      bar = el("div", "position:fixed;left:0;right:0;bottom:0;z-index:2147483646;background:#fff4ce;color:#3b2f00;border-top:1px solid #e0c060;padding:6px 12px;font:13px -apple-system,system-ui,sans-serif",
+        "Update due: " + (p.reason || "a newer Rivis is required soon."));
+      bar.id = "rivis-update-due"; bar.setAttribute("role", "status");
+      document.body.appendChild(bar);
+    } else if (p.state !== "due" && bar) { bar.remove(); bar = null; }
+    return false;
+  }
+  // mitmproxy watch: a quiet note (dismissible per release) when a newer mitmproxy or an advisory is known
+  let note = null;
+  function mitm(m) {
+    const key = m && m.summary ? "rivis-mitm-note:" + (m.latest || "") + ":" + (m.advisories || 0) : null;
+    let dismissed = false;
+    try { dismissed = !!key && localStorage.getItem("rivis-mitm-note") === key; } catch (e) { /* private window */ }
+    if (!key || dismissed) { if (note) { note.remove(); note = null; } return; }
+    if (note && note.dataset.key === key) return;
+    if (note) note.remove();
+    note = el("div", "position:fixed;left:12px;bottom:12px;z-index:2147483645;max-width:520px;background:#fff;color:#14202b;border:1px solid #c5cfd8;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:8px 10px;font:12px/1.4 -apple-system,system-ui,sans-serif;display:flex;gap:8px;align-items:flex-start");
+    note.id = "rivis-mitm-note"; note.dataset.key = key; note.setAttribute("role", "status");
+    const x = el("button", "border:0;background:none;cursor:pointer;font-size:14px;line-height:1;color:#4a5866", "×");
+    x.setAttribute("aria-label", "Dismiss");
+    x.onclick = () => { try { localStorage.setItem("rivis-mitm-note", key); } catch (e) { /* kept for this page only */ } note.remove(); note = null; };
+    note.append(el("span", null, m.summary), x);
+    document.body.appendChild(note);
+  }
+  window.RivisTermsGate = { seen: (t, p, m) => { mitm(m); if (!policy(p)) seen(t); } };
   async function ask() {
     if (heard || stopped) return;
-    try { await seen((await api("terms_status", {})).terms); } catch (e) { setTimeout(ask, 3000); }
+    try { const r = await api("terms_status", {}); window.RivisTermsGate.seen(r.terms, (r.state || {}).update_policy, (r.state || {}).mitm_watch); }
+    catch (e) { setTimeout(ask, 3000); }
   }
   const start = () => { setTimeout(ask, 4000); };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
