@@ -237,6 +237,34 @@ class QuotesAndUnicode(unittest.TestCase):
 
 
 
+class Latin1JsonStillMasksSecrets(unittest.TestCase):
+    """A body that is valid Latin-1 but not UTF-8 used to skip the redactor and ship the secret inside base64."""
+
+    def test_latin1_json_password_is_redacted_not_base64_leaked(self):
+        body = b'{"password":"LEAK-latin1", "name":"caf\xe9"}'
+        out = generate(req("POST", "https://h.test/",
+                           [("Content-Type", "application/json")], body), "curl")
+        self.assertNotIn("LEAK-latin1", out)
+        self.assertNotIn(base64.b64encode(body).decode(), out)
+        # No secrets and no UTF-8: original Latin-1 bytes must still round-trip as binary/base64, not be rewritten.
+        plain = b'{"name":"caf\xe9"}'
+        untouched = generate(req("POST", "https://h.test/",
+                                 [("Content-Type", "application/json")], plain), "curl")
+        self.assertIn(base64.b64encode(plain).decode(), untouched)
+
+
+class ArabicAndEmojiRoundTrip(unittest.TestCase):
+    def test_curl_keeps_arabic_url_header_and_json_body(self):
+        text = "مرحبا 👍🏽"
+        body = json.dumps({"n": text}, ensure_ascii=False).encode()
+        out = generate(req("POST", "https://h.test/" + text + "?q=" + text,
+                           [("Content-Type", "application/json"), ("X-Note", text)], body), "curl", False)
+        argv = shlex.split(out.replace("\\\n", " "))
+        self.assertEqual(argv[argv.index("--data-binary") + 1].encode(), body)
+        self.assertIn("X-Note: " + text, argv)
+        self.assertTrue(argv[-1].endswith("/" + text + "?q=" + text) or text in argv[-1])
+
+
 class MaskingCoversTheAuditRepro(unittest.TestCase):
     """F-11: with "Mask secrets" on, nothing that authenticates survives in any target; off keeps everything."""
     SECRETS = ("k-123", "t-456", "qs-789", "p@ss", "r-tok", "hunter2", "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1In0.sig")

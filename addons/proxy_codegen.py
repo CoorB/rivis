@@ -298,10 +298,14 @@ def _mask_body(request, headers):
     body = request.get("body")
     if not body:
         return request
-    try:
-        text = body.decode("utf-8") if isinstance(body, (bytes, bytearray)) else str(body)
-    except UnicodeDecodeError:
-        return request
+    if isinstance(body, (bytes, bytearray)):
+        try:
+            text, out_encoding = body.decode("utf-8"), "utf-8"
+        except UnicodeDecodeError:
+            # Latin-1 (any byte string) is still text to redact; skipping left secrets inside a base64 "binary" curl.
+            text, out_encoding = body.decode("latin-1"), "latin-1"
+    else:
+        text, out_encoding = str(body), "utf-8"
     ctype = next((v for k, v in headers if k.lower() == "content-type"), "")
     masked = proxy_redact.text(text, ctype)
     if masked == text:
@@ -311,7 +315,10 @@ def _mask_body(request, headers):
             return request
     except (ValueError, RecursionError):
         pass
-    return {**request, "body": masked.encode("utf-8")}
+    try:
+        return {**request, "body": masked.encode(out_encoding)}
+    except UnicodeEncodeError:
+        return {**request, "body": masked.encode("utf-8")}
 
 
 def generate(request, target="curl", mask_secrets=True):

@@ -9,6 +9,19 @@ from proxy_common import SAFE_NAME, atomic_json, confined_path
 VAR_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*}}")
 METHOD_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,32}$")
 HEADER_NAME_RE = METHOD_RE
+# userinfo: keep RFC 3986 unreserved/sub-delims and existing %escapes; encode everything else as UTF-8
+USERINFO_SAFE = "!$&'()*+,;=-._~%"
+
+
+def _strip_bom(text):
+    return text[1:] if isinstance(text, str) and text.startswith("\ufeff") else text
+
+
+def _encode_userinfo(userinfo):
+    if ":" in userinfo:
+        user, _, password = userinfo.partition(":")
+        return "%s:%s" % (quote(user, safe=USERINFO_SAFE), quote(password, safe=USERINFO_SAFE))
+    return quote(userinfo, safe=USERINFO_SAFE)
 
 
 def _rows(value):
@@ -46,7 +59,8 @@ def normalize_url(raw):
         raise ValueError("URL has an invalid host or port: %s" % exc) from None
     # R7A-01: a typed Arabic path/query and international host reached req.url unencoded; mitmproxy raised an ASCII
     # codec error. Preserve existing % escapes and URL delimiters while UTF-8-escaping only characters needing it.
-    authority = (parsed.netloc.rpartition("@")[0] + "@") if "@" in parsed.netloc else ""
+    # Userinfo (usér:päss@) hit the same codec error — percent-encode it the same way as path/query.
+    authority = (_encode_userinfo(parsed.netloc.rpartition("@")[0]) + "@") if "@" in parsed.netloc else ""
     authority += ("[" + host + "]") if ":" in host else host
     if port is not None:
         authority += ":%d" % port
@@ -93,7 +107,7 @@ def normalize_request(spec, variables=None):
             mode = "json"
         else:
             try:
-                json.loads(supplied_body)
+                json.loads(_strip_bom(supplied_body))
                 mode = "json"
             except ValueError:
                 mode = "raw"
@@ -101,7 +115,7 @@ def normalize_request(spec, variables=None):
         raise ValueError("body mode must be none, json, form or raw")
     body = b""
     if mode == "json":
-        text = supplied_body
+        text = _strip_bom(supplied_body)   # editors paste a UTF-8 BOM; json.loads rejects it and mitmproxy would send it
         try:
             value = json.loads(text)
         except ValueError as exc:

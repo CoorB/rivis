@@ -61,7 +61,9 @@ def coll_path(name):
 
 
 def load_coll(name):
-    with open(coll_path(name)) as f:
+    # UTF-8 explicitly: collections store Arabic/emoji response text with ensure_ascii=False; a Windows
+    # locale open() would raise UnicodeDecodeError on replay.
+    with open(coll_path(name), encoding="utf-8") as f:
         return migrate_collection(json.load(f))
 
 
@@ -163,7 +165,7 @@ class ProxyCollections:
             return
         self.checked = now
         try:
-            with open(self._rules_path()) as f:
+            with open(self._rules_path(), encoding="utf-8") as f:
                 cfg = migrate_rules(json.load(f)).get("collections") or {}
         except (OSError, ValueError):
             return

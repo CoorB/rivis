@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 import _paths  # noqa: F401
-from proxy_compose import ComposerStore, normalize_request
+from proxy_compose import ComposerStore, normalize_request, normalize_url
 
 
 class Normalize(unittest.TestCase):
@@ -14,6 +14,37 @@ class Normalize(unittest.TestCase):
         # R7A-01: browser-style URLs need UTF-8 escapes and an ASCII host before mitmproxy sees them.
         out = normalize_request({"url": "https://مثال.إختبار/مرحبا?text=أهلا"})
         self.assertEqual(out["url"], "https://xn--mgbh0fb.xn--kgbechtv/%D9%85%D8%B1%D8%AD%D8%A8%D8%A7?text=%D8%A3%D9%87%D9%84%D8%A7")
+
+    def test_r7a01_unicode_userinfo_is_percent_encoded(self):
+        # Same ASCII-only wire rule as path/host: mitmproxy Request.make raises UnicodeEncodeError on usér:päss@.
+        out = normalize_url("https://usér:päss@مثال.إختبار/x")
+        self.assertTrue(out.isascii(), out)
+        self.assertEqual(out, "https://us%C3%A9r:p%C3%A4ss@xn--mgbh0fb.xn--kgbechtv/x")
+        # Already-encoded userinfo must not be double-encoded; Arabic password must become UTF-8 percent-escapes.
+        self.assertEqual(normalize_url("https://us%C3%A9r:p%C3%A4ss@h.test/"),
+                         "https://us%C3%A9r:p%C3%A4ss@h.test/")
+        self.assertEqual(normalize_url("https://user:سر@h.test/path"),
+                         "https://user:%D8%B3%D8%B1@h.test/path")
+
+    def test_unicode_and_punycode_hosts_normalize_to_the_same_ascii_url(self):
+        unicode_host = normalize_url("https://مثال.إختبار/مرحبا")
+        punycode = normalize_url("https://xn--mgbh0fb.xn--kgbechtv/مرحبا")
+        self.assertEqual(unicode_host, punycode)
+        self.assertTrue(unicode_host.isascii())
+
+    def test_mixed_percent_encoded_and_raw_arabic_path_query(self):
+        out = normalize_url("https://h.test/%D9%85/مرحبا?a=%D8%A3&b=أهلا")
+        self.assertEqual(out, "https://h.test/%D9%85/%D9%85%D8%B1%D8%AD%D8%A8%D8%A7?a=%D8%A3&b=%D8%A3%D9%87%D9%84%D8%A7")
+
+    def test_json_body_with_utf8_bom_is_accepted(self):
+        # Editors (and some servers) prefix JSON with a UTF-8 BOM; compose must send the JSON, not refuse the paste.
+        typed = "\ufeff" + '{"name":"مرحبا","n":1}'
+        out = normalize_request({"method": "POST", "url": "https://h.test/", "body_mode": "json", "body": typed})
+        self.assertEqual(out["body"], '{"name":"مرحبا","n":1}'.encode())
+        self.assertEqual(json.loads(out["body"]), {"name": "مرحبا", "n": 1})
+        inferred = normalize_request({"method": "POST", "url": "https://h.test/", "body": typed})
+        self.assertEqual(inferred["body_mode"], "json")
+        self.assertEqual(inferred["body"], out["body"])
 
     def test_query_table_replaces_url_query_and_toggle(self):
         spec = {"method": "get", "url": "https://h.test/p?old=1",
