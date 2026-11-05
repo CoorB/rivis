@@ -615,10 +615,16 @@ class Load(Base):
         t = threading.Thread(target=churn, daemon=True)
         t.start()
         try:
-            calls = [Background(self.inst.fetch, UP.url("/echo?load=%d" % i), timeout=60) for i in range(200)]
+            # 200 curls at once makes mitmproxy open that many upstream sockets and close some before any
+            # response bytes: the upstream accepts TCP, never records an HTTP hit, and the app gets a 502
+            # (now Rivis-labelled; see test_conn_errors_c3 hangup-before-bytes). Direct curls at the same
+            # upstream stay clean. Four waves of 50 still overlap the rules churn without that herd.
             results = []
-            for c in calls:
-                results.append(c.result(90))
+            for wave in range(4):
+                calls = [Background(self.inst.fetch, UP.url("/echo?load=%d" % (wave * 50 + i)), timeout=60)
+                         for i in range(50)]
+                for c in calls:
+                    results.append(c.result(90))
         finally:
             stop.set()
             t.join(5)

@@ -3,10 +3,11 @@ the network is unreachable — the app's 502 page and the call's Error tab say w
 and the likely cause in plain words, and name the hosts-file line when that is where the address came from.
 (Certificate errors are test_hosts_f3.) The hosts file is a scratch file (RIVIS_HOSTS_FILE); the real one is never read."""
 import os
+import socket
 import sys
 import tempfile
-import unittest
 import threading
+import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -55,6 +56,44 @@ class ConnectionErrors(LiveCase):
         self.assertIn(("127.0.0.1:%d" % server.server_port).encode(), result.body)
         self.assertIn(b"before the response was complete", result.body)
         self.assertIn("before the response was complete", self.error_of("cycle5-short"))
+
+    def _hangup_server(self):
+        """Accepts TCP and closes without reading: the same mitmproxy 'server closed connection' a connection burst
+        produces (upstream accept count rises, HTTP hit count does not)."""
+        sock = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(64)
+        stop = threading.Event()
+
+        def loop():
+            sock.settimeout(0.3)
+            while not stop.is_set():
+                try:
+                    c, _ = sock.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+                c.close()
+
+        threading.Thread(target=loop, daemon=True).start()
+        self.addCleanup(stop.set)
+        self.addCleanup(sock.close)
+        return sock
+
+    def test_server_hangs_up_before_any_bytes_names_rivis_not_a_stock_page(self):
+        # Without the rewrite the app sees mitmproxy's stock "<p>server closed connection</p>" and the Error tab
+        # says only those three words — indistinguishable from the app's own server dying.
+        sock = self._hangup_server()
+        result = self.inst.fetch("http://127.0.0.1:%d/hangup-early" % sock.getsockname()[1])
+        self.assertEqual(result.status, 502, result)
+        self.assertIn(b"Rivis", result.body)
+        self.assertIn(("127.0.0.1:%d" % sock.getsockname()[1]).encode(), result.body)
+        self.assertIn(b"before any response arrived", result.body)
+        self.assertNotIn(b"<p>server closed connection</p>", result.body)
+        self.assertIn("before any response arrived", self.error_of("hangup-early"))
+        self.assertIn("not a bug in the app under test", self.error_of("hangup-early"))
 
     def test_cycle6_early_close_body_content_data_does_not_500(self):
         # Cycle 6: new window Body tab fetches content.data; mitmweb wrote None → HTTP 500 ("Could not load the body").

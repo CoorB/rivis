@@ -1173,6 +1173,17 @@ class ProxyRules:
             text = ("Rivis could not read the response from %s: the server closed the connection before the response was complete.\n"
                     "Check the upstream server or gateway and retry. Rivis answered the app with 502.\n"
                     "(System message: %s)\n" % (where, msg))
+        # mitmproxy's Http1Client uses this wording when the upstream socket closes with no response bytes at all
+        # (accept-then-hangup, or a connection-burst race where the upstream accepts TCP and never sees HTTP).
+        # The stock HTML is only "<p>server closed connection</p>" — a QA engineer cannot tell that from the app's
+        # own server failing. Same rewrite path as peer-closed: Error tab and 502 page share the text.
+        if not text and msg and "server closed connection" in msg.lower():
+            where = "%s:%s" % (host, flow.request.port) if flow.request else host
+            text = ("Rivis could not get a response from %s: the connection closed before any response arrived.\n"
+                    "This is often Rivis or the link to the server under a burst of connections, not a bug in the "
+                    "app under test. Retry the call; if it keeps happening at lower concurrency, check the server.\n"
+                    "Rivis answered the app with 502.\n"
+                    "(System message: %s)\n" % (where, msg))
         if text:
             table = _error_texts()
             if len(table) > 256:              # never grows: an entry is taken back as soon as its 502 page is built

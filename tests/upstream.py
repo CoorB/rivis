@@ -5,6 +5,7 @@ openssl CLI at start, SAN = 127.0.0.1 + localhost). Every request is recorded in
 call did (or did not) reach the server.
 """
 import base64
+import errno
 import gzip
 import hashlib
 import json
@@ -50,6 +51,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *a):
         pass
+
+    def handle(self):
+        # Mitmproxy under a thundering herd sometimes accepts then closes the upstream socket before any
+        # bytes arrive; readline then raises EBADF. That is a gone client, not a server bug — swallow it
+        # so one burst cannot flood stderr and upset later tests sharing this upstream.
+        try:
+            BaseHTTPRequestHandler.handle(self)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
 
     def setup(self):
         # Delay in the per-connection handler thread, not the accept loop. This models an expensive TLS handshake
