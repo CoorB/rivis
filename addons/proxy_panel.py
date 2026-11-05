@@ -1283,15 +1283,16 @@ class ProxyPanel:
         return os.path.join(project_state(self.active_project), "filters.json")
 
     def filters_list(self):
+        # Same resilience as columns(): a half-written / wrong-shaped filters.json must not 500 GET /proxy/api/state.
         try:
             with open(self._filters_file()) as fh:
                 rows = json.load(fh)
-        except FileNotFoundError:
+            if not isinstance(rows, list) or len(rows) > 30 or any(not isinstance(row, dict) or
+                    not isinstance(row.get("name"), str) or not isinstance(row.get("filter"), str) for row in rows):
+                raise PanelError("filters.json is invalid")
+            return rows
+        except (OSError, ValueError, TypeError, PanelError):
             return []
-        if not isinstance(rows, list) or len(rows) > 30 or any(not isinstance(row, dict) or
-                not isinstance(row.get("name"), str) or not isinstance(row.get("filter"), str) for row in rows):
-            raise PanelError("filters.json is invalid")
-        return rows
 
     def _save_filters(self, rows):
         atomic_json(self._filters_file(), rows)
@@ -1387,10 +1388,13 @@ class ProxyPanel:
         return f"{prefix}-{f.request.method.lower()}-{base}"
 
     def unique(self, cfg, name):
-        names = {r.get("name") for r in cfg["rules"]}
+        # Mac volumes fold case: treat MockA and mocka as the same rule name. Do not skip just because the mock
+        # file already exists — maplocal_add reuses a same-spelling hand-written file and omits rivis_created_mock
+        # so delete keeps it; mock-from-flow has its own lexists loop after this.
+        names = {str(r.get("name") or "").casefold() for r in cfg["rules"]}
         n, i = name, 2
-        while n in names:
-            n, i = f"{name}-{i}", i + 1
+        while n.casefold() in names:
+            n, i = "%s-%d" % (name, i), i + 1
         return n
 
     # ── TLS decryption list (allow_hosts / ignore_hosts) ─────────────────────────
@@ -1723,13 +1727,18 @@ class ProxyPanel:
                 raise PanelError("script name: letters, digits, . _ - only; language py or js")
             filename = name + "." + lang
             scripts = cfg.setdefault("scripts", [])
-            if any(x.get("file") == filename or x.get("name") == name for x in scripts if isinstance(x, dict)):
+            # Mac volumes fold case: Probe.py and probe.py are one inode — refuse a second spelling.
+            if any((isinstance(x.get("file"), str) and x["file"].casefold() == filename.casefold())
+                   or (isinstance(x.get("name"), str) and x["name"].casefold() == name.casefold())
+                   for x in scripts if isinstance(x, dict)):
                 raise PanelError("that script already exists")
             match = a.get("match") or "."
             user_regex(match)
             method = (a.get("method") or "").upper() or None
             source = self.script_template(lang, a.get("template") or "header")
             path = self._script_path(filename)
+            if os.path.exists(path):
+                raise PanelError("that script already exists")
             os.makedirs(SCRIPT_DIR, mode=0o700, exist_ok=True)
             atomic_write_text(path, source)
             scripts.append({"name": name, "file": filename, "lang": lang, "enabled": True,
@@ -1802,7 +1811,7 @@ class ProxyPanel:
             self.validate(r)
             if not str(r.get("match", "")).strip():     # an omitted match used to mean "every call": too easy to break everything
                 raise PanelError("match is required (a regex on the URL; '.' means every call)")
-            if any(x.get("name") == r["name"] for x in cfg["rules"]):
+            if any(isinstance(x.get("name"), str) and x["name"].casefold() == r["name"].casefold() for x in cfg["rules"]):
                 raise PanelError("a rule with that name exists")
             self.engine_check(r)
             cfg["rules"].append(r)
@@ -1813,7 +1822,7 @@ class ProxyPanel:
             folder = os.path.abspath(os.path.expanduser(str(a.get("folder") or "").strip()))
             if not SAFE_NAME.fullmatch(name):
                 raise PanelError("name must use letters, numbers, dots, dashes or underscores")
-            if any(r.get("name") == name for r in cfg["rules"]):
+            if any(isinstance(r.get("name"), str) and r["name"].casefold() == name.casefold() for r in cfg["rules"]):
                 raise PanelError("a rule with that name exists")
             if not os.path.isdir(folder):
                 raise PanelError("folder not found: " + folder)
@@ -2129,7 +2138,8 @@ class ProxyPanel:
                     existing["enabled"] = True
                     self.save_cfg(cfg)
                     return {"name": existing["name"], "existing": True}
-            if requested_name and any(r.get("name") == requested_name for r in cfg["rules"]):
+            if requested_name and any(isinstance(r.get("name"), str) and r["name"].casefold() == requested_name.casefold()
+                                      for r in cfg["rules"]):
                 raise PanelError("a rule with that name exists")
             name = self.unique(cfg, base_name)
             os.makedirs(MOCK_DIR, exist_ok=True)
@@ -2188,7 +2198,7 @@ class ProxyPanel:
             rows = self.filters_list()
             if old is not None and old not in [row["name"] for row in rows]:
                 raise PanelError("saved filter not found")
-            if any(row["name"] == name and row["name"] != old for row in rows):
+            if any(row["name"].casefold() == name.casefold() and row["name"] != old for row in rows):
                 raise PanelError("filter name already exists")
             if old is None:
                 if len(rows) >= 30:

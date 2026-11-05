@@ -202,6 +202,30 @@ class Ops(LiveCase):
         self.__class__.panel = self.inst.panel
         self.assertEqual(self.panel.state()["columns"], cols)
 
+    def test_corrupt_columns_json_falls_back_to_defaults(self):
+        # columns() swallows OSError/ValueError/KeyError; a half-written file must not break Tools → Columns or state.
+        path = self.inst.path("columns.json")
+        self.panel.ok("columns_set", {"columns": ["method", "status"]})
+        for payload in ("", "{", "[]", "null", '{"columns": "nope"}', "\ufeff" + json.dumps({"columns": ["method"]})):
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            state = self.panel.state()
+            self.assertEqual(state["columns"], ["path", "method", "status", "size", "time", "timestamp"], repr(payload[:40]))
+
+    def test_corrupt_filters_json_does_not_break_state(self):
+        # Same class of crash as FOUND-BUGS B16 (broken rules.json → state 500): filters_list() raises on bad JSON /
+        # wrong shape, and GET /proxy/api/state has no try/except, so a truncated filters.json freezes the drawer.
+        path = self.inst.path("filters.json")
+        self.panel.ok("filters_save", {"name": "Echo", "filter": "~u echo"})
+        self.assertEqual([r["name"] for r in self.panel.state()["saved_filters"]], ["Echo"])
+        for payload in ("", "{", "null", '{"name": "x"}', "\ufeff" + json.dumps([{"name": "Echo", "filter": "~u echo"}])):
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            code, body = self.panel.get("/proxy/api/state")
+            self.assertEqual(code, 200, "filters.json %r -> HTTP %s %r" % (payload[:40], code, body[:200]))
+            doc = json.loads(body)
+            self.assertEqual(doc.get("saved_filters"), [])
+
     def test_invalid_rules_file_is_preserved_on_panel_write(self):
         with open(self.inst.rules_path, "w") as fh:
             fh.write('{"rules": [')
@@ -1166,6 +1190,26 @@ class Confinement(LiveCase):
         self.panel.post("script_new", {"name": "../escape", "lang": "py"})
         self.assertEqual(set(os.listdir(parent)), before)
         self.assertEqual([f for f in os.listdir(self.inst.state_dir) if "escape" in f], [])
+
+    def test_case_folded_alias_cannot_overwrite_a_sibling_file(self):
+        # Mac volumes fold case: Probe.py / probe.py and MockA.json / mocka.json are one inode. A second spelling
+        # must be refused (or uniqued away from the file), not silently overwrite the first entry's body.
+        self.inst.clear_dir("scripts")
+        self.panel.ok("script_new", {"name": "Probe", "lang": "py", "template": "header", "match": "."})
+        before = open(os.path.join(self.inst.path("scripts"), "Probe.py")).read()
+        code, doc, raw = self.panel.post("script_new", {"name": "probe", "lang": "py", "template": "json", "match": "."})
+        self.assertEqual(code, 400, raw[:200])
+        self.assertIn("already exists", doc["error"])
+        self.assertEqual(open(os.path.join(self.inst.path("scripts"), "Probe.py")).read(), before)
+        self.assertEqual([s["name"] for s in self.inst.cfg().get("scripts", [])], ["Probe"])
+
+        self.panel.ok("maplocal_add", {"name": "MockA", "host": "h.test", "path": "/a", "body": '{"a":1}\n'})
+        mock_before = open(os.path.join(self.inst.path("mocks"), "MockA.json")).read()
+        code, doc, raw = self.panel.post("maplocal_add", {"name": "mocka", "host": "h.test", "path": "/b", "body": '{"b":2}\n'})
+        self.assertEqual(code, 400, raw[:200])
+        self.assertIn("that name exists", doc["error"])
+        self.assertEqual(open(os.path.join(self.inst.path("mocks"), "MockA.json")).read(), mock_before)
+        self.assertEqual([r["name"] for r in self.inst.cfg()["rules"] if r.get("action") == "map_local"], ["MockA"])
 
     def test_mockfile_ops_refuse_files_outside_the_mock_dir_including_symlinks(self):
         outside = os.path.join(self.suite.root, "outside-secret.txt")
