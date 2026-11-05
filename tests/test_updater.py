@@ -6,6 +6,7 @@ real: ssh-keygen verifies the signatures, the token is kept in a private file (R
 """
 import hashlib
 import http.server
+import importlib.util
 import json
 import os
 import shutil
@@ -17,6 +18,7 @@ import threading
 import time
 import unittest
 import zipfile
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
@@ -190,6 +192,50 @@ class SignIn(UpdaterBase):
         self.assertEqual(s["user_code"], "WXYZ-1234")
         self.assertEqual(s["interval"], 5)
         self.assertGreater(s["expires_at"], time.time() + 800)
+
+    def test_token_save_never_exposes_a_truncated_file_to_a_reader(self):
+        # O_TRUNC then write emptied the live token file first. A concurrent `status` / `check` read that
+        # hole as "not signed in", and the next private-repo check failed until the user signed in again.
+        spec = importlib.util.spec_from_file_location(
+            "updater_token_race", os.path.join(self.tool, "addons", "updater.py"))
+        upd = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(upd)
+        os.environ["RIVIS_TOKEN_FILE"] = self.token_file
+        self.addCleanup(lambda: os.environ.pop("RIVIS_TOKEN_FILE", None))
+        old = {"access_token": "tok-old", "refresh_token": "ref-old", "expires_at": time.time() + 3600}
+        new = {"access_token": "tok-new", "refresh_token": "ref-new", "expires_at": time.time() + 3600}
+        upd.token_save(old)
+        pause, resume = threading.Event(), threading.Event()
+        reads = []
+        target = os.path.abspath(self.token_file)
+        orig_open, orig_replace = os.open, os.replace
+
+        def open_hook(path, flags, mode=0o777):
+            fd = orig_open(path, flags, mode)
+            if os.path.abspath(path) == target and (flags & os.O_TRUNC):
+                pause.set()
+                resume.wait(2.0)
+            return fd
+
+        def replace_hook(src, dst):
+            if os.path.abspath(dst) == target:
+                pause.set()
+                resume.wait(2.0)
+            return orig_replace(src, dst)
+
+        def reader():
+            self.assertTrue(pause.wait(2.0), "save never reached a visible point")
+            reads.append(upd.token_load())
+            resume.set()
+
+        t = threading.Thread(target=reader)
+        t.start()
+        with mock.patch("os.open", open_hook), mock.patch("os.replace", replace_hook):
+            upd.token_save(new)
+        t.join(3.0)
+        self.assertTrue(reads)
+        self.assertIsNotNone(reads[0], "reader saw a truncated token file mid-save")
+        self.assertIn(reads[0].get("access_token"), ("tok-old", "tok-new"))
 
     def test_an_expired_token_is_refreshed_without_a_secret(self):
         self.gh.private = True; self.sign_in(expires_at=time.time() - 10)

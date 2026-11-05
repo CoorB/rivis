@@ -117,11 +117,22 @@ def build(out, extras=()):
     for extra in extras:
         with open(extra) as fh:
             added += PEM.findall(fh.read())
-    tmp = out + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write("\n".join(roots + added) + "\n")
-    os.replace(tmp, out)
+    # Unique temp: two concurrent builds (two `rivis start`s) used to share out.tmp and could leave a mixed
+    # or truncated bundle that mitmproxy then treated as the Mac's trust list.
+    directory = os.path.dirname(os.path.abspath(out)) or "."
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".trust-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write("\n".join(roots + added) + "\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, out)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
     return len(roots), len(added)
 
 

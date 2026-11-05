@@ -1,9 +1,11 @@
 """Settings setup through a fake emulator; no device or live proxy is used."""
+import importlib.util
 import os
 import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 import harness
@@ -11,6 +13,40 @@ import harness
 sys.path.insert(0, os.path.join(harness.REPO, 'addons'))
 import devices
 import android_picker
+
+
+class SettingsTimeoutRace(unittest.TestCase):
+    def test_deadline_does_not_kill_a_child_that_already_finished(self):
+        # When the child exits in the same tick as the deadline, killpg + return 124 used to report a timeout
+        # for a setup that had already succeeded (and risked signalling a recycled process group).
+        spec = importlib.util.spec_from_file_location(
+            "android_settings_timeout", os.path.join(harness.REPO, "addons", "android_settings_timeout.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        r_fd, w_fd = os.pipe()
+        os.close(w_fd)  # closed write end → stdout reads as EOF once registered
+
+        class Finished:
+            pid = os.getpid()  # unused when poll says done; killpg must not be called
+            stdout = os.fdopen(r_fd, "rb")
+
+            def poll(self):
+                return 0
+
+            def wait(self):
+                return 0
+
+        killed = []
+        start = time.monotonic()
+        # First monotonic: set end = start + 0.01; second: left <= 0 while child already finished.
+        monos = [start, start + 1.0, start + 1.0, start + 1.0, start + 1.0]
+
+        with mock.patch.object(mod.sys, "argv", ["t", "0.01", "cli", "serial", "1"]), \
+                mock.patch.object(mod.subprocess, "Popen", return_value=Finished()), \
+                mock.patch.object(mod.time, "monotonic", side_effect=monos), \
+                mock.patch.object(mod.os, "killpg", side_effect=lambda *a: killed.append(a)):
+            self.assertEqual(mod.main(), 0)
+        self.assertEqual(killed, [], "must not killpg a process that already exited")
 
 
 # RIVIS_ANDROID_SETUP_TIMEOUT is a per-step budget. Steps 1-3 each carry ~3 s of fixed settles plus a dozen adb/grep

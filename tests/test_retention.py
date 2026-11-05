@@ -5,7 +5,9 @@ import os
 import socket
 import sys
 import threading
+import types
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Background, Instance, LiveCase, Suite, wait_for
@@ -17,6 +19,53 @@ class FooterCopy(unittest.TestCase):
         panel = open(os.path.join(os.path.dirname(__file__), "..", "addons", "panel.js")).read()
         self.assertIn("keeps up to ${state.retention.limit}; trims oldest in batches", panel)
         self.assertNotIn("keeps the last ${state.retention.limit}", panel)
+
+
+class TrimSelectionRace(unittest.TestCase):
+    def test_trim_does_not_drop_a_call_selected_after_candidates_were_chosen(self):
+        # The candidate list is built from one snapshot of selection; a click that lands before view.remove
+        # must still protect that call — otherwise the engineer loses the call they just opened.
+        # Stub mitmproxy: the frozen app has no importable package for /usr/bin/python3.
+        addons = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "addons")
+        sys.path.insert(0, addons)
+        m = types.ModuleType("mitmproxy")
+        m.ctx = types.SimpleNamespace()
+        m.http = types.SimpleNamespace(HTTPFlow=type("HTTPFlow", (), {}))
+        sys.modules.update({"mitmproxy": m})
+        import proxy_retention as pr
+        flows = []
+        for i in range(30):
+            f = mock.Mock()
+            f.id = "f%d" % i
+            f.intercepted = False
+            f.live = False
+            f.response = object()
+            f.error = None
+            f.request = mock.Mock(timestamp_start=float(i))
+            f.timestamp_start = float(i)
+            flows.append(f)
+        removed = []
+        calls = {"n": 0}
+
+        def selected():
+            calls["n"] += 1
+            # Second read (just before delete) sees the click that landed after the candidate list.
+            if calls["n"] >= 2:
+                return {flows[0].id}
+            return set()
+
+        view = mock.Mock()
+        view._store = {f.id: f for f in flows}
+        view.remove = lambda victims: removed.extend(victims)
+        master = mock.Mock(view=view)
+        opts = mock.Mock(proxy_max_flows=20)
+        retention = pr.ProxyRetention()
+        with mock.patch.object(pr, "ctx", mock.Mock(master=master, options=opts)), \
+                mock.patch.object(pr.ProxyRetention, "_selected", staticmethod(selected)), \
+                mock.patch.object(pr.ProxyRetention, "_completed", staticmethod(lambda f: True)):
+            retention.trim()
+        self.assertNotIn(flows[0], removed)
+        self.assertTrue(removed)
 
 
 class Retention(LiveCase):

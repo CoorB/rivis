@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -242,10 +243,14 @@ def add(store, host, data, password=None, key_data=None):
 
 def remove(store, host):
     path = os.path.join(store, file_name(host))
-    if not os.path.isfile(path):
+    try:
+        if os.path.islink(path) or not os.path.isfile(path):
+            return False
+        os.unlink(path)
+        return True
+    except FileNotFoundError:
+        # Another remove (panel + CLI, or two panel clicks) won the race: treat as already gone.
         return False
-    os.unlink(path)
-    return True
 
 
 def fingerprint(store):
@@ -280,28 +285,51 @@ class Active:
         version = fingerprint(self.store)
         if version == self.version:
             return self.dir
-        self.version = version
         names = [n for n in sorted(os.listdir(self.store)) if host_of(n) and os.path.isfile(os.path.join(self.store, n))
                  and not os.path.islink(os.path.join(self.store, n))] if os.path.isdir(self.store) else []
-        self.hosts = [host_of(n) for n in names]
+        hosts = [host_of(n) for n in names]
         base = os.path.join(self.store, RUN_DIR)
-        if os.path.isdir(base):
-            for old in os.listdir(base):
-                if old != version:
-                    shutil.rmtree(os.path.join(base, old), ignore_errors=True)
         if not names:
-            self.dir = None
+            self.version, self.hosts, self.dir = version, [], None
+            if os.path.isdir(base):
+                for old in os.listdir(base):
+                    shutil.rmtree(os.path.join(base, old), ignore_errors=True)
             return None
         target = os.path.join(base, version)
         os.makedirs(target, mode=0o700, exist_ok=True)
         os.chmod(base, 0o700)
         for n in names:
             dst = os.path.join(target, n)
-            if not os.path.exists(dst):
-                shutil.copyfile(os.path.join(self.store, n), dst + ".tmp")
-                os.chmod(dst + ".tmp", 0o600)
-                os.replace(dst + ".tmp", dst)
-        self.dir = target
+            if os.path.exists(dst):
+                continue
+            src = os.path.join(self.store, n)
+            fd, tmp = tempfile.mkstemp(dir=target, prefix=".%s-" % n, suffix=".tmp")
+            os.close(fd)
+            try:
+                shutil.copyfile(src, tmp)
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, dst)
+            except FileNotFoundError:
+                # Removed from the store between listdir and copy: skip; fingerprint will move on next refresh.
+                if os.path.exists(tmp):
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+            except Exception:
+                if os.path.exists(tmp):
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                raise
+        # Stamp the version only once the build finished. Stamping first left a failed mid-copy refresh
+        # claiming to be current, so later connections kept the incomplete active directory. Old versions
+        # are removed only after the new one is ready, so a failed build keeps the previous active dir.
+        self.version, self.hosts, self.dir = version, hosts, target
+        for old in os.listdir(base):
+            if old != version:
+                shutil.rmtree(os.path.join(base, old), ignore_errors=True)
         return target
 
     def prepare(self, server_name):
@@ -314,10 +342,29 @@ class Active:
             dst = os.path.join(self.dir, normalize_host(server_name) + ".pem")
         except CertError:
             return None
-        if not os.path.exists(dst):
-            shutil.copyfile(os.path.join(self.dir, file_name(host)), dst + ".tmp")
-            os.chmod(dst + ".tmp", 0o600)
-            os.replace(dst + ".tmp", dst)
+        if os.path.exists(dst):
+            return host
+        src = os.path.join(self.dir, file_name(host))
+        fd, tmp = tempfile.mkstemp(dir=self.dir, prefix=".prep-", suffix=".tmp")
+        os.close(fd)
+        try:
+            shutil.copyfile(src, tmp)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, dst)
+        except FileNotFoundError:
+            if os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            return None
+        except Exception:
+            if os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            raise
         return host
 
 

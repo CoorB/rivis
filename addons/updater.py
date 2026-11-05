@@ -106,9 +106,22 @@ def token_save(tok):
     blob = base64.b64encode(json.dumps(tok).encode()).decode()       # base64: no quoting problems, no spaces
     f = os.environ.get("RIVIS_TOKEN_FILE")
     if f:
-        fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            fh.write(blob)
+        # Temp + replace: a concurrent status/check must never read a truncated token file (O_TRUNC then write
+        # emptied it first, so the reader saw "not signed in" and the next private-repo check failed).
+        d = os.path.dirname(os.path.abspath(f)) or "."
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".token-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(blob)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, f)
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
         return
     # through `security -i` on stdin, so the token never appears in a process list
     cmd = "add-generic-password -U -a %s -s %s -l %s -w %s %s\n" % (
@@ -121,8 +134,10 @@ def token_save(tok):
 def token_delete():
     f = os.environ.get("RIVIS_TOKEN_FILE")
     if f:
-        if os.path.exists(f):
+        try:
             os.remove(f)
+        except FileNotFoundError:
+            pass
         return
     subprocess.run(["security", "delete-generic-password", "-a", _account(), "-s", KEYCHAIN_SERVICE] + _keychain_args(),
                    capture_output=True, timeout=15)

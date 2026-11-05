@@ -70,6 +70,11 @@ class ProxyRetention:
         # sort the 5k-flow view for every single response after reaching the cap.
         batch = min(500, limit // 10)
         victims = candidates[:excess + batch]
+        # Re-read selection and pause state just before delete: a click that landed after the
+        # candidate list was built must still protect that call (check-then-delete is how user
+        # data was lost elsewhere in this project).
+        selected = self._selected()
+        victims = [f for f in victims if f.id not in selected and not getattr(f, "intercepted", False)]
         if victims:
             ctx.master.view.remove(victims)
             self.trimmed += len(victims)

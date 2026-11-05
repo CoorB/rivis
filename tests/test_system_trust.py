@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -66,6 +67,62 @@ class RootStoreAsMacOSTrustsIt(unittest.TestCase):
                 mock.patch.object(system_trust, "_trust_settings", side_effect=lambda flag, wd: domains[flag]):
             got = system_trust.system_roots("/nonexistent")
         self.assertEqual(got, [pems["AA"], pems["CC"]])
+
+    def test_build_does_not_write_through_a_shared_out_tmp(self):
+        # Two `rivis start`s used out.tmp for the same path: one truncated while the other wrote, leaving a
+        # mixed or empty trust bundle. Each build must use a private temp, then replace.
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "bundle.pem")
+            opened = []
+            real_open = os.open
+
+            def spy(path, flags, mode=0o777):
+                opened.append(os.path.abspath(path))
+                return real_open(path, flags, mode)
+
+            roots = ["-----BEGIN CERTIFICATE-----\nR%d\n-----END CERTIFICATE-----" % i for i in range(25)]
+            with mock.patch.object(system_trust, "system_roots", return_value=roots), \
+                    mock.patch.object(system_trust, "added_anchors", return_value=[]), \
+                    mock.patch("os.open", spy):
+                self.assertEqual(system_trust.build(out), (25, 0))
+            self.assertTrue(os.path.isfile(out))
+            self.assertNotIn(os.path.abspath(out + ".tmp"), opened,
+                             "shared out.tmp is racy under concurrent builds")
+            self.assertTrue(any(p.endswith(".tmp") for p in opened))
+
+    def test_concurrent_builds_leave_a_complete_unmixed_bundle(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "bundle.pem")
+            barrier = threading.Barrier(2)
+            errors = []
+
+            def roots(tag):
+                return ["-----BEGIN CERTIFICATE-----\n%s%d\n-----END CERTIFICATE-----" % (tag, i)
+                        for i in range(25)]
+
+            def run(tag):
+                def system_roots(_wd):
+                    barrier.wait()
+                    return roots(tag)
+
+                try:
+                    with mock.patch.object(system_trust, "system_roots", system_roots), \
+                            mock.patch.object(system_trust, "added_anchors", return_value=[]):
+                        system_trust.build(out)
+                except Exception as exc:
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=run, args=(tag,)) for tag in ("AAA", "BBB")]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(5.0)
+            self.assertEqual(errors, [])
+            body = open(out).read()
+            self.assertGreaterEqual(body.count("BEGIN CERTIFICATE"), 20)
+            self.assertTrue(
+                ("AAA0" in body and "BBB0" not in body) or ("BBB0" in body and "AAA0" not in body),
+                "bundle mixed both writers: %r" % body[:200])
 
 
 class UpstreamNotVerifiedByDefault(unittest.TestCase):

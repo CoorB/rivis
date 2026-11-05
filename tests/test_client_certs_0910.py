@@ -6,6 +6,7 @@ a replaced certificate is used from the next connection (no restart), and a remo
 import base64
 import json
 import os
+import shutil
 import ssl
 import stat
 import subprocess
@@ -13,6 +14,7 @@ import sys
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
@@ -258,6 +260,49 @@ class ClientCertsUnit(unittest.TestCase):
         client_certs.remove(store, "*.example.test")
         self.assertIsNone(active.refresh())
         self.assertEqual(client_certs.entries(store), [])
+
+    def test_remove_tolerates_the_file_vanishing_between_check_and_unlink(self):
+        # Panel remove and CLI remove (or a double click) can interleave: isfile was True, unlink then raised
+        # FileNotFoundError, and the panel surfaced an unexpected error instead of "already gone".
+        store = os.path.join(self.suite.new_home("rm-race"), "client-certs")
+        with open(self.alice[2], "rb") as fh:
+            client_certs.add(store, "127.0.0.1", fh.read(), "s3cret pass")
+        path = os.path.join(store, client_certs.file_name("127.0.0.1"))
+        real_isfile = os.path.isfile
+
+        def vanish(p):
+            if os.path.abspath(p) == os.path.abspath(path) and real_isfile(p):
+                os.unlink(p)
+                return True
+            return real_isfile(p)
+
+        with mock.patch("os.path.isfile", vanish):
+            self.assertFalse(client_certs.remove(store, "127.0.0.1"))
+
+    def test_failed_refresh_does_not_stick_as_the_current_version(self):
+        # Stamping the fingerprint before the copy finished left a failed refresh claiming to be current, so the
+        # next connection kept an empty/partial active directory and mTLS never sent the certificate again.
+        # Cleaning up old versions before the new build finished also deleted the working active dir on failure.
+        store = os.path.join(self.suite.new_home("refresh-race"), "client-certs")
+        with open(self.alice[2], "rb") as fh:
+            client_certs.add(store, "api.example.test", fh.read(), "s3cret pass")
+        active = client_certs.Active(store)
+        first = active.refresh()
+        self.assertTrue(os.path.isdir(first))
+        with open(self.bob[2], "rb") as fh:
+            client_certs.add(store, "api.example.test", fh.read(), "s3cret pass")
+
+        def boom(src, dst):
+            raise OSError("disk full")
+
+        with mock.patch("shutil.copyfile", boom):
+            with self.assertRaises(OSError):
+                active.refresh()
+        self.assertTrue(os.path.isdir(first), "a failed rebuild must keep the previous active directory")
+        path = active.refresh()
+        self.assertTrue(os.path.isdir(path))
+        self.assertNotEqual(path, first)
+        self.assertTrue(os.path.isfile(os.path.join(path, "api.example.test.pem")))
 
 
 if __name__ == "__main__":
