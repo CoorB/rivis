@@ -145,6 +145,24 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertGreaterEqual(stop.count('Our-Listening-Pids'), 2)
         self.assertNotIn('Listening-Pids @', stop.replace('Our-Listening-Pids @', ''))
 
+    def test_android_all_reinvokes_switches_via_hashtable_splat(self):
+        """A string splat of '-System' binds to positional $Name and leaves [switch]$System off."""
+        block = self.src[self.src.index('  "android" {'):self.src.index('$adb = Find-Adb; $s = Pick-Serial')]
+        self.assertNotIn('$extra += "-System"', block)
+        self.assertNotIn('$extra += "-ProxyOnly"', block)
+        self.assertIn('$reinvoke = @{ Serial = $emulator; Project = $Project }', block)
+        self.assertIn('$reinvoke.System = $true', block)
+        self.assertIn('$reinvoke.ProxyOnly = $true', block)
+        self.assertIn('& $PSCommandPath android $Action @reinvoke', block)
+
+    def test_help_command_accepts_a_topic_and_writes_windows_insecure_hint(self):
+        """help CMD must reach Write-Usage (not the no-args reject list); new profiles name -Insecure."""
+        self.assertIn('if ($Command -eq "help")', self.src)
+        self.assertIn('Write-Usage $Action', self.src)
+        no_args = self.src[self.src.index('$unexpected = @()'):self.src.index('if ($unexpected.Count)')]
+        self.assertNotRegex(no_args, r'@\("start".*"help"\)')
+        self.assertIn('use -Insecure only when the upstream certificate cannot be validated', self.src)
+
 
 @unittest.skipUnless(HAVE_PWSH, NO_PWSH)
 class Parse(unittest.TestCase):
@@ -710,6 +728,54 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
     def test_neo_mitm_shim_defaults_to_project_neo(self):
         out = self.ok("projects", "show", bin="neo-mitm.ps1")
         self.assertEqual(json.loads(out)["id"], "neo")
+
+    def test_neo_mitm_bash_style_project_flag_binds(self):
+        """Splatting the reconstructed string '-Project' bound it to $Name; --project must set the project."""
+        for args in (("--project", "default"), ("--project=default",), ("-Project", "default")):
+            with self.subTest(args=args):
+                out = self.ok("projects", "show", *args, bin="neo-mitm.ps1")
+                self.assertEqual(json.loads(out)["id"], "default", args)
+
+    def test_help_topic_matches_command_dash_h(self):
+        topic = self.ok("help", "start")
+        self.assertIn("-AllowPrivateHosts", topic)
+        self.assertIn("mitmweb: proxy", topic)
+        self.assertNotIn("unexpected argument", topic)
+        self.assertIn("-AllowPrivateHosts", self.ok("start", "-h"))
+        self.bad("help", "start", "extra", msg="unexpected argument")
+
+    def test_android_all_passes_system_via_hashtable(self):
+        """Prove the -All reinvoke binds -System (string splat used to park it in $Name)."""
+        script = r'''
+param([Parameter(Position=0)][string]$Command,[Parameter(Position=1)][string]$Action="",
+      [string]$Serial="",[string]$Project="",[switch]$ProxyOnly,[switch]$System,
+      [Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest=@())
+if ($Command -eq "android" -and $Serial) {
+  Write-Output ("child Serial={0} Project={1} ProxyOnly={2} System={3} NameRest={4}" -f `
+    $Serial,$Project,$ProxyOnly.IsPresent,$System.IsPresent,(($Rest + @()) -join "|"))
+  exit 0
+}
+$ProxyOnly = $true; $System = $true; $Project = "default"
+$emulators = @("emulator-5554","emulator-5556")
+foreach ($emulator in $emulators) {
+  $reinvoke = @{ Serial = $emulator; Project = $Project }
+  if ($ProxyOnly) { $reinvoke.ProxyOnly = $true }
+  if ($System) { $reinvoke.System = $true }
+  & $PSCommandPath android on @reinvoke
+}
+'''
+        path = os.path.join(self.home, "reinvoke.ps1")
+        with open(path, "w") as fh:
+            fh.write(script)
+        cp = self.suite.run([PWSH, "-NoProfile", "-NonInteractive", "-File", path],
+                            home=self.home, env=self.env, timeout=30)
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        lines = [l for l in cp.stdout.splitlines() if l.startswith("child ")]
+        self.assertEqual(len(lines), 2, cp.stdout)
+        for line, serial in zip(lines, ("emulator-5554", "emulator-5556")):
+            self.assertIn("Serial=" + serial, line)
+            self.assertIn("System=True", line)
+            self.assertIn("ProxyOnly=True", line)
 
     @unittest.skipUnless(IS_WIN, WINDOWS_ONLY)
     def test_status_and_net_reset_dry_run(self):

@@ -623,10 +623,18 @@ if ($Command -in @("version","--version") -or ($Command -eq "help" -and -not $Ac
   Write-Output "$($ProductConfig.cli) $v"; exit 0
 }
 
+# help [CMD]: filtered usage (same text as `CMD -h`). Extra args after CMD are refused.
+if ($Command -eq "help") {
+  $helpExtra = @(); if ($Name) { $helpExtra += $Name }; $helpExtra += @($Rest)
+  if ($helpExtra.Count) { Die "unexpected argument(s): $($helpExtra -join ' ')" }
+  Write-Usage $Action
+  exit 0
+}
+
 if ($Command -notin @("help","cert","doctor","bug-report","-h","--help","")) { Migrate-Legacy }
 
 $unexpected = @()
-if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report","status","cert","help")) {
+if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report","status","cert")) {
   if ($Action) { $unexpected += $Action }; if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif ($Command -eq "browser") {
   if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
@@ -679,7 +687,7 @@ switch ($Command) {
       $temp = Join-Path (Join-Path $StateRoot "profiles") (".$id.tmp." + [Guid]::NewGuid().ToString("N"))
       try {
         New-Item -ItemType Directory -Force -Path $temp | Out-Null
-        $doc = [ordered]@{ id=$id; label=$Label; description="User project profile"; hosts=$Hosts; record_match=$Hosts; throttle_match=$Hosts; dev_ssl_insecure_hint="use --insecure only when the upstream certificate cannot be validated"; android_packages=@(); ios_bundle_ids=@() }
+        $doc = [ordered]@{ id=$id; label=$Label; description="User project profile"; hosts=$Hosts; record_match=$Hosts; throttle_match=$Hosts; dev_ssl_insecure_hint="use -Insecure only when the upstream certificate cannot be validated"; android_packages=@(); ios_bundle_ids=@() }
         [IO.File]::WriteAllText((Join-Path $temp "project.json"), (($doc | ConvertTo-Json -Depth 10) + [Environment]::NewLine), $Utf8NoBom)
         $cfg = Get-Content -Raw (Join-Path $PSScriptRoot "projects\_template\rules.example.json") | ConvertFrom-Json
         $cfg.throttle_match = $Hosts; $cfg.collections.record_match = $Hosts
@@ -1195,8 +1203,12 @@ switch ($Command) {
       if (-not $emulators.Count) { Die "no running emulator. Physical devices need a separate approval." }
       $failed = @()
       foreach ($emulator in $emulators) {   # every emulator gets its turn; any one not done fails the command (review R7)
-        $extra = @(); if ($ProxyOnly) { $extra += "-ProxyOnly" }; if ($System) { $extra += "-System" }
-        & $PSCommandPath android $Action -Serial $emulator -Project $Project @extra
+        # Hashtable splat: a string array of "-System"/"-ProxyOnly" binds those tokens to positional $Name
+        # (and leaves the switches off), so -All -System used to install only the user-store CA.
+        $reinvoke = @{ Serial = $emulator; Project = $Project }
+        if ($ProxyOnly) { $reinvoke.ProxyOnly = $true }
+        if ($System) { $reinvoke.System = $true }
+        & $PSCommandPath android $Action @reinvoke
         if ($LASTEXITCODE -ne 0) { $failed += $emulator }
       }
       if ($failed.Count) { Die "android ${Action}: not done on $($failed -join ' ') (see above)" }
