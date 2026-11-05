@@ -578,6 +578,11 @@ the lists are *Hosts to decrypt* and *Hosts to leave alone*. It is stored per pr
   `http3` on; Rivis does not change it): the app keeps working; those calls are not listed or changed.
 - On This call: **Decrypt this host** / **Don't decrypt this host**. In mode `all`, "Don't decrypt" switches to
   `ignore` with that host so everything else stays decrypted; "Decrypt" in mode `all` is a no-op.
+- **HTTP/3 (QUIC, UDP 443)** on the iOS Simulator (local capture) and elsewhere: when Rivis does not decrypt a
+  host (allow/ignore list, or a host that refused the Rivis CA), HTTP/3 is passed through unchanged — the bytes
+  are not decrypted or listed as HTTP calls. The log prints one plain line the first time each such host is seen
+  (`passing HTTP/3 to <host> through unchanged`). Apps that need Rivis to see the calls fall back to TCP+TLS
+  (HTTP/1 or HTTP/2), which Rivis handles as usual. Proxyman does not pass HTTP/3 either.
 
 ### Protocol viewers
 

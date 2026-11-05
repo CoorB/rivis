@@ -68,6 +68,12 @@ def running():
         mod = importlib.import_module("mitmproxy.proxy.layers.http." + name)
         _need(report, "format_error." + name, lambda m=mod: hasattr(m, "format_error"))
 
+    from mitmproxy.proxy.layers.quic import _stream_layers as quic_sl
+    from mitmproxy.proxy.layers import udp as udp_mod
+    _need(report, "ClientQuicLayer.receive_handshake_data",
+          lambda: callable(getattr(quic_sl.ClientQuicLayer, "receive_handshake_data", None)))
+    _need(report, "UDPLayer.start", lambda: callable(getattr(udp_mod.UDPLayer, "start", None)))
+
     from mitmproxy.proxy import commands, events
     _need(report, "events.DataReceived", lambda: hasattr(events, "DataReceived"))
     _need(report, "commands.Log", lambda: hasattr(commands, "Log"))

@@ -404,6 +404,11 @@ def upstream_tls_text(message, host, cli="rivis", ip=None):
 
 _install_interim_drop()
 _install_error_text()
+try:  # HTTP/3 ignore pass-through (proxy_quic): same process as mitmdump; skip when imported without mitmproxy
+    from proxy_quic import install as _install_quic_passthrough
+    _install_quic_passthrough()
+except ImportError:
+    pass
 
 
 class ProxyRules:
@@ -1309,6 +1314,14 @@ class ProxyRules:
             flow.error.msg = text             # the Error tab says the same as the app's 502 page
         if self._hits_unflushed:
             self._flush_hits_soon()                      # request-side rule on an upstream failure
+
+    def next_layer(self, nextlayer):
+        """Log once when NextLayer picks UDP pass-through for likely HTTP/3 (see proxy_quic)."""
+        try:
+            from proxy_quic import ProxyQuic
+        except ImportError:
+            return
+        ProxyQuic.next_layer(self, nextlayer)
 
 
 addons = [ProxyRules()]
