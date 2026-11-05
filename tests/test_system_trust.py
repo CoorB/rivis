@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -19,6 +20,7 @@ import harness
 
 sys.path.insert(0, os.path.join(harness.REPO, "addons"))
 import system_trust  # noqa: E402
+from upstream import _make_upstream_cert  # noqa: E402
 
 
 class TrustedByThisMac(unittest.TestCase):
@@ -40,7 +42,7 @@ class TrustedByThisMac(unittest.TestCase):
                             "-out", extra, "-days", "2", "-subj", "/CN=rivis-corp-test-root"], check=True, capture_output=True)
             out = os.path.join(d, "bundle.pem")
             cp = subprocess.run(["/usr/bin/python3", "-I", os.path.join(harness.REPO, "addons", "system_trust.py"),
-                                 out, extra], capture_output=True, text=True)
+                                 out, extra], capture_output=True, text=True, timeout=60)
             self.assertEqual(cp.returncode, 0, cp.stderr)
             roots, added = map(int, cp.stdout.split())
             self.assertGreater(roots, 50)
@@ -49,6 +51,24 @@ class TrustedByThisMac(unittest.TestCase):
                 body = fh.read()
                 self.assertIn(ex.read().strip(), body)
             self.assertEqual(oct(os.stat(out).st_mode & 0o777), "0o600")
+
+    def test_a_hung_security_command_cannot_stall_the_build(self):
+        # /usr/bin/security waiting on a keychain or authorization dialog never returns. Without a short bound on
+        # every call, `rivis start --verify-upstream` and this module's live build sit until the dialog is dismissed
+        # (the full suite hung here for hours). A stuck binary must fail the build in seconds, not hang the runner.
+        with tempfile.TemporaryDirectory() as d:
+            fake = os.path.join(d, "security")
+            with open(fake, "w") as fh:
+                fh.write("#!/bin/sh\nexec sleep 120\n")
+            os.chmod(fake, 0o755)
+            out = os.path.join(d, "bundle.pem")
+            with mock.patch.object(system_trust, "SECURITY", fake):
+                t0 = time.time()
+                rc = system_trust.main(["system_trust.py", out])
+                elapsed = time.time() - t0
+            self.assertEqual(rc, 1)
+            self.assertFalse(os.path.exists(out))
+            self.assertLess(elapsed, 15, "hung security blocked for %.1fs" % elapsed)
 
 
 class RootStoreAsMacOSTrustsIt(unittest.TestCase):
@@ -126,31 +146,41 @@ class RootStoreAsMacOSTrustsIt(unittest.TestCase):
     def test_concurrent_builds_leave_a_complete_unmixed_bundle(self):
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "bundle.pem")
-            barrier = threading.Barrier(2)
+            barrier = threading.Barrier(2, timeout=5)
             errors = []
 
             def roots(tag):
                 return ["-----BEGIN CERTIFICATE-----\n%s%d\n-----END CERTIFICATE-----" % (tag, i)
                         for i in range(25)]
 
-            def run(tag):
-                def system_roots(_wd):
-                    barrier.wait()
-                    return roots(tag)
+            original = system_trust.system_roots
+            local = threading.local()
 
+            def system_roots(_wd):
+                barrier.wait()
+                return roots(local.tag)
+
+            def run(tag):
+                local.tag = tag
                 try:
-                    with mock.patch.object(system_trust, "system_roots", system_roots), \
-                            mock.patch.object(system_trust, "added_anchors", return_value=[]):
-                        system_trust.build(out)
+                    system_trust.build(out)
                 except Exception as exc:
                     errors.append(exc)
 
-            threads = [threading.Thread(target=run, args=(tag,)) for tag in ("AAA", "BBB")]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join(5.0)
+            # Patch once, here: mock.patch is not thread-safe. Two threads patching the same attribute could restore
+            # each other's stand-in, leaving the barrier-waiting system_roots on the module, and the next test that
+            # built a root store waited on that barrier for ever (the suite hung for hours in this module).
+            # daemon: a stuck barrier must not keep the pytest process alive after join times out.
+            threads = [threading.Thread(target=run, args=(tag,), daemon=True) for tag in ("AAA", "BBB")]
+            with mock.patch.object(system_trust, "system_roots", system_roots), \
+                    mock.patch.object(system_trust, "added_anchors", return_value=[]):
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join(5.0)
+            self.assertIs(system_trust.system_roots, original, "a stand-in system_roots leaked onto the module")
             self.assertEqual(errors, [])
+            self.assertTrue(all(not t.is_alive() for t in threads))
             body = open(out).read()
             self.assertGreaterEqual(body.count("BEGIN CERTIFICATE"), 20)
             self.assertTrue(
@@ -195,7 +225,8 @@ class CorporateRootTrusted(unittest.TestCase):
     def setUpClass(cls):
         cls.suite = harness.Suite.get()
         cls.up = cls.suite.upstream()                   # its self-signed cert stands in for the corporate root
-        cls.other = cls.suite.upstream()                # a second server nobody trusts
+        # Suite reuses one cert across upstreams; this case needs a second, untrusted identity.
+        cls.other = cls.suite.upstream(cert_key=_make_upstream_cert(cls.suite.root))
         cls.inst = harness.Instance(cls.suite, cls.__name__.lower(), start_args=("--verify-upstream",),
                                     extra_env={"RIVIS_EXTRA_TRUST": cls.up.cert}).start()
 

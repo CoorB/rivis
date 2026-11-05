@@ -17,16 +17,30 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 SECURITY = "/usr/bin/security"
 SYSTEM_ROOTS = "/System/Library/Keychains/SystemRootCertificates.keychain"
 SYSTEM_KEYCHAIN = "/Library/Keychains/System.keychain"
 PEM = re.compile(r"-----BEGIN CERTIFICATE-----\s.*?-----END CERTIFICATE-----", re.S)
 HASHED = re.compile(r"SHA-1 hash: ([0-9A-F]+)\s+(-----BEGIN CERTIFICATE-----\s.*?-----END CERTIFICATE-----)", re.S)
+# Bound every /usr/bin/security call: a keychain/authorization dialog waits forever, and under suite load
+# verify-cert can sit just under a long timeout for every cert in the keychain (hours). Keep calls short;
+# build() also has a wall budget so a long list cannot accumulate.
+BUILD_BUDGET_SEC = 30
+_FIND_TIMEOUT = 8
+_QUICK_TIMEOUT = 3
 
 
-def _security(*args, timeout=20):
-    return subprocess.run([SECURITY] + list(args), capture_output=True, text=True, timeout=timeout)
+def _security(*args, timeout=None):
+    if timeout is None:
+        timeout = _FIND_TIMEOUT if args and args[0] == "find-certificate" else _QUICK_TIMEOUT
+    try:
+        # stdin closed: a password prompt on a TTY/pipe nobody answers is another forever-wait.
+        return subprocess.run([SECURITY] + list(args), capture_output=True, text=True, timeout=timeout,
+                              stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess([SECURITY] + list(args), 1, "", "timeout")
 
 
 def _user_keychains():
@@ -39,10 +53,11 @@ def trusted_for_ssl(pem, workdir):
     path = os.path.join(workdir, "c.pem")
     with open(path, "w") as fh:
         fh.write(pem + "\n")
-    return _security("verify-cert", "-c", path, "-p", "ssl", "-L", "-l", "-q").returncode == 0
+    # -R offline: -L only skips fetching missing issuers; revocation checks can still phone home and stall.
+    return _security("verify-cert", "-c", path, "-p", "ssl", "-L", "-l", "-R", "offline", "-q").returncode == 0
 
 
-def added_anchors(workdir, keychains=None):
+def added_anchors(workdir, keychains=None, deadline=None):
     """Certificates outside the root store that macOS trusts for SSL (corporate / MDM / admin / user trust)."""
     keychains = [k for k in (keychains if keychains is not None else [SYSTEM_KEYCHAIN] + _user_keychains())
                  if os.path.exists(k)]
@@ -50,6 +65,8 @@ def added_anchors(workdir, keychains=None):
         return []
     seen, kept = set(), []
     for sha1, pem in HASHED.findall(_security("find-certificate", "-a", "-Z", "-p", *keychains).stdout):
+        if deadline is not None and time.time() > deadline:
+            break
         if sha1 in seen:
             continue
         seen.add(sha1)
@@ -113,11 +130,12 @@ def system_roots(workdir):
 
 
 def build(out, extras=()):
+    deadline = time.time() + BUILD_BUDGET_SEC
     with tempfile.TemporaryDirectory() as workdir:
         roots = system_roots(workdir)
         if len(roots) < 20:                   # not macOS, or the root store could not be read: keep mitmproxy's list
             return None
-        added = added_anchors(workdir)
+        added = added_anchors(workdir, deadline=deadline)
     for extra in extras:
         with open(extra) as fh:
             added += PEM.findall(fh.read())
