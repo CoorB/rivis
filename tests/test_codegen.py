@@ -237,6 +237,76 @@ class QuotesAndUnicode(unittest.TestCase):
 
 
 
+class AtPrefixedBodyIsLiteral(unittest.TestCase):
+    """curl --data-binary and wget --body-data treat a leading @ as a file path; a copied call must not."""
+
+    def test_curl_uses_data_raw_so_at_body_is_not_a_file(self):
+        body = b"@secret.txt"
+        out = generate(req("POST", "https://h.test/upload", body=body), "curl", False)
+        self.assertIn("--data-raw ", out)
+        self.assertNotIn("--data-binary ", out)
+        argv = shlex.split(out.replace("\\\n", " "))
+        self.assertEqual(argv[argv.index("--data-raw") + 1], "@secret.txt")
+        # @- alone is stdin for --data-binary; it must stay a literal too
+        dash = generate(req("POST", "https://h.test/", body=b"@-"), "curl", False)
+        self.assertIn("--data-raw ", dash)
+        self.assertEqual(shlex.split(dash.replace("\\\n", " "))[
+            shlex.split(dash.replace("\\\n", " ")).index("--data-raw") + 1], "@-")
+
+    def test_curl_at_body_sends_literal_bytes_when_executed(self):
+        # Prove the generated command does not open a same-named file in cwd (the old --data-binary path did).
+        import socket
+        import threading
+        import time
+        body = b"@secret.txt"
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "secret.txt"), "w", encoding="utf-8") as fh:
+                fh.write("FILECONTENTS")
+            got = {}
+            def serve():
+                sock = socket.socket()
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(("127.0.0.1", 0))
+                got["port"] = sock.getsockname()[1]
+                sock.listen(1)
+                got["ready"] = True
+                conn, _ = sock.accept()
+                conn.settimeout(2)
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    data += conn.recv(4096)
+                head, _, rest = data.partition(b"\r\n\r\n")
+                length = 0
+                for line in head.split(b"\r\n"):
+                    if line.lower().startswith(b"content-length:"):
+                        length = int(line.split(b":")[1])
+                while len(rest) < length:
+                    rest += conn.recv(4096)
+                got["body"] = rest[:length]
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                conn.close()
+                sock.close()
+            threading.Thread(target=serve).start()
+            while not got.get("ready"):
+                time.sleep(0.01)
+            cmd = generate(req("POST", "http://127.0.0.1:%d/" % got["port"], body=body), "curl", False)
+            subprocess.run(["bash", "-c", cmd], cwd=d, capture_output=True, timeout=5)
+            time.sleep(0.05)
+            self.assertEqual(got.get("body"), body)
+
+    def test_wget_at_body_uses_temp_file_not_body_data(self):
+        out = generate(req("POST", "https://h.test/", body=b"@secret.txt"), "wget", False)
+        self.assertIn("--body-file=", out)
+        self.assertNotIn("--body-data=", out)
+        self.assertIn("mktemp", out)
+        self.assertIn(shlex.quote("@secret.txt"), out)
+
+    def test_non_at_curl_body_still_uses_data_binary(self):
+        out = generate(req("POST", "https://h.test/", body=b"hello"), "curl", False)
+        self.assertIn("--data-binary ", out)
+        self.assertNotIn("--data-raw ", out)
+
+
 class Latin1JsonStillMasksSecrets(unittest.TestCase):
     """A body that is valid Latin-1 but not UTF-8 used to skip the redactor and ship the secret inside base64."""
 

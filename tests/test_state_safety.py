@@ -118,6 +118,10 @@ class LogsAndReports(unittest.TestCase):
                 fh.write('token=%s Authorization: Bearer %s home=%s\n' % (secret, jwt, home))
             with open(os.path.join(logs, "android-setup.log"), "w", encoding="utf-8") as fh:
                 fh.write('step 4/5: Downloads; token=%s\n' % secret)
+            with open(os.path.join(logs, "mitmweb.log"), "w", encoding="utf-8") as fh:
+                fh.write("Loading script failed: token=%s\n" % secret)
+            with open(os.path.join(state, "last-start-32002"), "w", encoding="utf-8") as fh:
+                fh.write("START_PORT=32001\nSTART_WEB_PORT=32002\nSTART_ARGS=(--project default start --background)\n")
             os.makedirs(os.path.join(state, "projects", "default", "sessions"), exist_ok=True)
             with open(os.path.join(state, "web-token"), "w") as fh:
                 fh.write("must-never-be-read")
@@ -131,12 +135,63 @@ class LogsAndReports(unittest.TestCase):
                                  "--port", "32001", "--web-port", "32002", "--script-dir", os.path.join(state, "scripts"),
                                  "--output", output])
             with zipfile.ZipFile(output) as archive:
-                self.assertEqual(set(archive.namelist()), {"manifest.json", "versions.txt", "doctor.txt", "logs.txt", "android-setup.log", "README.txt"})
+                self.assertEqual(set(archive.namelist()), {
+                    "manifest.json", "versions.txt", "doctor.txt", "logs.txt", "mitmweb.log",
+                    "last-start.txt", "android-setup.log", "README.txt"})
                 data = b"\n".join(archive.read(name) for name in archive.namelist()).decode("utf-8")
+                self.assertIn("Loading script failed", archive.read("mitmweb.log").decode("utf-8"))
+                self.assertIn("START_PORT=32001", archive.read("last-start.txt").decode("utf-8"))
+                self.assertIn("configured proxy port 32001, web port 32002",
+                              archive.read("versions.txt").decode("utf-8"))
             for forbidden in (secret, jwt, "must-never-be-read", "must-never-be-read-flow", home):
                 self.assertNotIn(forbidden, data)
             self.assertIn("[REDACTED]", data)
             self.assertIn('step 4/5: Downloads', data)
+
+    def test_bug_report_redacts_pem_passphrase_and_bootstrap(self):
+        # A log that somehow carries a private key, a PKCS#12 passphrase, or the UI bootstrap value
+        # used to ship them verbatim in the zip testers are asked to attach.
+        lines = [
+            "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcLEAKKEYMATERIAL\n-----END PRIVATE KEY-----",
+            "openssl: passphrase='MyP@ss-Leak99'",
+            'web-bootstrap=BOOTSTRAPSECRETVALUE12',
+            '"passphrase": "QuotedPassLeak77"',
+        ]
+        out = bug_report.redact("\n".join(lines), None)
+        for marker in ("LEAKKEYMATERIAL", "MyP@ss-Leak99", "BOOTSTRAPSECRETVALUE12", "QuotedPassLeak77"):
+            self.assertNotIn(marker, out, out)
+        self.assertIn("BEGIN PRIVATE KEY", out)
+        self.assertIn("[REDACTED]", out)
+
+    def test_bug_report_tolerates_absent_unreadable_and_huge_inputs(self):
+        with tempfile.TemporaryDirectory() as root:
+            state = os.path.join(root, "state")
+            logs = os.path.join(state, "logs")
+            os.makedirs(logs)
+            # enormous rivis.log: only the tail ships
+            with open(os.path.join(logs, "rivis.log"), "wb") as fh:
+                fh.write(b"OLD\n" + b"x" * (bug_report.MAX_LOG_BYTES + 50) + b"\nTAIL-MARKER\n")
+            # unreadable mitmweb.log must not abort the bundle
+            mitm = os.path.join(logs, "mitmweb.log")
+            with open(mitm, "w", encoding="utf-8") as fh:
+                fh.write("should-be-skipped\n")
+            os.chmod(mitm, 0)
+            output = os.path.join(root, "report.zip")
+            shutil.copy(os.path.join(os.path.dirname(bug_report.HERE), "product.json"), root)
+            try:
+                with mock.patch.object(bug_report, "ROOT", root), mock.patch.object(bug_report, "device_names", return_value=[]), \
+                        mock.patch.object(bug_report, "command", side_effect=[(0, "{}"), (0, "m"), (0, "n")]):
+                    bug_report.main(["--state-root", state, "--project", "default", "--rules", "r", "--confdir", root,
+                                     "--port", "1", "--web-port", "2", "--script-dir", root, "--output", output])
+                with zipfile.ZipFile(output) as archive:
+                    logs_txt = archive.read("logs.txt").decode("utf-8", "replace")
+                    self.assertIn("TAIL-MARKER", logs_txt)
+                    self.assertNotIn("OLD\n", logs_txt)
+                    self.assertNotIn("should-be-skipped", archive.read("mitmweb.log").decode("utf-8", "replace"))
+                    self.assertEqual(archive.read("last-start.txt").decode("utf-8").strip(), "")
+                    self.assertEqual(archive.read("android-setup.log").decode("utf-8"), "")
+            finally:
+                os.chmod(mitm, 0o600)
 
 
     def test_bundle_masks_the_har_redactors_field_names_and_device_names(self):

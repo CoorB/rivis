@@ -22,9 +22,14 @@ import proxy_redact
 
 MAX_LOG_BYTES = 256 * 1024
 QUOTED_SECRET = re.compile(
-    r'(?i)(["\'](?:authorization|access_token|refresh_token|token|password|secret|api[_-]?key)["\']\s*:\s*["\'])(.*?)(["\'])')
+    r'(?i)(["\'](?:authorization|access_token|refresh_token|token|password|passphrase|secret|api[_-]?key)["\']\s*:\s*["\'])(.*?)(["\'])')
 QUERY_SECRET = re.compile(r'(?i)([?&](?:access_token|refresh_token|token|password|secret|api[_-]?key)=)([^&\s]+)')
 BEARER = re.compile(r'(?i)(bearer\s+)([^\s,;]+)')
+# PEM private key material (client cert / CA key dump) must never leave the machine in a support zip
+PEM_PRIVATE = re.compile(
+    r"-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----.*?-----END(?: [A-Z0-9]+)? PRIVATE KEY-----", re.DOTALL)
+PASS_PHRASE = re.compile(r'(?i)(passphrase\s*[=:]\s*)([\'"]?)([^\'"\s,;]+)([\'"]?)')
+WEB_BOOTSTRAP = re.compile(r'(?i)(web-bootstrap\s*[=:]\s*)(\S+)')
 IPV4 = re.compile(r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])')
 IPV6 = re.compile(r'(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f:%]+(?![\w:])')
 
@@ -53,9 +58,12 @@ def redact(text, home, devices=()):
     text = proxy_redact._loose(text)       # text-level pass: keeps doctor.txt and the logs laid out as they were
     for i, name in enumerate(devices, 1):
         text = text.replace(name, "<device %d>" % i)
+    text = PEM_PRIVATE.sub("-----BEGIN PRIVATE KEY-----\n[REDACTED]\n-----END PRIVATE KEY-----", text)
     text = QUOTED_SECRET.sub(r"\1[REDACTED]\3", text)
     text = QUERY_SECRET.sub(r"\1[REDACTED]", text)
     text = BEARER.sub(r"\1[REDACTED]", text)
+    text = PASS_PHRASE.sub(r"\1\2[REDACTED]\4", text)
+    text = WEB_BOOTSTRAP.sub(r"\1[REDACTED]", text)
     def hide_lan(match):
         try:
             address = ipaddress.ip_address(match.group())
@@ -77,9 +85,9 @@ def command(args, timeout=20):
         return 127, "%s: %s" % (type(exc).__name__, exc)
 
 
-def last_logs(log_dir):
+def last_named_logs(log_dir, names):
     chunks = []
-    for name in ("rivis.log.3", "rivis.log.2", "rivis.log.1", "rivis.log"):
+    for name in names:
         path = os.path.join(log_dir, name)
         try:
             with open(path, "rb") as fh:
@@ -90,12 +98,40 @@ def last_logs(log_dir):
     return "\n".join(chunks)[-MAX_LOG_BYTES:]
 
 
+def last_logs(log_dir):
+    return last_named_logs(log_dir, ("rivis.log.3", "rivis.log.2", "rivis.log.1", "rivis.log"))
+
+
+def last_mitmweb(log_dir):
+    # Startup and add-on load failures land here before ProxyOperability attaches rivis.log
+    return last_named_logs(log_dir, ("mitmweb.log.3", "mitmweb.log.2", "mitmweb.log.1", "mitmweb.log"))
+
+
 def last_android_setup(path):
     try:
         with open(path, "rb") as fh:
             return fh.read()[-MAX_LOG_BYTES:].decode("utf-8", "replace")
     except OSError:
         return ""
+
+
+def last_start_files(state_root):
+    """How the proxy was last started (ports and argv) — needed when doctor sees a free port that 'should' be ours."""
+    try:
+        names = sorted(n for n in os.listdir(state_root)
+                       if n == "last-start" or n.startswith("last-start-"))
+    except OSError:
+        return ""
+    chunks = []
+    for name in names:
+        path = os.path.join(state_root, name)
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()[-MAX_LOG_BYTES:]
+        except OSError:
+            continue
+        chunks.append("===== %s =====\n%s" % (name, data.decode("utf-8", "replace")))
+    return "\n".join(chunks)[-MAX_LOG_BYTES:]
 
 
 def main(argv=None):
@@ -132,6 +168,7 @@ def main(argv=None):
         except OSError:
             continue
 
+    log_dir = os.path.join(args.state_root, "logs")
     manifest = {
         "bundle_schema_version": 1,
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -139,9 +176,10 @@ def main(argv=None):
         "product_version": product_version,
         "project": args.project,
         "doctor_exit": doctor_rc,
-        "contents": ["manifest.json", "versions.txt", "doctor.txt", "logs.txt", "android-setup.log", "README.txt"],
+        "contents": ["manifest.json", "versions.txt", "doctor.txt", "logs.txt", "mitmweb.log",
+                     "last-start.txt", "android-setup.log", "README.txt"],
         "excluded": ["captured flows", "web-token", "web-bootstrap", "composer variables", "request/response bodies",
-                     "simulator and emulator names"],
+                     "simulator and emulator names", "CA and client-certificate private keys"],
     }
     versions = "\n".join((
         "%s %s" % (product.get("name"), product_version),
@@ -149,13 +187,16 @@ def main(argv=None):
         "OS " + platform.platform(),
         "mitmweb (exit %d): %s" % (mitm_rc, mitm_version),
         "Node (exit %d): %s" % (node_rc, node_version),
+        "configured proxy port %s, web port %s" % (args.port, args.web_port),
     )) + "\n"
     contents = {
         "manifest.json": json.dumps(manifest, indent=2) + "\n",
         "versions.txt": versions,
         "doctor.txt": doctor_output + "\n",
-        "logs.txt": last_logs(os.path.join(args.state_root, "logs")) + "\n",
-        "android-setup.log": last_android_setup(os.path.join(args.state_root, "logs", "android-setup.log")),
+        "logs.txt": last_logs(log_dir) + "\n",
+        "mitmweb.log": last_mitmweb(log_dir) + "\n",
+        "last-start.txt": last_start_files(args.state_root) + "\n",
+        "android-setup.log": last_android_setup(os.path.join(log_dir, "android-setup.log")),
         "README.txt": "Redacted Rivis diagnostics. This bundle intentionally contains no captured flows or tokens.\n",
     }
 

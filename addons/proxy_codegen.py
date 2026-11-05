@@ -102,7 +102,9 @@ def _curl(method, url, headers, raw, text, binary):
     for key, value in headers:
         parts.append("-H " + shlex.quote(key + ": " + value))
     if raw:
-        parts.append("--data-binary " + (body_ref if binary else shlex.quote(text)))
+        # --data-binary treats a leading @ as "read this file" (and @- as stdin); --data-raw sends the bytes
+        flag = "--data-binary " if binary or not text.startswith("@") else "--data-raw "
+        parts.append(flag + (body_ref if binary else shlex.quote(text)))
     parts.append(shlex.quote(url))
     return prefix + " \\\n  ".join(parts)
 
@@ -120,18 +122,26 @@ def _httpie(method, url, headers, raw, text, binary):
 def _wget(method, url, headers, raw, text, binary):
     lines = []
     body_arg = []
+    cleanup = False
     if binary:
         encoded = base64.b64encode(raw).decode("ascii")
         lines = ["# Binary body: decoded into a temporary file.", "body_file=$(mktemp)",
                  "printf '%%s' %s | base64 -d > \"$body_file\"" % shlex.quote(encoded)]
         body_arg = ['--body-file="$body_file"']
+        cleanup = True
+    elif raw and text.startswith("@"):
+        # wget --body-data=@path reads that file; write the literal body into a temp file instead
+        lines = ["# Body starts with @; wget would read it as a file path.", "body_file=$(mktemp)",
+                 "printf '%%s' %s > \"$body_file\"" % shlex.quote(text)]
+        body_arg = ['--body-file="$body_file"']
+        cleanup = True
     elif raw:
         body_arg = ["--body-data=" + shlex.quote(text)]
     parts = ["wget --method=" + shlex.quote(method)]
     parts += ["--header=" + shlex.quote(key + ": " + value) for key, value in headers]
     parts += body_arg + ["-O - " + shlex.quote(url)]
     lines.append(" \\\n  ".join(parts))
-    if binary:
+    if cleanup:
         lines.append('rm -f "$body_file"')
     return "\n".join(lines)
 
