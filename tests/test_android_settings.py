@@ -29,6 +29,46 @@ class Api36PickerFixture(unittest.TestCase):
         self.assertEqual(android_picker.choose(downloads, 'file'), '500 350')
 
 
+class NoEmulatorAttached(unittest.TestCase):
+    """`android off` with nothing attached stopped at "no running emulator", which reads like a dead end: the
+    certificate and the proxy are still on the emulator, and only a running one can be cleaned."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.suite = harness.Suite.get()
+
+    def setUp(self):
+        self.home = self.suite.new_home('no-emulator')
+        adb = os.path.join(self.home, 'adb')
+        with open(adb, 'w') as fake:
+            fake.write('#!/bin/sh\n[ "$1" = devices ] && echo "List of devices attached"\nexit 0\n')
+        os.chmod(adb, 0o755)
+        self.env = self.suite.cli_env(self.home, ADB=adb)
+
+    def run_android(self, *args):
+        # every `rivis android` run is piped through the diagnostic logger, which merges stderr into stdout
+        result = self.suite.rivis('android', *args, home=self.home, env=self.env)
+        return result.returncode, result.stdout + result.stderr
+
+    def test_off_says_nothing_was_undone_and_how_to_finish(self):
+        code, output = self.run_android('off')
+        self.assertNotEqual(code, 0)
+        self.assertIn('no running emulator', output)
+        self.assertIn('Nothing was undone', output)
+        self.assertIn('android off', output)                   # the command to run once it is up
+
+    def test_off_all_gives_the_same_advice(self):
+        code, output = self.run_android('off', '--all')
+        self.assertNotEqual(code, 0)
+        self.assertIn('Nothing was undone', output)
+
+    def test_on_keeps_the_short_message(self):
+        code, output = self.run_android('on')
+        self.assertNotEqual(code, 0)
+        self.assertIn('no running emulator', output)
+        self.assertNotIn('Nothing was undone', output)
+
+
 class SettingsRoute(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -1089,6 +1089,19 @@ cmd_compose() {
 }
 
 # ───────────────────────── android ─────────────────────────
+# "nothing is attached" is a dead end only for `on`. For `off` it means the certificate and the proxy are still on
+# an emulator that is not running: they live on the device, so they can only be taken off while it is up. A user
+# whose terminal died mid-setup was told "no running emulator" and left to guess that.
+no_device_msg() {
+  local base="no running emulator (adb devices). Physical devices need a separate approval."
+  [ "${1:-}" = off ] || { printf '%s' "$base"; return; }
+  printf '%s' "$base
+  Nothing was undone: the certificate and the proxy setting are on the emulator. Start it (Android Studio, or
+  emulator -avd NAME), then run '$CLI android off' again. An emulator left on the temporary setup boot drops
+  Magisk and the system-store copy as soon as it next starts normally; the user-store certificate and the proxy
+  stay until this command removes them."
+}
+
 pick_serial() {
   local s devices q1 q2
   devices=$("$ADB" devices) || die "adb devices failed"
@@ -1096,7 +1109,7 @@ pick_serial() {
   else
     s=$(printf '%s\n' "$devices" | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
   fi
-  [ -z "$s" ] && die "no running emulator (adb devices). Physical devices need a separate approval."
+  [ -z "$s" ] && die "$(no_device_msg "${1:-}")"
   [ "$(echo "$s" | wc -l | tr -d ' ')" -gt 1 ] && die "several emulators running — pass -s SERIAL: $(echo $s)"
   printf '%s\n' "$devices" | awk -v serial="$s" '$1 == serial && $2 == "device" {found=1} END {exit !found}' \
     || die "$s: not an attached device (adb devices)"
@@ -1383,7 +1396,7 @@ cmd_android() {
   if [ "$all" = 1 ]; then
     [ -z "${SERIAL:-}" ] || die "android: pass -s or --all, not both"
     local e list failed=""; list=$("$ADB" devices | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
-    [ -n "$list" ] || die "no running emulator (adb devices)"
+    [ -n "$list" ] || die "$(no_device_msg "$action")"
     for e in $list; do
       ( SERIAL="$e"; cmd_android "$action" $([ "$auto_ui" = 0 ] && echo --manual) $([ "$proxy_only" = 1 ] && echo --proxy-only) $([ "$system" = 1 ] && echo --system) $consent $strict ) \
         || failed="$failed $e"
@@ -1392,7 +1405,7 @@ cmd_android() {
     [ -z "$failed" ] || die "android $action: not done on$failed (see above)"
     return
   fi
-  local s; s=$(pick_serial) || exit 1
+  local s; s=$(pick_serial "$action") || exit 1
   [ "$action" = on ] && ensure_ca
   local h=""; [ -f "$CA_PEM" ] && h=$(ca_hash)
   # The user store is sufficient for debug builds that trust user CAs; no system remount is used.
