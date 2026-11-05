@@ -301,6 +301,18 @@ en9: flags=8863<UP> mtu 1500
             with open(path) as fh:
                 self.assertEqual(json.load(fh)["devices"], [])
 
+    def test_non_numeric_last_seen_does_not_crash_seen_or_keep_the_device_forever(self):
+        # A hand-edited (or otherwise corrupt) last_seen string used to TypeError in seen() on the next
+        # allowed call, and the TTL filter kept the row forever because it was not an int/float.
+        path = os.path.join(Suite.get().new_home("lan-bad-seen"), "lan-devices.json")
+        with open(path, "w") as fh:
+            json.dump({"devices": [{"ip": "192.168.1.9", "name": "Tab", "added": 1,
+                                    "last_seen": "yesterday", "mac": None}]}, fh)
+        d = proxy_lan.Devices(path)
+        with patch.object(proxy_lan.time, "time", return_value=2_000_000):
+            d.seen("192.168.1.9")                      # must not raise
+            self.assertIsNone(d.get("192.168.1.9"), "a non-numeric last_seen must not keep the allow-list entry forever")
+
 
 DECODER = None
 if sys.platform == "darwin" and shutil.which("xcrun"):

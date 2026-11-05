@@ -18,7 +18,10 @@ def main():
     while selector.get_map():
         left = end - time.monotonic()
         if left <= 0:
-            os.killpg(proc.pid, signal.SIGKILL)
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass                      # child exited in the same instant as the deadline
             proc.wait()
             return 124
         for key, _ in selector.select(timeout=min(left, 0.1)):

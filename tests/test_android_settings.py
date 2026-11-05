@@ -28,6 +28,13 @@ class Api36PickerFixture(unittest.TestCase):
         self.assertEqual(android_picker.choose(recents, 'file'), '')
         self.assertEqual(android_picker.choose(downloads, 'file'), '500 350')
 
+    def test_empty_or_garbage_uiautomator_dump_is_no_match_not_a_crash(self):
+        # Device gone mid-flow: adb returns an empty dump; ParseError used to abort the setup with a traceback.
+        for junk in ('', '<', 'not xml', '\ufeff'):
+            self.assertEqual(android_picker.choose(junk, 'file'), '')
+            self.assertEqual(android_picker.choose(junk, 'drawer'), '')
+            self.assertEqual(android_picker.choose(junk, 'downloads'), '')
+
 
 class NoEmulatorAttached(unittest.TestCase):
     """`android off` with nothing attached stopped at "no running emulator", which reads like a dead end: the
@@ -196,6 +203,32 @@ class SettingsRoute(unittest.TestCase):
         self.assertNotIn('input swipe', check, 'the trust check searched for a CA entry that is not on screen')
         self.assertIn('step 5/5', result.stdout)
         self.assertEqual(self.proxy(), '10.0.2.2:' + self.env['RIVIS_PORT'])
+
+
+class SettingsTimeoutHelper(unittest.TestCase):
+    def test_deadline_when_killpg_finds_no_process_still_returns_124(self):
+        """The child can exit in the same instant as the deadline; killpg then raises ProcessLookupError."""
+        import signal
+        from unittest import mock
+        sys.path.insert(0, os.path.join(harness.REPO, 'addons'))
+        import android_settings_timeout as timeout_mod
+        cli = os.path.join(harness.Suite.get().new_home('settings-timeout'), 'child.sh')
+        with open(cli, 'w') as fh:
+            fh.write('#!/bin/bash\nexec sleep 60\n')
+        os.chmod(cli, 0o755)
+        real_killpg = os.killpg
+
+        def kill_then_gone(pid, sig):
+            try:
+                real_killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            raise ProcessLookupError()
+
+        with mock.patch.object(timeout_mod.os, 'killpg', side_effect=kill_then_gone):
+            with mock.patch.object(sys, 'argv', ['android_settings_timeout.py', '0.05', cli, 'serial', 'step']):
+                rc = timeout_mod.main()
+        self.assertEqual(rc, 124)
 
 
 if __name__ == '__main__':

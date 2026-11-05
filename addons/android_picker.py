@@ -10,7 +10,10 @@ def doc_id(node, suffix=None):
 
 
 def nodes(xml):
-    return list(ET.fromstring(xml).iter('node'))
+    try:
+        return list(ET.fromstring(xml).iter('node'))
+    except ET.ParseError:
+        return []          # empty / truncated dump (device gone mid-flow): no match, not a traceback
 
 
 def center(node):

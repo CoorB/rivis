@@ -134,8 +134,9 @@ class Devices:
             self._stamp = stamp
             self._rows = self._read() if stamp else []
         now = time.time()
-        keep = [r for r in self._rows if not isinstance(r.get("last_seen"), (int, float))
-                or now - r["last_seen"] < DEVICE_TTL]
+        # Non-numeric last_seen is corrupt: drop it (fail closed) rather than keep the device forever.
+        keep = [r for r in self._rows if isinstance(r.get("last_seen"), (int, float))
+                and now - r["last_seen"] < DEVICE_TTL]
         if len(keep) != len(self._rows):
             self._write(keep)
             self._rows = keep
@@ -183,7 +184,11 @@ class Devices:
     def seen(self, ip):
         row = self.get(ip)
         now = int(time.time())
-        if row is None or (row.get("last_seen") or 0) > now - 60:
+        if row is None:
+            return
+        prev = row.get("last_seen")
+        # A non-numeric last_seen (hand-edited JSON) must not TypeError on the next allowed call.
+        if isinstance(prev, (int, float)) and prev > now - 60:
             return
         rows = [dict(r, last_seen=now) if r["ip"] == ip else r for r in self.rows()]
         self._write(rows)

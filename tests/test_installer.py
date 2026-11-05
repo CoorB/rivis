@@ -967,3 +967,21 @@ class SourceInstallLeavesOutTestArtifacts(InstallerBase):
             root = os.path.join(self.home, ".local", "rivis", d)
             self.assertTrue(os.path.isfile(os.path.join(root, "rivis")), d)
             self.assertFalse(os.path.exists(os.path.join(root, "tests", ".artifacts")), d)
+
+
+class UnwritableDestination(InstallerBase):
+    def test_unwritable_install_root_fails_without_a_broken_launcher(self):
+        """~/.local/rivis exists but is not writable: without set -e the installer kept going, printed success,
+        and left ~/.local/bin/rivis pointing at a missing current/."""
+        root = os.path.join(self.home, ".local", "rivis")
+        os.makedirs(root)
+        os.chmod(root, 0o555)
+        self.addCleanup(lambda: os.chmod(root, 0o755) if os.path.isdir(root) else None)
+        shutil.copytree(self.suite.ca_dir, os.path.join(self.home, ".mitmproxy"))
+        cp = self.install("--yes", "--skip-local-capture", "--no-rc")
+        self.assertNotEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertRegex(cp.stdout + cp.stderr, r"writable|Permission denied|cannot install",
+                         cp.stdout + cp.stderr)
+        link = os.path.join(self.home, ".local", "bin", "rivis")
+        self.assertFalse(os.path.lexists(link), "a broken launcher was left behind after a failed install")
+        self.assertFalse(os.path.exists(os.path.join(root, "current")))
