@@ -80,7 +80,7 @@ def _value(obj, depth=0):
             return [obj[0], REDACTED if obj[1] not in (None, "") else obj[1]]
         return [_value(v, depth) for v in obj]
     if isinstance(obj, str):
-        stripped = obj.strip()
+        stripped = obj.strip().lstrip("\ufeff")
         if depth < 4 and stripped[:1] in ("{", "[") and len(stripped) <= 2_000_000:
             try:   # JSON sent as a string inside JSON (echoed bodies, wrapped payloads): redact it by field name too
                 return json.dumps(_value(json.loads(stripped), depth + 1), ensure_ascii=False)
@@ -182,6 +182,10 @@ def text(body, mime=""):
     """Redact a text body: JSON by structure, form-encoded by field name, anything else by JWT shape."""
     if not body:
         return body
+    # UTF-8 BOM (U+FEFF): some servers and export tools prefix JSON with it. json.loads rejects it, so without
+    # stripping, only the string-value regex path runs and numeric password/otp/pin fields leak into the HAR.
+    if body.startswith("\ufeff"):
+        body = body[1:]
     stripped = body.lstrip()
     if stripped[:1] in ("{", "["):
         try:
@@ -303,7 +307,7 @@ def raw_text(raw):
                 ctype = m.group(2)
             if secret_header(m.group(1)):
                 line = "%s: %s%s" % (m.group(1), REDACTED, line[len(bare):])
-        elif not in_head and bare.lstrip()[:1] in ("{", "["):
+        elif not in_head and bare.lstrip().lstrip("\ufeff")[:1] in ("{", "["):
             line = text(bare, ctype) + line[len(bare):]       # a JSON body line: redact by field name too
         out.append(line)
     return _loose("".join(out))

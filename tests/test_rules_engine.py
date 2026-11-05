@@ -129,6 +129,15 @@ class Actions(LiveCase):
         r = self.fetch("/echo")
         self.assertEqual((r.status, r.text, r.header("content-type")), (200, "plain", "text/plain"))
 
+    def test_respond_json_null_false_and_true_bodies(self):
+        # Fixed reply Content-Type defaults to application/json. A JSON null/false/true body in rules.json must be
+        # encoded as JSON (null/false/true), not Python's str() ("None"/"False"/"True").
+        for value, expected in ((None, b"null"), (False, b"false"), (True, b"true"), (0, b"0")):
+            self.reset_state(rules=[self.rule("r", "respond", "/echo", body=value)])
+            r = self.fetch("/echo")
+            self.assertEqual((r.status, r.body, r.header("content-type")),
+                             (200, expected, "application/json"), repr(value))
+
     def test_respond_body_file_and_binary_exact(self):
         blob = bytes(range(256)) * 40
         path = self.inst.path("blob.bin")          # inside the project: file rules are confined (F-09)

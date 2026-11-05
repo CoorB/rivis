@@ -173,6 +173,23 @@ class PilotReview(unittest.TestCase):
         self.assertNotIn("SECRET", R.text("GET /cb?code=SECRET HTTP/1.1", "text/plain"))
         self.assertIn("<password><redacted></password>", R.text("<r><password>x</password></r>", "text/xml"))
 
+    def test_utf8_bom_json_numeric_secrets_are_redacted(self):
+        # Some servers/tools prefix JSON with a UTF-8 BOM. Without stripping it, structure-based redaction is skipped
+        # and only quoted string values are masked — numeric password/otp/pin leak into the HAR.
+        body = "\ufeff" + json.dumps({"password": 123456, "otp": 987654, "pin": 42, "user": "qa", "ok": True})
+        out = R.text(body, "application/json")
+        for leak in ("123456", "987654", "42"):
+            self.assertNotIn(leak, out)
+        self.assertIn("qa", out)
+        doc = R.har(har([entry(text=body)]))
+        dumped = json.dumps(doc)
+        for leak in ("123456", "987654"):
+            self.assertNotIn(leak, dumped)
+        raw = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + body
+        masked_raw = R.raw_text(raw)
+        for leak in ("123456", "987654", "42"):
+            self.assertNotIn(leak, masked_raw)
+
 
 class RoundThreeAuditShapes(unittest.TestCase):
     def test_secret_containers_variants_redirects_and_encoded_bodies(self):

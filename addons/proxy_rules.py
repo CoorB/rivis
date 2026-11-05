@@ -963,7 +963,12 @@ class ProxyRules:
             with open(os.path.expanduser(r["body_file"]), "rb") as f:
                 return f.read()
         b = r.get("body", "")
-        return (json.dumps(b) if isinstance(b, (dict, list)) else str(b)).encode()
+        if isinstance(b, (bytes, bytearray)):
+            return bytes(b)
+        if isinstance(b, str):
+            return b.encode()
+        # JSON null/false/true/numbers must stay JSON (null/false/true/0), not Python's str() (None/False/True).
+        return json.dumps(b).encode()
 
     # ── request side ─────────────────────────────────────────────
     async def request(self, flow: http.HTTPFlow):
