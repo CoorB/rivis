@@ -351,6 +351,46 @@ class KeyboardAndHeavyBodies(UiBase):
         self.assertEqual((r.status, len(r.body)), (201, 1048576), "the clipped preview replaced the binary body")
         self.assertEqual(self.errors, [])
 
+    def test_edit_and_repeat_of_a_large_body_does_not_freeze_the_page(self):
+        # Edit & Repeat used to put the request body through esc() into sheet.innerHTML. Map Local already avoided
+        # that (R6B-09); a multi-MB POST still froze the tab when opening Edit & Repeat.
+        body = "x" * (2 * 1024 * 1024)
+        self.fetch("/echo?kbretry=1", method="POST", data=body, headers={"Content-Type": "text/plain"}, timeout=60)
+        page = self.open()
+        self.select("kbretry=1")
+        page.evaluate("""() => { window.__lt = []; new PerformanceObserver((l) => l.getEntries().forEach((e) => window.__lt.push(Math.round(e.duration))))
+            .observe({ entryTypes: ['longtask'] }); }""")
+        self.P("#fab").click()
+        self.P("button[data-t=call]").click()
+        wait_for(lambda: "kbretry=1" in self.P("#main").inner_text(), 15, 0.2, "Call tab")
+        self.P("#retry").click()
+        wait_for(lambda: self.P("#rb").count() == 1 and self.P("#rb").evaluate("t => t.value.length") > 2000000, 30, 0.2, "body loaded")
+        page.wait_for_timeout(800)
+        worst = max(page.evaluate("window.__lt") or [0])
+        self.assertLess(worst, 1000, "Edit & Repeat on a 2 MB body blocked the page for %d ms" % worst)
+        # The body must not be baked into the sheet markup (that is what froze Chromium).
+        html_len = page.evaluate("document.querySelector('#proxy-panel-host').shadowRoot.getElementById('sheet').innerHTML.length")
+        self.assertLess(html_len, 50000, "body was interpolated into innerHTML (%d chars of markup)" % html_len)
+        self.assertEqual(self.errors, [])
+
+    def test_paused_form_tab_parses_json_that_starts_with_a_bom(self):
+        # paused_get returns the body via UTF-8 decode, which keeps U+FEFF. Form used JSON.parse on that string and
+        # treated a BOM-prefixed JSON object as "not a JSON object", so field editing was unavailable.
+        self.reset_state(breakpoints=[{
+            "name": "bombp", "match": r"/json/bom\?kbform", "request": False, "response": True, "enabled": True}])
+        page = self.open()
+        t, box = self.in_background("/json/bom?kbform=1")
+        self.P("#pause.open").wait_for(timeout=15000)
+        self.P("[data-psub=form]").click()
+        wait_for(lambda: self.P("#pfjson").count() == 1, 5, 0.1, "JSON form fields")
+        keys = self.P("#pfjson .hrow input").evaluate_all("els => els.filter((_,i)=>i%2===0).map(e => e.value)")
+        self.assertIn("bom_marker", keys)
+        self.assertIn("ok", keys)
+        self.P("#pskip").click()
+        t.join(20)
+        self.assertEqual(box["r"].status, 200)
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1110,6 +1110,37 @@ class SearchBarFilterDetection(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "true", out.stderr)
 
 
+class TreeWorkerBom(unittest.TestCase):
+    @harness.skip_unless(harness.node_ok(), "node not installed")
+    def test_bom_prefixed_json_parses_in_the_tree_worker(self):
+        # Mirrors addons/tree-worker.js: a UTF-8 BOM character before JSON used to make Tree say "cannot be parsed"
+        # when the body reaches the worker as text (byte BOMs are already stripped by TextDecoder in treeBody).
+        src = open(os.path.join(harness.REPO, "addons", "tree-worker.js")).read()
+        code = r"""
+const self = { onmessage: null, postMessage(m) { this.out = m; } };
+""" + src + r"""
+self.onmessage({ data: "\uFEFF" + JSON.stringify({ bom_marker: "present" }) });
+if (!self.out || self.out.error) { console.error(self.out && self.out.error); process.exit(1); }
+console.log(self.out.data.bom_marker);
+"""
+        out = harness.subprocess.run([harness.NODE, "-e", code], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "present", out.stderr)
+
+    @harness.skip_unless(harness.node_ok(), "node not installed")
+    def test_panel_json_parse_accepts_a_leading_bom(self):
+        # Format JSON / Form / HAR import / jsonCheck all used bare JSON.parse; a BOM character made a valid
+        # body look like "Not JSON" (Python's decode keeps U+FEFF; TextDecoder would have stripped a byte BOM).
+        src = open(os.path.join(harness.REPO, "addons", "panel.js")).read()
+        start = src.index("const jsonParse")
+        code = src[start:src.index(";", start) + 1]
+        out = harness.subprocess.run(
+            [harness.NODE, "-e", code + 'console.log(jsonParse("\\uFEFF"+JSON.stringify({ok:1})).ok)'],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "1", out.stderr)
+
+
 class Confinement(LiveCase):
     """Names with ../, absolute paths and symlink tricks never leave the project's state dir."""
     TRAVERSAL = ("../x", "../../x", "/etc/hosts", "/tmp/x", "a/b", "x\x00y", "x%2e%2e%2fy", "a b", "~/x", "C:\\x", "",

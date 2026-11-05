@@ -51,6 +51,8 @@
     return p[0] === "flows" && p[1] ? p[1] : null;
   };
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // UTF-8 BOM: some servers/tools prefix JSON with it; JSON.parse rejects it (same fix as HAR redaction).
+  const jsonParse = (s) => JSON.parse(String(s ?? "").replace(/^\uFEFF/, ""));
   const emptyState = (icon, title, hint) =>
     `<div class="empty">${ico(icon)}<b>${esc(title)}</b><span class="sub">${hint}</span></div>`;
   const info = (t) => `<span class="info" tabindex="0" role="img" aria-label="${esc(t)}" title="${esc(t)}">ⓘ</span>`;
@@ -684,7 +686,7 @@
   };
   const readHeaders = (idp) => [...root.getElementById(idp).querySelectorAll(".hrow")]
     .map((r) => [...r.querySelectorAll("input")].map((i) => i.value)).filter(([k]) => k.trim());
-  const jsonCheck = (ta, out) => { try { JSON.parse(ta.value); out.textContent = ta.value.trim() ? "Valid JSON" : ""; return true; } catch (x) { out.textContent = ta.value.trim() ? "Not JSON — sent as plain text" : ""; out.title = x.message; return !ta.value.trim(); } };
+  const jsonCheck = (ta, out) => { try { jsonParse(ta.value); out.textContent = ta.value.trim() ? "Valid JSON" : ""; return true; } catch (x) { out.textContent = ta.value.trim() ? "Not JSON — sent as plain text" : ""; out.title = x.message; return !ta.value.trim(); } };
 
   // F2: the call list is fetched incrementally (only what is new or changed since the last answer, plus the ids that left the
   // list), with a full download when there is no cursor yet, the proxy says so (list cleared or rebuilt) and every
@@ -1305,7 +1307,7 @@
     $("cimp").onclick = async () => {
       const file = $("chf").files[0];
       if (!file) return toast("Choose a .har file first", true);
-      let har; try { har = JSON.parse(await file.text()); } catch (e) { return toast("Not a valid HAR (JSON) file", true); }
+      let har; try { har = jsonParse(await file.text()); } catch (e) { return toast("Not a valid HAR (JSON) file", true); }
       const name = $("chn").value.trim() || file.name.replace(/\.har$|\.json$/i, "").replace(/[^A-Za-z0-9._-]/g, "-");
       const overwrite = c.items.some((x) => x.name === name);
       if (overwrite && !await ask("A collection named '" + name + "' already exists. Replace it?\n\nIts recorded calls will be lost.", { yes: "Replace", danger: true })) return;
@@ -2347,16 +2349,18 @@
   async function openRetry(id) {
     let p;
     try { p = await api("retry_get", { flow_id: id }); } catch (e) { return toast(e.message, true); }
+    // R6B-09 class: body via .value, never escaped into innerHTML — a multi-MB request through the template freezes the tab
     $("sheet").innerHTML = `
       <header class="retry"><b>${ico("retry", "sm")} Edit &amp; Repeat</b><span class="sub">sends a copy; the original stays in the list</span></header>
       <main>
         <div class="btns" style="margin-top:0"><select id="rm">${methodOpts(p.method)}</select>
           <input type="text" id="ru" class="grow" value="${esc(p.url)}"></div>
         <div class="seg"><button data-rsub="body" class="on">Body</button><button data-rsub="headers">Headers</button></div>
-        <div id="rpb"><textarea id="rb" spellcheck="false" ${p.req_body_editable ? "" : "readonly"}>${esc(p.req_body)}</textarea></div>
+        <div id="rpb"><textarea id="rb" spellcheck="false" ${p.req_body_editable ? "" : "readonly"}></textarea></div>
         <div id="rph" style="display:none">${headersHTML(p.req_headers, "rhd")}</div>
       </main>
       <footer><button class="b" id="rcancel">Cancel</button><button class="b p" id="rsend">Send</button></footer>`;
+    $("rb").value = p.req_body || "";
     openSheet("pause", "#ru");     // R6B-04: the keyboard lands in the editor, not behind it
     wireHeaders($("sheet"));
     // R6-02: Esc is a shortcut, so it must not invoke Cancel after any loaded value changes.
@@ -2563,18 +2567,19 @@
     }
     const modes = [["none", "None"], ["json", "JSON"], ["form", "Form"], ["raw", "Raw"]];
     const seg = `<div class="seg">${modes.map(([id, l]) => `<button data-bm="${id}" class="${draft.body_mode === id ? "on" : ""}">${l}</button>`).join("")}</div>`;
-    if (draft.body_mode === "json") return `${seg}<textarea id="cb" spellcheck="false" style="min-height:150px;height:210px">${esc(draft.body)}</textarea>
+    // body via .value after draw (R6B-09 class): Compose-from-call can carry a multi-MB body
+    if (draft.body_mode === "json") return `${seg}<textarea id="cb" spellcheck="false" style="min-height:150px;height:210px"></textarea>
       <div class="btns"><button class="b" id="cpretty">Pretty-print</button><span class="sub" id="cjs"></span></div>`;
-    if (draft.body_mode === "raw") return `${seg}<textarea id="cb" spellcheck="false" style="min-height:150px;height:210px">${esc(draft.body)}</textarea>`;
+    if (draft.body_mode === "raw") return `${seg}<textarea id="cb" spellcheck="false" style="min-height:150px;height:210px"></textarea>`;
     if (draft.body_mode === "form") return `${seg}${kvHTML("form", draft.form, ["field", "value"])}`;
     return `${seg}<p class="muted">No request body.</p>`;
   }
   function drawSection() {
     const area = $("carea"); area.innerHTML = composeSection(); wireKV(area);
     area.querySelectorAll("[data-bm]").forEach((b) => (b.onclick = () => { draft.body_mode = b.dataset.bm; drawSection(); }));
-    if ($("cb")) $("cb").oninput = () => { draft.body = $("cb").value; if (draft.body_mode === "json") jsonCheck($("cb"), $("cjs")); };
+    if ($("cb")) { $("cb").value = draft.body || ""; $("cb").oninput = () => { draft.body = $("cb").value; if (draft.body_mode === "json") jsonCheck($("cb"), $("cjs")); }; }
     if ($("cpretty")) $("cpretty").onclick = () => {
-      try { draft.body = JSON.stringify(JSON.parse($("cb").value), null, 2); $("cb").value = draft.body; jsonCheck($("cb"), $("cjs")); }
+      try { draft.body = JSON.stringify(jsonParse($("cb").value), null, 2); $("cb").value = draft.body; jsonCheck($("cb"), $("cjs")); }
       catch (e) { $("cjs").textContent = "Not JSON: " + e.message; }
     };
     if ($("cvsave")) $("cvsave").onclick = () => {
@@ -2834,10 +2839,10 @@
           const rule = { match: val("match").trim(), method: val("method") };
           if (t === "respond") {
             rule.status = Number(val("status"));
-            if (!v.body_file) { const b = val("body"); if (/^\s*[\[{]/.test(b)) { try { rule.body = JSON.parse(b); } catch (x) { rule.body = b; } } else rule.body = b; }
+            if (!v.body_file) { const b = val("body"); if (/^\s*[\[{]/.test(b)) { try { rule.body = jsonParse(b); } catch (x) { rule.body = b; } } else rule.body = b; }
           } else if (t === "status") rule.status = Number(val("status"));
           else if (t === "json_patch") {
-            let o; try { o = JSON.parse(val("set")); } catch (x) { throw new Error("Set fields must be a JSON object, e.g. {\"user.name\": \"QA\"}"); }
+            let o; try { o = jsonParse(val("set")); } catch (x) { throw new Error("Set fields must be a JSON object, e.g. {\"user.name\": \"QA\"}"); }
             if (!o || typeof o !== "object" || Array.isArray(o) || !Object.keys(o).length) throw new Error("Set fields must be a JSON object with at least one path");
             rule.set = o;
           } else if (t === "delay") rule.ms = Number(val("ms"));
@@ -2958,7 +2963,7 @@
       if (e.draft) { try { const r = await api("delete", { name: e.name }); if (r.message) toast(r.message); } catch (x) { toast(x.message, true); return; } }
       leave();
     };
-    $("fmt").onclick = () => { try { ta.value = JSON.stringify(JSON.parse(ta.value), null, 2) + "\n"; ta.oninput(); } catch (x) { toast("Not JSON — cannot format", true); } };
+    $("fmt").onclick = () => { try { ta.value = JSON.stringify(jsonParse(ta.value), null, 2) + "\n"; ta.oninput(); } catch (x) { toast("Not JSON — cannot format", true); } };
     let saving = false;     // not save.disabled: disabling the focused button would drop keyboard focus to <body>
     $("save").onclick = async () => {
       if (saving) return;
@@ -3005,7 +3010,7 @@
     const type = (headers.find(([k]) => k.toLowerCase() === "content-type") || ["", ""])[1].toLowerCase();
     let kind = "none", fields = [];
     if (/application\/x-www-form-urlencoded/.test(type)) { kind = "urlencoded"; fields = [...new URLSearchParams(raw).entries()]; }
-    else { try { const doc = JSON.parse(raw); if (doc && typeof doc === "object" && !Array.isArray(doc)) { kind = "json"; fields = Object.entries(doc); } } catch (x) {
+    else { try { const doc = jsonParse(raw); if (doc && typeof doc === "object" && !Array.isArray(doc)) { kind = "json"; fields = Object.entries(doc); } } catch (x) {
       if (!raw.trim() && /json/.test(type)) kind = "json";
     } }
     p.formKind = kind;
@@ -3041,7 +3046,7 @@
           if (type === "number") { const n = Number(val); if (!val.trim() || !Number.isFinite(n)) throw Error("Enter a valid number for " + key); obj[key] = n; }
           else if (type === "boolean") { if (val !== "true" && val !== "false") throw Error("Use true or false for " + key); obj[key] = val === "true"; }
           else if (type === "null") obj[key] = null;
-          else if (type === "json") obj[key] = JSON.parse(val);
+          else if (type === "json") obj[key] = jsonParse(val);
           else obj[key] = val;
         });
         $("pb").value = JSON.stringify(obj);
@@ -3068,7 +3073,7 @@
           ? "To change what the app <b>receives</b>, press Continue: the response pauses next."
           : `To change what the app <b>receives</b>, pause its response. <button class="lnk" id="presp">Pause the response too</button>`}</div>`}
         <div class="seg"><button data-psub="body" class="${p.sub === "body" ? "on" : ""}">${isResp ? "Response body" : "Request body"}</button><button data-psub="headers" class="${p.sub === "headers" ? "on" : ""}">Headers</button><button data-psub="form" class="${p.sub === "form" ? "on" : ""}">Form</button></div>
-        <div id="ppb" style="${p.sub === "body" ? "" : "display:none"}"><textarea id="pb" spellcheck="false" placeholder="No body" class="${(isResp ? p.resp_body : p.req_body) ? "" : "nobody"}" ${(isResp ? p.resp_body_editable : p.req_body_editable) ? "" : "readonly"}>${esc(isResp ? p.resp_body : p.req_body)}</textarea>
+        <div id="ppb" style="${p.sub === "body" ? "" : "display:none"}"><textarea id="pb" spellcheck="false" placeholder="No body" class="${(isResp ? p.resp_body : p.req_body) ? "" : "nobody"}" ${(isResp ? p.resp_body_editable : p.req_body_editable) ? "" : "readonly"}></textarea>
           <div class="btns">${(isResp ? p.resp_body : p.req_body) && (isResp ? p.resp_body_editable : p.req_body_editable) ? `<button class="b" id="pfmt">Format JSON</button>` : ""}<span class="sub" id="pjs"></span></div></div>
         <div id="pph" style="${p.sub === "headers" ? "" : "display:none"}">${headersHTML(isResp ? p.resp_headers : p.req_headers, "phd")}</div>
         <div id="ppf" style="display:none"></div>
@@ -3077,6 +3082,8 @@
         ${q > 1 ? `<button class="lnk" id="pall">Resume all ${q}</button> · ` : ""}<button class="lnk" id="pbpoff">Turn off this breakpoint</button></span>
         <button class="b d" id="pabort">Abort</button><button class="b" id="pskip">Skip (send unchanged)</button>
         <button class="b p" id="pcont">Continue</button></footer>`;
+    // R6B-09 class: body via .value — a paused multi-MB response through esc()+innerHTML freezes the tab
+    $("pb").value = (isResp ? p.resp_body : p.req_body) || "";
     openSheet("pause", isResp ? "#pst" : "#pu", auto); // R6-01: polling must leave the current typing target focused.
     const ta = $("pb"); jsonCheck(ta, $("pjs")); ta.oninput = () => jsonCheck(ta, $("pjs"));
     wireHeaders($("sheet"));
@@ -3091,7 +3098,7 @@
       $("ppb").style.display = p.sub === "body" ? "" : "none"; $("pph").style.display = p.sub === "headers" ? "" : "none"; $("ppf").style.display = p.sub === "form" ? "" : "none";
       root.querySelectorAll("[data-psub]").forEach((x) => x.classList.toggle("on", x === b));
     }));
-    if ($("pfmt")) $("pfmt").onclick = () => { try { ta.value = JSON.stringify(JSON.parse(ta.value), null, 2); jsonCheck(ta, $("pjs")); } catch (x) { toast("Not JSON", true); } };
+    if ($("pfmt")) $("pfmt").onclick = () => { try { ta.value = JSON.stringify(jsonParse(ta.value), null, 2); jsonCheck(ta, $("pjs")); } catch (x) { toast("Not JSON", true); } };
     const done = async (op, edits) => {
       const id = p.id;
       const r = await run(op, { id, edits }, op === "paused_continue" ? "Continued with your edits" : op === "paused_skip" ? "Sent unchanged" : "Aborted");

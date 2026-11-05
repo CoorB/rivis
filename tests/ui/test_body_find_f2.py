@@ -98,6 +98,20 @@ class BodyFindF2(UiBase):
         wait_for(lambda: self.page.locator(".rv-find-count").inner_text() == "1 of 1", 5, 0.05, "one match")   # typing waits 150 ms
         self.assertEqual(self.errors, [])
 
+    def test_utf8_bom_json_opens_as_a_tree(self):
+        # End-to-end: a response whose bytes start with a UTF-8 BOM still opens as a Tree. (TextDecoder strips a
+        # byte BOM before the worker; the worker also strips a BOM character — see TreeWorkerBom.)
+        self.fetch("/json/bom?f2=bom")
+        self.open()
+        self.response("f2=bom")
+        self.page.locator(".rv-tree-toggle").click()
+        tree = self.page.locator(".rv-tree")
+        wait_for(lambda: tree.get_attribute("data-ready") == "1", 10, 0.1, "BOM JSON tree")
+        self.assertEqual(tree.locator('[data-path="$.bom_marker"]').count(), 1)
+        self.assertIn("present", tree.inner_text())
+        self.assertNotIn("cannot be parsed", tree.inner_text().lower())
+        self.assertEqual(self.errors, [])
+
     def test_tree_fold_search_copy_and_dark_colours(self):
         self.fetch("/json/find?f2=tree")
         self.open()

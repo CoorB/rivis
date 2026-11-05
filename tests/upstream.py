@@ -120,6 +120,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, body, ctype="application/json")
         if p == "/json/find":
             return self._send(200, {"products": [{"id": i, "sku": "FINDME"} for i in range(12)], "meta": {"source": "fixture"}})
+        if p == "/json/bom":
+            # UTF-8 BOM + JSON: legal on the wire; JSON.parse rejects it unless the BOM is stripped first
+            return self._send(200, b"\xef\xbb\xbf" + json.dumps({"bom_marker": "present", "ok": True}).encode(),
+                              ctype="application/json")
         if p == "/closing":
             # a gateway that ends the connection after its answer (the UAT edge does this on about half its calls)
             return self._send(200, {"closing": True}, headers=[("Connection", "close"), ("Keep-Alive", "timeout=5")])

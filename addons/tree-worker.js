@@ -25,7 +25,10 @@ function depthOf(value) {
 
 self.onmessage = (event) => {
   try {
-    var data = JSON.parse(event.data);
+    // Some servers prefix JSON with a UTF-8 byte-order mark, and it can sit behind whitespace or
+    // repeat; JSON.parse rejects any of it. Stripping only the first one left the same hole the
+    // redactor had.
+    var data = JSON.parse(String(event.data).replace(/^[\s\uFEFF]+/, ""));
     if (depthOf(data) > MAX_DEPTH) {
       self.postMessage({ error: "JSON is nested more than " + MAX_DEPTH + " levels deep" });
       return;
