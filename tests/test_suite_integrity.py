@@ -397,5 +397,234 @@ class CiWiresUiSuite(unittest.TestCase):
         self.assertNotIn("token:", text.lower())
 
 
+class FreePortCloseThenUseIsStealable(unittest.TestCase):
+    """free_port() binds port 0 and closes. Between that and a listener binding the number, anything can take it —
+    the symptom is 'port already taken' in a module that never chose that port. Instance.start uses free_port()
+    then hold_port() through env/CA/pre, and closes the holders only immediately before Popen."""
+
+    def test_a_released_free_port_is_taken_during_a_ten_ms_gap(self):
+        import socket
+        import threading
+        import time
+        import harness
+        steals = 0
+        for _ in range(40):
+            port = harness.free_port()
+            held = {"s": None}
+
+            def thief(p=port):
+                s = socket.socket()
+                try:
+                    s.bind(("127.0.0.1", p))
+                    s.listen(1)
+                    held["s"] = s
+                except OSError:
+                    s.close()
+
+            t = threading.Thread(target=thief)
+            t.start()
+            time.sleep(0.01)
+            s = socket.socket()
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                steals += 1
+            finally:
+                s.close()
+            t.join()
+            if held["s"] is not None:
+                held["s"].close()
+        self.assertGreaterEqual(steals, 30, "free_port close-then-use gap should be stealable (got %d/40)" % steals)
+
+    def test_hold_port_after_free_port_blocks_thieves_until_the_holder_closes(self):
+        """Instance.start: free_port() (patchable) then hold_port() through setup — the pattern restart_on_same_port relies on."""
+        import socket
+        import threading
+        import time
+        import harness
+        steals = 0
+        for _ in range(40):
+            port = harness.free_port()
+            holder = harness.hold_port(port)
+            held = {"s": None}
+
+            def thief(p=port):
+                s = socket.socket()
+                try:
+                    s.bind(("127.0.0.1", p))
+                    s.listen(1)
+                    held["s"] = s
+                except OSError:
+                    s.close()
+
+            t = threading.Thread(target=thief)
+            t.start()
+            time.sleep(0.01)
+            holder.close()
+            s = socket.socket()
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                steals += 1
+            finally:
+                s.close()
+            t.join()
+            if held["s"] is not None:
+                held["s"].close()
+        self.assertEqual(steals, 0, "held port must not be stealable during the setup gap (got %d/40)" % steals)
+
+    def test_instance_start_holds_chosen_ports_through_pre(self):
+        """Wiring check: without hold_port in Instance.start, free_port()'s gap leaves the numbers bindable during pre."""
+        import socket
+        import harness
+
+        suite = harness.Suite.get()
+        # True = bind succeeded during pre (port was not held). Must stay False with the hold wiring.
+        seen = {"proxy_free": None, "web_free": None}
+
+        def pre(inst):
+            for key, port in (("proxy_free", inst.proxy_port), ("web_free", inst.web_port)):
+                s = socket.socket()
+                try:
+                    s.bind(("127.0.0.1", port))
+                    seen[key] = True
+                except OSError:
+                    seen[key] = False
+                finally:
+                    s.close()
+            raise RuntimeError("stop before Popen")
+
+        inst = harness.Instance(suite, "hold-through-pre", pre=pre)
+        with self.assertRaises(RuntimeError):
+            inst.start()
+        self.assertIs(seen["proxy_free"], False, "proxy port must stay held through pre")
+        self.assertIs(seen["web_free"], False, "web port must stay held through pre")
+        self.assertNotIn(inst, suite.instances)
+
+
+class UpstreamClientDropStaysQuiet(unittest.TestCase):
+    """A client that drops an accepted socket used to dump a socketserver traceback on stderr. Under a herd that
+    noise rattled later tests sharing the same Upstream (failures landed in a different class each run)."""
+
+    def test_http_drop_mid_response_prints_no_traceback_and_serves_the_next_call(self):
+        import contextlib
+        import io
+        import socket
+        import urllib.request
+        import harness
+        import upstream as upstream_mod
+
+        suite = harness.Suite.get()
+        up = suite.upstream()
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                c = socket.create_connection(("127.0.0.1", up.http_port), timeout=2)
+                c.sendall(b"GET /big?mb=1 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                c.recv(32)
+                c.close()
+                # give the handler thread a moment to hit the broken write
+                import time
+                time.sleep(0.2)
+                body = urllib.request.urlopen(up.url("/json/small"), timeout=5).read()
+            self.assertNotIn("Exception occurred during processing of request", err.getvalue(), err.getvalue())
+            self.assertNotIn("Traceback", err.getvalue(), err.getvalue())
+            self.assertIn(b"alice", body)
+            self.assertTrue(upstream_mod._client_gone(ConnectionResetError(54, "Connection reset by peer")))
+            self.assertFalse(upstream_mod._client_gone(ValueError("boom")))
+        finally:
+            up.close()
+            if up in suite.upstreams:
+                suite.upstreams.remove(up)
+
+    def test_client_gone_classifier_keeps_real_bugs_loud(self):
+        import errno
+        import ssl
+        import upstream as upstream_mod
+        self.assertTrue(upstream_mod._client_gone(BrokenPipeError()))
+        self.assertTrue(upstream_mod._client_gone(OSError(errno.EBADF, "Bad file descriptor")))
+        self.assertTrue(upstream_mod._client_gone(ssl.SSLError("UNEXPECTED_EOF_WHILE_READING")))
+        self.assertFalse(upstream_mod._client_gone(ssl.SSLError("PEM lib")))
+        self.assertFalse(upstream_mod._client_gone(RuntimeError("handler bug")))
+
+
+class SuiteUpstreamReusesCert(unittest.TestCase):
+    """Suite.upstream used to spend an openssl invocation per Upstream. LiveCase builds two per class; share one
+    cert/key pair per Suite so the second (and later) skip the ~40ms openssl cost."""
+
+    def test_two_upstreams_from_the_same_suite_share_one_cert_file(self):
+        import ssl
+        import urllib.request
+        import harness
+
+        suite = harness.Suite.get()
+        suite._upstream_cert_key = None
+        up1 = suite.upstream()
+        up2 = suite.upstream()
+        try:
+            self.assertEqual(up1.cert, up2.cert)
+            self.assertIs(suite._upstream_cert_key[0], up1.cert)
+            body = urllib.request.urlopen(up1.url("/json/small"), timeout=5).read()
+            self.assertIn(b"alice", body)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            body2 = urllib.request.urlopen(up2.url("/json/small", tls=True), context=ctx, timeout=5).read()
+            self.assertIn(b"alice", body2)
+        finally:
+            for u in (up1, up2):
+                u.close()
+                if u in suite.upstreams:
+                    suite.upstreams.remove(u)
+
+
+class LiveCaseTearDownClosesUpstreams(unittest.TestCase):
+    """LiveCase used to stop the Rivis instance but leave both Upstream listeners in Suite.upstreams until process
+    exit. A later class in the same module could then see leftover hits/connections if it forgot reset_hits."""
+
+    def test_tear_down_class_closes_upstreams_and_removes_them_from_the_suite(self):
+        import socket
+        import harness
+
+        suite = harness.Suite.get()
+        suite_before = list(suite.upstreams)
+        kept = {}
+
+        class Probe(harness.LiveCase):
+            @classmethod
+            def setUpClass(cls):
+                cls.suite = suite
+                cls.up = suite.upstream()
+                cls.up2 = suite.upstream()
+                cls.inst = type("Inst", (), {"stop": staticmethod(lambda: None)})()
+                kept["up"], kept["up2"] = cls.up, cls.up2
+
+            def setUp(self):
+                pass  # no Rivis; only exercising tearDownClass upstream cleanup
+
+            def test_placeholder(self):
+                self.assertTrue(self.up.http_port > 0)
+
+        loaded = unittest.defaultTestLoader.loadTestsFromTestCase(Probe)
+        result = unittest.TestResult()
+        loaded.run(result)
+        self.assertTrue(result.wasSuccessful(), result.failures + result.errors)
+        up, up2 = kept["up"], kept["up2"]
+        self.assertNotIn(up, suite.upstreams)
+        self.assertNotIn(up2, suite.upstreams)
+        for port in (up.http_port, up.https_port, up2.http_port, up2.https_port):
+            s = socket.socket()
+            s.settimeout(0.3)
+            try:
+                self.assertNotEqual(s.connect_ex(("127.0.0.1", port)), 0, "upstream still listening on %d" % port)
+            finally:
+                s.close()
+        for u in (up, up2):
+            if u in suite.upstreams:
+                u.close()
+                suite.upstreams.remove(u)
+        self.assertEqual(suite.upstreams, suite_before)
+
+
 if __name__ == "__main__":
     unittest.main()

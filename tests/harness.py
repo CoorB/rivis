@@ -57,7 +57,9 @@ _ISSUED_PORTS = set()
 
 def free_port():
     # never hand the same port out twice in one run: a released ephemeral port is the first one the kernel offers again,
-    # so two callers (a test's "dead" proxy port and the product's own RIVIS_PORT) could end up on the same number
+    # so two callers (a test's "dead" proxy port and the product's own RIVIS_PORT) could end up on the same number.
+    # Between close() and the listener binding, another process can still steal the number — callers that will bind
+    # (Instance.start, CA bootstrap) must use reserve_dead_port() and only close the holder immediately before listen.
     for _ in range(50):
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
@@ -71,7 +73,7 @@ def free_port():
 
 def reserve_dead_port():
     """A port nothing listens on that nothing else can take either: bound but never listening. Returns (port, holder);
-    close the holder when done."""
+    close the holder when done (or immediately before a real listener binds the same number)."""
     for _ in range(50):
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
@@ -81,6 +83,13 @@ def reserve_dead_port():
             return port, s
         s.close()
     raise RuntimeError("no free port")
+
+
+def hold_port(port):
+    """Bind port without listening so nothing else can take it until the holder is closed."""
+    s = socket.socket()
+    s.bind(("127.0.0.1", int(port)))
+    return s
 
 
 def port_open(port):
@@ -280,8 +289,10 @@ class Suite:
     # -- CA / upstream ----------------------------------------------------------------------------------
     def _make_ca(self):
         os.makedirs(self.ca_dir)
-        port = free_port()
+        # hold the port until mitmdump is about to bind it: free_port()'s close-then-use gap is stealable
+        port, holder = reserve_dead_port()
         env = self.env(os.path.join(self.root, "ca-home"))
+        holder.close()
         proc = subprocess.Popen([REAL_MITMDUMP, "--listen-host", "127.0.0.1", "-p", str(port), "--set",
                                  "confdir=" + self.ca_dir], env=env, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -296,7 +307,13 @@ class Suite:
         self.ca_pem = os.path.join(self.ca_dir, "mitmproxy-ca-cert.pem")
 
     def upstream(self, **kwargs):
-        from upstream import Upstream
+        from upstream import Upstream, _make_upstream_cert
+        # Reuse one openssl-made cert per Suite: each Upstream() used to spend ~40ms on openssl, and LiveCase
+        # builds two per class. static_rsa still shares the files; only the SSLContext ciphers differ.
+        if kwargs.get("cert_key") is None:
+            if getattr(self, "_upstream_cert_key", None) is None:
+                self._upstream_cert_key = _make_upstream_cert(self.root)
+            kwargs = dict(kwargs, cert_key=self._upstream_cert_key)
         up = Upstream(self.root, **kwargs)
         self.upstreams.append(up)
         return up
@@ -468,39 +485,75 @@ class Instance:
         suite = self.suite
         last = None
         for attempt in range(4):
-            self.proxy_port, self.web_port = free_port(), free_port()
-            env = suite.env(self.home, extra=self.extra_env, confdir=os.path.join(self.home, ".mitmproxy"),
-                            ports=(self.proxy_port, self.web_port), password=self.password)
-            if not os.path.isdir(env["RIVIS_CONFDIR"]) and not self.fresh_ca:
-                shutil.copytree(suite.ca_dir, env["RIVIS_CONFDIR"])
-            self.env = env
-            if self.pre:
-                self.pre(self)
-            argv = ["/bin/bash", self.rivis_bin] + (["--project", self.project] if self.project != "default" else []) \
-                + ["start", "--no-ios", "--no-open"] + self.start_args
-            logfh = open(self.logpath, "ab")
-            self.proc = subprocess.Popen(argv, env=env, cwd=suite.root, stdin=subprocess.DEVNULL, stdout=logfh,
-                                         stderr=subprocess.STDOUT, start_new_session=True)
-            suite.instances.append(self)
-            self.panel = Panel(self.web_port, self.password)
+            # Hold both ports through env/CA setup; close holders only in the instant before Popen so a parallel
+            # suite job (or anything else) cannot bind them in the free_port() close-then-use gap.
+            proxy_hold = web_hold = None
             try:
-                def ready():
-                    if self.proc.poll() is not None:
-                        raise RuntimeError("rivis start exited rc=%s" % self.proc.returncode)
-                    self.panel.login()
-                    return self.panel.state()
-                wait_for(ready, 45, 0.25, "rivis start (%s)" % self.name)
-                if self.setup:
-                    self.setup(self)
-                return self
-            except AssertionError as exc:
-                last = exc
-                with open(self.logpath, "rb") as fh:
-                    tail = fh.read()[-1500:].decode("utf-8", "replace")
-                self.stop()
-                if "already taken" in tail:
-                    continue
-                raise AssertionError("%s\n--- log tail ---\n%s" % (exc, tail))
+                # free_port() stays the source of numbers so tests can patch it (restart_on_same_port). Hold each
+                # number through env/CA setup. Retry the hold on the SAME numbers — a just-stopped listener can
+                # linger for a beat, and re-calling free_port() would burn a patched side_effect of length 2.
+                self.proxy_port, self.web_port = free_port(), free_port()
+                for _ in range(50):
+                    try:
+                        proxy_hold = hold_port(self.proxy_port)
+                        web_hold = hold_port(self.web_port)
+                        break
+                    except OSError:
+                        for h in (proxy_hold, web_hold):
+                            if h is not None:
+                                try:
+                                    h.close()
+                                except OSError:
+                                    pass
+                        proxy_hold = web_hold = None
+                        time.sleep(0.05)
+                else:
+                    proxy_hold = web_hold = None  # proceed without a hold; "already taken" retry below still applies
+                env = suite.env(self.home, extra=self.extra_env, confdir=os.path.join(self.home, ".mitmproxy"),
+                                ports=(self.proxy_port, self.web_port), password=self.password)
+                if not os.path.isdir(env["RIVIS_CONFDIR"]) and not self.fresh_ca:
+                    shutil.copytree(suite.ca_dir, env["RIVIS_CONFDIR"])
+                self.env = env
+                if self.pre:
+                    self.pre(self)
+                argv = ["/bin/bash", self.rivis_bin] + (["--project", self.project] if self.project != "default" else []) \
+                    + ["start", "--no-ios", "--no-open"] + self.start_args
+                logfh = open(self.logpath, "ab")
+                if proxy_hold is not None:
+                    proxy_hold.close()
+                    proxy_hold = None
+                if web_hold is not None:
+                    web_hold.close()
+                    web_hold = None
+                self.proc = subprocess.Popen(argv, env=env, cwd=suite.root, stdin=subprocess.DEVNULL, stdout=logfh,
+                                             stderr=subprocess.STDOUT, start_new_session=True)
+                suite.instances.append(self)
+                self.panel = Panel(self.web_port, self.password)
+                try:
+                    def ready():
+                        if self.proc.poll() is not None:
+                            raise RuntimeError("rivis start exited rc=%s" % self.proc.returncode)
+                        self.panel.login()
+                        return self.panel.state()
+                    wait_for(ready, 45, 0.25, "rivis start (%s)" % self.name)
+                    if self.setup:
+                        self.setup(self)
+                    return self
+                except AssertionError as exc:
+                    last = exc
+                    with open(self.logpath, "rb") as fh:
+                        tail = fh.read()[-1500:].decode("utf-8", "replace")
+                    self.stop()
+                    if "already taken" in tail:
+                        continue
+                    raise AssertionError("%s\n--- log tail ---\n%s" % (exc, tail))
+            finally:
+                for h in (proxy_hold, web_hold):
+                    if h is not None:
+                        try:
+                            h.close()
+                        except OSError:
+                            pass
         raise last
 
     def stop(self):
@@ -605,7 +658,7 @@ class Instance:
             if float(base.get("loss") or 0) >= 100 and not base.get("throttle_match"):       # every call is killed before rules run: a kill IS the proof
                 wait_for(lambda: (lambda r: r.rc != 0 and r.status == 0)(self.fetch(url, timeout=5)), 12, 0.2, "loss reload")
             else:
-                wait_for(lambda: self.fetch(url, timeout=5).text == "ok-" + marker, 12, 0.2, "rules reload")
+                wait_for(lambda: self.fetch(url, timeout=5).text == "ok-" + marker, 12, 0.05, "rules reload")
             time.sleep(0.15)
         return base
 
@@ -644,6 +697,17 @@ class LiveCase(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.inst.stop()
+        # Close class upstreams now: leaving them until process atexit keeps listeners and openssl certs
+        # alive across later classes in the same module and can leak hits/connections into a careless test.
+        for name in ("up", "up2"):
+            up = getattr(cls, name, None)
+            if up is None:
+                continue
+            try:
+                up.close()
+            finally:
+                if up in cls.suite.upstreams:
+                    cls.suite.upstreams.remove(up)
 
     def setUp(self):
         self.reset_state()

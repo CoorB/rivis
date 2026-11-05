@@ -13,10 +13,27 @@ import os
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
+
+# Client dropped the accepted socket (mitmproxy herd close, curl abort, TLS peek then reset). Not a server bug —
+# the default handle_error traceback floods stderr and has rattled later tests on a shared Upstream.
+_CLIENT_GONE_ERRNO = {errno.EPIPE, errno.ECONNRESET, errno.EBADF, errno.ECONNABORTED}
+
+
+def _client_gone(exc):
+    if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+        return True
+    if isinstance(exc, OSError) and exc.errno in _CLIENT_GONE_ERRNO:
+        return True
+    if isinstance(exc, ssl.SSLError):
+        # handshake / read after the peer left: EOF, reset, unexpected record — not a bad fixture cert
+        msg = str(exc).lower()
+        return any(s in msg for s in ("eof", "reset", "broken pipe", "unexpected eof", "connection"))
+    return False
 
 
 def b64u(data):
@@ -54,12 +71,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle(self):
         # Mitmproxy under a thundering herd sometimes accepts then closes the upstream socket before any
-        # bytes arrive; readline then raises EBADF. That is a gone client, not a server bug — swallow it
-        # so one burst cannot flood stderr and upset later tests sharing this upstream.
+        # bytes arrive; readline then raises EBADF. Swallow a gone client so one burst cannot flood stderr
+        # and upset later tests sharing this upstream (handle_error is the backstop for setup/handshake).
         try:
             BaseHTTPRequestHandler.handle(self)
-        except OSError as exc:
-            if exc.errno != errno.EBADF:
+        except Exception as exc:       # noqa: BLE001 - classified below; anything else re-raised
+            if not _client_gone(exc):
                 raise
 
     def setup(self):
@@ -241,21 +258,35 @@ class _Server(ThreadingHTTPServer):
         owner.connections.append({"kind": key, "peer": address, "t": time.time()})
         return request, address
 
+    def handle_error(self, request, client_address):
+        if _client_gone(sys.exc_info()[1]):
+            return
+        ThreadingHTTPServer.handle_error(self, request, client_address)
+
+
+def _make_upstream_cert(workdir):
+    """One openssl invocation; Suite reuses the paths across Upstream instances in the same process."""
+    tag = os.urandom(4).hex()
+    cert = os.path.join(workdir, "upstream-cert-%s.pem" % tag)
+    key = os.path.join(workdir, "upstream-key-%s.pem" % tag)
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert,
+                    "-days", "2", "-subj", "/CN=rivis-test-upstream",
+                    "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
+                   check=True, capture_output=True)
+    return cert, key
+
 
 class Upstream:
-    def __init__(self, workdir, static_rsa=False, handshake_delay=0):
+    def __init__(self, workdir, static_rsa=False, handshake_delay=0, cert_key=None):
         self.hits = []
         self.counter = 0
         self.connection_count = {"http": 0, "https": 0}
         self.connections = []
         self.handshake_delay = handshake_delay
-        tag = os.urandom(4).hex()           # several upstreams share one workdir: never share a cert file
-        self.cert = os.path.join(workdir, "upstream-cert-%s.pem" % tag)
-        key = os.path.join(workdir, "upstream-key-%s.pem" % tag)
-        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", self.cert,
-                        "-days", "2", "-subj", "/CN=rivis-test-upstream",
-                        "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
-                       check=True, capture_output=True)
+        if cert_key:
+            self.cert, key = cert_key
+        else:
+            self.cert, key = _make_upstream_cert(workdir)
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(self.cert, key)
         if static_rsa:
