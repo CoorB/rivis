@@ -491,7 +491,11 @@ def trusted_files(state_dir):
             doc = json.load(fh)
     except (OSError, ValueError):
         return set()
-    return {p for p in (doc.get("files") if isinstance(doc, dict) else None) or [] if isinstance(p, str)}
+    files = doc.get("files") if isinstance(doc, dict) else None
+    # A bare string is iterable too: walked as characters it would trust "/", "t", "m", ...
+    if not isinstance(files, list):
+        return set()
+    return {p for p in files if isinstance(p, str)}
 
 
 def set_trusted_file(state_dir, path, trusted=True):
