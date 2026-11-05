@@ -574,15 +574,11 @@ the lists are *Hosts to decrypt* and *Hosts to leave alone*. It is stored per pr
   turns on mitmproxy's `show_ignored_hosts` and lets the list show those rows when the mode is not `all`; mitmproxy
   warns that this keeps the tunnels' bytes in memory, which adds up over a long session). IP-only
   connections carry no host name, so in `allow` mode they are tunnelled, not decrypted.
-- **HTTP/3 (QUIC)** from the simulator to a host that is not decrypted passes through unmodified (mitmproxy leaves
-  `http3` on; Rivis does not change it): the app keeps working; those calls are not listed or changed.
 - On This call: **Decrypt this host** / **Don't decrypt this host**. In mode `all`, "Don't decrypt" switches to
   `ignore` with that host so everything else stays decrypted; "Decrypt" in mode `all` is a no-op.
-- **HTTP/3 (QUIC, UDP 443)** on the iOS Simulator (local capture) and elsewhere: when Rivis does not decrypt a
-  host (allow/ignore list, or a host that refused the Rivis CA), HTTP/3 is passed through unchanged — the bytes
-  are not decrypted or listed as HTTP calls. The log prints one plain line the first time each such host is seen
-  (`passing HTTP/3 to <host> through unchanged`). Apps that need Rivis to see the calls fall back to TCP+TLS
-  (HTTP/1 or HTTP/2), which Rivis handles as usual. Proxyman does not pass HTTP/3 either.
+- **HTTP/3 (QUIC)** (UDP 443) from the simulator to a host Rivis does not decrypt (allow/ignore list, or a host
+  that refused the Rivis CA) passes through unmodified: the app keeps working, and those calls are not decrypted,
+  listed or changed. The log says so once per host (`passing HTTP/3 to <host> through unchanged`).
 
 ### Protocol viewers
 
