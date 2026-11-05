@@ -59,9 +59,19 @@ def main(argv):
             tls_update(cfg, mode=args[1])
             message = "tls mode: %s" % args[1].lower()
         elif cmd in ("allow", "ignore") and len(args) == 3 and args[1] in ("add", "rm"):
-            pairs = [(cmd, args[2])]
-            tls_update(cfg, add=pairs if args[1] == "add" else (), remove=pairs if args[1] == "rm" else ())
-            message = "%s %s: %s" % (cmd, "added" if args[1] == "add" else "removed", args[2].lower())
+            pattern = str(args[2]).strip().lower()
+            tls_host_regex(pattern)          # same validation tls_update applies, before we talk about success
+            before = tls_config(cfg)[cmd]
+            if args[1] == "rm":
+                if pattern not in before:
+                    die("no %s pattern '%s'" % (cmd, pattern))
+                tls_update(cfg, remove=[(cmd, pattern)])
+                message = "%s removed: %s" % (cmd, pattern)
+            else:
+                if pattern in before:
+                    die("%s pattern '%s' is already on the list" % (cmd, pattern))
+                tls_update(cfg, add=[(cmd, pattern)])
+                message = "%s added: %s" % (cmd, pattern)
         else:
             die("usage: tls list | tls mode [all|allow|ignore] | tls allow|ignore add|rm HOST[:PORT]")
         atomic_json(path, cfg)

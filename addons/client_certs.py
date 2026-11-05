@@ -267,6 +267,20 @@ def fingerprint(store):
     return h.hexdigest()[:16]
 
 
+def _scrub_key_temps(directory):
+    """Remove leftover .*.tmp copies from an interrupted refresh/prepare — they hold unencrypted private keys."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return
+    for name in names:
+        if name.startswith(".") and name.endswith(".tmp"):
+            try:
+                os.unlink(os.path.join(directory, name))
+            except OSError:
+                pass
+
+
 class Active:
     """What the running proxy hands mitmproxy (`client_certs` = a directory of <server name>.pem files).
 
@@ -284,6 +298,9 @@ class Active:
         """Rebuild the active directory if the store changed. Returns it, or None when there are no entries."""
         version = fingerprint(self.store)
         if version == self.version:
+            if self.dir and os.path.isdir(self.dir):
+                os.chmod(self.dir, 0o700)
+                _scrub_key_temps(self.dir)
             return self.dir
         names = [n for n in sorted(os.listdir(self.store)) if host_of(n) and os.path.isfile(os.path.join(self.store, n))
                  and not os.path.islink(os.path.join(self.store, n))] if os.path.isdir(self.store) else []
@@ -298,6 +315,8 @@ class Active:
         target = os.path.join(base, version)
         os.makedirs(target, mode=0o700, exist_ok=True)
         os.chmod(base, 0o700)
+        os.chmod(target, 0o700)
+        _scrub_key_temps(target)
         for n in names:
             dst = os.path.join(target, n)
             if os.path.exists(dst):
@@ -345,6 +364,7 @@ class Active:
         if os.path.exists(dst):
             return host
         src = os.path.join(self.dir, file_name(host))
+        _scrub_key_temps(self.dir)
         fd, tmp = tempfile.mkstemp(dir=self.dir, prefix=".prep-", suffix=".tmp")
         os.close(fd)
         try:

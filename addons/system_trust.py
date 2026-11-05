@@ -97,10 +97,14 @@ def system_roots(workdir):
     code-signing-only root), minus any root an admin or the user set to 'Never Trust' for SSL."""
     hashed = HASHED.findall(_security("find-certificate", "-a", "-Z", "-p", SYSTEM_ROOTS).stdout)
     system = _trust_settings("-s", workdir)
+    # Without the system trust list we cannot tell SSL roots from code-signing-only ones: refuse rather than
+    # ship every certificate in the keychain and claim it is what this Mac trusts for HTTPS.
+    if system is None:
+        return []
     overrides = [d for d in (_trust_settings("-d", workdir), _trust_settings("", workdir)) if d]
     roots = []
     for sha1, pem in hashed:
-        if system is not None and (sha1 not in system or not _ssl_verdict(system[sha1])):
+        if sha1 not in system or not _ssl_verdict(system[sha1]):
             continue
         if any(sha1 in d and _ssl_denied(d[sha1]) for d in overrides):
             continue
@@ -121,6 +125,7 @@ def build(out, extras=()):
     # or truncated bundle that mitmproxy then treated as the Mac's trust list.
     directory = os.path.dirname(os.path.abspath(out)) or "."
     os.makedirs(directory, mode=0o700, exist_ok=True)
+    os.chmod(directory, 0o700)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".trust-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:

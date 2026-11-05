@@ -68,6 +68,39 @@ class RootStoreAsMacOSTrustsIt(unittest.TestCase):
             got = system_trust.system_roots("/nonexistent")
         self.assertEqual(got, [pems["AA"], pems["CC"]])
 
+    def test_unreadable_system_trust_settings_do_not_ship_every_root(self):
+        # trust-settings-export -s failed: the old code kept every certificate in SystemRootCertificates
+        # (including Apple's code-signing-only root) and build() still printed success counts. Without the
+        # system list we cannot say which roots macOS trusts for SSL — refuse so the caller keeps mitmproxy's.
+        pems = {("%040X" % i): "-----BEGIN CERTIFICATE-----\nR%d\n-----END CERTIFICATE-----" % i
+                for i in range(25)}
+        listing = "".join("SHA-1 hash: %s\n%s\n" % (h, p) for h, p in pems.items())
+        fake = mock.Mock(return_value=mock.Mock(stdout=listing, returncode=0))
+        with mock.patch.object(system_trust, "_security", fake), \
+                mock.patch.object(system_trust, "_trust_settings", return_value=None):
+            self.assertEqual(system_trust.system_roots("/nonexistent"), [])
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "bundle.pem")
+            with mock.patch.object(system_trust, "_security", fake), \
+                    mock.patch.object(system_trust, "_trust_settings", return_value=None), \
+                    mock.patch.object(system_trust, "added_anchors", return_value=[]):
+                self.assertIsNone(system_trust.build(out))
+            self.assertFalse(os.path.exists(out))
+
+    def test_build_reasserts_owner_only_on_the_output_directory(self):
+        # makedirs(..., exist_ok=True) does not fix a directory that already exists as 0755. The trust bundle
+        # parent must be re-chmod'd to 0700 so a looser mode from an earlier run does not stick.
+        with tempfile.TemporaryDirectory() as d:
+            parent = os.path.join(d, "nested")
+            os.makedirs(parent, mode=0o755)
+            os.chmod(parent, 0o755)
+            out = os.path.join(parent, "bundle.pem")
+            roots = ["-----BEGIN CERTIFICATE-----\nR%d\n-----END CERTIFICATE-----" % i for i in range(25)]
+            with mock.patch.object(system_trust, "system_roots", return_value=roots), \
+                    mock.patch.object(system_trust, "added_anchors", return_value=[]):
+                self.assertEqual(system_trust.build(out), (25, 0))
+            self.assertEqual(oct(os.stat(parent).st_mode & 0o777), "0o700")
+
     def test_build_does_not_write_through_a_shared_out_tmp(self):
         # Two `rivis start`s used out.tmp for the same path: one truncated while the other wrote, leaving a
         # mixed or empty trust bundle. Each build must use a private temp, then replace.

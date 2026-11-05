@@ -304,6 +304,49 @@ class ClientCertsUnit(unittest.TestCase):
         self.assertNotEqual(path, first)
         self.assertTrue(os.path.isfile(os.path.join(path, "api.example.test.pem")))
 
+    def test_active_directory_is_private_and_orphan_key_temps_are_removed(self):
+        # A kill between mkstemp and replace left .*.tmp copies of the unencrypted key in .active/<fp>/. The next
+        # refresh (same fingerprint) returned early and never cleaned them; a directory that somehow became 0755
+        # stayed that way. Keys must be owner-only, and temps must not outlive the operation.
+        store = os.path.join(self.suite.new_home("active-perms"), "client-certs")
+        with open(self.alice[2], "rb") as fh:
+            client_certs.add(store, "127.0.0.1", fh.read(), "s3cret pass")
+        active = client_certs.Active(store)
+        path = active.refresh()
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o700)
+        orphan = os.path.join(path, ".127.0.0.1.pem-crash.tmp")
+        with open(orphan, "w") as fh:
+            fh.write("-----BEGIN PRIVATE KEY-----\norphan\n-----END PRIVATE KEY-----\n")
+        os.chmod(path, 0o755)
+        again = active.refresh()
+        self.assertEqual(again, path)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o700)
+        self.assertFalse(os.path.exists(orphan), "interrupted copy temps must not keep private keys")
+
+    def test_restart_rebuild_and_prepare_also_scrub_orphan_key_temps(self):
+        # A new Active() (proxy restart) rebuilds into the same fingerprint dir without taking the early-return
+        # path; prepare leaves .prep-*.tmp the same way. Both must scrub orphans and reassert 0700.
+        store = os.path.join(self.suite.new_home("active-rebuild"), "client-certs")
+        with open(self.alice[2], "rb") as fh:
+            client_certs.add(store, "*.example.test", fh.read(), "s3cret pass")
+        path = client_certs.Active(store).refresh()
+        orphan = os.path.join(path, ".api.example.test.pem-crash.tmp")
+        with open(orphan, "w") as fh:
+            fh.write("-----BEGIN PRIVATE KEY-----\norphan\n-----END PRIVATE KEY-----\n")
+        os.chmod(path, 0o755)
+        rebuilt = client_certs.Active(store).refresh()
+        self.assertEqual(rebuilt, path)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o700)
+        self.assertFalse(os.path.exists(orphan))
+        active = client_certs.Active(store)
+        active.refresh()
+        prep_orphan = os.path.join(path, ".prep-crash.tmp")
+        with open(prep_orphan, "w") as fh:
+            fh.write("-----BEGIN PRIVATE KEY-----\nprep\n-----END PRIVATE KEY-----\n")
+        # prepare (not another refresh) must scrub — dst for this host does not exist yet, so scrub runs
+        self.assertEqual(active.prepare("api.example.test"), "*.example.test")
+        self.assertFalse(os.path.exists(prep_orphan), "prepare must not leave key temps from a prior crash")
+
 
 if __name__ == "__main__":
     harness.main()

@@ -1,9 +1,16 @@
 """Wildcard -> regex tests for the TLS allow/ignore lists (proxy_common)."""
+import json
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 
 import _paths  # noqa: F401
 from proxy_common import tls_config, tls_covering, tls_host_regex, tls_options, tls_update
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TLS_CLI = os.path.join(REPO, "addons", "tls_cli.py")
 
 
 def hit(pattern, candidate):
@@ -51,6 +58,46 @@ class Wildcards(unittest.TestCase):
                     "<script>", "مرحبا.example"):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 tls_host_regex(bad)
+
+    def test_punycode_is_matched_and_unicode_idna_is_refused(self):
+        # SNI on the wire is punycode; a Unicode label in a pattern is refused so it cannot silently match nothing
+        # (or, worse, be widened). The punycode form is an ordinary hostname.
+        puny = "xn--bcher-kva.example.test"
+        self.assertTrue(hit(puny, puny + ":443"))
+        self.assertTrue(hit("*." + puny.split(".", 1)[1], "www." + puny.split(".", 1)[1] + ":443"))
+        self.assertFalse(hit("never-listed.zzzz", "api.example.test:443"))
+        with self.assertRaises(ValueError):
+            tls_host_regex("bücher.example.test")
+
+
+class TlsCliNoFalseSuccess(unittest.TestCase):
+    """tls allow|ignore add|rm must not claim a change that did not happen."""
+
+    def _run(self, path, *args):
+        return subprocess.run(["/usr/bin/python3", "-I", TLS_CLI, path, *args],
+                              capture_output=True, text=True)
+
+    def test_removing_a_pattern_that_is_not_on_the_list_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "rules.json")
+            with open(path, "w") as fh:
+                json.dump({"rules": [], "tls": {"mode": "ignore", "ignore": ["foo.test"], "allow": []}}, fh)
+            cp = self._run(path, "ignore", "rm", "missing.test")
+            self.assertNotEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+            self.assertIn("no ignore pattern", cp.stderr)
+            self.assertNotIn("removed", cp.stdout)
+            with open(path) as fh:
+                self.assertEqual(json.load(fh)["tls"]["ignore"], ["foo.test"])
+
+    def test_adding_a_pattern_already_on_the_list_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "rules.json")
+            with open(path, "w") as fh:
+                json.dump({"rules": [], "tls": {"mode": "allow", "allow": ["foo.test"], "ignore": []}}, fh)
+            cp = self._run(path, "allow", "add", "FOO.test")
+            self.assertNotEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+            self.assertIn("already on the list", cp.stderr)
+            self.assertNotIn("added", cp.stdout)
 
 
 class Config(unittest.TestCase):
