@@ -190,6 +190,27 @@ class PilotReview(unittest.TestCase):
         for leak in ("123456", "987654", "42"):
             self.assertNotIn(leak, masked_raw)
 
+    def test_bom_after_whitespace_or_another_bom_still_redacts(self):
+        # The first BOM fix only peeled a single U+FEFF at index 0. Whitespace before the BOM, a second BOM, or
+        # BOM-space-BOM (and the same shapes inside a nested JSON string) still skipped structure redaction.
+        secret = json.dumps({"password": 123456, "otp": 987654, "pin": 42, "user": "qa"})
+        prefixes = ("  \ufeff", "\t\ufeff", "\r\n\ufeff", "\ufeff\ufeff", "\ufeff \ufeff", " \ufeff\n\ufeff")
+        for prefix in prefixes:
+            body = prefix + secret
+            out = R.text(body, "application/json")
+            for leak in ("123456", "987654", "42"):
+                self.assertNotIn(leak, out, repr(prefix))
+            self.assertIn("qa", out, repr(prefix))
+            raw = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + body
+            masked_raw = R.raw_text(raw)
+            for leak in ("123456", "987654", "42"):
+                self.assertNotIn(leak, masked_raw, repr(prefix))
+        nested = json.dumps({"payload": "\ufeff \ufeff" + secret})
+        nested_out = R.text(nested, "application/json")
+        for leak in ("123456", "987654", "42"):
+            self.assertNotIn(leak, nested_out)
+        self.assertIn("qa", nested_out)
+
 
 class RoundThreeAuditShapes(unittest.TestCase):
     def test_secret_containers_variants_redirects_and_encoded_bodies(self):
