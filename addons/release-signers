@@ -1,2 +1,3 @@
 # Public half of the release-signing key (ssh-keygen -Y). One line: rivis-release namespaces="rivis-release" ssh-ed25519 AAAA...
 # Empty = this build cannot verify updates, so it never installs any.
+rivis-release namespaces="rivis-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOLsYkWOs4JF/JTDkdZTReGuLnjFlmF/a2p6v1MOq/CU
