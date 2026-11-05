@@ -4,5 +4,15 @@
   "env_prefix": "RIVIS",
   "state_dir": "~/.rivis",
   "update_repo": "CoorB/rivis",
-  "github_app_client_id": ""
+  "github_app_client_id": "",
+  "update_source": "azure",
+  "azure_updates": {
+    "org": "coorb",
+    "project": "Rivis",
+    "feed": "rivis",
+    "view": "Release",
+    "package": "rivis",
+    "tenant": "",
+    "client_id": ""
+  }
 }

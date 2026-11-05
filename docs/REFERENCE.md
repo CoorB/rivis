@@ -185,8 +185,11 @@ rivis bug-report [--output PATH]                     # redacted support zip (no 
 rivis update [check|install|login|logout|status]     # signed updates when configured; otherwise install the new release zip
 ```
 
-An installed copy checks public GitHub releases without a sign-in. `rivis update login` is only needed if the
-repository is private. Every update still needs a manifest signed by a key shipped in `addons/release-signers` and
+An installed copy checks the organisation's Azure DevOps feed (`rivis`, view `Release`): run `rivis update login`
+once and sign in with your organisation account in the browser (a device code; nothing is typed into Rivis). Only
+versions IT has approved, by promoting them to the `Release` view, are offered, and your account must be in the
+Rivis readers group. A build configured for GitHub releases instead (`update_source` `github`) checks public releases
+without a sign-in. Every update still needs a manifest signed by a key shipped in `addons/release-signers` and
 an installer whose SHA-256 matches that manifest; a build without a release key cannot offer updates.
 
 For `throttle`, `loss=` applies only to that command; a later profile uses its own packet loss.

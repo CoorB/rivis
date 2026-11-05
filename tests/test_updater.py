@@ -126,7 +126,7 @@ class UpdaterBase(unittest.TestCase):
         self.set_signer(self.key)
         p = os.path.join(self.tool, "product.json")
         prod = json.load(open(p))
-        prod.update(github_app_client_id="Iv-test", update_api="http://127.0.0.1:%d" % self.gh.port,
+        prod.update(update_source="github", github_app_client_id="Iv-test", update_api="http://127.0.0.1:%d" % self.gh.port,
                     update_login="http://127.0.0.1:%d" % self.gh.port)
         json.dump(prod, open(p, "w"))
         self.token_file = os.path.join(self.root, "token")

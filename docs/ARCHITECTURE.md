@@ -207,7 +207,7 @@ macOS has no `flock(1)` binary; the CLIs never shell out for the lock. They call
 
 | File | Responsibility |
 |---|---|
-| `updater.py` | Check / download signed GitHub releases (signature + SHA-256) |
+| `updater.py` | Check / download signed releases from the Azure DevOps feed (signature + SHA-256) |
 | `update_install.sh` | Detached install of a verified zip, then restart from `last-start` |
 | `release-signers` | Public half of the release-signing key (empty ⇒ updates never install) |
 

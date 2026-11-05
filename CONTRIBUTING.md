@@ -169,4 +169,4 @@ fails for a reason that has nothing to do with your change. Keep those functions
 
 ## Releases
 
-Packaging and first-run checks live under `install/mirror/` and `release-tools/`. Signing keys, publishing to the mirror/GitHub and cutting a version are the maintainer's job — do not document or handle keys here, and do not bump `install/VERSION` (or any other release pin) unless you are that person. Contributors ship behaviour + tests; the maintainer ships the zip.
+Packaging and first-run checks live under `install/mirror/` and `release-tools/`. Signing keys, publishing to the mirror/Azure DevOps feed and cutting a version are the maintainer's job — do not document or handle keys here, and do not bump `install/VERSION` (or any other release pin) unless you are that person. Contributors ship behaviour + tests; the maintainer ships the zip.

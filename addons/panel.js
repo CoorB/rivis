@@ -3693,7 +3693,7 @@
         extra = `<div class="devcode">${esc(l.user_code)}</div><div class="btns" style="margin:0"><a class="b p" href="${esc(l.uri)}" target="_blank" rel="noopener">Open GitHub</a>` +
           `<button class="b" id="upd-copy">Copy code</button></div>`;
       } else {
-        sub = l.status === "error" ? `Sign-in failed: ${esc(l.error || "")}` : `This release repository needs GitHub sign-in.`;
+        sub = l.status === "error" ? `Sign-in failed: ${esc(l.error || "")}` : `Updates need a sign-in with your organisation account.`;
         act = `<button class="b p" id="upd-login" ${l.status === "starting" ? "disabled" : ""}>Sign in with GitHub</button>`;
       }
     } else {

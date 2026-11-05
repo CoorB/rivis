@@ -103,7 +103,7 @@
 #                                 --fix-safe does only safe, reversible fixes (asks y/N)
 #   <cli> bug-report [--output PATH]     create a redacted support bundle (no flows or tokens)
 #   <cli> update [check|install|login|logout|status] [--yes]
-#                                 signed in-app updates from the public GitHub releases
+#                                 signed in-app updates (the organisation's Azure DevOps feed, or GitHub releases)
 #                                 --yes: install without the "Install it now?" prompt (for check; install already does)
 #   <cli> health                  is the running proxy answering, on the installed version? (exit 0 = yes)
 #   <cli> rollback [VERSION|--list]   go back to an earlier installed version and restart with the same options
@@ -889,8 +889,8 @@ PY
 }
 our_listeners() { local pid; for pid in $(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u); do our_mitmweb "$pid" && echo "$pid"; done; true; }
 # ───────────────────────── update ─────────────────────────
-# Signed updates from the public GitHub releases (addons/updater.py: signature +
-# SHA-256 checks; device-flow sign-in only for a private repo). The install runs detached (addons/update_install.sh) because it stops and restarts this proxy.
+# Signed updates from the Azure DevOps feed or GitHub releases (addons/updater.py: signature +
+# SHA-256 checks; device-code sign-in where the source needs one). The install runs detached (addons/update_install.sh) because it stops and restarts this proxy.
 cmd_update() {
   local U=(/usr/bin/python3 -I "$SCRIPT_DIR/addons/updater.py") action="${1:-check}" out yes=0
   [ $# -gt 0 ] && shift
@@ -902,7 +902,7 @@ cmd_update() {
     check|install)
       local pinned; pinned=$(mitmdump --version 2>/dev/null | sed -n 's/^[Mm]itmproxy:* *v*\([0-9.]*\).*/\1/p' | head -1)
       [ -z "$pinned" ] || /usr/bin/python3 -I "$SCRIPT_DIR/addons/mitm_watch.py" check "$pinned" | sed 's/^/• /' || true
-      out=$("${U[@]}" check) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error","update check failed"))' 2>/dev/null). To upgrade, download the new release zip from https://github.com/CoorB/rivis/releases and run its install.sh."
+      out=$("${U[@]}" check) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error","update check failed"))' 2>/dev/null). To upgrade by hand, get the new release zip (Azure DevOps: Rivis > Artifacts > rivis) and run its install.sh."
       local v notes; v=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; a=json.load(sys.stdin)["available"]; print(a["version"] if a else "")')
       if [ -z "$v" ]; then info "$PRODUCT_NAME $(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["current"])') is up to date"; return 0; fi
       notes=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["available"]["notes"])')
@@ -2195,7 +2195,7 @@ case "${1:-}" in
   bug-report) shift; cmd_bug_report "$@" ;;
   update)    shift; cmd_update "$@" ;;
   terms)     shift; cmd_terms "$@" ;;
-  uninstall) die "run install.sh --uninstall from the unzipped Rivis release zip (download: https://github.com/CoorB/rivis/releases)" ;;
+  uninstall) die "run install.sh --uninstall from the unzipped Rivis release zip (Azure DevOps: Rivis > Artifacts > rivis)" ;;
   cert)      shift; [ $# -eq 0 ] || die "usage: $CLI cert"; cmd_cert ;;
   --version|-V|version)   # installed copies carry VERSION at their root; a repo checkout keeps it in install/
     v=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || cat "$SCRIPT_DIR/install/VERSION" 2>/dev/null || echo dev)
