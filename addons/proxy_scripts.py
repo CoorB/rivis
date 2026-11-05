@@ -15,6 +15,7 @@ import re
 import shutil
 import struct
 import sys
+import threading
 import time
 import glob
 import traceback
@@ -38,6 +39,9 @@ GRAPHQL_OP_RE = re.compile(
     r"(?:([_A-Za-z][_0-9A-Za-z]*))?|(?P<selection>\{))"
 )
 MAX_VIEWER_BODY = 1024 * 1024
+# Shared by every script for the life of the proxy (Proxyman sharedState). Cap keeps a runaway script from
+# pinning megabytes in the mitmweb process; the error names the limit so the Scripts tab is enough to fix it.
+MAX_SHARED_STATE_BYTES = 256 * 1024
 NODE_PIPE_LIMIT = 64 * 1024 * 1024
 NO_HOOK = object()
 NODE_OUTER_TIMEOUT = 30.0
@@ -328,6 +332,39 @@ class ScriptFailure(Exception):
         self.short_traceback = short_traceback
 
 
+def prepare_shared_state(value):
+    """Normalise a shared-state dict: JSON-only values, under MAX_SHARED_STATE_BYTES, else a plain ScriptFailure."""
+    if not isinstance(value, dict):
+        # None too: a JS script that ran sharedState = null / undefined must not wipe every other script's keys.
+        raise ScriptFailure("shared state must be a dictionary (an object); it was replaced with %s, so nothing "
+                            "was saved" % ("null" if value is None else type(value).__name__))
+    try:
+        raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise ScriptFailure("shared state values must be JSON-serialisable") from exc
+    if len(raw.encode("utf-8")) > MAX_SHARED_STATE_BYTES:
+        raise ScriptFailure(
+            "shared state is full (max %d KB of JSON)" % (MAX_SHARED_STATE_BYTES // 1024))
+    return json.loads(raw)
+
+
+def merge_shared_state(current, before, after):
+    """The bag after one hook: its own changes (after vs the snapshot it was given) applied onto the CURRENT bag.
+
+    Hooks of different scripts overlap, so committing a hook's whole dict would let a hook that only read the
+    bag roll back a key another hook wrote meanwhile, and two writers of different keys would lose one of them.
+    Only the keys this hook added, changed or removed are applied; every other key keeps its current value."""
+    after = prepare_shared_state(after)
+    merged = dict(current)
+    for key, value in after.items():
+        if key not in before or before[key] != value:
+            merged[key] = value
+    for key in before:
+        if key not in after:
+            merged.pop(key, None)
+    return prepare_shared_state(merged)          # the cap applies to the result, not only to this hook's view
+
+
 def _capture_user_call(fn, args):
     """Run user code without allowing SystemExit/KeyboardInterrupt out of its worker."""
     try:
@@ -459,6 +496,9 @@ class ProxyScripts:
         self.scripts = []
         self.modules = {}
         self.contexts = {}
+        self.shared_state = {}
+        self._shared_generation = 0        # bumped by Clear / project switch: writes from older hooks are dropped
+        self._shared_guard = threading.Lock()
         self.last_errors = {}
         self.node = find_node()
         self.proc = None
@@ -474,12 +514,34 @@ class ProxyScripts:
         self.python_hosts = {}
 
     def configure(self, updated):
+        if "proxy_project" in updated:
+            # A project switch must not leak tokens/counters from the previous project's scripts.
+            self.clear_shared_state()
         if "proxy_rules_file" in updated or "proxy_project" in updated:
             self.rules_path = os.path.expanduser(ctx.options.proxy_rules_file)
             self.project = ctx.options.proxy_project
             self.script_dir = os.path.join(project_state(self.project), "scripts")
             os.makedirs(self.script_dir, mode=0o700, exist_ok=True)
             self.mtime = 0
+
+    def clear_shared_state(self):
+        with self._shared_guard:
+            self.shared_state = {}
+            self._shared_generation += 1
+
+    def _shared_snapshot(self):
+        """(generation, copy of the bag) for one hook call; pass it back to _shared_commit with the hook's bag."""
+        with self._shared_guard:
+            return self._shared_generation, copy.deepcopy(self.shared_state)
+
+    def _shared_commit(self, snapshot, value):
+        generation, before = snapshot
+        with self._shared_guard:
+            if generation != self._shared_generation:
+                # Cleared (button or project switch) while this hook ran: Clear wins, but a bad bag is still reported.
+                prepare_shared_state(value)
+                return
+            self.shared_state = merge_shared_state(self.shared_state, before, value)
 
     def _error(self, filename, phase, exc, short_traceback=""):
         message = str(exc) if isinstance(exc, ScriptFailure) else f"{type(exc).__name__}: {exc}"
@@ -666,10 +728,11 @@ class ProxyScripts:
         async with self.script_locks.setdefault(filename, asyncio.Lock()):
             if filename not in self.python_hosts:
                 await self._start_python_host(item)
+            shared = self._shared_snapshot()
             try:
                 msg = await self._python_exchange(filename, {"op": "call", "hook": hook, "context": context,
                                                     "url": url, "request": request, "response": response,
-                                                    "message": message})
+                                                    "message": message, "shared_state": shared[1]})
             except asyncio.TimeoutError as exc:
                 await self._stop_python_host(filename)
                 raise ScriptFailure("timed out after 2 s and was stopped; the call went on unchanged") from exc
@@ -677,6 +740,7 @@ class ProxyScripts:
         if not msg.get("ok"):
             raise ScriptFailure(msg.get("error", "Python host failed"), msg.get("traceback", ""))
         if not msg.get("invoked", True): return NO_HOOK
+        self._shared_commit(shared, msg.get("shared_state"))
         context.clear(); context.update(msg.get("context") or {})
         return msg.get("result")
 
@@ -814,9 +878,10 @@ class ProxyScripts:
             pending = self.node_pending[generation]
             write_lock = self.node_write_locks[generation]
             self.seq += 1; request_id = self.seq
+            shared = self._shared_snapshot()
             payload = {"id": request_id, "name": item["file"], "code": item["code"], "hook": hook,
                        "context": context, "url": url, "request": request, "response": response,
-                       "message": message}
+                       "message": message, "shared_state": shared[1]}
             loop = asyncio.get_running_loop()
             call = {"future": loop.create_future(), "started": asyncio.Event()}
             pending[request_id] = call
@@ -842,6 +907,7 @@ class ProxyScripts:
             raise ScriptFailure(message, "\n".join(lines[:12]))  # R3A-06: Node leads with file:line; the cause is lower down
         if not msg.get("invoked", True):
             return NO_HOOK
+        self._shared_commit(shared, msg.get("shared_state"))
         context.clear(); context.update(msg.get("context") or {})
         return msg.get("result")
 

@@ -12,6 +12,18 @@ function reply(id, value) {
   process.stdout.write(JSON.stringify({ id, ...value }) + "\n");
 }
 
+function syncSharedState(entry, incoming) {
+  const src = (incoming && typeof incoming === "object" && !Array.isArray(incoming)) ? incoming : {};
+  if (!entry.context.sharedState || typeof entry.context.sharedState !== "object" || Array.isArray(entry.context.sharedState)) {
+    entry.context.sharedState = Object.create(null);
+  }
+  for (const key of Object.keys(entry.context.sharedState)) delete entry.context.sharedState[key];
+  Object.assign(entry.context.sharedState, src);
+  entry.context.clearSharedState = () => {
+    for (const key of Object.keys(entry.context.sharedState)) delete entry.context.sharedState[key];
+  };
+}
+
 async function invoke(msg) {
   let entry = scripts.get(msg.name);
   if (!entry || entry.code !== msg.code) {
@@ -24,6 +36,8 @@ async function invoke(msg) {
       globalThis.log = (...args) => globalThis.__proxyLogs.push(args.map(String).join(" "));
       globalThis.sleep = (ms) => Atomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, Number(ms) || 0)).value;
       globalThis.mock = (status=200, body="", headers={}) => ({__proxy_mock__:true,statusCode:status,body,headers});
+      globalThis.sharedState = Object.create(null);
+      globalThis.clearSharedState = () => { for (const k of Object.keys(globalThis.sharedState)) delete globalThis.sharedState[k]; };
     `).runInContext(context, { timeout: 2000 });
     // Helpers exist before user code loads, so user declarations intentionally win.
     new vm.Script(`"use strict";\n${msg.code}`, { filename: msg.name }).runInContext(context, { timeout: 2000 });
@@ -34,6 +48,7 @@ async function invoke(msg) {
     : msg.hook === "on_websocket" ? ["onWebsocket", "on_websocket"]
     : ["onResponse", "on_response"];
   const functionName = preferred.find((name) => vm.runInContext(`typeof ${name} === "function"`, entry.context));
+  syncSharedState(entry, msg.shared_state);
   entry.context.__proxyInputJson = JSON.stringify({ state: msg.context || {}, url: msg.url,
     request: msg.request, response: msg.response, message: msg.message });
   entry.context.__proxyFresh = entry.fresh;
@@ -48,7 +63,7 @@ async function invoke(msg) {
   `).runInContext(entry.context, { timeout: 2000 });
   entry.fresh = false;
   if (!functionName) {
-    const raw = vm.runInContext(`JSON.stringify({context:globalThis.__proxyState,logs:globalThis.__proxyLogs,result:null})`, entry.context);
+    const raw = vm.runInContext(`JSON.stringify({context:globalThis.__proxyState,logs:globalThis.__proxyLogs,result:null,shared_state:globalThis.sharedState})`, entry.context);
     return { ...JSON.parse(raw), invoked: false };
   }
   const args = msg.hook === "on_request" ? "__proxyState,__proxyInput.url,__proxyInput.request"
@@ -62,7 +77,7 @@ async function invoke(msg) {
     new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timed out after 2 s")), 2000); }),
   ]).finally(() => clearTimeout(timer));
   entry.context.__proxyResolved = result;
-  const raw = vm.runInContext(`JSON.stringify({context:globalThis.__proxyState,logs:globalThis.__proxyLogs,result:globalThis.__proxyResolved})`, entry.context, { timeout: 2000 });
+  const raw = vm.runInContext(`JSON.stringify({context:globalThis.__proxyState,logs:globalThis.__proxyLogs,result:globalThis.__proxyResolved,shared_state:globalThis.sharedState})`, entry.context, { timeout: 2000 });
   return { ...JSON.parse(raw), invoked: true };
 }
 

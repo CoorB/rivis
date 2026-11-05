@@ -658,6 +658,14 @@ and binary bodies are base64 with `body_is_base64: true`. Returning nothing leav
 Both languages receive `log`, `sleep`, and request-side `mock` helpers. A changed flow is tagged
 `script:<name>`; locally answered calls are marked so collections skip them.
 
+**Shared state** (Proxyman `sharedState`): every script in the running proxy shares one in-memory dictionary —
+`sharedState` in JavaScript, `shared_state` in Python (both names work in either host). Put a token in
+`onResponse`, read it in a later `onRequest` or in another script. Values must be JSON-serialisable; the bag is
+capped at 256 KB of JSON and the Scripts tab shows a plain "shared state is full" error when a write would
+exceed it. It is cleared by `rivis restart`, by switching the active project, by **Clear shared state** in the
+Scripting window, or by `clearSharedState()` / `clear_shared_state()` inside a script. Per-script `context` is
+unchanged and still only visible to that script.
+
 WebSocket frames also call `onWebsocket(context, url, message)` (Python: `on_websocket`). `message` has
 `from` (`client` / `server`), `type` (`text` / `binary`), and `data` (string; binary that is not UTF-8 text is
 shown as `Binary (length=N)`, with `rawData` as base64). The hook is read-only in this release: use `log()` to

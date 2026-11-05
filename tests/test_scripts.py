@@ -139,6 +139,103 @@ def on_request(context, url, request):
         self.assertEqual({h["x-project"] for h in seen}, {"default"})
         self.assertEqual({h["x-flow"] for h in seen}, {"yes"})
 
+    def test_shared_state_token_from_response_is_used_on_the_next_request(self):
+        # Capture a login-shaped field on /json/small, then attach it as Authorization on /echo.
+        self.install("tok.py", '''
+def on_request(context, url, request):
+    token = shared_state.get("token")
+    if token:
+        request["headers"]["Authorization"] = "Bearer " + token
+    return request
+
+def on_response(context, url, request, response):
+    body = response.get("body")
+    if isinstance(body, dict) and isinstance(body.get("user"), dict) and body["user"].get("name"):
+        shared_state["token"] = body["user"]["name"]
+    return response
+''', match=r"/json/small|/echo")
+        self.assertEqual(self.fetch("/json/small").json()["user"]["name"], "alice")
+        doc = self.fetch("/echo").json()
+        hdr = {k.lower(): v for k, v in doc["headers"]}
+        self.assertEqual(hdr.get("authorization"), "Bearer alice")
+
+    def test_shared_state_is_shared_across_scripts(self):
+        self.install("a_writer.py", '''
+def on_response(context, url, request, response):
+    shared_state["cross"] = "from-a"
+    return response
+''', match="/json/small")
+        self.install("b_reader.py", '''
+def on_request(context, url, request):
+    if shared_state.get("cross"):
+        request["headers"]["X-Cross"] = shared_state["cross"]
+    return request
+''', match="/echo")
+        self.fetch("/json/small")
+        hdr = {k.lower(): v for k, v in self.fetch("/echo").json()["headers"]}
+        self.assertEqual(hdr.get("x-cross"), "from-a")
+
+    def test_shared_state_cap_records_a_plain_error_and_keeps_prior_values(self):
+        self.install("cap.py", '''
+def on_request(context, url, request):
+    if "seed" in url:
+        shared_state["keep"] = "yes"
+        request["headers"]["X-Keep"] = shared_state["keep"]
+        return request
+    if "blow" in url:
+        shared_state["pad"] = "x" * (300 * 1024)
+        return request
+    request["headers"]["X-Keep"] = str(shared_state.get("keep") or "")
+    return request
+''', match="/echo")
+        seed = {k.lower(): v for k, v in self.fetch("/echo?seed=1").json()["headers"]}
+        self.assertEqual(seed.get("x-keep"), "yes")
+        self.fetch("/echo?blow=1")
+        err = wait_for(lambda: self.errors().get("cap.py"), 5, 0.2, "cap error")
+        self.assertIn("shared state is full", err["message"])
+        after = {k.lower(): v for k, v in self.fetch("/echo?after=1").json()["headers"]}
+        self.assertEqual(after.get("x-keep"), "yes", "a rejected over-size write must leave earlier keys")
+
+    def test_panel_clear_shared_state_forgets_tokens(self):
+        self.install("clr.py", '''
+def on_request(context, url, request):
+    if "set" in url:
+        shared_state["token"] = "t1"
+    request["headers"]["X-Tok"] = str(shared_state.get("token") or "")
+    return request
+''', match="/echo")
+        self.assertEqual({k.lower(): v for k, v in self.fetch("/echo?set=1").json()["headers"]}.get("x-tok"), "t1")
+        self.panel.ok("script_shared_clear", {})
+        self.assertEqual({k.lower(): v for k, v in self.fetch("/echo?after=1").json()["headers"]}.get("x-tok"), "")
+
+    def test_shared_state_clears_on_project_switch(self):
+        self.install("sw.py", '''
+def on_request(context, url, request):
+    if "set" in url:
+        shared_state["token"] = "alive"
+    request["headers"]["X-Tok"] = str(shared_state.get("token") or "")
+    return request
+''', match="/echo")
+        self.assertEqual({k.lower(): v for k, v in self.fetch("/echo?set=1").json()["headers"]}.get("x-tok"), "alive")
+        neo = os.path.join(self.inst.home, ".rivis", "projects", "neo")
+        os.makedirs(os.path.join(neo, "scripts"), mode=0o700, exist_ok=True)
+        with open(os.path.join(neo, "rules.json"), "w") as fh:
+            json.dump({"rules": [], "scripts": []}, fh)
+        default_rules = self.inst.rules_path
+        try:
+            # Same live switch path as client-certs: changing proxy_project runs ProxyScripts.configure.
+            self.panel.set_option("proxy_project", "neo")
+            self.panel.set_option("proxy_rules_file", os.path.join(neo, "rules.json"))
+            wait_for(lambda: self.panel.option("proxy_project") == "neo", 5, 0.1, "option is neo")
+            self.panel.set_option("proxy_project", "default")
+            self.panel.set_option("proxy_rules_file", default_rules)
+            wait_for(lambda: self.panel.option("proxy_project") == "default", 5, 0.1, "option is default")
+            hdr = {k.lower(): v for k, v in self.fetch("/echo?after=1").json()["headers"]}
+            self.assertEqual(hdr.get("x-tok"), "", "project switch must clear shared_state")
+        finally:
+            self.panel.set_option("proxy_project", "default")
+            self.panel.set_option("proxy_rules_file", default_rules)
+
     def test_mock_with_plain_text_answers_locally_and_upstream_is_not_hit(self):
         self.install("mock.py", 'def on_request(context, url, request):\n    return mock(202, "plain mock")\n', match="/echo")
         r = self.fetch("/echo")
@@ -355,6 +452,64 @@ function onRequest(context, url, request) {
         got = [dict((k.lower(), v) for k, v in self.fetch("/echo").json()["headers"])["x-n"] for _ in range(3)]
         self.assertEqual(got, ["1", "2", "3"])
 
+    def test_shared_state_token_survives_an_edit_of_the_script(self):
+        # One script keeps its own globals in one VM, so a token test inside one unchanged script proves nothing.
+        # Saving an edit starts a fresh VM: only the proxy-held sharedState can still hand the token over.
+        self.install("tok.js", '''
+function onResponse(context, url, request, response) {
+  if (response.body && response.body.user && response.body.user.name)
+    sharedState.token = response.body.user.name;
+  return response;
+}
+''', match=r"/json/small|/echo")
+        self.assertEqual(self.fetch("/json/small").json()["user"]["name"], "alice")
+        with open(os.path.join(self.inst.path("scripts"), "tok.js"), "w") as fh:
+            fh.write('''
+function onRequest(context, url, request) {
+  request.headers["X-V"] = "2";
+  if (sharedState.token) request.headers["Authorization"] = "Bearer " + sharedState.token;
+  return request;
+}
+''')
+        hdr = wait_for(lambda: (lambda h: h if h.get("x-v") == "2" else None)(
+            {k.lower(): v for k, v in self.fetch("/echo").json()["headers"]}), 10, 0.3, "edited script in use")
+        self.assertEqual(hdr.get("authorization"), "Bearer alice")
+
+    def test_a_script_that_nulls_shared_state_does_not_wipe_other_scripts_keys(self):
+        self.install("a_keep.js", '''
+function onResponse(context, url, request, response) { sharedState.keep = "k"; return response; }
+''', match="/json/small")
+        self.install("n_null.js", '''
+function onRequest(context, url, request) { sharedState = null; return request; }
+''', match="/text")
+        self.install("r_read.js", '''
+function onRequest(context, url, request) { request.headers["X-Keep"] = String(sharedState.keep || ""); return request; }
+''', match="/echo")
+        self.fetch("/json/small")
+        self.fetch("/text")
+        err = wait_for(lambda: self.errors().get("n_null.js"), 5, 0.2, "null error")
+        self.assertIn("dictionary", err["message"])
+        hdr = {k.lower(): v for k, v in self.fetch("/echo").json()["headers"]}
+        self.assertEqual(hdr.get("x-keep"), "k")
+
+    def test_shared_state_is_shared_across_scripts(self):
+        # Two JS VMs: without the proxy bag, the reader never sees the writer's key.
+        self.install("a_writer.js", '''
+function onResponse(context, url, request, response) {
+  sharedState.cross = "from-a-js";
+  return response;
+}
+''', match="/json/small")
+        self.install("b_reader.js", '''
+function onRequest(context, url, request) {
+  if (sharedState.cross) request.headers["X-Cross"] = sharedState.cross;
+  return request;
+}
+''', match="/echo")
+        self.fetch("/json/small")
+        hdr = {k.lower(): v for k, v in self.fetch("/echo").json()["headers"]}
+        self.assertEqual(hdr.get("x-cross"), "from-a-js")
+
     def test_mock_plain_text(self):
         self.install("m.js", 'async function onRequest(c, u, r) { return mock(201, "js mock"); }\n', match="/echo")
         r = self.fetch("/echo")
@@ -499,6 +654,64 @@ class NodeMissing(LiveCase):
             else:
                 os.environ["RIVIS_NODE"] = old
 
+
+
+class SharedStateUnit(unittest.TestCase):
+    def test_prepare_shared_state_rejects_oversize_and_non_dicts(self):
+        sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+        import proxy_scripts
+        self.assertEqual(proxy_scripts.prepare_shared_state({"a": 1}), {"a": 1})
+        with self.assertRaises(proxy_scripts.ScriptFailure) as bad:
+            proxy_scripts.prepare_shared_state(["not", "a", "dict"])
+        self.assertIn("dictionary", str(bad.exception))
+        with self.assertRaises(proxy_scripts.ScriptFailure) as full:
+            proxy_scripts.prepare_shared_state({"pad": "x" * (proxy_scripts.MAX_SHARED_STATE_BYTES)})
+        self.assertIn("shared state is full", str(full.exception))
+        with self.assertRaises(proxy_scripts.ScriptFailure):
+            proxy_scripts.prepare_shared_state(None)          # JS sharedState = null / undefined
+
+    def _scripts(self):
+        sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+        import proxy_scripts
+        ps = proxy_scripts.ProxyScripts.__new__(proxy_scripts.ProxyScripts)
+        ps.shared_state, ps._shared_generation, ps._shared_guard = {}, 0, threading.Lock()
+        return proxy_scripts, ps
+
+    def test_overlapping_hooks_keep_each_others_keys(self):
+        _, ps = self._scripts()
+        ps.shared_state = {"token": "T"}
+        a, b = ps._shared_snapshot(), ps._shared_snapshot()            # two hooks start on the same bag
+        ps._shared_commit(a, {"token": "U"})                          # A refreshes the token
+        ps._shared_commit(b, {"token": "T"})                          # B only read it: must not roll A back
+        self.assertEqual(ps.shared_state, {"token": "U"})
+        c, d = ps._shared_snapshot(), ps._shared_snapshot()
+        ps._shared_commit(c, {"token": "U", "counter": 1})
+        ps._shared_commit(d, {"token": "U", "other": "x"})
+        self.assertEqual(ps.shared_state, {"token": "U", "counter": 1, "other": "x"})
+        e = ps._shared_snapshot()
+        ps._shared_commit(e, {"counter": 1, "other": "x"})            # a hook that deleted token
+        self.assertEqual(ps.shared_state, {"counter": 1, "other": "x"})
+
+    def test_clear_wins_over_a_hook_in_flight_and_a_null_bag_changes_nothing(self):
+        proxy_scripts, ps = self._scripts()
+        ps.shared_state = {"token": "t1"}
+        inflight = ps._shared_snapshot()
+        ps.clear_shared_state()
+        ps._shared_commit(inflight, {"token": "t1", "late": True})
+        self.assertEqual(ps.shared_state, {})
+        ps.shared_state = {"keep": "k"}
+        with self.assertRaises(proxy_scripts.ScriptFailure):
+            ps._shared_commit(ps._shared_snapshot(), None)
+        self.assertEqual(ps.shared_state, {"keep": "k"})
+
+    def test_the_cap_applies_to_the_merged_bag(self):
+        proxy_scripts, ps = self._scripts()
+        half = "x" * (proxy_scripts.MAX_SHARED_STATE_BYTES // 2)
+        a, b = ps._shared_snapshot(), ps._shared_snapshot()
+        ps._shared_commit(a, {"a": half})
+        with self.assertRaises(proxy_scripts.ScriptFailure):
+            ps._shared_commit(b, {"b": half + "y" * 100})
+        self.assertEqual(list(ps.shared_state), ["a"])
 
 
 class ScriptBodyEncoding(unittest.TestCase):

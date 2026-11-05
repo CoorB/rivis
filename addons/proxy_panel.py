@@ -995,20 +995,82 @@ class ProxyPanel:
             raise PanelError("unknown script language or template")
         if lang == "py":
             return {
-                "header": 'def on_request(context, url, request):\n    request["headers"]["X-QA"] = "enabled"\n    return request\n',
-                "json": 'def on_response(context, url, request, response):\n    if isinstance(response["body"], dict):\n        response["body"]["featureEnabled"] = True\n        return response\n',
-                "mock": 'def on_request(context, url, request):\n    return mock(200, {"message": "local response"}, {"Content-Type": "application/json"})\n',
-                "latency": 'async def on_request(context, url, request):\n    await sleep(500)\n',
-                "token": 'def on_response(context, url, request, response):\n    if "token" in url.lower():\n        log("token refresh", response["statusCode"])\n',
-                "websocket": 'def on_websocket(context, url, message):\n    log("[%s] %s: %s" % (message["from"], message["type"], message["data"]))\n',
+                "header": (
+                    '# shared_state is shared by every script until rivis restart, a project switch, or Clear shared state.\n'
+                    'def on_request(context, url, request):\n'
+                    '    request["headers"]["X-QA"] = "enabled"\n'
+                    '    return request\n'
+                ),
+                "json": (
+                    '# shared_state holds JSON values across hooks and scripts (e.g. a token from a login response).\n'
+                    'def on_response(context, url, request, response):\n'
+                    '    if isinstance(response["body"], dict):\n'
+                    '        response["body"]["featureEnabled"] = True\n'
+                    '        return response\n'
+                ),
+                "mock": (
+                    '# Prefer shared_state for data another script must see; context is per-script only.\n'
+                    'def on_request(context, url, request):\n'
+                    '    return mock(200, {"message": "local response"}, {"Content-Type": "application/json"})\n'
+                ),
+                "latency": (
+                    '# shared_state / clear_shared_state() — same bag every script in this project sees.\n'
+                    'async def on_request(context, url, request):\n'
+                    '    await sleep(500)\n'
+                ),
+                "token": (
+                    '# Example: shared_state["access_token"] = response["body"]["access_token"]  # then add it in on_request.\n'
+                    'def on_response(context, url, request, response):\n'
+                    '    if "token" in url.lower():\n'
+                    '        log("token refresh", response["statusCode"])\n'
+                ),
+                "websocket": (
+                    '# shared_state is available here too (JSON values only; size-capped).\n'
+                    'def on_websocket(context, url, message):\n'
+                    '    log("[%s] %s: %s" % (message["from"], message["type"], message["data"]))\n'
+                ),
             }[kind]
         return {
-            "header": 'async function onRequest(context, url, request) {\n  request.headers["X-QA"] = "enabled";\n  return request;\n}\n',
-            "json": 'async function onResponse(context, url, request, response) {\n  if (response.body && typeof response.body === "object") {\n    response.body.featureEnabled = true;\n    return response;\n  }\n}\n',
-            "mock": 'async function onRequest(context, url, request) {\n  return mock(200, {message: "local response"}, {"Content-Type": "application/json"});\n}\n',
-            "latency": 'async function onRequest(context, url, request) {\n  await sleep(500);\n}\n',
-            "token": 'async function onResponse(context, url, request, response) {\n  if (url.toLowerCase().includes("token")) log("token refresh", response.statusCode);\n}\n',
-            "websocket": 'async function onWebsocket(context, url, message) {\n  log(`[${message.from}] ${message.type}: ${message.data}`);\n}\n',
+            "header": (
+                '// sharedState is shared by every script until rivis restart, a project switch, or Clear shared state.\n'
+                'async function onRequest(context, url, request) {\n'
+                '  request.headers["X-QA"] = "enabled";\n'
+                '  return request;\n'
+                '}\n'
+            ),
+            "json": (
+                '// sharedState holds JSON values across hooks and scripts (e.g. a token from a login response).\n'
+                'async function onResponse(context, url, request, response) {\n'
+                '  if (response.body && typeof response.body === "object") {\n'
+                '    response.body.featureEnabled = true;\n'
+                '    return response;\n'
+                '  }\n'
+                '}\n'
+            ),
+            "mock": (
+                '// Prefer sharedState for data another script must see; context is per-script only.\n'
+                'async function onRequest(context, url, request) {\n'
+                '  return mock(200, {message: "local response"}, {"Content-Type": "application/json"});\n'
+                '}\n'
+            ),
+            "latency": (
+                '// sharedState / clearSharedState() — same bag every script in this project sees.\n'
+                'async function onRequest(context, url, request) {\n'
+                '  await sleep(500);\n'
+                '}\n'
+            ),
+            "token": (
+                '// Example: sharedState.access_token = response.body.access_token;  // then add it in onRequest.\n'
+                'async function onResponse(context, url, request, response) {\n'
+                '  if (url.toLowerCase().includes("token")) log("token refresh", response.statusCode);\n'
+                '}\n'
+            ),
+            "websocket": (
+                '// sharedState is available here too (JSON values only; size-capped).\n'
+                'async function onWebsocket(context, url, message) {\n'
+                '  log(`[${message.from}] ${message.type}: ${message.data}`);\n'
+                '}\n'
+            ),
         }[kind]
 
     @staticmethod
@@ -1857,6 +1919,16 @@ class ProxyPanel:
             if len(cfg["scripts"]) == before: raise PanelError("no such script")
             if os.path.exists(path): os.unlink(path)
             self.save_cfg(cfg)
+        elif op == "script_shared_clear":
+            # Proxyman's "Clear all shared State data" — in-memory only; next script call sees {}.
+            cleared = False
+            for addon in self._addons():
+                if addon.__class__.__name__ == "ProxyScripts" and hasattr(addon, "clear_shared_state"):
+                    addon.clear_shared_state()
+                    cleared = True
+            if not cleared:
+                raise PanelError("Scripting add-on is not loaded")
+            return {"cleared": True}
         elif op == "graphql_filter":
             self.graphql_operation = a.get("name") or None
             self._write_view_filter()

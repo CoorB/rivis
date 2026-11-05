@@ -21,11 +21,18 @@
     render(w) {
       w.data.sig = null;
       w.body.innerHTML = `<div class="rv-split2"><div class="rv-list2"><div class="rv-win-bar">
-          <button type="button" class="rv-btn p" data-script-new>+ New</button></div>
+          <button type="button" class="rv-btn p" data-script-new>+ New</button>
+          <button type="button" class="rv-btn" data-script-shared-clear title="Forget tokens and counters kept in sharedState / shared_state">Clear shared state</button></div>
           <div data-script-list></div></div><div data-script-editor></div></div>`;
       w.body.onclick = async (e) => {
         const add = e.target.closest("[data-script-new]");
         if (add) { if (await mayLeave(w)) newScript(w); return; }
+        const clearShared = e.target.closest("[data-script-shared-clear]");
+        if (clearShared) {
+          if (await A.ask("Clear shared state?", "Scripts lose tokens and counters kept in sharedState until the next call sets them again. Per-script context is not cleared.", "Clear shared state", true))
+            await ui.run("script_shared_clear", {}, "Shared state cleared");
+          return;
+        }
         const del = e.target.closest("[data-script-del]");
         if (del) { await deleteScript(w, del.dataset.scriptDel); return; }
         const save = e.target.closest("[data-script-save]");

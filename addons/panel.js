@@ -1435,6 +1435,8 @@
         <select id="smethod" aria-label="Method"><option value="">Any method</option>${["GET","POST","PUT","PATCH","DELETE"].map((x) => `<option>${x}</option>`).join("")}</select></div>
       <div class="btns"><label class="sub" for="smatch" style="white-space:nowrap">Run on URLs like</label><input id="smatch" type="text" class="grow" value="." placeholder="URL pattern" title="A pattern matched against the URL (a regular expression). A single dot matches every call.">
         <button class="b p" id="snew">New</button></div>
+      <div class="btns"><button class="b" id="ssharedclear" title="Forget tokens and counters kept in sharedState / shared_state">Clear shared state</button>
+        <span class="sub">sharedState (JS) / shared_state (Python) — in memory until restart, a project switch, or this button.</span></div>
       <p class="sub">Rules run first, then scripts. Scripts are trusted code with your user rights — not a sandbox. ${info("Python and JavaScript scripts run with your user rights. The Node VM omits process, require and network helpers to prevent accidents, but it is NOT a security boundary.")}</p>
       <h4>Scripts (${scripts.length})</h4>${scripts.length ? scripts.map((s, i) => `<div class="row">${sw(`data-si="${i}"`, s.enabled !== false)}
         <div class="n"><div><b>${esc(s.name)}</b><span class="tag">${esc(s.lang)}</span></div><div class="sub">${esc(s.method || "ANY")} · ${esc(s.match || ".")} · ${esc(tilde(s.file))}${s.exists ? "" : " · FILE MISSING"}${errorHTML(status.errors && status.errors[s.file])}</div></div>
@@ -1442,6 +1444,10 @@
     $("snew").onclick = async () => {
       const r = await run("script_new", { name: $("sn").value, lang: $("sl").value, template: $("stpl").value, match: $("smatch").value, method: $("smethod").value }, (x) => "Created " + x.file);
       if (r) openScript(r.file);
+    };
+    $("ssharedclear").onclick = async () => {
+      if (await ask("Clear shared state?\n\nScripts lose tokens and counters kept in sharedState until the next call sets them again. Per-script context is not cleared.", { yes: "Clear shared state", danger: true }))
+        run("script_shared_clear", {}, "Shared state cleared");
     };
     m.querySelectorAll("input[data-si]").forEach((c) => (c.onchange = () => run("script_toggle", { file: scripts[c.dataset.si].file, enabled: c.checked }, c.checked ? "Script on" : "Script off")));
     m.querySelectorAll("[data-sedit]").forEach((b) => (b.onclick = () => openScript(scripts[b.dataset.sedit].file)));
