@@ -6,20 +6,34 @@ For how the pieces fit together, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.m
 
 ## Working checkout
 
-You need the pinned mitmproxy **12.2.3** on your PATH (`mitmweb` / `mitmdump`). The installer and `install/mirror.conf` are authoritative; a Homebrew cask of that version is fine for development when its signature verifies.
+You need the pinned mitmproxy **12.2.3** on your PATH (`mitmweb` / `mitmdump`). Check with `mitmweb --version`. The installer and `install/mirror.conf` are authoritative. A Homebrew cask install of **that exact version** is fine for development when its app signature verifies — but an unpinned `brew install --cask mitmproxy` may pull a newer release; do not float past 12.2.3.
 
-From the repository root:
+From the repository root. Prefer calling the checkout binary directly until you mean to replace whatever `rivis` already resolves to:
+
+```bash
+./rivis projects list
+./rivis --version
+```
+
+To put `rivis` on your PATH via `~/bin` (macOS does not include `~/bin` by default — add `export PATH="$HOME/bin:$PATH"` to your shell rc if needed):
 
 ```bash
 mkdir -p ~/bin
-ln -sf "$PWD/rivis" ~/bin/rivis
+ln -sf "$PWD/rivis" ~/bin/rivis    # overwrites any existing ~/bin/rivis symlink
+hash -r 2>/dev/null || true
 rivis projects list
-rivis start
 ```
 
-On Windows, run `.\rivis.ps1` from the checkout (or link it the same way). The installed product zip has no `tests/` or `install/`; a source checkout does.
+**Ports.** Defaults are 8080 / 8083. If those already have a Rivis (or mitmweb) listener, bare `rivis start` exits 0 with "already running" and does **not** launch this checkout — you are looking at the other instance. For a second process (or any work while a live QA proxy is up), pick free ports and keep using them for `ui` / `status` / `stop`:
 
-Do not point your everyday QA work at this checkout's default ports while someone else's live Rivis is on 8080/8083 — use `RIVIS_PORT` / `RIVIS_WEB_PORT`, or stop the live instance first.
+```bash
+export RIVIS_PORT=18780 RIVIS_WEB_PORT=18783
+rivis start --background          # or: ./rivis start --background
+rivis status
+rivis stop
+```
+
+Do not stop someone else's 8080/8083 instance to "free the ports" unless you own that session. On Windows, run `.\rivis.ps1` from the checkout (or link it the same way), and set `$env:RIVIS_PORT` / `$env:RIVIS_WEB_PORT` the same way. The installed product zip has no `tests/` or `install/`; a source checkout does.
 
 ---
 
@@ -42,7 +56,17 @@ One module while you iterate (from the repo root):
 /usr/bin/python3 -m pytest tests/test_<name>.py -k <pattern> -x -q
 ```
 
-Needs `/usr/bin/python3` with `pytest`, `mitmweb` on PATH, `node` (JS scripts) and `curl`. Browser UI tests: `pip3 install --user playwright && python3 -m playwright install chromium`.
+Needs `/usr/bin/python3` with `pytest`, `mitmweb` on PATH, `node` (JS scripts) and `curl`. Install pytest for that interpreter (not a Homebrew `python3` ahead of it on PATH):
+
+```bash
+/usr/bin/python3 -m pip install --user pytest
+```
+
+`tests/run.sh` refuses to start if that import fails and prints the same hint. Browser UI tests also need Playwright + Chromium on the same interpreter:
+
+```bash
+/usr/bin/python3 -m pip install --user playwright && /usr/bin/python3 -m playwright install chromium
+```
 
 **Hermetic check at the end.** `tests/run.sh` snapshots the machine before the suite (`tests/hermetic.py`), runs the modules, then compares. It fails the run if any Rivis test process, port or temp dir was left behind, or if `$HOME`, the protected ports or the system proxy changed. Exit status is also non-zero on an "unexpected success" (a known bug in `tests/FOUND-BUGS.md` whose `expectedFailure` you fixed — remove the marker).
 
@@ -116,8 +140,8 @@ mitmweb not found (brew install --cask mitmproxy)
 Things that have already cost someone a day. The test suite guards each one, but knowing why saves you
 the detour.
 
-**`grep -q` at the end of a pipeline.** Both shell entry points run under `set -o pipefail` (`rivis:93`,
-`addons/android_magisk.sh:20`). `grep -q` exits the moment it matches. If the writer is still pushing
+**`grep -q` at the end of a pipeline.** Both shell entry points run under `set -o pipefail` (`rivis` near the top,
+`addons/android_magisk.sh` near the top — search for `set -uo pipefail`). `grep -q` exits the moment it matches. If the writer is still pushing
 output it dies of SIGPIPE, and `pipefail` then reports the pipeline as **141** — so a match reads as
 "no match". With a short producer the writer finishes first and everything works, which is what makes
 this so slow to find: it only bites on a long `ps` listing or a `uiautomator` dump, and only sometimes.

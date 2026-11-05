@@ -10,8 +10,8 @@ Trace starts at `cmd_start()` in `rivis`.
 
 1. Resolve project, ports (`RIVIS_PORT` / `RIVIS_WEB_PORT`, default 8080 / 8083), rules path and confdir (`~/.mitmproxy` by default).
 2. Ensure the mitmproxy CA exists (`ensure_ca`) and the project rules file exists (`ensure_rules`).
-3. Refuse to clobber another instance on the same ports (`our_listeners`, start-guard directory).
-4. Write a one-run UI password to `$STATE_ROOT/web-token` (or `web-token-$WEB_PORT`) and a one-time bootstrap nonce to `web-bootstrap` (mode 600).
+3. If `our_listeners` already sees this Rivis on the chosen ports, print "already running" and **return 0** — no new process, no new token. Otherwise take a `start-guard-$WEB_PORT` directory lock and refuse foreign owners of `$PORT` / `$WEB_PORT`. (So a second `start` on 8080/8083 while QA's proxy is up looks successful but never runs your checkout; use `RIVIS_PORT` / `RIVIS_WEB_PORT`.)
+4. Write a one-run UI password to `$STATE_ROOT/web-token` (or `web-token-$WEB_PORT`) and a one-time bootstrap nonce to `web-bootstrap` / `web-bootstrap-$WEB_PORT` (mode 600).
 5. Build a `mitmweb` argv: listen on `127.0.0.1`, web UI on `127.0.0.1:$WEB_PORT`, load the add-ons below, pass options (`proxy_rules_file`, `proxy_auth_token_file`, …).
 6. Optionally clear stale loopback system-proxy leftovers (`cmd_net_reset --auto`), then either:
    - foreground: `exec mitmweb …` (this Terminal *is* the proxy), or
@@ -20,7 +20,7 @@ Trace starts at `cmd_start()` in `rivis`.
 
 **mitmweb** is mitmproxy's bundled web UI + proxy in one process. Rivis does not fork a separate API server: everything after start is that one process plus CLI helpers that talk to it over loopback HTTP.
 
-Add-ons loaded with `-s` (order matters; scripts run after rules):
+Add-ons loaded with `-s` (order in `cmd_start` argv; `proxy_scripts` is after `proxy_rules`):
 
 | `-s` path | Role |
 |---|---|
@@ -36,7 +36,7 @@ Add-ons loaded with `-s` (order matters; scripts run after rules):
 
 Other Python under `addons/` is imported by those add-ons or invoked by the CLI with `/usr/bin/python3 -I` (see the module map).
 
-**Browser panel.** `proxy_panel.py` registers Tornado routes on the running mitmweb app. When mitmweb serves its index HTML, the add-on rewrites the response: inject `./proxy/boot.js` into `<head>` and `./proxy/panel.js` before `</body>`. The new main window is a separate page at `/rivis/` (files under `addons/ui/`). Both UIs call `/proxy/api/<op>` with mitmweb's XSRF cookie scheme.
+**Browser panel.** `proxy_panel.py` registers Tornado routes on the running mitmweb app. When mitmweb serves its index HTML, the add-on rewrites the response: inject `./proxy/boot.js` into `<head>` and `./proxy/panel.js` before `</body>`. There is no `addons/boot.js` on disk — `/proxy/boot.js` is generated and served from `panel_mitmweb.py` (pre-paint theme + mitmweb scroll patch). `panel.js` and `theme.css` are real files under `addons/`. The new main window is a separate page at `/rivis/` (files under `addons/ui/`). Both UIs call `/proxy/api/<op>` with mitmweb's XSRF cookie scheme.
 
 **How the CLI talks to a running instance afterwards.** Commands that need live state (`status`, `compose send`, `mock`, parts of `scripts`, `warn_running_project`) use `ui_curl`: read the token from `$TOKEN_FILE`, hit `http://127.0.0.1:$WEB_PORT…` with `?token=…` (token never placed in argv). Rule edits go to the rules JSON on disk; the rules add-on reloads on the next request. Device setup (`ios` / `android`) talks to simctl/adb directly, not through mitmweb.
 
@@ -80,8 +80,8 @@ Created with `umask 077` and `chmod 700` on the sensitive trees (`secure_dirs` i
 | `projects/<id>/collections/` | Recorded journeys |
 | `projects/<id>/sessions/` | Saved sessions |
 | `projects/<id>/scripts/` | Script source next to rules metadata |
-| `projects/<id>/composer/` | Saved Compose requests |
-| `projects/<id>/client-certs/` | Per-host mTLS material |
+| `projects/<id>/composer/` | Saved Compose requests (created on first compose save) |
+| `projects/<id>/client-certs/` | Per-host mTLS material (created on first `tls client-cert add`) |
 | `profiles/<id>/` | User-created project profiles (`projects new`) |
 | `web-token` / `web-token-$WEB_PORT` | mitmweb UI password for this run (**secret**) |
 | `web-bootstrap` / `web-bootstrap-$WEB_PORT` | One-time login nonce (**secret**, consumed on use) |
@@ -159,6 +159,9 @@ Outside `STATE_ROOT` but equally sensitive: `$CONFDIR` (`mitmproxy-ca.pem`, `mit
 | File | Responsibility |
 |---|---|
 | `proxy_panel.py` | Tornado routes, HTML inject, `/proxy/api/*`, `/rivis/`, bootstrap login |
+| `panel_mitmweb.py` | `/proxy/boot.js` body + mitmweb index/bundle patch helpers (imported by `proxy_panel`) |
+| `panel_view.py` | Response text view, body clipping, `/proxy/api/flows_since` feed helpers |
+| `panel_har.py` | HAR import/export helpers for the panel (redacted) |
 | `panel.js` | Classic drawer injected into mitmweb (shadow DOM) |
 | `theme.css` | Design tokens + mitmweb skin |
 | `tree-worker.js` | Worker that JSON-parses large trees off the UI thread |

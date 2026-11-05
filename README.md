@@ -155,8 +155,9 @@ rivis              # the command (macOS)        rivis.ps1   # the command (Windo
 addons/            # what runs inside mitmproxy, plus the browser panel
 projects/          # one profile per app: its hosts and example rules
 install/           # installer, offline bundle builder
-docs/              # reference, Proxyman comparison, SBOM
+docs/              # REFERENCE, ARCHITECTURE, Proxyman comparison, SBOM
 tests/             # automated test suite (bash tests/run.sh --fast)
+CONTRIBUTING.md    # checkout, tests, safety rules (start here if you change Rivis)
 ```
 
 ### Working on Rivis
