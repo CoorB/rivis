@@ -483,6 +483,32 @@ function Save-RulesConfig($cfg) {
   Write-PrivateFile $RulesPath $json
 }
 
+# Sidecar lock matching addons/proxy_common.state_lock_path (rules.json → .rules.lock). FileShare.None
+# interoperates with Python's fcntl.flock on macOS/Linux (the other holder blocks our Open; we retry),
+# and is an exclusive share lock on Windows. macOS has no flock(1); do not shell out for this.
+function Invoke-WithStateLock([string]$TargetPath, [scriptblock]$Body) {
+  $dir = Split-Path -Parent $TargetPath
+  $base = [IO.Path]::GetFileName($TargetPath)
+  if ($base.EndsWith(".json", [StringComparison]::OrdinalIgnoreCase)) { $base = $base.Substring(0, $base.Length - 5) }
+  $lockPath = Join-Path $dir (".$base.lock")
+  if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+  $stream = $null
+  $deadline = [datetime]::UtcNow.AddSeconds(30)
+  while ($null -eq $stream) {
+    try {
+      $stream = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    } catch {
+      if ([datetime]::UtcNow -ge $deadline) { Die "could not lock $lockPath — another Rivis command is still writing state" }
+      Start-Sleep -Milliseconds 50
+    }
+  }
+  try {
+    return (& $Body)
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 function Find-Rule($cfg, $ruleName) {
   $rule = @($cfg.rules) | Where-Object { $_.name -eq $ruleName } | Select-Object -First 1
   if (-not $rule) { Die "no rule named '$ruleName' (${Cli}.ps1 rules list)" }
@@ -920,40 +946,46 @@ switch ($Command) {
     } elseif ($subcommand -in @("allow-file","disallow-file","trusted-files")) {
       # Map Local / body_file outside the project: only files trusted here, in a list rules.json cannot write (F-09).
       $trustPath = Join-Path (Split-Path -Parent $RulesPath) "trusted-files.json"
-      $files = @()
-      if (Test-Path $trustPath) { try { $files = @((Get-Content -Raw $trustPath | ConvertFrom-Json).files) } catch { $files = @() } }
       if ($subcommand -eq "trusted-files") {
+        $files = @()
+        if (Test-Path $trustPath) { try { $files = @((Get-Content -Raw $trustPath | ConvertFrom-Json).files) } catch { $files = @() } }
         if ($files.Count) { $files | ForEach-Object { Write-Host $_ } } else { Write-Host "(no files outside the project are trusted)" }
         break
       }
       $target = if ($Name) { $Name } elseif ($args.Count -gt 0) { [string]$args[0] } else { "" }
       if (-not $target) { Die "usage: rules $subcommand PATH" }
       $full = [IO.Path]::GetFullPath($target)
-      if ($subcommand -eq "allow-file") {
-        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { Die "file not found: $target" }
-        $item = Get-Item -LiteralPath $full -Force
-        if ($item.LinkType) { Die "refusing to trust ${target}: it is a link; trust the file it points to" }
-        $deny = @((Join-Path $HOME ".mitmproxy"), (Join-Path $HOME ".ssh"), (Join-Path $HOME ".aws"), (Join-Path $HOME ".gnupg"),
-                  (Join-Path $HOME ".kube"), (Join-Path $HOME ".docker"), $ConfDir) | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\','/') }
-        foreach ($d in $deny) {
-          if ($full.StartsWith($d + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { Die "refusing to trust ${target}: it is inside $d (keys and credentials)" }
+      $message = Invoke-WithStateLock $trustPath {
+        $files = @()
+        if (Test-Path $trustPath) { try { $files = @((Get-Content -Raw $trustPath | ConvertFrom-Json).files) } catch { $files = @() } }
+        if ($subcommand -eq "allow-file") {
+          if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { Die "file not found: $target" }
+          $item = Get-Item -LiteralPath $full -Force
+          if ($item.LinkType) { Die "refusing to trust ${target}: it is a link; trust the file it points to" }
+          $deny = @((Join-Path $HOME ".mitmproxy"), (Join-Path $HOME ".ssh"), (Join-Path $HOME ".aws"), (Join-Path $HOME ".gnupg"),
+                    (Join-Path $HOME ".kube"), (Join-Path $HOME ".docker"), $ConfDir) | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\','/') }
+          foreach ($d in $deny) {
+            if ($full.StartsWith($d + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { Die "refusing to trust ${target}: it is inside $d (keys and credentials)" }
+          }
+          $leaf = [IO.Path]::GetFileName($full).ToLowerInvariant()
+          if ($leaf -in @("web-token","web-bootstrap","trusted-files.json") -or $leaf -match '^web-(token|bootstrap)-[0-9]+$' -or $leaf -match '\.(pem|p12|pfx|key)$') { Die "refusing to trust ${target}: it looks like a key or a $ProductName secret" }
+          $files = @($files | Where-Object { $_ -ne $full }) + $full
+          $msg = "trusted on this machine: $full - rules may now read it"
+        } else {
+          $files = @($files | Where-Object { $_ -ne $full })
+          $msg = "no longer trusted: $full"
         }
-        $leaf = [IO.Path]::GetFileName($full).ToLowerInvariant()
-        if ($leaf -in @("web-token","web-bootstrap","trusted-files.json") -or $leaf -match '^web-(token|bootstrap)-[0-9]+$' -or $leaf -match '\.(pem|p12|pfx|key)$') { Die "refusing to trust ${target}: it looks like a key or a $ProductName secret" }
-        $files = @($files | Where-Object { $_ -ne $full }) + $full
-        Write-Host "trusted on this machine: $full - rules may now read it"
-      } else {
-        $files = @($files | Where-Object { $_ -ne $full })
-        Write-Host "no longer trusted: $full"
+        $trustDoc = ConvertTo-Json -InputObject @{ files = @($files | Sort-Object) } -Depth 3
+        Write-PrivateFile $trustPath $trustDoc
+        $msg
       }
-      $trustDoc = ConvertTo-Json -InputObject @{ files = @($files | Sort-Object) } -Depth 3
-      Write-PrivateFile $trustPath $trustDoc
+      Write-Host $message
       if (Test-Path $RulesPath) { (Get-Item $RulesPath).LastWriteTime = Get-Date }   # hot reload
     } elseif ($subcommand -in @("on","off","show","rm")) {
       $ruleName = if ($Name) { $Name } elseif ($args.Count -gt 0) { [string]$args[0] } else { "" }
       if (-not $ruleName) { Die "usage: rules $subcommand NAME" }
-      $rule = Find-Rule $cfg $ruleName
       if ($subcommand -eq "show") {
+        $rule = Find-Rule $cfg $ruleName
         Write-Host ($rule | ConvertTo-Json -Depth 20)
       } elseif ($subcommand -eq "rm") {
         $python = Get-PythonCommand
@@ -966,9 +998,14 @@ switch ($Command) {
           [Environment]::SetEnvironmentVariable("RIVIS_ACTIVE_PROJECT", $previousProject)
         }
       } else {
-        $rule | Add-Member -NotePropertyName enabled -NotePropertyValue ($subcommand -eq "on") -Force
-        if ($subcommand -eq "on") { $rule.PSObject.Properties.Remove("draft") }
-        Save-RulesConfig $cfg
+        # Hold .rules.lock across read+write so a concurrent bash/panel edit is not overwritten.
+        Invoke-WithStateLock $RulesPath {
+          $cfg = Read-RulesConfig
+          $rule = Find-Rule $cfg $ruleName
+          $rule | Add-Member -NotePropertyName enabled -NotePropertyValue ($subcommand -eq "on") -Force
+          if ($subcommand -eq "on") { $rule.PSObject.Properties.Remove("draft") }
+          Save-RulesConfig $cfg
+        }
         Write-Host "$ruleName -> $($subcommand.ToUpperInvariant())"
       }
     } else {
@@ -978,13 +1015,13 @@ switch ($Command) {
   "scripts" {
     Ensure-Rules
     Warn-RunningProject
-    $cfg = Read-RulesConfig
-    if ($null -eq $cfg.scripts) { $cfg | Add-Member -NotePropertyName scripts -NotePropertyValue @() -Force }
-    else { $cfg.scripts = @($cfg.scripts) }
     $subcommand = if ($Action) { $Action.ToLowerInvariant() } else { "list" }
     $scriptDir = Join-Path $ProjectState "scripts"
     New-Item -ItemType Directory -Force -Path $scriptDir | Out-Null
     if ($subcommand -eq "list") {
+      $cfg = Read-RulesConfig
+      if ($null -eq $cfg.scripts) { $cfg | Add-Member -NotePropertyName scripts -NotePropertyValue @() -Force }
+      else { $cfg.scripts = @($cfg.scripts) }
       Write-Host "scripts (${scriptDir}):"
       if (-not @($cfg.scripts).Count) { Write-Host "  (none)"; break }
       foreach ($script in @($cfg.scripts | Sort-Object file)) {
@@ -994,84 +1031,102 @@ switch ($Command) {
       break
     }
     if (-not $Name -or $Name -notmatch '^[A-Za-z0-9._-]{1,64}$') { Die "scripts $subcommand requires a safe NAME" }
-    $script = @($cfg.scripts | Where-Object { $_.name -eq $Name -or $_.file -eq $Name }) | Select-Object -First 1
-    if ($subcommand -eq "new") {
-      if (-not $Lang) { Die "scripts new NAME requires -Lang py|js" }
-      try { [void](New-Object System.Text.RegularExpressions.Regex $(if ($Match) {$Match} else {"."})) } catch { Die "bad regex in match: $($_.Exception.Message)" }
-      $filename = "$Name.$Lang"; $path = Join-Path $scriptDir $filename
-      if ($script -or (Test-Path $path)) { Die "script already exists" }
-      $source = if ($Lang -eq "py") {
-        'def on_request(context, url, request):' + "`n" + '    request["headers"]["X-QA"] = "enabled"' + "`n" + '    return request' + "`n"
-      } else {
-        'async function onRequest(context, url, request) {' + "`n" + '  request.headers["X-QA"] = "enabled";' + "`n" + '  return request;' + "`n" + '}' + "`n"
-      }
-      Write-PrivateFile $path $source.TrimEnd("`r","`n")
-      $cfg.scripts += [PSCustomObject]@{name=$Name;file=$filename;lang=$Lang;enabled=$true;match=$(if ($Match) {$Match} else {"."});method=$null}
-      Save-RulesConfig $cfg; Write-Host "created $path"
-    } elseif (-not $script) { Die "no script named '$Name'" }
-    elseif ($subcommand -in @("on","off")) {
-      $script | Add-Member -NotePropertyName enabled -NotePropertyValue ($subcommand -eq "on") -Force
-      Save-RulesConfig $cfg; Write-Host "$($script.name) -> $($subcommand.ToUpperInvariant())"
-    } elseif ($subcommand -eq "edit") {
+    if ($subcommand -eq "edit") {
+      $cfg = Read-RulesConfig
+      if ($null -eq $cfg.scripts) { $cfg | Add-Member -NotePropertyName scripts -NotePropertyValue @() -Force }
+      else { $cfg.scripts = @($cfg.scripts) }
+      $script = @($cfg.scripts | Where-Object { $_.name -eq $Name -or $_.file -eq $Name }) | Select-Object -First 1
+      if (-not $script) { Die "no script named '$Name'" }
       Start-Process notepad.exe -ArgumentList ('"{0}"' -f (Join-Path $scriptDir $script.file)) -Wait
-    } elseif ($subcommand -eq "rm") {
-      $cfg.scripts = @($cfg.scripts | Where-Object { $_ -ne $script }); Save-RulesConfig $cfg
-      $path = Join-Path $scriptDir $script.file; if (Test-Path $path) { Remove-Item $path }
-      Write-Host "removed $($script.name)"
-    } else {
-      Die "unknown scripts command '$subcommand'"
+      break
     }
+    $createdPath = Invoke-WithStateLock $RulesPath {
+      $cfg = Read-RulesConfig
+      if ($null -eq $cfg.scripts) { $cfg | Add-Member -NotePropertyName scripts -NotePropertyValue @() -Force }
+      else { $cfg.scripts = @($cfg.scripts) }
+      $script = @($cfg.scripts | Where-Object { $_.name -eq $Name -or $_.file -eq $Name }) | Select-Object -First 1
+      if ($subcommand -eq "new") {
+        if (-not $Lang) { Die "scripts new NAME requires -Lang py|js" }
+        try { [void](New-Object System.Text.RegularExpressions.Regex $(if ($Match) {$Match} else {"."})) } catch { Die "bad regex in match: $($_.Exception.Message)" }
+        $filename = "$Name.$Lang"; $path = Join-Path $scriptDir $filename
+        if ($script -or (Test-Path $path)) { Die "script already exists" }
+        $source = if ($Lang -eq "py") {
+          'def on_request(context, url, request):' + "`n" + '    request["headers"]["X-QA"] = "enabled"' + "`n" + '    return request' + "`n"
+        } else {
+          'async function onRequest(context, url, request) {' + "`n" + '  request.headers["X-QA"] = "enabled";' + "`n" + '  return request;' + "`n" + '}' + "`n"
+        }
+        Write-PrivateFile $path $source.TrimEnd("`r","`n")
+        $cfg.scripts += [PSCustomObject]@{name=$Name;file=$filename;lang=$Lang;enabled=$true;match=$(if ($Match) {$Match} else {"."});method=$null}
+        Save-RulesConfig $cfg
+        return $path
+      } elseif (-not $script) { Die "no script named '$Name'" }
+      elseif ($subcommand -in @("on","off")) {
+        $script | Add-Member -NotePropertyName enabled -NotePropertyValue ($subcommand -eq "on") -Force
+        Save-RulesConfig $cfg
+        return "$($script.name) -> $($subcommand.ToUpperInvariant())"
+      } elseif ($subcommand -eq "rm") {
+        $cfg.scripts = @($cfg.scripts | Where-Object { $_ -ne $script }); Save-RulesConfig $cfg
+        $path = Join-Path $scriptDir $script.file; if (Test-Path $path) { Remove-Item $path }
+        return "removed $($script.name)"
+      } else {
+        Die "unknown scripts command '$subcommand'"
+      }
+    }
+    if ($subcommand -eq "new") { Write-Host "created $createdPath" } else { Write-Host $createdPath }
   }
   "throttle" {
     Ensure-Rules
     Warn-RunningProject
-    $cfg = Read-RulesConfig
     $extras = @(); if ($Name) { $extras += $Name }; $extras += @($Rest)
-    if (-not $Action) { Show-Throttle $cfg; break }
+    if (-not $Action) { Show-Throttle (Read-RulesConfig); break }
     $spec = $Action.ToLowerInvariant()
     if ($spec -notin $ThrottlePresets -and $spec -notmatch '^\d+ms(/\d+kbps)?$') {
       Die ("throttle: " + ($ThrottlePresets -join " | ") + " | <ms>ms[/<kbps>kbps]")
     }
-    $cfg | Add-Member -NotePropertyName throttle -NotePropertyValue $spec -Force
-    $cfg | Add-Member -NotePropertyName loss -NotePropertyValue 0 -Force
-    $scope = if ($ProjectConfig.throttle_match -and $ProjectConfig.throttle_match.Trim() -ne ".") { $ProjectConfig.throttle_match.Trim() } else { "" }
-    $cfg | Add-Member -NotePropertyName throttle_match -NotePropertyValue $scope -Force
-    foreach ($kv in $extras) {
-      $key, $val = $kv -split '=', 2
-      if ($kv -notmatch '=') { Die "throttle: expected key=value, got '$kv'" }
-      if ($key -eq "match") { $Match = $val; $PSBoundParameters["Match"] = $val }
-      elseif ($key -eq "loss") { $Loss = Convert-ToNumber $val "loss"; $PSBoundParameters["Loss"] = $Loss }
-      elseif ($key -in $ThrottleManualKeys) {
-        if ($null -eq $cfg.PSObject.Properties["manual"] -or $null -eq $cfg.manual) { $cfg | Add-Member -NotePropertyName manual -NotePropertyValue ([PSCustomObject]@{}) -Force }
-        $cfg.manual | Add-Member -NotePropertyName $key -NotePropertyValue (Convert-ToNumber $val $key) -Force   # used when the profile is "manual"
+    $cfg = Invoke-WithStateLock $RulesPath {
+      $cfg = Read-RulesConfig
+      $cfg | Add-Member -NotePropertyName throttle -NotePropertyValue $spec -Force
+      $cfg | Add-Member -NotePropertyName loss -NotePropertyValue 0 -Force
+      $scope = if ($ProjectConfig.throttle_match -and $ProjectConfig.throttle_match.Trim() -ne ".") { $ProjectConfig.throttle_match.Trim() } else { "" }
+      $cfg | Add-Member -NotePropertyName throttle_match -NotePropertyValue $scope -Force
+      foreach ($kv in $extras) {
+        $key, $val = $kv -split '=', 2
+        if ($kv -notmatch '=') { Die "throttle: expected key=value, got '$kv'" }
+        if ($key -eq "match") { $Match = $val; $PSBoundParameters["Match"] = $val }
+        elseif ($key -eq "loss") { $Loss = Convert-ToNumber $val "loss"; $PSBoundParameters["Loss"] = $Loss }
+        elseif ($key -in $ThrottleManualKeys) {
+          if ($null -eq $cfg.PSObject.Properties["manual"] -or $null -eq $cfg.manual) { $cfg | Add-Member -NotePropertyName manual -NotePropertyValue ([PSCustomObject]@{}) -Force }
+          $cfg.manual | Add-Member -NotePropertyName $key -NotePropertyValue (Convert-ToNumber $val $key) -Force   # used when the profile is "manual"
+        }
+        else { Die "throttle options: match=REGEX loss=PCT, and for manual: $($ThrottleManualKeys -join '= ')=" }
       }
-      else { Die "throttle options: match=REGEX loss=PCT, and for manual: $($ThrottleManualKeys -join '= ')=" }
+      if ($PSBoundParameters.ContainsKey("Match")) {
+        try { [void](New-Object System.Text.RegularExpressions.Regex $Match) } catch { Die "bad regex in match: $($_.Exception.Message)" }
+        $cfg | Add-Member -NotePropertyName throttle_match -NotePropertyValue $Match -Force
+      }
+      if ($PSBoundParameters.ContainsKey("Loss")) { $cfg | Add-Member -NotePropertyName loss -NotePropertyValue $Loss -Force }
+      Save-RulesConfig $cfg
+      $cfg
     }
-    if ($PSBoundParameters.ContainsKey("Match")) {
-      try { [void](New-Object System.Text.RegularExpressions.Regex $Match) } catch { Die "bad regex in match: $($_.Exception.Message)" }
-      $cfg | Add-Member -NotePropertyName throttle_match -NotePropertyValue $Match -Force
-    }
-    if ($PSBoundParameters.ContainsKey("Loss")) { $cfg | Add-Member -NotePropertyName loss -NotePropertyValue $Loss -Force }
-    Save-RulesConfig $cfg
     Show-Throttle $cfg
   }
   "nocache" {
     Ensure-Rules
     Warn-RunningProject
-    $cfg = Read-RulesConfig
     $sub = if ($Action) { $Action.ToLowerInvariant() } else { "status" }
     if ($Name -or $sub -notin @("on","off","status")) { Die "nocache: on | off | status" }
-    if ($sub -ne "status") {
+    if ($sub -eq "status") { Show-NoCache (Read-RulesConfig); break }
+    $cfg = Invoke-WithStateLock $RulesPath {
+      $cfg = Read-RulesConfig
       $cfg | Add-Member -NotePropertyName no_cache -NotePropertyValue ($sub -eq "on") -Force
       Save-RulesConfig $cfg
+      $cfg
     }
     Show-NoCache $cfg
   }
   "tls" {
     Ensure-Rules
     Warn-RunningProject
-    $cfg = Read-RulesConfig
-    $tls = Get-Tls $cfg
     $sub = if ($Action) { $Action.ToLowerInvariant() } else { "list" }
     if ($sub -eq "client-cert") {   # client certificates (mTLS) per host, kept in the project's private state
       $ccArgs = @($(if ($Name) { $Name } else { "list" })) + @($Rest)
@@ -1084,6 +1139,8 @@ switch ($Command) {
     $tlsNote = "applies to new connections after the next rules poll; allow a few seconds - no restart; open connections keep their earlier decision"
     if ($sub -eq "list") {
       if ($Name -or @($Rest).Count) { Die "tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN" }
+      $cfg = Read-RulesConfig
+      $tls = Get-Tls $cfg
       Write-Host "tls mode: $($tls.mode)"
       foreach ($which in @("allow","ignore")) {
         Write-Host ("{0}{1}:" -f $which, $(if ($tls.mode -eq $which) { "  (active)" } else { "  (used when mode is $which)" }))
@@ -1093,27 +1150,33 @@ switch ($Command) {
       if ($tls.mode -eq "all") { Write-Host "all hosts are decrypted; hosts that are not decrypted show as host-only tunnel rows in the other modes" }
       break
     }
-    if ($sub -eq "mode") {
-      if (-not $Name) { Write-Host "tls mode: $($tls.mode)"; break }
-      $newMode = $Name.ToLowerInvariant()
-      if ($newMode -notin $TlsModes) { Die "tls mode must be all, allow or ignore" }
-      $tls.mode = $newMode; $message = "tls mode: $newMode"
-    } elseif ($sub -in @("allow","ignore")) {
-      $verb = if ($Name) { $Name.ToLowerInvariant() } else { "" }
-      $pattern = if (@($Rest).Count -eq 1) { $Rest[0] } else { "" }
-      if ($verb -notin @("add","rm") -or -not $pattern) { Die "tls $sub add|rm PATTERN" }
-      $pattern = Test-TlsPattern $pattern
-      # Same refusals as addons/tls_cli.py: a no-op must not print added/removed.
-      if ($verb -eq "add") {
-        if ($pattern -in @($tls[$sub])) { Die "$sub pattern '$pattern' is already on the list" }
-        $tls[$sub] = @(@($tls[$sub]) + $pattern); $message = "$sub added: $pattern"
-      } else {
-        if ($pattern -notin @($tls[$sub])) { Die "no $sub pattern '$pattern'" }
-        $tls[$sub] = @(@($tls[$sub]) | Where-Object { $_ -ne $pattern }); $message = "$sub removed: $pattern"
-      }
-    } else { Die "tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN" }
-    Save-Tls $cfg $tls
-    Write-Host $message
+    if ($sub -eq "mode" -and -not $Name) { Write-Host "tls mode: $((Get-Tls (Read-RulesConfig)).mode)"; break }
+    $result = Invoke-WithStateLock $RulesPath {
+      $cfg = Read-RulesConfig
+      $tls = Get-Tls $cfg
+      if ($sub -eq "mode") {
+        $newMode = $Name.ToLowerInvariant()
+        if ($newMode -notin $TlsModes) { Die "tls mode must be all, allow or ignore" }
+        $tls.mode = $newMode; $message = "tls mode: $newMode"
+      } elseif ($sub -in @("allow","ignore")) {
+        $verb = if ($Name) { $Name.ToLowerInvariant() } else { "" }
+        $pattern = if (@($Rest).Count -eq 1) { $Rest[0] } else { "" }
+        if ($verb -notin @("add","rm") -or -not $pattern) { Die "tls $sub add|rm PATTERN" }
+        $pattern = Test-TlsPattern $pattern
+        # Same refusals as addons/tls_cli.py: a no-op must not print added/removed (Die exits; the OS drops the lock).
+        if ($verb -eq "add") {
+          if ($pattern -in @($tls[$sub])) { Die "$sub pattern '$pattern' is already on the list" }
+          $tls[$sub] = @(@($tls[$sub]) + $pattern); $message = "$sub added: $pattern"
+        } else {
+          if ($pattern -notin @($tls[$sub])) { Die "no $sub pattern '$pattern'" }
+          $tls[$sub] = @(@($tls[$sub]) | Where-Object { $_ -ne $pattern }); $message = "$sub removed: $pattern"
+        }
+      } else { Die "tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN" }
+      Save-Tls $cfg $tls
+      @{ message = $message; tls = $tls }
+    }
+    Write-Host $result.message
+    $tls = $result.tls
     if ($tls.mode -ne "all" -and -not @($tls[$tls.mode]).Count) { Write-Host "note: mode is $($tls.mode) but the $($tls.mode) list is empty$(if ($tls.mode -eq 'allow') { ' - nothing would be decrypted' })" }
     Write-Host $tlsNote
   }

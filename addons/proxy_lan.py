@@ -26,7 +26,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
-from proxy_common import PRODUCT, STATE_ROOT, atomic_json
+from proxy_common import PRODUCT, STATE_ROOT, acquire_state_lock, atomic_json
 
 try:
     from mitmproxy import ctx, http
@@ -125,6 +125,14 @@ class Devices:
         self._rows = []
 
     def rows(self):
+        lock = acquire_state_lock(self.path)
+        try:
+            return self._rows_locked()
+        finally:
+            if lock is not None:
+                lock.close()
+
+    def _rows_locked(self):
         try:
             st = os.stat(self.path)
             stamp = (st.st_mtime_ns, st.st_size)
@@ -163,7 +171,7 @@ class Devices:
         return next((r for r in self.rows() if r["ip"] == ip), None)
 
     def _write(self, rows):
-        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+        os.makedirs(os.path.dirname(self.path) or ".", mode=0o700, exist_ok=True)
         atomic_json(self.path, {"devices": rows})
         self._stamp = None
 
@@ -171,36 +179,58 @@ class Devices:
         ip = str(ipaddress.ip_address(plain_ip(ip)))           # ValueError for anything that is not an address
         if is_loopback(ip):
             raise ValueError("this Mac itself is always allowed")
-        rows = [r for r in self.rows() if r["ip"] != ip]
-        if len(rows) >= MAX_DEVICES:
-            raise ValueError("at most %d devices; remove one first" % MAX_DEVICES)
-        old = self.get(ip)
-        now = int(time.time())
-        row = {"ip": ip, "name": clean_name(name or (old or {}).get("name")), "added": now,
-               "last_seen": now, "mac": lookup_mac(ip)}
-        self._write(rows + [row])
-        return row
+        mac = lookup_mac(ip)          # ARP outside the lock: do not hold writers for a stalled lookup
+        lock = acquire_state_lock(self.path)
+        try:
+            current = self._rows_locked()
+            old = next((r for r in current if r["ip"] == ip), None)
+            rows = [r for r in current if r["ip"] != ip]
+            if len(rows) >= MAX_DEVICES:
+                raise ValueError("at most %d devices; remove one first" % MAX_DEVICES)
+            now = int(time.time())
+            row = {"ip": ip, "name": clean_name(name or (old or {}).get("name")), "added": now,
+                   "last_seen": now, "mac": mac}
+            self._write(rows + [row])
+            self._rows = rows + [row]
+            return row
+        finally:
+            if lock is not None:
+                lock.close()
 
     def seen(self, ip):
-        row = self.get(ip)
-        now = int(time.time())
-        if row is None:
-            return
-        prev = row.get("last_seen")
-        # A non-numeric last_seen (hand-edited JSON) must not TypeError on the next allowed call.
-        if isinstance(prev, (int, float)) and prev > now - 60:
-            return
-        rows = [dict(r, last_seen=now) if r["ip"] == ip else r for r in self.rows()]
-        self._write(rows)
+        ip = plain_ip(ip)
+        lock = acquire_state_lock(self.path)
+        try:
+            current = self._rows_locked()
+            row = next((r for r in current if r["ip"] == ip), None)
+            now = int(time.time())
+            if row is None:
+                return
+            prev = row.get("last_seen")
+            # A non-numeric last_seen (hand-edited JSON) must not TypeError on the next allowed call.
+            if isinstance(prev, (int, float)) and prev > now - 60:
+                return
+            rows = [dict(r, last_seen=now) if r["ip"] == ip else r for r in current]
+            self._write(rows)
+            self._rows = rows
+        finally:
+            if lock is not None:
+                lock.close()
 
     def remove(self, ip):
         ip = plain_ip(ip)
-        rows = self.rows()
-        keep = [r for r in rows if r["ip"] != ip]
-        if len(keep) == len(rows):
-            return False
-        self._write(keep)
-        return True
+        lock = acquire_state_lock(self.path)
+        try:
+            rows = self._rows_locked()
+            keep = [r for r in rows if r["ip"] != ip]
+            if len(keep) == len(rows):
+                return False
+            self._write(keep)
+            self._rows = keep
+            return True
+        finally:
+            if lock is not None:
+                lock.close()
 
 
 # ---- the setup page ------------------------------------------------------------------------------------------------

@@ -102,6 +102,33 @@ Created with `umask 077` and `chmod 700` on the sensitive trees (`secure_dirs` i
 
 Outside `STATE_ROOT` but equally sensitive: `$CONFDIR` (`mitmproxy-ca.pem`, `mitmproxy-ca-cert.pem`, …). Losing or replacing the CA without re-running device setup breaks every simulator/emulator that still trusts the old one.
 
+### Concurrent writers (one lock, every state JSON)
+
+The panel (each tab’s `/proxy/api/*` POST), the bash CLI and the PowerShell CLI all read-change-write the same project files. An atomic replace alone is not enough: two writers that each load, mutate and save can both succeed while one change vanishes.
+
+Every read-change-write takes one exclusive advisory sidecar next to the file, via `proxy_common.acquire_state_lock(path)`:
+
+| State file | Sidecar |
+|---|---|
+| `rules.json` | `.rules.lock` |
+| `trusted-files.json` | `.trusted-files.lock` |
+| `lan-devices.json` | `.lan-devices.lock` |
+| other `*.json` (when a writer takes the helper) | `.<stem>.lock` |
+
+Panel mutations of `filters.json`, columns and collection metadata go through `proxy_panel.act`, which holds `.rules.lock` for the whole action (same sidecar as rules RMW — not a separate `.filters.lock`).
+
+On macOS/Linux the sidecar is `flock(2)` (Python `fcntl.flock`). PowerShell opens the same path with `FileShare.None` and retries until it gets it (a busy sidecar raises immediately under .NET rather than blocking like flock). Windows has no flock for the Python helpers — they still run unlocked there; PowerShell’s exclusive open covers the native CLI paths.
+
+Who holds it:
+
+- `rules_cli` / `tls_cli` / `scripts_cli` — whole mutating command (not `rules edit` while the editor is open; that lock is taken only at save, with a “changed while the editor was open” check).
+- `proxy_panel.act` — every panel mutation, so two tabs and a concurrent `rivis rules add` serialise on `.rules.lock`.
+- `set_trusted_file` — `.trusted-files.lock`.
+- `proxy_lan.Devices` allow/remove/seen/expiry — `.lan-devices.lock`.
+- `rivis.ps1` — `Invoke-WithStateLock` around every native rules/scripts/throttle/nocache/tls/trusted-files read-change-write.
+
+macOS has no `flock(1)` binary; the CLIs never shell out for the lock. They call the Python helper (bash) or open the sidecar themselves (PowerShell).
+
 ---
 
 ## Module map (`addons/`)

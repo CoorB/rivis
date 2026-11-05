@@ -25,9 +25,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
-from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PROFILE_VALUES, PRODUCT, SAFE_NAME, atomic_json, breakpoints, confined_path,
-                           forbidden_file, migrate_rules, owned_mock_file, project_profile, project_state, remote_url_problem, set_trusted_file,
-                           throttle_shorthand, trusted_files, user_regex)
+from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PROFILE_VALUES, PRODUCT, SAFE_NAME, acquire_state_lock, atomic_json,
+                           breakpoints, confined_path, forbidden_file, migrate_rules, owned_mock_file, project_profile,
+                           project_state, remote_url_problem, set_trusted_file, throttle_shorthand, trusted_files, user_regex)
 from proxy_rule_validation import compile_rule, explain_rules, map_remote_warning, rule_fingerprint
 
 ACTIONS = ACTION_REQUIREMENTS
@@ -57,20 +57,8 @@ def save(path, cfg):
 
 
 def acquire_lock(path):
-    try:
-        import fcntl
-    except ImportError:
-        return None                    # Windows has no flock; commands must still work there
-    lock = None
-    try:
-        lock = os.fdopen(os.open(os.path.join(os.path.dirname(os.path.abspath(os.path.expanduser(path))), ".rules.lock"),
-                                 os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a")
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        return lock
-    except OSError:
-        if lock is not None:
-            lock.close()
-        return None                    # read-only or missing dir: the command reports that itself
+    """Exclusive lock for rules.json (and callers that share it). Same sidecar as acquire_state_lock."""
+    return acquire_state_lock(path)
 
 
 def value(v):

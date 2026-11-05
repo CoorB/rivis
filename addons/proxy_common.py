@@ -156,6 +156,41 @@ def _fsync_directory(path):
         pass
 
 
+def state_lock_path(path):
+    """Sidecar lock next to a JSON state file: rules.json → .rules.lock, trusted-files.json → .trusted-files.lock.
+
+    One helper for every read-change-write so the panel, bash CLI and PowerShell CLI serialise on the same
+    inode. Stem strips a trailing .json so the existing .rules.lock name stays stable."""
+    path = os.path.abspath(os.path.expanduser(path))
+    base = os.path.basename(path)
+    if base.endswith(".json"):
+        base = base[:-5]
+    return os.path.join(os.path.dirname(path) or ".", ".%s.lock" % base)
+
+
+def acquire_state_lock(path):
+    """Exclusive advisory lock for the whole read-change-write of `path`. Close the returned file to release.
+
+    Uses flock(2) via fcntl (present on macOS and Linux; Windows has no flock — returns None and the
+    caller still runs, same as the older rules-only helper). PowerShell opens the same sidecar with
+    FileShare.None and retries until it acquires it (interoperates with flock on Unix)."""
+    try:
+        import fcntl
+    except ImportError:
+        return None
+    lock = None
+    try:
+        lock_path = state_lock_path(path)
+        os.makedirs(os.path.dirname(lock_path) or ".", mode=0o700, exist_ok=True)
+        lock = os.fdopen(os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return lock
+    except OSError:
+        if lock is not None:
+            lock.close()
+        return None
+
+
 def atomic_write_bytes(path, data, mode=0o600, durable=True):
     """Crash-safe private write: temp file, flush+fsync, replace, then directory fsync.
 
@@ -504,10 +539,16 @@ def set_trusted_file(state_dir, path, trusted=True):
     why = forbidden_file(real)
     if trusted and why:
         raise ValueError("refusing to trust %s: %s" % (path, why))
-    files = trusted_files(state_dir)
-    files = (files | {real}) if trusted else (files - {real})
-    atomic_json(os.path.join(state_dir, TRUSTED_FILES), {"files": sorted(files)})
-    return real
+    target = os.path.join(state_dir, TRUSTED_FILES)
+    lock = acquire_state_lock(target)
+    try:
+        files = trusted_files(state_dir)
+        files = (files | {real}) if trusted else (files - {real})
+        atomic_json(target, {"files": sorted(files)})
+        return real
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 def rule_file_path(state_dir, path, what, extra_forbidden=()):

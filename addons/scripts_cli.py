@@ -9,7 +9,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from proxy_common import PRODUCT, SAFE_NAME, atomic_json, atomic_write_text, migrate_rules, user_regex, without_leading_bom
+from proxy_common import (PRODUCT, SAFE_NAME, acquire_state_lock, atomic_json, atomic_write_text, migrate_rules,
+                           user_regex, without_leading_bom)
 from proxy_scripts import find_node, node_missing_message
 
 
@@ -81,8 +82,8 @@ def main(argv):
         command, rest = argv[1], argv[2:]
         script_dir = os.path.join(os.path.dirname(rules), "scripts")
     os.makedirs(script_dir, mode=0o700, exist_ok=True)
-    cfg = load(rules)
     if command == "list":
+        cfg = load(rules)
         # R1A-03: the live panel's script_status is keyed by filename; keep offline lists usable without it.
         state = json.load(sys.stdin) if rest == ["--errors-stdin"] else {}
         # review 0.9.7 #6: both sides through realpath, or a symlinked state dir hides the live ERROR text
@@ -101,47 +102,61 @@ def main(argv):
             print("  ! " + node_missing_message())
         if not cfg["scripts"]: print("  (none)")
         return
-    if not rest: raise SystemExit(f"scripts {command}: NAME required")
-    name = rest[0]
-    if command == "new":
-        p = argparse.ArgumentParser(prog="scripts new")
-        p.add_argument("name"); p.add_argument("--lang", choices=("py", "js"), required=True)
-        p.add_argument("--match", default="."); p.add_argument("--method", default="")
-        p.add_argument("--template", choices=tuple(TEMPLATES["py"]), default="header")
-        a = p.parse_args(rest)
-        if not SAFE_NAME.fullmatch(a.name): raise SystemExit("bad script name")
-        try:
-            user_regex(a.match)
-        except re.error as e:
-            raise SystemExit("bad regex in --match: %s" % e)
-        filename = f"{a.name}.{a.lang}"; path = os.path.join(script_dir, filename)
-        # Case-fold: Auth and auth are one script file on the Mac default volume (and one metadata slot).
-        key, file_key = a.name.casefold(), filename.casefold()
-        if any((x.get("name") or "").casefold() == key or (x.get("file") or "").casefold() == file_key
-               for x in cfg["scripts"]) or os.path.lexists(path):
-            raise SystemExit("script already exists")
-        atomic_write_text(path, TEMPLATES[a.lang][a.template])
-        cfg["scripts"].append({"name": a.name, "file": filename, "lang": a.lang, "enabled": True,
-                               "match": a.match, "method": a.method.upper() or None})
-        save(rules, cfg); print(f"created {path}")
-        if a.lang == "js" and not find_node():
-            print("note: " + node_missing_message(), file=sys.stderr)
-        return
-    item = find(cfg, name); filename = item["file"]
-    if os.path.basename(filename) != filename: raise SystemExit("unsafe script filename")
-    path = os.path.join(script_dir, filename)
-    if command in ("on", "off"):
-        item["enabled"] = command == "on"; save(rules, cfg); print(f"{item['name']} -> {command.upper()}")
-        if command == "on" and item.get("lang") == "js" and not find_node():
-            print("note: " + node_missing_message(), file=sys.stderr)
-    elif command == "rm":
-        cfg["scripts"].remove(item); save(rules, cfg)
-        if os.path.exists(path): os.unlink(path)
-        print(f"removed {item['name']}")
-    elif command == "edit":
+    if command == "edit":
+        # Editor only touches the script source; rules.json is unchanged, so no lock and no re-read race.
+        if not rest: raise SystemExit(f"scripts {command}: NAME required")
+        cfg = load(rules)
+        item = find(cfg, rest[0]); filename = item["file"]
+        if os.path.basename(filename) != filename: raise SystemExit("unsafe script filename")
+        path = os.path.join(script_dir, filename)
         editor = os.environ.get("EDITOR") or ("notepad.exe" if os.name == "nt" else "vi")
         raise SystemExit(subprocess.call([editor, path]))
-    else: raise SystemExit(f"unknown scripts command '{command}'")
+    if not rest: raise SystemExit(f"scripts {command}: NAME required")
+    # Same .rules.lock as rules_cli / the panel: a scripts new that rewrote rules.json without it used to
+    # drop a rules add that landed between load and save (and the other way around).
+    lock = acquire_state_lock(rules)
+    try:
+        cfg = load(rules)
+        name = rest[0]
+        if command == "new":
+            p = argparse.ArgumentParser(prog="scripts new")
+            p.add_argument("name"); p.add_argument("--lang", choices=("py", "js"), required=True)
+            p.add_argument("--match", default="."); p.add_argument("--method", default="")
+            p.add_argument("--template", choices=tuple(TEMPLATES["py"]), default="header")
+            a = p.parse_args(rest)
+            if not SAFE_NAME.fullmatch(a.name): raise SystemExit("bad script name")
+            try:
+                user_regex(a.match)
+            except re.error as e:
+                raise SystemExit("bad regex in --match: %s" % e)
+            filename = f"{a.name}.{a.lang}"; path = os.path.join(script_dir, filename)
+            # Case-fold: Auth and auth are one script file on the Mac default volume (and one metadata slot).
+            key, file_key = a.name.casefold(), filename.casefold()
+            if any((x.get("name") or "").casefold() == key or (x.get("file") or "").casefold() == file_key
+                   for x in cfg["scripts"]) or os.path.lexists(path):
+                raise SystemExit("script already exists")
+            atomic_write_text(path, TEMPLATES[a.lang][a.template])
+            cfg["scripts"].append({"name": a.name, "file": filename, "lang": a.lang, "enabled": True,
+                                   "match": a.match, "method": a.method.upper() or None})
+            save(rules, cfg); print(f"created {path}")
+            if a.lang == "js" and not find_node():
+                print("note: " + node_missing_message(), file=sys.stderr)
+            return
+        item = find(cfg, name); filename = item["file"]
+        if os.path.basename(filename) != filename: raise SystemExit("unsafe script filename")
+        path = os.path.join(script_dir, filename)
+        if command in ("on", "off"):
+            item["enabled"] = command == "on"; save(rules, cfg); print(f"{item['name']} -> {command.upper()}")
+            if command == "on" and item.get("lang") == "js" and not find_node():
+                print("note: " + node_missing_message(), file=sys.stderr)
+        elif command == "rm":
+            cfg["scripts"].remove(item); save(rules, cfg)
+            if os.path.exists(path): os.unlink(path)
+            print(f"removed {item['name']}")
+        else: raise SystemExit(f"unknown scripts command '{command}'")
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 if __name__ == "__main__": main(sys.argv[1:])
