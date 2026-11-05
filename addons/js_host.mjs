@@ -30,10 +30,12 @@ async function invoke(msg) {
     entry = { code: msg.code, context, fresh: true };
     scripts.set(msg.name, entry);
   }
-  const preferred = msg.hook === "on_request" ? ["onRequest", "on_request"] : ["onResponse", "on_response"];
+  const preferred = msg.hook === "on_request" ? ["onRequest", "on_request"]
+    : msg.hook === "on_websocket" ? ["onWebsocket", "on_websocket"]
+    : ["onResponse", "on_response"];
   const functionName = preferred.find((name) => vm.runInContext(`typeof ${name} === "function"`, entry.context));
   entry.context.__proxyInputJson = JSON.stringify({ state: msg.context || {}, url: msg.url,
-    request: msg.request, response: msg.response });
+    request: msg.request, response: msg.response, message: msg.message });
   entry.context.__proxyFresh = entry.fresh;
   new vm.Script(`
     globalThis.__proxyInput = JSON.parse(globalThis.__proxyInputJson);
@@ -50,7 +52,8 @@ async function invoke(msg) {
     return { ...JSON.parse(raw), invoked: false };
   }
   const args = msg.hook === "on_request" ? "__proxyState,__proxyInput.url,__proxyInput.request"
-                                         : "__proxyState,__proxyInput.url,__proxyInput.request,__proxyInput.response";
+    : msg.hook === "on_websocket" ? "__proxyState,__proxyInput.url,__proxyInput.message"
+    : "__proxyState,__proxyInput.url,__proxyInput.request,__proxyInput.response";
   const started = new vm.Script(`globalThis.__proxyResult = ${functionName}(${args})`)
     .runInContext(entry.context, { timeout: 2000 });
   let timer;

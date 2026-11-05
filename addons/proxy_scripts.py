@@ -661,14 +661,15 @@ class ProxyScripts:
             flow.comment = (flow.comment + " | " if flow.comment else "") + label
         if response: flow.metadata["proxy_modified"] = True
 
-    async def _python(self, item, hook, context, url, request, response=None):
+    async def _python(self, item, hook, context, url, request, response=None, message=None):
         filename = item["file"]
         async with self.script_locks.setdefault(filename, asyncio.Lock()):
             if filename not in self.python_hosts:
                 await self._start_python_host(item)
             try:
                 msg = await self._python_exchange(filename, {"op": "call", "hook": hook, "context": context,
-                                                    "url": url, "request": request, "response": response})
+                                                    "url": url, "request": request, "response": response,
+                                                    "message": message})
             except asyncio.TimeoutError as exc:
                 await self._stop_python_host(filename)
                 raise ScriptFailure("timed out after 2 s and was stopped; the call went on unchanged") from exc
@@ -803,7 +804,7 @@ class ProxyScripts:
             except Exception:
                 pass
 
-    async def _javascript(self, item, hook, context, url, request, response=None):
+    async def _javascript(self, item, hook, context, url, request, response=None, message=None):
         script_lock = self.script_locks.setdefault(item["file"], asyncio.Lock())
         async with script_lock:
             generation = await self._start_node()
@@ -814,7 +815,8 @@ class ProxyScripts:
             write_lock = self.node_write_locks[generation]
             self.seq += 1; request_id = self.seq
             payload = {"id": request_id, "name": item["file"], "code": item["code"], "hook": hook,
-                       "context": context, "url": url, "request": request, "response": response}
+                       "context": context, "url": url, "request": request, "response": response,
+                       "message": message}
             loop = asyncio.get_running_loop()
             call = {"future": loop.create_future(), "started": asyncio.Event()}
             pending[request_id] = call
@@ -917,6 +919,87 @@ class ProxyScripts:
 
     async def request(self, flow): await self._run(flow, "on_request")
     async def response(self, flow): await self._run(flow, "on_response")
+
+    @staticmethod
+    def _ws_message(msg):
+        """Proxyman-shaped frame for onWebsocket: from/type/data (read-only in this slice)."""
+        peer = "client" if getattr(msg, "from_client", False) else "server"
+        is_text = bool(getattr(msg, "is_text", False))
+        if not is_text:
+            try:
+                is_text = str(getattr(msg.type, "name", "")).upper() == "TEXT"
+            except Exception:
+                is_text = False
+        content = msg.content or b""
+        if is_text:
+            try:
+                data = content.decode("utf-8")
+            except UnicodeDecodeError:
+                data = "Binary (length=%d)" % len(content)
+                is_text = False
+        else:
+            try:
+                text = content.decode("utf-8")
+                data = text if all(c.isprintable() or c in "\r\n\t" for c in text) else (
+                    "Binary (length=%d)" % len(content))
+            except UnicodeDecodeError:
+                data = "Binary (length=%d)" % len(content)
+        out = {"from": peer, "type": "text" if is_text else "binary", "data": data}
+        if not is_text:
+            out["rawData"] = base64.b64encode(content).decode("ascii")
+        return out
+
+    async def _run_ws(self, flow):
+        """Call onWebsocket for each frame. Read-only: returns are ignored (no inject/drop in this slice)."""
+        if flow.metadata.get("rivis_local_page"):
+            return
+        await self._reload(force=True)
+        ws = getattr(flow, "websocket", None)
+        msgs = getattr(ws, "messages", None) if ws is not None else None
+        if not msgs:
+            return
+        message = self._ws_message(msgs[-1])
+        url = flow.request.pretty_url
+        request = self._request(flow)
+        for item in self.scripts:
+            if not item["_re"].search(url):
+                continue
+            if item.get("method") and item["method"].upper() != flow.request.method:
+                continue
+            if item.get("_stopped"):
+                continue
+            context = self.contexts.setdefault(item["file"], ScriptContext())
+            context.update(flow_id=flow.id, project=self.project)
+            call_context = ScriptContext(copy.deepcopy(context))
+            started = time.perf_counter()
+            try:
+                if item["file"].endswith(".py"):
+                    result = await self._python(item, "on_websocket", call_context, url, request,
+                                                message=message)
+                else:
+                    result = await self._javascript(item, "on_websocket", call_context, url, request,
+                                                    message=message)
+                if result is NO_HOOK:
+                    continue
+                context.clear()
+                context.update(call_context)
+                self.last_errors.pop(item["file"], None)
+                # Tag so the call list shows the script ran (returns do not edit the frame yet).
+                self._tag(flow, item)
+            except BaseException as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                short_tb = getattr(exc, "short_traceback", "") or "".join(
+                    traceback.format_exception(type(exc), exc, exc.__traceback__, limit=8))
+                record = self._error(item["file"], "on_websocket", exc, short_tb)
+                ctx.log.warn(f"proxy_scripts: {item['name']} on_websocket: {record['message']}; frame unchanged")
+            finally:
+                elapsed = (time.perf_counter() - started) * 1000
+                if elapsed > 200:
+                    ctx.log.warn(f"proxy_scripts: {item['name']} on_websocket took {elapsed:.0f} ms (>200 ms)")
+
+    async def websocket_message(self, flow):
+        await self._run_ws(flow)
 
 
 addons = [ProxyScripts()] if ctx is not None else []

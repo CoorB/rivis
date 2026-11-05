@@ -972,11 +972,15 @@ class Breakpoints(CliBase):
 
 class Scripts(CliBase):
     def test_lifecycle_for_both_languages_and_every_template(self):
-        for tpl in ("header", "json", "mock", "latency", "token"):
+        for tpl in ("header", "json", "mock", "latency", "token", "websocket"):
             for lang in ("py", "js"):
                 self.ok("scripts", "new", "s-%s-%s" % (tpl, lang), "--lang", lang, "--template", tpl)
         sdir = os.path.join(self.state, "projects", "default", "scripts")
-        self.assertEqual(len(os.listdir(sdir)), 10)
+        self.assertEqual(len(os.listdir(sdir)), 12)
+        ws_py = open(os.path.join(sdir, "s-websocket-py.py")).read()
+        self.assertIn("on_websocket", ws_py)
+        ws_js = open(os.path.join(sdir, "s-websocket-js.js")).read()
+        self.assertIn("onWebsocket", ws_js)
         for name in os.listdir(sdir):
             self.assertEqual(mode(os.path.join(sdir, name)), 0o600)
         self.assertEqual(mode(sdir), 0o700)

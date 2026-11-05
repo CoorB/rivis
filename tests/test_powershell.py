@@ -732,6 +732,15 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
         self.bad("scripts", "new", "jsone", "-Lang", "js")             # already exists
         self.assertIn("jsone", self.bash("scripts", "list"))
 
+    def test_scripts_new_websocket_template_matches_bash(self):
+        self.ok("scripts", "new", "wslog", "-Lang", "py", "-Template", "websocket", "-Match", "/chat")
+        path = os.path.join(self.state, "projects", "default", "scripts", "wslog.py")
+        src = open(path).read()
+        self.assertIn("on_websocket", src)
+        self.assertIn('message["from"]', src)
+        item = next(s for s in self.cfg()["scripts"] if s["name"] == "wslog")
+        self.assertEqual(item["match"], "/chat")
+
     def fake_proxy(self, active):
         """A stand-in for the proxy UI: serves the login page and /proxy/api/state for the project it 'runs'."""
         class Handler(BaseHTTPRequestHandler):

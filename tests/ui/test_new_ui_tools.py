@@ -335,6 +335,23 @@ class ToolWindows(UiBase):
         w.locator('[data-script-on="%s"]' % s["file"]).click()
         wait_for(lambda: [x for x in self.panel.state()["scripts"] if x["file"] == s["file"]][0]["enabled"] != s["enabled"], 5, 0.1, "toggled")
 
+    def test_scripting_window_websocket_template_creates_onWebsocket(self):
+        self.inst.clear_dir("scripts")
+        self.open_new("/json/small?nws=1")
+        self.page.locator('[data-tool="scripts"]').click()
+        w = self.win_open("scripts")
+        wait_for(lambda: w.locator('[data-script-field="template"]').count() == 1, 10, 0.1, "new form")
+        labels = w.locator('[data-script-field="template"] option').all_inner_texts()
+        self.assertTrue(any("WebSocket" in t for t in labels), labels)
+        w.locator('[data-script-field="name"]').fill("ws-log")
+        w.locator('[data-script-field="lang"]').select_option("js")
+        w.locator('[data-script-field="template"]').select_option("websocket")
+        w.locator("[data-script-save]").click()
+        wait_for(lambda: any(x["file"] == "ws-log.js" for x in self.panel.state()["scripts"]), 10, 0.2, "created")
+        wait_for(lambda: w.locator('[data-script-field="content"]').count() == 1, 10, 0.1, "editor")
+        wait_for(lambda: "onWebsocket" in w.locator('[data-script-field="content"]').input_value(), 5, 0.1, "template body")
+        self.assertIn("message.from", w.locator('[data-script-field="content"]').input_value())
+
     def test_edit_and_repeat_sends_a_changed_copy(self):
         self.open_new("/echo?ner=1")
         self.menu("ner=1", "edit")

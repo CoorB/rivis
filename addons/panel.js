@@ -1428,7 +1428,7 @@
       <h4>New script</h4>
       <div class="btns" style="margin-top:0"><input id="sn" type="text" class="grow" placeholder="Script name" aria-label="Script name">
         <select id="sl"><option value="js">JavaScript</option><option value="py">Python</option></select></div>
-      <div class="btns"><select id="stpl" aria-label="Template"><option value="header">Request header</option><option value="json">JSON response field</option><option value="mock">Local mock</option><option value="latency">Endpoint latency</option><option value="token">Log token refresh</option></select>
+      <div class="btns"><select id="stpl" aria-label="Template"><option value="header">Request header</option><option value="json">JSON response field</option><option value="mock">Local mock</option><option value="latency">Endpoint latency</option><option value="token">Log token refresh</option><option value="websocket">Log WebSocket messages</option></select>
         <select id="smethod" aria-label="Method"><option value="">Any method</option>${["GET","POST","PUT","PATCH","DELETE"].map((x) => `<option>${x}</option>`).join("")}</select></div>
       <div class="btns"><label class="sub" for="smatch" style="white-space:nowrap">Run on URLs like</label><input id="smatch" type="text" class="grow" value="." placeholder="URL pattern" title="A pattern matched against the URL (a regular expression). A single dot matches every call.">
         <button class="b p" id="snew">New</button></div>
@@ -2854,7 +2854,7 @@
     } else if (t === "script") {
       if (!it) {
         body += fld("lang", "Language", `<select id="rf-lang"><option value="js">JavaScript</option><option value="py">Python</option></select>`);
-        body += fld("template", "Template", `<select id="rf-template"><option value="header">Request header</option><option value="json">JSON response field</option><option value="mock">Local mock</option><option value="latency">Endpoint latency</option><option value="token">Log token refresh</option></select>`);
+        body += fld("template", "Template", `<select id="rf-template"><option value="header">Request header</option><option value="json">JSON response field</option><option value="mock">Local mock</option><option value="latency">Endpoint latency</option><option value="token">Log token refresh</option><option value="websocket">Log WebSocket messages</option></select>`);
         body += fld("smethod", "Method", method(""));
       }
     } else if (t === "throttle") {

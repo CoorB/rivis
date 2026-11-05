@@ -24,6 +24,7 @@ TEMPLATES = {
         "mock": 'def on_request(context, url, request):\n    return mock(200, {"message": "local response"}, {"Content-Type": "application/json"})\n',
         "latency": 'async def on_request(context, url, request):\n    await sleep(500)\n',
         "token": 'def on_response(context, url, request, response):\n    if "token" in url.lower():\n        log("token refresh", response["statusCode"])\n',
+        "websocket": 'def on_websocket(context, url, message):\n    log("[%s] %s: %s" % (message["from"], message["type"], message["data"]))\n',
     },
     "js": {
         "header": 'async function onRequest(context, url, request) {\n  request.headers["X-QA"] = "enabled";\n  return request;\n}\n',
@@ -31,6 +32,7 @@ TEMPLATES = {
         "mock": 'async function onRequest(context, url, request) {\n  return mock(200, {message: "local response"}, {"Content-Type": "application/json"});\n}\n',
         "latency": 'async function onRequest(context, url, request) {\n  await sleep(500);\n}\n',
         "token": 'async function onResponse(context, url, request, response) {\n  if (url.toLowerCase().includes("token")) log("token refresh", response.statusCode);\n}\n',
+        "websocket": 'async function onWebsocket(context, url, message) {\n  log(`[${message.from}] ${message.type}: ${message.data}`);\n}\n',
     },
 }
 

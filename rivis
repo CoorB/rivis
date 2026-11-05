@@ -48,7 +48,8 @@
 #                                 set_header: header=NAME value=TEXT [side=request|response];
 #                                 json_patch: set='path=value' (or set='{"path":value}'); map_remote: replace=REGEX with=URL
 #                                 optional: method=POST operation=GetUser (only that GraphQL operation)
-#   <cli> scripts list|new NAME --lang py|js [--match REGEX]|on NAME|off NAME|edit NAME|rm NAME
+#   <cli> scripts list|new NAME --lang py|js [--match REGEX] [--template header|json|mock|latency|token|websocket]
+#                                 |on NAME|off NAME|edit NAME|rm NAME
 #   <cli> throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]
 #                 [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
 #   <cli> nocache on|off|status            No Caching: strip If-None-Match/If-Modified-Since… from requests and
@@ -1159,7 +1160,7 @@ cmd_scripts()  {
   # ui_curl reads the token from its file via stdin; neither the token nor the state is placed in argv.
   local state=""
   if [ $# -eq 0 ] || [ "$1" = list ]; then
-    [ $# -le 1 ] || die "usage: $CLI scripts list|new NAME --lang py|js [--match REGEX]|on NAME|off NAME|edit NAME|rm NAME"
+    [ $# -le 1 ] || die "usage: $CLI scripts list|new NAME --lang py|js [--match REGEX] [--template header|json|mock|latency|token|websocket]|on NAME|off NAME|edit NAME|rm NAME"
     state=$(ui_curl /proxy/api/state --max-time 3 2>/dev/null) || state=""
     if [ -n "$state" ]; then
       printf '%s' "$state" | /usr/bin/python3 -I "$SCRIPT_DIR/addons/scripts_cli.py" "$RULES" \

@@ -1,11 +1,14 @@
 """Scripts (Python + JavaScript) live through the proxy: edits, context, mock, errors, timeouts, big/gzip/multi-value
 bodies, Node missing, the vm escape attempt."""
+import base64
 import gzip
 import hashlib
 import json
 import os
 import shutil
+import socket
 import sys
+import threading
 import time
 import unittest
 
@@ -606,6 +609,134 @@ class StopRace(unittest.TestCase):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip().splitlines()[-1], "clean", r.stdout + r.stderr)
+
+
+def _ws_echo_through_proxy(proxy_port, path="/ws", payload=b"hello-ws"):
+    """Open a WebSocket through the proxy to a local echo server; return once one text frame has round-tripped."""
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    done = threading.Event()
+
+    def ws_server():
+        try:
+            conn, _ = srv.accept()
+        except OSError:
+            return
+        try:
+            req = b""
+            while b"\r\n\r\n" not in req:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                req += chunk
+            key = [line.split(b":", 1)[1].strip() for line in req.split(b"\r\n")
+                   if line.lower().startswith(b"sec-websocket-key")][0]
+            accept = base64.b64encode(hashlib.sha1(key + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest())
+            conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                         b"Sec-WebSocket-Accept: " + accept + b"\r\n\r\n")
+            data = conn.recv(4096)
+            ln = data[1] & 0x7F
+            mask, body = data[2:6], data[6:6 + ln]
+            text = bytes(b ^ mask[i % 4] for i, b in enumerate(body))
+            conn.sendall(b"\x81" + bytes([len(text)]) + text)
+            done.wait(2)
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    threading.Thread(target=ws_server, daemon=True).start()
+    proxy = socket.create_connection(("127.0.0.1", proxy_port), 5)
+    try:
+        proxy.sendall(("GET http://127.0.0.1:%d%s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                       "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                       "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+                       % (port, path, port)).encode())
+        proxy.settimeout(5)
+        head = b""
+        while b"\r\n\r\n" not in head:
+            head += proxy.recv(4096)
+        if b" 101 " not in head.split(b"\r\n")[0]:
+            raise AssertionError("WebSocket upgrade failed: %r" % head.split(b"\r\n")[0])
+        mask = b"\x01\x02\x03\x04"
+        proxy.sendall(b"\x81" + bytes([0x80 | len(payload)]) + mask +
+                      bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+        frame = head.split(b"\r\n\r\n", 1)[1]
+        while len(frame) < 2 + len(payload):
+            frame += proxy.recv(4096)
+        if frame[2:2 + len(payload)] != payload:
+            raise AssertionError("echo mismatch: got %r" % frame[2:2 + len(payload)])
+    finally:
+        done.set()
+        try:
+            proxy.close()
+        except OSError:
+            pass
+        srv.close()
+
+
+class WebsocketScripts(ScriptCase):
+    def test_on_websocket_sees_payload_and_tags_the_flow(self):
+        # Without the hook, an enabled script never runs for WebSocket frames — chat bugs stay invisible.
+        # Context + a follow-up HTTP call proves the frame text was seen (mitmweb's info log is not always in the
+        # process capture); the flow comment proves the hook ran.
+        self.install("wslog.py", '''
+def on_websocket(context, url, message):
+    log("[%s] %s: %s" % (message["from"], message["type"], message["data"]))
+    context["last_ws"] = message["data"]
+
+def on_request(context, url, request):
+    if "/echo" in url and "last_ws" in context:
+        request["headers"]["X-Last-Ws"] = context["last_ws"]
+        return request
+''', match=r"wslog=1|/echo\?afterws")
+        _ws_echo_through_proxy(self.inst.proxy_port, path="/ws?wslog=1", payload=b"chat-payload-42")
+        flow = wait_for(lambda: self.inst.flow_for("wslog=1"), 10, 0.1, "websocket flow")
+        self.assertIn("script:wslog", flow.get("comment") or "",
+                      "on_websocket must tag the call the way on_request does")
+        doc = self.fetch("/echo?afterws=1").json()
+        hdr = {k.lower(): v for k, v in doc["headers"]}
+        self.assertEqual(hdr.get("x-last-ws"), "chat-payload-42",
+                         "on_websocket must see the text frame payload (got %r)" % hdr)
+
+    def test_websocket_template_source_logs_messages(self):
+        made = self.panel.ok("script_new", {"name": "ws-tpl", "lang": "py", "template": "websocket",
+                                            "match": "/never-ws"})
+        self.assertEqual(made["file"], "ws-tpl.py")
+        content = self.panel.ok("script_get", {"file": "ws-tpl.py"})["content"]
+        self.assertIn("on_websocket", content)
+        self.assertIn("message", content)
+        self.assertIn("log(", content)
+        js = self.panel.ok("script_new", {"name": "ws-tpl-js", "lang": "js", "template": "websocket",
+                                          "match": "/never-ws"})
+        js_src = self.panel.ok("script_get", {"file": js["file"]})["content"]
+        self.assertIn("onWebsocket", js_src)
+
+    @needs_node
+    def test_javascript_onWebsocket_sees_payload(self):
+        self.install("wslog.js", '''
+async function onWebsocket(context, url, message) {
+  log(`[${message.from}] ${message.type}: ${message.data}`);
+  context.last_ws = message.data;
+}
+async function onRequest(context, url, request) {
+  if (url.includes("/echo") && context.last_ws) {
+    request.headers["X-Last-Ws"] = context.last_ws;
+    return request;
+  }
+}
+''', match=r"wslogjs=1|/echo\?afterwsjs")
+        _ws_echo_through_proxy(self.inst.proxy_port, path="/ws?wslogjs=1", payload=b"js-frame-99")
+        flow = wait_for(lambda: self.inst.flow_for("wslogjs=1"), 10, 0.1, "websocket flow")
+        self.assertIn("script:wslog", flow.get("comment") or "")
+        doc = self.fetch("/echo?afterwsjs=1").json()
+        hdr = {k.lower(): v for k, v in doc["headers"]}
+        self.assertEqual(hdr.get("x-last-ws"), "js-frame-99")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

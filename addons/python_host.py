@@ -37,12 +37,18 @@ def main():
                 continue
             hook = call["hook"]
             namespace["_logs"] = logs
-            fn = namespace.get(hook) or namespace.get("onRequest" if hook == "on_request" else "onResponse")
+            camel = {"on_request": "onRequest", "on_response": "onResponse", "on_websocket": "onWebsocket"}
+            fn = namespace.get(hook) or namespace.get(camel.get(hook, ""))
             if fn is None:
                 send({"ok": True, "invoked": False, "logs": logs})
                 continue
             context, request, response = call["context"], call["request"], call["response"]
-            args = (context, call["url"], request) if response is None else (context, call["url"], request, response)
+            if hook == "on_websocket":
+                args = (context, call["url"], call.get("message"))
+            elif response is None:
+                args = (context, call["url"], request)
+            else:
+                args = (context, call["url"], request, response)
             with contextlib.redirect_stdout(io.StringIO()):
                 result = fn(*args)
                 if asyncio.iscoroutine(result): result = asyncio.run(result)

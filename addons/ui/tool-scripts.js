@@ -6,7 +6,7 @@
   const { esc } = A, ui = T.ui;
   const methods = ["", "GET", "POST", "PUT", "PATCH", "DELETE"];
   const templates = [["header", "Request header"], ["json", "JSON response field"], ["mock", "Local mock"],
-    ["latency", "Endpoint latency"], ["token", "Log token refresh"]];
+    ["latency", "Endpoint latency"], ["token", "Log token refresh"], ["websocket", "Log WebSocket messages"]];
   const scripts = () => (A.state() || {}).scripts || [];
   const status = () => (A.state() || {}).script_status || {};
   const sig = (st) => JSON.stringify([st.scripts, st.script_status]);

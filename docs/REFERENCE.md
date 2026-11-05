@@ -614,8 +614,8 @@ run with the user's rights. JavaScript runs in one lazily started Node sidecar; 
 `require`, `process`, network, and filesystem helpers to prevent accidents, but **this is not a security boundary**.
 Only run scripts you trust. Node may be overridden with `<PREFIX>_NODE`.
 The Scripts tab can create, edit, toggle, or delete scripts and reports each script's last error. Templates are:
-request header, JSON response field, local mock, endpoint latency, and token-refresh logging. Source and metadata
-hot-reload within about one second.
+request header, JSON response field, local mock, endpoint latency, token-refresh logging, and **Log WebSocket
+messages**. Source and metadata hot-reload within about one second.
 
 Scripts use Proxyman-compatible `onRequest(context, url, request)` / `onResponse(context, url, request,
 response)` hooks (snake_case is also accepted in Python). Request objects include method, URL parts, queries,
@@ -623,6 +623,12 @@ headers, and body; responses include `statusCode`, headers, and body. JSON bodie
 and binary bodies are base64 with `body_is_base64: true`. Returning nothing leaves the message unchanged.
 Both languages receive `log`, `sleep`, and request-side `mock` helpers. A changed flow is tagged
 `script:<name>`; locally answered calls are marked so collections skip them.
+
+WebSocket frames also call `onWebsocket(context, url, message)` (Python: `on_websocket`). `message` has
+`from` (`client` / `server`), `type` (`text` / `binary`), and `data` (string; binary that is not UTF-8 text is
+shown as `Binary (length=N)`, with `rawData` as base64). The hook is read-only in this release: use `log()` to
+trace chat/WS traffic. Returning a value does not edit or drop the frame (inject/drop is not shipped yet).
+Match the handshake URL the same way as other scripts (`rivis scripts new NAME --lang py --template websocket`).
 Python scripts run in separate, persistent host processes, one per enabled script. A hook or top-level load that
 exceeds two seconds is killed; the call continues unchanged and the host starts again on its next call. The Scripts
 tab and log name the script and show the timeout.

@@ -1065,12 +1065,14 @@ class Ops(LiveCase):
     def test_script_ops(self):
         self.inst.clear_dir("scripts")
         for lang in ("py", "js"):
-            for tpl in ("header", "json", "mock", "latency", "token"):
+            for tpl in ("header", "json", "mock", "latency", "token", "websocket"):
                 name = "s-%s-%s" % (lang, tpl)
                 self.assertEqual(self.panel.ok("script_new", {"name": name, "lang": lang, "template": tpl,
                                                               "match": "/never", "method": "get"})["file"], name + "." + lang)
         scripts = self.panel.state()["scripts"]
-        self.assertEqual(len(scripts), 10)
+        self.assertEqual(len(scripts), 12)
+        self.assertIn("on_websocket", self.panel.ok("script_get", {"file": "s-py-websocket.py"})["content"])
+        self.assertIn("onWebsocket", self.panel.ok("script_get", {"file": "s-js-websocket.js"})["content"])
         self.assertTrue(all(s["exists"] for s in scripts))
         got = self.panel.ok("script_get", {"file": "s-py-header.py"})
         self.assertIn("def on_request", got["content"])

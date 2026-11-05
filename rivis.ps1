@@ -25,7 +25,7 @@ system proxy, one CA per workstation, removed again with `off`.
                                             optional: method=POST operation=GetUser (only that GraphQL operation)
   .\<cli>.ps1 rules variant NAME add|use|rm VARIANT [file=PATH]
                                             manage hot-reloaded interception rules (json_patch: set='path=value' or set='{"path":value}')
-  .\<cli>.ps1 scripts list|new NAME -Lang py|js [-Match REGEX]|on NAME|off NAME|edit NAME|rm NAME
+  .\<cli>.ps1 scripts list|new NAME -Lang py|js [-Match REGEX] [-Template header|json|mock|latency|token|websocket]|on NAME|off NAME|edit NAME|rm NAME
   .\<cli>.ps1 throttle [off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]]
                          [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
                          (-Match REGEX / -Loss PCT work too)
@@ -71,6 +71,7 @@ param(
   [Alias("-method")][string]$Method = "",
   [Alias("-operation")][string]$Operation = "",
   [ValidateSet("py","js")][string]$Lang = "",
+  [ValidateSet("header","json","mock","latency","token","websocket")][string]$Template = "",
   [double]$Loss,
   [Alias("Dev")][switch]$Insecure,
   [switch]$VerifyUpstream,
@@ -1041,26 +1042,27 @@ switch ($Command) {
       Start-Process notepad.exe -ArgumentList ('"{0}"' -f (Join-Path $scriptDir $script.file)) -Wait
       break
     }
+    if ($subcommand -eq "new") {
+      # Same templates as bash scripts_cli (including websocket). scripts_cli holds .rules.lock itself.
+      if (-not $Lang) { Die "scripts new NAME requires -Lang py|js" }
+      try { [void](New-Object System.Text.RegularExpressions.Regex $(if ($Match) {$Match} else {"."})) } catch { Die "bad regex in match: $($_.Exception.Message)" }
+      $python = Get-PythonCommand
+      $tpl = if ($Template) { $Template } else { "header" }
+      $cliArgs = @()
+      $cliArgs += $python.Prefix
+      $cliArgs += @("-I", (Join-Path $PSScriptRoot "addons\scripts_cli.py"), $RulesPath, "--script-dir", $scriptDir,
+                    "new", $Name, "--lang", $Lang, "--template", $tpl)
+      if ($Match) { $cliArgs += @("--match", $Match) }
+      & $python.Exe @cliArgs
+      if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      break
+    }
     $createdPath = Invoke-WithStateLock $RulesPath {
       $cfg = Read-RulesConfig
       if ($null -eq $cfg.scripts) { $cfg | Add-Member -NotePropertyName scripts -NotePropertyValue @() -Force }
       else { $cfg.scripts = @($cfg.scripts) }
       $script = @($cfg.scripts | Where-Object { $_.name -eq $Name -or $_.file -eq $Name }) | Select-Object -First 1
-      if ($subcommand -eq "new") {
-        if (-not $Lang) { Die "scripts new NAME requires -Lang py|js" }
-        try { [void](New-Object System.Text.RegularExpressions.Regex $(if ($Match) {$Match} else {"."})) } catch { Die "bad regex in match: $($_.Exception.Message)" }
-        $filename = "$Name.$Lang"; $path = Join-Path $scriptDir $filename
-        if ($script -or (Test-Path $path)) { Die "script already exists" }
-        $source = if ($Lang -eq "py") {
-          'def on_request(context, url, request):' + "`n" + '    request["headers"]["X-QA"] = "enabled"' + "`n" + '    return request' + "`n"
-        } else {
-          'async function onRequest(context, url, request) {' + "`n" + '  request.headers["X-QA"] = "enabled";' + "`n" + '  return request;' + "`n" + '}' + "`n"
-        }
-        Write-PrivateFile $path $source.TrimEnd("`r","`n")
-        $cfg.scripts += [PSCustomObject]@{name=$Name;file=$filename;lang=$Lang;enabled=$true;match=$(if ($Match) {$Match} else {"."});method=$null}
-        Save-RulesConfig $cfg
-        return $path
-      } elseif (-not $script) { Die "no script named '$Name'" }
+      if (-not $script) { Die "no script named '$Name'" }
       elseif ($subcommand -in @("on","off")) {
         $script | Add-Member -NotePropertyName enabled -NotePropertyValue ($subcommand -eq "on") -Force
         Save-RulesConfig $cfg
@@ -1073,7 +1075,7 @@ switch ($Command) {
         Die "unknown scripts command '$subcommand'"
       }
     }
-    if ($subcommand -eq "new") { Write-Host "created $createdPath" } else { Write-Host $createdPath }
+    Write-Host $createdPath
   }
   "throttle" {
     Ensure-Rules
