@@ -5,7 +5,7 @@ import re
 import shutil
 from urllib.parse import urlsplit
 
-from proxy_common import SAFE_NAME, atomic_json, migrate_rules, user_regex
+from proxy_common import SAFE_NAME, atomic_json, migrate_rules, user_regex, without_leading_bom
 from proxy_rule_validation import compile_rule
 
 DEFAULT_TREE = os.path.expanduser(
@@ -94,11 +94,11 @@ def import_proxyman(rules_path, source=None, dry_run=False):
     if os.path.isdir(config):
         config = os.path.join(config, "MapLocalFiles-RuleTree")
     with open(config, encoding="utf-8") as fh:
-        tree = json.load(fh)
+        tree = json.loads(without_leading_bom(fh.read()))
     if not isinstance(tree, dict) or not isinstance(tree.get("nodes"), list):
         raise ValueError("expected Proxyman MapLocalFiles-RuleTree with nodes")
     with open(rules_path, encoding="utf-8") as fh:
-        cfg = migrate_rules(json.load(fh))
+        cfg = migrate_rules(json.loads(without_leading_bom(fh.read())))
     state_dir = os.path.dirname(os.path.abspath(rules_path))
     mocks = os.path.join(state_dir, "mocks")
     names = {r.get("name") for r in cfg.get("rules", []) if isinstance(r, dict)}

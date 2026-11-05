@@ -21,6 +21,24 @@ RULES_SCHEMA_VERSION = 1
 COLLECTION_SCHEMA_VERSION = 1
 
 
+def without_leading_bom(text):
+    """Leading whitespace and UTF-8 BOM(s) are not content.
+
+    Strip both, in any order and any number, before a prefix check or json.loads on text that came
+    from outside (a captured body, a paste, a file). A mark inside the payload is left alone. Decode
+    bytes as UTF-8 first — a UTF-16 BOM is not this mark and must fail that decode, not be guessed.
+    """
+    if not isinstance(text, str):
+        return text
+    while text:
+        trimmed = text.lstrip()
+        if trimmed.startswith("\ufeff"):
+            text = trimmed[1:]
+            continue
+        return trimmed
+    return text
+
+
 def hosts_file_path():
     """The hosts file the OS resolver reads. RIVIS_HOSTS_FILE replaces it (tests; never set it in normal use)."""
     path = os.environ.get("RIVIS_HOSTS_FILE")

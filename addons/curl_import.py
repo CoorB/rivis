@@ -4,6 +4,8 @@ import re
 import shlex
 from urllib.parse import quote, urlsplit, urlunsplit
 
+from proxy_common import without_leading_bom
+
 
 _ANSI_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", "'": "'", '"': '"', "0": "\0", "a": "\a", "b": "\b",
                  "e": "\x1b", "E": "\x1b", "f": "\f", "v": "\v", "?": "?"}
@@ -115,11 +117,12 @@ def _ensure_header(headers, name, value):
 
 
 def parse_curl(command):
-    if not isinstance(command, str) or not command.strip():
+    if not isinstance(command, str) or not without_leading_bom(command):
         raise ValueError("Paste a cURL command")
-    # U+FEFF (UTF-8 BOM): Notepad and some clipboards prefix a paste with it; strip() leaves it, so the first
-    # token becomes "\ufeffcurl" and a good command is refused.
-    command = command.lstrip("\ufeff").strip()
+    # U+FEFF (UTF-8 BOM): Notepad and some clipboards prefix a paste with it — alone, after spaces, or
+    # repeated. strip()/lstrip("\ufeff") leave space-then-mark and mark-space-mark, so the first token
+    # becomes "\ufeffcurl" and a good command is refused.
+    command = without_leading_bom(command)
     if '^"' in command or re.search(r" \^\r?\n", command):     # Windows "Copy as cURL (cmd)"
         args = _windows_args(command)
     else:

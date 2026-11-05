@@ -32,7 +32,7 @@ if HERE not in sys.path:
 import proxy_common
 importlib.reload(proxy_common)
 from proxy_common import (SAFE_NAME, STATE_ROOT, atomic_json, confined_path, migrate_collection,
-                          migrate_rules, project_profile, project_state, user_regex)
+                          migrate_rules, project_profile, project_state, user_regex, without_leading_bom)
 
 DEFAULT_RECORD = "."
 COLL_DIR = os.path.join(STATE_ROOT, "projects", "default", "collections")
@@ -45,9 +45,12 @@ def canon_query(q):
 
 def body_hash(raw):
     raw = raw or b""
-    try:   # JSON bodies compare by content, not key order / whitespace
-        raw = json.dumps(json.loads(raw), sort_keys=True, separators=(",", ":")).encode()
-    except (ValueError, RecursionError):
+    try:   # JSON bodies compare by content, not key order / whitespace / a leading UTF-8 BOM
+        # Decode as UTF-8 first: json.loads(bytes) would silently accept a UTF-16 BOM and hash the
+        # re-encoded object, so two different on-the-wire bodies looked like the same call.
+        text = without_leading_bom(raw.decode("utf-8"))
+        raw = json.dumps(json.loads(text), sort_keys=True, separators=(",", ":")).encode()
+    except (ValueError, RecursionError, UnicodeDecodeError):
         pass
     return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -62,9 +65,10 @@ def coll_path(name):
 
 def load_coll(name):
     # UTF-8 explicitly: collections store Arabic/emoji response text with ensure_ascii=False; a Windows
-    # locale open() would raise UnicodeDecodeError on replay.
+    # locale open() would raise UnicodeDecodeError on replay. without_leading_bom: a file edited in
+    # Notepad may start with a UTF-8 BOM; json.load rejects it.
     with open(coll_path(name), encoding="utf-8") as f:
-        return migrate_collection(json.load(f))
+        return migrate_collection(json.loads(without_leading_bom(f.read())))
 
 
 def save_coll(doc):
@@ -166,7 +170,7 @@ class ProxyCollections:
         self.checked = now
         try:
             with open(self._rules_path(), encoding="utf-8") as f:
-                cfg = migrate_rules(json.load(f)).get("collections") or {}
+                cfg = migrate_rules(json.loads(without_leading_bom(f.read()))).get("collections") or {}
         except (OSError, ValueError):
             return
         old_recording = self.cfg.get("recording")
