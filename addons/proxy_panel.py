@@ -24,7 +24,6 @@ import sys
 import tempfile
 import time
 import uuid
-import zlib
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 from mitmproxy import ctx, flowfilter, http
@@ -32,23 +31,6 @@ from mitmproxy.addonmanager import traverse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# mitmweb serves a strict CSP (default-src 'self'; no 'unsafe-inline' for scripts), so the boot logic
-# CANNOT be an inline <script> — it would be blocked and the skin would only apply late, after panel.js
-# loads (a flash of stock mitmweb), and the ?theme=off kill switch would never run. It is therefore
-# served as a same-origin external script (/proxy/boot.js), injected synchronously into <head> so it
-# runs before first paint. It applies the remembered theme / density and, unless the skin is switched
-# off (?theme=off or the panel toggle), parser-writes the /proxy/theme.css link (render-blocking → no
-# flash). Everything is wrapped in try/catch because localStorage can throw in private windows.
-THEME_BOOT = '<script src="./proxy/boot.js"></script>'
-BOOT_JS = b"""(function(){var load=true;try{
-var d=document.documentElement,s=window.localStorage,q=new URLSearchParams(location.search),t=q.get("theme");
-if(t==="off"||t==="on")s.setItem("rivis-skin",t);else if(t==="light"||t==="dark"||t==="system")s.setItem("rivis-theme",t);
-var k=s.getItem("rivis-skin")||s.getItem("proxy-restyle")||"on",m=s.getItem("rivis-theme");
-if(m==="light"||m==="dark")d.setAttribute("data-theme",m);
-if(s.getItem("rivis-compact")==="on")d.setAttribute("data-density","compact");
-if(k==="off"){d.setAttribute("data-skin","off");load=false;}
-}catch(e){}
-if(load)document.write('<link rel="stylesheet" href="./proxy/theme.css" id="rivis-theme">');})();"""
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
@@ -71,6 +53,13 @@ import client_certs
 importlib.reload(client_certs)
 import proxy_source        # helpers only (summaries, the list-filter clause); the add-on itself is loaded by the CLI
 importlib.reload(proxy_source)
+import panel_mitmweb
+import panel_view
+import panel_har
+from panel_mitmweb import THEME_BOOT, BOOT_JS, MITMWEB_PATCH_VERSION, patch_mitmweb_js
+from panel_view import (VIEW_CLIP, VIEW_SOURCE, VIEW_SOURCE_LIMIT, Utf8TextView, FlowFeed,
+                       body_prefix, preview_message, request_url, clip_view)
+from panel_har import HAR_BODY_LIMIT
 
 DEFAULT_STATE = os.path.join(STATE_ROOT, "projects", "default")
 _VERSION_AT_LOAD = None
@@ -97,9 +86,6 @@ MAX_PANEL_REQUEST_BYTES = 64 * 1024 * 1024
 MAX_PANEL_TEXT_BYTES = 32 * 1024 * 1024
 MAX_PANEL_VALUES = 1000000
 MAX_PANEL_DEPTH = 16
-# F-03: a session HAR leaves out any single body larger than this (with a comment saying so). Redacting a 60 MB body
-# took a minute of pure-Python regex that holds the interpreter lock, so even off the event loop it froze live traffic.
-HAR_BODY_LIMIT = 4 * 1024 * 1024
 # A binary mock (a PDF, an image) opens in the editor as text with U+FFFD for every byte that is not UTF-8. Chromium needs
 # ~10 s to lay out 1 MB of that in a textarea (~110 s for 3 MB; plain ASCII takes 75 ms), blocking the whole page. Above this
 # size the editor gets a read-only preview of the first bytes; status and headers stay editable and Save keeps the file's bytes.
@@ -208,193 +194,6 @@ def _session_meta(doc, fallback_name):
     return {"name": name, "note": doc.get("note") if isinstance(doc.get("note"), str) else "",
             "count": int(number(doc.get("count"))), "created": float(number(doc.get("created"))),
             "hosts": [h for h in hosts if isinstance(h, str)][:8]}
-
-# ── mitmweb bundle fix ──────────────────────────────────────────────────────────
-# mitmweb 12's FlowTable.onViewportUpdate stores min(scrollTop, end * rowHeight) as viewportTop but compares the
-# UNclamped scrollTop against it. Whenever scrollTop is past the last rendered row (the sticky header's height, a list
-# that just shrank under the retention cap, a very short list pane) the two never match, every componentDidUpdate
-# calls setState again, and React aborts the page with error #185 ("mitmproxy has crashed") while the user scrolls.
-# The fix compares the clamped value. Matched by shape, not minified names; if a future mitmweb changes the code the
-# bundle is served unchanged and a warning is logged.
-MITMWEB_PATCH_VERSION = "1"
-_VIEWPORT_LOOP = re.compile(
-    r"if\(this\.state\.viewportTop!==(\w+)\|\|!(\w+)\(this\.state\.vScroll,(\w+)\)\)\{"
-    r"const (\w+)=Math\.min\(\1,\3\.end\*this\.props\.rowHeight\);"
-    r"this\.setState\(\{vScroll:\3,viewportTop:\4\}\)\}")
-
-
-def patch_mitmweb_js(source, warn=None):
-    patched, n = _VIEWPORT_LOOP.subn(
-        lambda m: ("{const %(t)s=Math.min(%(s)s,%(v)s.end*this.props.rowHeight);"
-                   "if(this.state.viewportTop!==%(t)s||!%(eq)s(this.state.vScroll,%(v)s))"
-                   "this.setState({vScroll:%(v)s,viewportTop:%(t)s})}")
-        % {"s": m.group(1), "eq": m.group(2), "v": m.group(3), "t": m.group(4)}, source)
-    if n != 1 and warn and "this.state.viewportTop" in source:
-        warn("proxy_panel: mitmweb's flow-list code changed; the scroll-crash fix was not applied")
-    return patched if n == 1 else source
-
-
-# ── mitmweb's response viewer: text that is text, bodies too big to paint ───────
-# R6B-03: mitmproxy's automatic view treats any body whose first bytes are mostly >0x7e as binary, so valid UTF-8
-# Arabic or emoji text/plain showed as a hex dump. This view claims such bodies above Hex Dump (0.5) and below every
-# format-specific view (1.0); pure ASCII is left to Raw, images to Image, real binary (control bytes) to Hex Dump.
-class Utf8TextView:
-    name = "Text"
-    syntax_highlight = "none"
-
-    @staticmethod
-    def _text(data):
-        if not data or data.isascii() or b"\x00" in data:
-            return None
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-        sample = text[:65536]
-        ctrl = sum(1 for c in sample if c < " " and c not in "\t\n\r\f\v\x1b")
-        return text if ctrl <= len(sample) // 100 else None
-
-    def prettify(self, data, metadata):
-        text = self._text(data)
-        return text if text is not None else data.decode("utf-8", "replace")
-
-    def render_priority(self, data, metadata):
-        if (getattr(metadata, "content_type", None) or "").lower().startswith("image/"):
-            return 0
-        return 0.6 if self._text(data) is not None else 0
-
-
-# R6B-07: mitmweb paints a view's text into one <pre>; a 5 MB one-line script or a 20 MB JSON string is wider than
-# Chromium can lay out (33,554,430 px), so the block stayed empty. Views are clipped to their first VIEW_CLIP
-# characters, with the size in the view's title and a last line saying how to get all of it (panel.js turns the
-# title into Download / Open raw links).
-VIEW_CLIP = 256 * 1024
-
-
-def _size(n):
-    return "%.1f MB" % (n / 1048576) if n >= 1048576 else "%d KB" % max(1, round(n / 1024))
-
-
-# R10-01: a content view is built on the event loop that also moves every call, so rendering a 400 MB body stalled all
-# traffic for 22 s (50 MB: 3 s). Only the first VIEW_SOURCE bytes of a body larger than VIEW_SOURCE_LIMIT are rendered
-# (decoded incrementally when gzip/deflate), which is still far more text than VIEW_CLIP shows. Bodies up to the limit
-# render exactly as before; Download / Open raw still give the whole body.
-VIEW_SOURCE_LIMIT = 4 * 1024 * 1024
-VIEW_SOURCE = 1024 * 1024
-
-
-def body_prefix(message, limit):
-    """(first `limit` decoded bytes, True when the body is longer) without decoding the rest — or None when the
-    encoding cannot be decoded piecewise here (the caller decodes the whole body)."""
-    raw = message.raw_content or b""
-    enc = (message.headers.get("content-encoding") or "").strip().lower()
-    if enc in ("", "identity", "none"):
-        return raw[:limit], len(raw) > limit
-    if enc in ("gzip", "x-gzip", "deflate"):
-        for wbits in ((31,) if "gzip" in enc else (15, -15)):
-            try:
-                d = zlib.decompressobj(wbits)
-                out = d.decompress(raw, limit)
-                return out, bool(d.unconsumed_tail) or len(out) >= limit
-            except zlib.error:
-                continue
-    return None
-
-
-def preview_message(message):
-    """A copy of message whose body is only its first VIEW_SOURCE decoded bytes, or None when it is small enough to
-    render whole (or cannot be cut)."""
-    raw = getattr(message, "raw_content", None)
-    if not isinstance(raw, (bytes, bytearray)) or len(raw) <= VIEW_SOURCE_LIMIT or not hasattr(message, "headers"):
-        return None
-    cut = body_prefix(message, VIEW_SOURCE)
-    if cut is None:
-        return None
-    preview = message.copy()
-    preview.headers.pop("content-encoding", None)
-    preview.raw_content = cut[0]
-    return preview
-
-
-def request_url(r):
-    """r.pretty_url with an IPv6 host in brackets (R10-09): mitmproxy writes http://::1:8080/x, which curl and every
-    URL parser reject as a bad port."""
-    url = r.pretty_url
-    if getattr(r, "first_line_format", "") == "authority":
-        return url
-    for host in (r.pretty_host, r.host):
-        if host and ":" in host and not host.startswith("["):
-            prefix = "%s://%s" % (r.scheme, host)
-            if url.startswith(prefix):
-                return "%s://[%s]%s" % (r.scheme, host, url[len(prefix):])
-    return url
-
-
-def clip_view(result, total=None, partial=False):
-    """A mitmweb content-view reply ({text, view_name, description, …}) cut to VIEW_CLIP characters; other replies
-    (a list of websocket messages, an error) unchanged. partial: the view was built from the body's start only, so it
-    says so even when its text is short."""
-    if not isinstance(result, dict) or not isinstance(result.get("text"), str):
-        return result
-    if len(result["text"]) <= VIEW_CLIP and not partial:
-        return result
-    text = result["text"]
-    cut = text.rfind("\n", VIEW_CLIP - 4096, VIEW_CLIP) if len(text) > VIEW_CLIP else len(text)
-    cut = cut if cut > 0 else min(VIEW_CLIP, len(text))
-    note = "showing first %s of %s" % (_size(cut), _size(max(total or 0, len(text))))
-    out = dict(result)
-    out["text"] = text[:cut] + "\n\n… [%s — Download or Open raw for the whole body]" % note
-    desc = result.get("description") or ""
-    if partial and "failed to parse" in desc.lower():
-        desc = re.sub(r"\[?failed to parse[^\]]*\]?", "[truncated (%s/%s)]" % (_size(cut), _size(VIEW_SOURCE_LIMIT)), desc, flags=re.I)
-    out["description"] = ((desc + " (" + note + ")") if desc else ("(" + note + ")")).strip()
-    return out
-
-
-class FlowFeed:
-    """F2: what changed in the flow view since a cursor, so the panel's poll with the Tools drawer open does not download the
-    whole call list every second. It listens to the same signals mitmweb's own websocket does (a call added to, changed in or
-    removed from the list; the list refreshed or cleared). `epoch` changes whenever the list is rebuilt (clear, filter change):
-    a client holding another epoch, or a cursor older than the removals still remembered, is given the whole list."""
-    MAX_REMOVED = 4096
-
-    def __init__(self, view):
-        self.view = view
-        self._reset()
-        view.sig_view_add.connect(self._touch)
-        view.sig_view_update.connect(self._touch)
-        view.sig_view_remove.connect(self._gone)
-        view.sig_view_refresh.connect(self._reset)
-
-    def _reset(self, *args, **kw):
-        self.epoch = uuid.uuid4().hex[:12]
-        self.seq = self.floor = 0
-        self.touched = {}           # id of a call in the list -> sequence number of its last add / change
-        self.removed = {}           # id of a call that left the list -> sequence number of its removal (oldest first)
-
-    def _touch(self, flow, *args, **kw):
-        self.seq += 1
-        self.touched[flow.id] = self.seq
-        self.removed.pop(flow.id, None)
-
-    def _gone(self, flow, *args, **kw):
-        self.seq += 1
-        self.touched.pop(flow.id, None)
-        self.removed[flow.id] = self.seq
-        while len(self.removed) > self.MAX_REMOVED:
-            self.floor = max(self.floor, self.removed.pop(next(iter(self.removed))))
-
-    def since(self, epoch, cursor):
-        """(full, flows, removed_ids) for a client at (epoch, cursor)."""
-        try:
-            cursor = int(cursor)
-        except (TypeError, ValueError):
-            cursor = -1
-        if epoch != self.epoch or cursor < self.floor or cursor > self.seq:
-            return True, list(self.view), []
-        flows = [f for f in (self.view.get_by_id(i) for i, n in self.touched.items() if n > cursor) if f is not None]
-        return False, flows, [i for i, n in self.removed.items() if n > cursor]
-
 
 # Pilot 2026-10-21: "I can't log in to the app while the tool is running". Rivis captures every simulator as soon as it
 # starts, but only a simulator / emulator that trusts the Rivis CA can talk HTTPS through it: on any other, every HTTPS
@@ -2849,109 +2648,10 @@ class ProxyPanel:
                     e["_rivisSource"] = {k: src.get(k, "") for k in ("kind", "device", "app", "id")}
         return self._har_reply(har, a)
 
-    @staticmethod
-    def _cap_har_bodies(har, limit=HAR_BODY_LIMIT):
-        """F-03: drop request/response bodies over `limit` bytes from a HAR (in place), leaving the size and a
-        comment, so building and redacting a session with big downloads stays short. Smaller bodies are unchanged."""
-        for e in (har.get("log") or {}).get("entries") or []:
-            for part, key in ((e.get("request") or {}, "postData"), (e.get("response") or {}, "content")):
-                body = part.get(key)
-                text = body.get("text") if isinstance(body, dict) else None
-                if text and (len(text) * 3 // 4 if body.get("encoding") == "base64" else len(text)) > limit:
-                    body["text"] = ""
-                    body.pop("encoding", None)
-                    body["comment"] = ("Body left out: larger than the %d MiB HAR export limit (%s bytes). The saved "
-                                       "session still holds it." % (limit // (1024 * 1024), body.get("size", "?")))
-        return har
-
-    @staticmethod
-    def _har_reply(har, a):
-        """HAR for the browser to download: secrets redacted unless the user ticked "Include secrets" (F-08)."""
-        secrets_in = a.get("include_secrets") is True
-        return {"har": har if secrets_in else proxy_redact.har(har), "redacted": not secrets_in,
-                "filename": a["name"] + ".har"}
-
-    @staticmethod
-    def to_har(doc):
-        import datetime
-        out = []
-        for e in doc.get("entries", []):
-            text = e.get("text")
-            content = {"size": len(text or ""), "mimeType": next((v for k, v in e["headers"] if k.lower() == "content-type"), ""),
-                       **({"text": text} if text is not None else {"text": e.get("b64", ""), "encoding": "base64"})}
-            q = ("?" + e["query"]) if e.get("query") else ""
-            out.append({
-                "startedDateTime": datetime.datetime.fromtimestamp(e.get("recorded_at", 0), datetime.timezone.utc).isoformat(),
-                "time": 0,
-                "request": {"method": e["method"], "url": f"{e.get('scheme', 'https')}://{e['host']}{e['path']}{q}",
-                            "httpVersion": "HTTP/1.1", "headers": [], "queryString": [], "cookies": [], "headersSize": -1, "bodySize": -1,
-                            # collections keep only a fingerprint of the request body (not the body): carry it, so an
-                            # exported collection imported elsewhere still replays each POST by its body
-                            **({"_rivisRequestBodyHash": e["req_body"]} if e.get("req_body") else {})},
-                "response": {"status": e["status"], "statusText": "", "httpVersion": "HTTP/1.1",
-                             "headers": [{"name": k, "value": v} for k, v in e["headers"]], "cookies": [],
-                             "content": content, "redirectURL": "", "headersSize": -1, "bodySize": -1},
-                "cache": {}, "timings": {"send": 0, "wait": 0, "receive": 0}})
-        return {"log": {"version": "1.2", "creator": {"name": PRODUCT["name"], "version": "1"}, "entries": out}}
-
-    @staticmethod
-    def from_har(har, skipped=None):
-        import base64
-        import time as _t
-        from urllib.parse import parse_qsl, urlencode, urlsplit
-        from proxy_collections import body_hash
-        out = []
-        for e in ((har or {}).get("log") or {}).get("entries", [])[:10000]:
-            try:
-                req, resp = e["request"], e["response"]
-                u = urlsplit(req["url"])
-                c = resp.get("content") or {}
-                # R2A-05: keep the request body (hashed like a live recording) so calls differing only by body replay apart
-                post = req.get("postData") or {}
-                if post.get("text") is not None:
-                    raw = base64.b64decode(post["text"]) if post.get("encoding") == "base64" else str(post["text"]).encode("utf-8")
-                elif post.get("params"):
-                    raw = urlencode([(p["name"], p.get("value", "")) for p in post["params"]]).encode("utf-8")
-                else:
-                    raw = None
-                hashed = req.get("_rivisRequestBodyHash")
-                if raw is None and isinstance(hashed, str) and re.fullmatch(r"[0-9a-f]{16}", hashed):
-                    req_body = hashed                     # a Rivis collection export: the body's fingerprint, not the body
-                else:
-                    req_body = body_hash(raw or b"")
-                ent = {"method": req["method"].upper(), "scheme": u.scheme or "https", "host": u.hostname or "",
-                       "path": u.path or "/",
-                       "query": urlencode(sorted(parse_qsl(u.query, keep_blank_values=True))),
-                       "req_body": req_body, "status": int(resp["status"]),
-                       "headers": [[str(h["name"]), "" if h.get("value") is None else str(h["value"])]
-                                   for h in resp.get("headers", [])
-                                   if str(h.get("name") or "").lower() not in ("content-encoding", "content-length", "transfer-encoding", "connection")
-                                   and not str(h.get("name") or "").startswith(":")],
-                       "recorded_at": _t.time()}
-                # HAR exporters sometimes write "text": null for an empty body, and null header values. .get("text", "")
-                # still returns None when the key is present, and replay then crashed on None.encode().
-                text = c.get("text")
-                if text is None:
-                    text = ""
-                elif not isinstance(text, str):
-                    text = str(text)
-                if c.get("encoding") == "base64":
-                    ent["b64"] = text
-                    base64.b64decode(ent["b64"])
-                else:
-                    ent["text"] = text
-                if not ent["host"] or ent["status"] <= 0:
-                    why = "failed call (status 0)"
-                elif ent["status"] == 101:
-                    why = "WebSocket upgrade (101 cannot be replayed)"
-                else:
-                    out.append(ent)
-                    continue
-                if skipped is not None:       # R2A-10: say what was left out instead of dropping it silently
-                    skipped.append("%s %s: %s" % (ent["method"], ent["path"][:60], why))
-            except (KeyError, ValueError, TypeError):
-                continue
-        return out
+    _cap_har_bodies = staticmethod(panel_har._cap_har_bodies)
+    _har_reply = staticmethod(panel_har._har_reply)
+    to_har = staticmethod(panel_har.to_har)
+    from_har = staticmethod(panel_har.from_har)
 
     @staticmethod
     def diff(fa, fb):
