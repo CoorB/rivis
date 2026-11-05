@@ -13,6 +13,7 @@ final class RivisApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKU
     private var window: NSWindow!
     private var webView: WKWebView!
     private var cli: String?
+    private var cliEnvironment: [String: String]?
     var allowedPort: Int?
     private var generation = 0
     private var downloads: [ObjectIdentifier: URL] = [:]
@@ -72,10 +73,42 @@ final class RivisApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKU
         } catch { return nil }
     }
 
-    nonisolated func runCLI(_ args: [String], using cli: String) -> (Int32, String, String) {
+    // Opened from Finder, the Dock or at login, the app has launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin), so a
+    // checkout or Homebrew install cannot find mitmweb and `start` fails. `rivis app` passes the shell's PATH;
+    // otherwise put the login shell's PATH (found the same way as the CLI) in front of the app's own.
+    nonisolated func environmentForCLI(loginPath: String?) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        if environment["RIVIS_CLI"] != nil { return environment }
+        var entries: [String] = []
+        for entry in [loginPath ?? "", environment["PATH"] ?? "", "/opt/homebrew/bin:/usr/local/bin"]
+            .joined(separator: ":").split(separator: ":").map(String.init) where !entries.contains(entry) {
+            entries.append(entry)
+        }
+        environment["PATH"] = entries.joined(separator: ":")
+        return environment
+    }
+
+    nonisolated private func loginShellPath() -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", "print -r -- $PATH"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return process.terminationStatus == 0 && !path.isEmpty ? path : nil
+        } catch { return nil }
+    }
+
+    nonisolated func runCLI(_ args: [String], using cli: String, environment: [String: String]? = nil) -> (Int32, String, String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: cli)
         process.arguments = args
+        if let environment { process.environment = environment }
         let output = Pipe(), errors = Pipe()
         process.standardOutput = output
         process.standardError = errors
@@ -104,14 +137,16 @@ final class RivisApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKU
     }
 
     private func requestLogin(_ current: Int, retries: Int) {
-        let currentCLI = cli
+        let currentCLI = cli, currentEnvironment = cliEnvironment
         DispatchQueue.global(qos: .userInitiated).async {
             let selectedCLI = currentCLI ?? self.findCLI()
-            let result = selectedCLI.map { self.runCLI(["ui", "--new", "--url"], using: $0) }
+            let environment = currentEnvironment ?? self.environmentForCLI(loginPath: self.loginShellPath())
+            let result = selectedCLI.map { self.runCLI(["ui", "--new", "--url"], using: $0, environment: environment) }
                 ?? (1, "", "Rivis CLI was not found. Set RIVIS_CLI or install rivis in ~/.local/bin.")
             DispatchQueue.main.async {
                 guard self.generation == current else { return }
                 self.cli = selectedCLI
+                self.cliEnvironment = environment
                 if result.0 == 0, let url = URL(string: result.1.trimmingCharacters(in: .whitespacesAndNewlines)),
                    self.isLocal(url), url.path.hasPrefix("/proxy/bootstrap/") {
                     self.allowedPort = url.port
@@ -157,22 +192,36 @@ final class RivisApp: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKU
 
     @objc private func startRivis(_ sender: Any?) {
         guard let cli else { return }
+        let environment = cliEnvironment
+        generation += 1
+        let current = generation
+        showProblem("Starting Rivis…", canStart: false)
+        DispatchQueue.global(qos: .userInitiated).async {
+            // --background returns once the start has worked or failed, so a failure is shown, not only logged
+            let result = self.runCLI(["start", "--background", "--no-open"], using: cli, environment: environment)
+            self.appendToLog(result.1 + result.2)
+            DispatchQueue.main.async {
+                guard self.generation == current else { return }
+                if result.0 == 0 {
+                    self.requestLogin(current, retries: 1)
+                } else {
+                    let reason = (result.2 + result.1).trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.showProblem("Rivis did not start.\n\n" + (reason.isEmpty ? "See ~/Library/Logs/Rivis-app.log." : reason),
+                                     canStart: true)
+                }
+            }
+        }
+    }
+
+    nonisolated private func appendToLog(_ text: String) {
         let log = ("~/Library/Logs/Rivis-app.log" as NSString).expandingTildeInPath
-        do {
-            try FileManager.default.createDirectory(at: URL(fileURLWithPath: log).deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            if !FileManager.default.fileExists(atPath: log) { FileManager.default.createFile(atPath: log, contents: nil) }
-            let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: log))
-            handle.seekToEndOfFile()
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: cli)
-            process.arguments = ["start"]
-            process.standardOutput = handle
-            process.standardError = handle
-            try process.run()
-            generation += 1
-            requestLogin(generation, retries: 1)
-        } catch { showProblem("Could not start Rivis: \(error.localizedDescription)", canStart: true) }
+        let manager = FileManager.default
+        try? manager.createDirectory(at: URL(fileURLWithPath: log).deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !manager.fileExists(atPath: log) { manager.createFile(atPath: log, contents: nil) }
+        guard let handle = FileHandle(forWritingAtPath: log) else { return }
+        handle.seekToEndOfFile()
+        handle.write(Data(text.utf8))
+        handle.closeFile()
     }
 
     private func isLocal(_ url: URL) -> Bool {

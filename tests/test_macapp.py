@@ -102,6 +102,54 @@ guard result.0 == 0, result.1 == "http://127.0.0.1:12345/ready\\n", result.2.cou
             result = subprocess.run([binary, fake], capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def run_swift(self, folder, body, *args, env=None):
+        main = os.path.join(folder, "main.swift")
+        with open(main, "w") as file:
+            with open(os.path.join(REPO, "addons/macapp/RivisApp.swift")) as source:
+                file.write(source.read())
+            file.write("\nimport Foundation\n" + body)
+        binary = os.path.join(folder, "runner")
+        build = subprocess.run(["swiftc", "-D", "RIVIS_TEST", main, "-o", binary,
+                                "-framework", "AppKit", "-framework", "WebKit"],
+                               capture_output=True, text=True, timeout=60)
+        self.assertEqual(build.returncode, 0, build.stderr)
+        return subprocess.run([binary, *args], capture_output=True, text=True, timeout=10, env=env)
+
+    def test_opened_from_finder_the_cli_gets_the_login_shell_path(self):
+        # launchd gives a Finder/Dock/login-item app /usr/bin:/bin:/usr/sbin:/sbin; with that, a checkout or a
+        # Homebrew mitmproxy is not found and Start Rivis failed with nothing on screen.
+        body = """let env = RivisApp().environmentForCLI(loginPath: "/login/bin:/usr/bin")
+print(env["PATH"] ?? "")
+"""
+        with tempfile.TemporaryDirectory(prefix="rivis-app-path-") as folder:
+            launchd = {"HOME": folder, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
+            result = self.run_swift(folder, body, env=launchd)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(),
+                             "/login/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin")
+            # `rivis app` already passes the shell's PATH with RIVIS_CLI: leave it exactly as given
+            result = self.run_swift(folder, body, env=dict(launchd, RIVIS_CLI="/x/rivis", PATH="/given/bin"))
+            self.assertEqual(result.stdout.strip(), "/given/bin")
+
+    def test_the_cli_runs_with_the_environment_it_is_given(self):
+        with tempfile.TemporaryDirectory(prefix="rivis-app-env-") as folder:
+            fake = os.path.join(folder, "fake-cli")
+            with open(fake, "w") as file:
+                file.write("#!/bin/sh\nprintf '%s' \"$PATH\"\n")
+            os.chmod(fake, 0o755)
+            result = self.run_swift(folder, """let out = RivisApp().runCLI([], using: CommandLine.arguments[1], environment: ["PATH": "/only/here"])
+guard out.0 == 0, out.1 == "/only/here" else { print(out); exit(1) }
+""", fake)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_start_rivis_waits_for_the_start_and_shows_why_it_failed(self):
+        with open(os.path.join(REPO, "addons/macapp/RivisApp.swift")) as source:
+            code = source.read()
+        start = code[code.index("@objc private func startRivis"):code.index("nonisolated private func appendToLog")]
+        self.assertIn('["start", "--background", "--no-open"]', start, "a foreground start never reports its failure")
+        self.assertIn("Rivis did not start.", start)
+        self.assertIn("canStart: true", start, "after a failed start the button must stay so the user can retry")
+
     def test_delegate_compiles_in_swift6_mode(self):
         version = subprocess.run(["swiftc", "-version"], capture_output=True, text=True)
         if not re.search(r"Swift version ([6-9]|[1-9][0-9])\.", version.stdout):
