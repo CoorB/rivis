@@ -203,15 +203,17 @@ try:
 except Exception as e:
     sys.stderr.write("%s: project profile %s is damaged (%s) — fix the JSON or recreate the project (%s projects new)\n"
                      % (cli, path, e, cli))
-    sys.exit(1)
+    sys.exit(3)
 v = doc.get(key, "")
 print(v if not isinstance(v, (dict, list)) else json.dumps(v))
 ' "$CLI" "$PROJECT_JSON" "$1"
 }
-PROJECT_LABEL="$(project_value label)" || exit 1
-PROJECT_HOSTS="$(project_value hosts)" || exit 1
-PROJECT_ANDROID="$(project_value android_packages)" || exit 1
-PROJECT_IOS="$(project_value ios_bundle_ids)" || exit 1
+# Exit 3 = the profile itself is damaged: stop. Any other failure is python3 itself (a Mac without the Command
+# Line Tools has only the xcrun stub) and must not block --version, uninstall or the commands that never need it.
+PROJECT_LABEL="$(project_value label)" || { [ $? = 3 ] && exit 1; }
+PROJECT_HOSTS="$(project_value hosts)" || { [ $? = 3 ] && exit 1; }
+PROJECT_ANDROID="$(project_value android_packages)" || { [ $? = 3 ] && exit 1; }
+PROJECT_IOS="$(project_value ios_bundle_ids)" || { [ $? = 3 ] && exit 1; }
 PROJECT_STATE="$STATE_ROOT/projects/$PROJECT"
 
 PORT="$(env_value PORT 8080)"
