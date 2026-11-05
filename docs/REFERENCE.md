@@ -344,7 +344,7 @@ for JSON bodies up to 2 MB, opens only what you open or what a search finds, and
 bodies show as hex; text is shown up to 512 KB. Right-click a call for Copy URL, Copy as cURL, Repeat, Map Local,
 Breakpoint, Show only this host and Delete. Columns are the project's (the same choice as the classic view's picker).
 Shortcuts: ⌥⌘F filter, ⌘F search in the body, ⌘K find a source, ⇧⌘L follow the newest, ⇧⌘⌫ clear all (asks
-first), ⌥⌘N No Caching, ⌥⌘A Allow List (hosts to decrypt), ⌥⌘L / ⌥⌘R / ⌥⌘B Map Local / Map Remote / Breakpoint, ⌥1–⌥9 saved filters, ↑ ↓ calls,
+first), ⌥⌘N No Caching, ⌥⌘A TLS decryption: hosts to decrypt, ⌥⌘L / ⌥⌘R / ⌥⌘B Map Local / Map Remote / Breakpoint, ⌥1–⌥9 saved filters, ↑ ↓ calls,
 ⌫ delete the selected call. The classic view stays as it is (**Classic view** in the toolbar).
 
 Open the mitmweb UI and click the **Tools** button at the right end of the toolbar. Tabs provide This call, Compose, Map Local,

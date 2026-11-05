@@ -1172,7 +1172,7 @@
   const KEYS = [
     [`${MOD}K`, "Find or pin a domain in the sidebar"], [`${ALT}${MOD}F`, "Filter the list"], [`${SHIFT}${MOD}L`, "Auto-select the newest call (follow)"],
     [`${SHIFT}${MOD}⌫`, "Clear the list"], [`${ALT}${MOD}L`, "Map Local"], [`${ALT}${MOD}R`, "Map Remote"], [`${ALT}${MOD}B`, "Breakpoint"],
-    [`${ALT}${MOD}X`, "Block List"], [`${ALT}${MOD}N`, "No Caching"], [`${ALT}${MOD}A`, "Allow List (hosts to decrypt)"], [`${ALT}1 … ${ALT}9`, "Saved filters"], [`${MOD}F`, "Search in the request or response body"],
+    [`${ALT}${MOD}X`, "Block List"], [`${ALT}${MOD}N`, "No Caching"], [`${ALT}${MOD}A`, "TLS decryption: hosts to decrypt"], [`${ALT}1 … ${ALT}9`, "Saved filters"], [`${MOD}F`, "Search in the request or response body"],
     ["↑ ↓", "Move through the list"], ["⌫", "Delete the selected call"], [`${MOD}↩`, "Continue a paused call · send in Edit and Repeat"], [`${MOD}S`, "Save in Map Local"], ["Esc", "Close the front window"],
   ];
   function showDialog(html, focusSel) {

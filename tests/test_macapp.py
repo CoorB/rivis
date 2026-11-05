@@ -13,12 +13,29 @@ from harness import LiveCase, REPO, RIVIS, Suite
 from test_new_ui_routes import get, opener
 
 
+class ToolNaming(unittest.TestCase):
+    """One name per tool, on every surface. Needs no toolchain, so it runs everywhere the suite does."""
+
+    def test_the_tls_tool_is_called_tls_decryption_everywhere_it_is_named(self):
+        # The Mac menu, the panel's shortcut sheet and the reference all said "Allow List" while the control
+        # itself is headed "TLS decryption". A wiki section was written from the wrong one before it was caught.
+        surfaces = {"RivisApp.swift": os.path.join(REPO, "addons", "macapp", "RivisApp.swift"),
+                    "app.js": os.path.join(REPO, "addons", "ui", "app.js"),
+                    "REFERENCE.md": os.path.join(REPO, "docs", "REFERENCE.md")}
+        for name, path in surfaces.items():
+            with open(path) as source:
+                text = source.read()
+            self.assertFalse("Allow List" in text,     # not assertNotIn: it would print the whole file
+                             "%s still calls the TLS decryption tool 'Allow List'" % name)
+
+
 @unittest.skipUnless(shutil.which("swiftc"), "swiftc is not on PATH")
 class MacAppBuild(unittest.TestCase):
-    def test_allow_list_menu_sends_the_window_command(self):
+    def test_tls_decryption_menu_sends_the_window_command(self):
         with open(os.path.join(REPO, 'addons', 'macapp', 'RivisApp.swift')) as source:
             swift = source.read()
-        self.assertIn('command("Allow List", "allow", to: tools, key: "a", modifiers: [.command, .option])', swift)
+        # the menu's label changed; the command id behind it stays "allow"
+        self.assertIn('command("TLS Decryption", "allow", to: tools, key: "a", modifiers: [.command, .option])', swift)
         with open(os.path.join(REPO, 'addons', 'ui', 'app.js')) as source:
             script = source.read()
         self.assertIn('else if (detail === "allow") openAllowList();', script)

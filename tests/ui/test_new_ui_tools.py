@@ -64,7 +64,7 @@ class ToolWindows(UiBase):
     def toast(self):
         return self.page.locator("#toast").inner_text()
 
-    def test_allow_list_shortcut_opens_network_at_decrypt_hosts(self):
+    def test_tls_decryption_shortcut_opens_network_at_decrypt_hosts(self):
         self.open_new()
         self.page.locator('#q').focus()
         self.page.keyboard.press(MOD + "+Alt+A")
@@ -76,7 +76,7 @@ class ToolWindows(UiBase):
         self.page.keyboard.press("Escape")
         self.page.locator('#tscroll').focus()
         self.page.keyboard.press("?")
-        self.assertIn("Allow List", self.page.locator("#dialog").inner_text())
+        self.assertIn("TLS decryption: hosts to decrypt", self.page.locator("#dialog").inner_text())
 
     # ── Breakpoint ──────────────────────────────────────────────────────────────────────────────────────────────────
     def test_breakpoint_from_the_menu_then_the_paused_call_opens_by_itself_and_its_edit_reaches_the_app(self):
