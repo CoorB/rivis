@@ -320,6 +320,25 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
         self.assertEqual(direct.returncode, 0, direct.stdout + direct.stderr)
         self.assertIn("regular@" + env["RIVIS_PORT"], self.suite.shim_log("mitm-argv.log"))
 
+    def test_start_all_and_allow_private_hosts_match_bash(self):
+        """Parity for start -All (DNS/UDP view) and -AllowPrivateHosts (plain HTTP to private hosts)."""
+        log = os.path.join(self.suite.shimlog, "mitm-argv.log")
+        open(log, "w").close()
+        env = dict(self.env, SHIM_DRYRUN="1")
+        cmd = [PWSH, "-NoProfile", "-NonInteractive", "-File", os.path.join(harness.REPO, "rivis.ps1")]
+        regex = "^(localhost|127\\.0\\.0\\.1)$"
+        cp = self.suite.run(cmd + ["start", "-NoOpen", "-All", "-AllowPrivateHosts", regex],
+                            home=self.home, env=env, timeout=120)
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        line = self.suite.shim_log("mitm-argv.log")
+        self.assertIn("proxy_private_hosts=" + regex, line)
+        self.assertNotIn("view_filter=", line)  # -All: no HTTP-only filter (same as bash --all)
+        self.assertIn("everything (incl. DNS/UDP)", cp.stdout + cp.stderr)
+        bad = self.suite.run(cmd + ["start", "-NoOpen", "-AllowPrivateHosts", "("],
+                             home=self.home, env=env, timeout=120)
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("AllowPrivateHosts", bad.stdout + bad.stderr)
+
     def bash(self, *args):
         if not harness.BASH_CLI_READY:
             self.skipTest(NO_BASH_CLI)

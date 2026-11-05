@@ -5,9 +5,12 @@ this PC's Wi-Fi/Ethernet address for phones and tablets, each allowed first), ne
 system proxy, one CA per workstation, removed again with `off`.
 (No iOS Simulator exists on Windows — iOS testing stays on the Macs.)
 
-  .\<cli>.ps1 start [-Insecure] [-VerifyUpstream] [-ProjectOnly] [-NoOpen] [-Project ID] [-Lan]
+  .\<cli>.ps1 start [-Insecure] [-VerifyUpstream] [-ProjectOnly] [-NoOpen] [-All] [-Project ID] [-Lan]
+                                            [-Upstream http://host:port|direct] [-AllowPrivateHosts REGEX]
                                             mitmweb: proxy 127.0.0.1:8080, UI http://127.0.0.1:8083
                                             -Lan: phones/tablets on this Wi-Fi too (allow each one first)
+                                            -All: also show DNS/UDP rows (hidden by default)
+                                            -AllowPrivateHosts: also let plain-HTTP calls reach these hosts on private addresses
   .\<cli>.ps1 lan [list] | allow IP [NAME] | rm IP   phones and tablets allowed to use the proxy
   .\<cli>.ps1 stop | ui [-New|-Classic] [-Url] | status | cert   (new window by default; -Classic is the fallback)
   .\<cli>.ps1 app                           the native window is macOS only; use ui here
@@ -41,7 +44,7 @@ system proxy, one CA per workstation, removed again with `off`.
                                             -System: also the emulator's SYSTEM store (Google APIs images, adb root)
   .\<cli>.ps1 setup                         configure every running Android emulator (iOS is unavailable on Windows)
   .\<cli>.ps1 net-reset [-DryRun] | status | cert
-  .\<cli>.ps1 doctor [-Json] [-NoNet] [-FixSafe [-Yes]]
+  .\<cli>.ps1 doctor [-Json] [-NoNet] [-AllowProfileNetwork] [-FixSafe [-Yes]]
                                             read-only health check. Runs the shared Python checker when
                                             Python is installed; otherwise a reduced native subset
                                             (ports, WinINET/WinHTTP proxy, adb, mitmproxy version)
@@ -90,6 +93,7 @@ param(
   [string]$Key = "",
   [switch]$PasswordStdin,
   [switch]$Lan,
+  [string]$AllowPrivateHosts = "",
   [switch]$New,
   [switch]$Classic,
   [Alias("Url")][switch]$PrintUiUrl,
@@ -610,6 +614,7 @@ function Quote-Arg([string]$a) { return '"' + ($a -replace '(\\*)"', '$1$1\"' -r
 $helpTokens = @("-h","--help","-Help")
 $helpRequested = $Help -or $Action -in $helpTokens -or $Name -in $helpTokens -or @($Rest | Where-Object { $_ -in $helpTokens }).Count
 if ($helpRequested -or $Command -in @("-h","--help")) { Write-Usage $Command; exit 0 }
+# -V is bash-only: PowerShell treats -V as an ambiguous prefix for -Var / -VerifyUpstream.
 if ($Command -in @("version","--version") -or ($Command -eq "help" -and -not $Action -and @($Rest) -contains "--version")) {   # PowerShell binds a bare --version to $Rest      # installed copies carry VERSION at their root; a repo keeps it in install\
   $v = "dev"
   foreach ($f in @((Join-Path $PSScriptRoot "VERSION"), (Join-Path (Join-Path $PSScriptRoot "install") "VERSION"))) {
@@ -732,7 +737,14 @@ switch ($Command) {
     $verify = $VerifyUpstream.IsPresent -or (-not $Insecure.IsPresent -and (Config-Env "VERIFY_UPSTREAM" "0") -ne "0")
     if ($verify) { Info "TLS: upstream certificates verified against this machine's trust store" }
     else { $margs += @("--set","ssl_insecure=true"); Info "TLS: upstream certificates are not verified (as in Proxyman) - -VerifyUpstream checks them" }
-    if ($ProjectOnly -and $ProjectConfig.hosts) {
+    if ($AllowPrivateHosts) {
+      try { [void](New-Object System.Text.RegularExpressions.Regex $AllowPrivateHosts) }
+      catch { Die "-AllowPrivateHosts needs a valid regex" }
+      $margs += @("--set","proxy_private_hosts=$AllowPrivateHosts")
+    }
+    # Default view = HTTP(S) only, like Proxyman. -All shows DNS/UDP too (same as bash --all).
+    if ($All) { Info "view   everything (incl. DNS/UDP)" }
+    elseif ($ProjectOnly -and $ProjectConfig.hosts) {
       $escapedHosts = $ProjectConfig.hosts.Replace('\','\\').Replace("'","\'")
       $margs += @("--set","view_filter=~http & (~d '$escapedHosts')"); Info "view: $($ProjectConfig.label) calls only"
     }
@@ -1496,7 +1508,7 @@ switch ($Command) {
     Info "your normal browser, the system proxy and the certificate store are not touched; close that window when done"
     if (-not $loopback -and $url -match '^https?://(localhost|127\.0\.0\.1)([:/]|$)') {
       Info "localhost opens directly, not through $ProductName (it blocks private addresses unless told otherwise). To capture it:"
-      Info "  start $ProductName with --allow-private-hosts '^(localhost|127\.0\.0\.1)$', then run this again"
+      Info "  .\${Cli}.ps1 start -AllowPrivateHosts '^(localhost|127\.0\.0\.1)$', then run this again"
     }
   }
   "cert" {
