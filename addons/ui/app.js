@@ -359,6 +359,7 @@
   function setRecord(on) {
     S.record = on;
     $("tb-record").setAttribute("aria-pressed", String(on));
+    $("tb-record").setAttribute("aria-label", on ? "Record" : "Paused");
     $("tb-record").querySelector(".rv-tb-l").textContent = on ? "Record" : "Paused";
     if (on && S.held.size) { S.held.forEach(addFlow); S.held.clear(); rebuildView(); followNewest(); }
     drawStatus();
@@ -420,9 +421,9 @@
   function drawTools() {
     $("tb-tools").innerHTML = TOOLS.map(([id, label, key]) => {
       const t = toolState(id);
-      return `<button class="rv-tb${t.on ? " on" : ""}" data-tool="${id}" aria-pressed="${t.on}" title="${esc(label + (key ? " (" + key + ")" : "") + (id === "nocache" ? " — click to switch" : hasWin(id) ? "" : " — opens in the classic view"))}">`
+      return `<button class="rv-tb${t.on ? " on" : ""}" data-tool="${id}" aria-pressed="${t.on}" aria-label="${esc(label)}" title="${esc(label + (key ? " (" + key + ")" : "") + (id === "nocache" ? " — click to switch" : hasWin(id) ? "" : " — opens in the classic view"))}">`
         + `<span class="rv-tb-l">${esc(label)}</span>${t.n ? `<span class="rv-n">${t.n}</span>` : ""}</button>`;
-    }).join("") + `<button class="rv-tb" type="button" id="tb-more" aria-haspopup="menu" aria-expanded="false">More</button>`;
+    }).join("") + `<button class="rv-tb" type="button" id="tb-more" aria-haspopup="menu" aria-expanded="false" aria-label="More">More</button>`;
   }
   const TOOL_TAB = { map: "map", remote: "rules", block: "rules", bp: "bp", scripts: "scripts", net: "net" };
   const hasWin = (id) => !!(TOOL_WIN[id] && window.RivisTools && window.RivisTools.has(TOOL_WIN[id][0]));
@@ -979,6 +980,16 @@
     if (dialogOwner) dialogOwner();
     dialogOwner = cancel || null;
   }
+  // keep Tab inside a modal: the scrim is not in the tab order, so without this Tab walks the page behind
+  function trapTab(e, root) {
+    if (e.key !== "Tab") return;
+    const nodes = [...root.querySelectorAll("a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")]
+      .filter((el) => !el.closest("[hidden]") && (el.offsetParent !== null || getComputedStyle(el).position === "fixed"));
+    if (!nodes.length) return;
+    const first = nodes[0], last = nodes[nodes.length - 1];
+    if (e.shiftKey && (document.activeElement === first || !root.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (document.activeElement === last || !root.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+  }
   function ask(title, text, yes, danger) {
     return new Promise((resolve) => {
       ownDialog();
@@ -988,13 +999,13 @@
       const back = document.activeElement;
       const done = (v) => { d.hidden = sc.hidden = true; d.onkeydown = null; if (back && back.focus) back.focus(); resolve(v); };
       $("dyes").onclick = () => done(true); $("dno").onclick = () => done(false); sc.onclick = () => done(false);
-      d.onkeydown = (e) => { if (e.key === "Escape") done(false); };
+      d.onkeydown = (e) => { if (e.key === "Escape") done(false); trapTab(e, d); };
       $("dyes").focus();
     });
   }
   async function pickColumns() {
     ownDialog();
-    const cur = columns().slice(1), d = $("dialog"), sc = $("scrim");
+    const cur = columns().slice(1), d = $("dialog"), sc = $("scrim"), back = document.activeElement;
     const labels = Object.assign({}, ...BUILTINS.map((c) => ({ [c]: COLS[c].label })));
     const extra = cur.filter((c) => !BUILTINS.includes(c));
     d.innerHTML = `<h3>Columns</h3><p>Saved for this project; the classic view uses the same choice.</p><div class="rv-cols">`
@@ -1002,8 +1013,8 @@
       + `</div><label>Header column <input type="text" id="hcol" placeholder="response:Content-Type" style="flex:1"></label>`
       + `<div class="rv-btns" style="margin-top:12px"><button class="rv-btn" id="dno">Cancel</button><button class="rv-btn p" id="dyes">Save</button></div>`;
     d.hidden = sc.hidden = false;
-    const close = () => { d.hidden = sc.hidden = true; };
-    $("dno").onclick = close; sc.onclick = close; d.onkeydown = (e) => { if (e.key === "Escape") close(); };
+    const close = () => { d.hidden = sc.hidden = true; d.onkeydown = null; if (back && back.focus) back.focus(); };
+    $("dno").onclick = close; sc.onclick = close; d.onkeydown = (e) => { if (e.key === "Escape") close(); trapTab(e, d); };
     $("dyes").onclick = async () => {
       const want = [...d.querySelectorAll("[data-c]")].filter((x) => x.checked).map((x) => x.dataset.c);
       const h = $("hcol").value.trim(); if (h) want.push(/^(request|response):/i.test(h) ? h.replace(/^(\w+):/, (m, s) => s.toLowerCase() + ":") : "response:" + h);
@@ -1054,7 +1065,7 @@
       };
       d.querySelector("form").onsubmit = (e) => { e.preventDefault(); submit(); };
       $("dno").onclick = () => done(null); sc.onclick = () => done(null);
-      d.onkeydown = (e) => { if (e.key === "Escape") done(null); if (e.key === "Enter" && (isMac ? e.metaKey : e.ctrlKey)) { e.preventDefault(); submit(); } };
+      d.onkeydown = (e) => { if (e.key === "Escape") done(null); if (e.key === "Enter" && (isMac ? e.metaKey : e.ctrlKey)) { e.preventDefault(); submit(); } trapTab(e, d); };
       $("dtext").focus();
     });
   }
@@ -1119,7 +1130,7 @@
     if (!$("dialog").hidden) return;
     if (mod && e.altKey && e.code === "KeyF") { e.preventDefault(); $("q").focus(); $("q").select(); return; }
     // a text field keeps its keys (review); ⌥⌘ tool chords type nothing, so they open their tool from anywhere, as in Proxyman
-    if (typing && !(mod && (e.code === "KeyK" || e.code === "KeyF")) && !(mod && e.altKey && /^Key[ALRBXN]$/.test(e.code))) return;
+    if (typing && !(mod && (e.code === "KeyK" || e.code === "KeyF")) && !(mod && e.altKey && /^Key[ALRBXNCD]$/.test(e.code))) return;
     if (mod && e.shiftKey && (e.key === "Backspace" || e.key === "Delete")) { e.preventDefault(); clearAll(); return; }
     if (mod && e.shiftKey && e.code === "KeyL") { e.preventDefault(); setFollow(!S.follow); return; }
     if (mod && e.altKey && e.code === "KeyN") { e.preventDefault(); openTool("nocache"); return; }
@@ -1194,7 +1205,8 @@
   const KEYS = [
     [`${MOD}K`, "Find or pin a domain in the sidebar"], [`${ALT}${MOD}F`, "Filter the list"], [`${SHIFT}${MOD}L`, "Auto-select the newest call (follow)"],
     [`${SHIFT}${MOD}⌫`, "Clear the list"], [`${ALT}${MOD}L`, "Map Local"], [`${ALT}${MOD}R`, "Map Remote"], [`${ALT}${MOD}B`, "Breakpoint"],
-    [`${ALT}${MOD}X`, "Block List"], [`${ALT}${MOD}N`, "No Caching"], [`${ALT}${MOD}A`, "TLS decryption: hosts to decrypt"], [`${ALT}1 … ${ALT}9`, "Saved filters"], [`${MOD}F`, "Search in the request or response body"],
+    [`${ALT}${MOD}X`, "Block List"], [`${ALT}${MOD}N`, "No Caching"], [`${ALT}${MOD}A`, "TLS decryption: hosts to decrypt"],
+    [`${ALT}${MOD}C`, "Compose"], [`${ALT}${MOD}D`, "Devices"], [`${ALT}1 … ${ALT}9`, "Saved filters"], [`${MOD}F`, "Search in the request or response body"],
     ["↑ ↓", "Move through the list"], ["⌫", "Delete the selected call"], [`${MOD}↩`, "Continue a paused call · send in Edit and Repeat"], [`${MOD}S`, "Save in Map Local"], ["Esc", "Close the front window"],
   ];
   function showDialog(html, focusSel) {
@@ -1203,7 +1215,7 @@
     d.className = "rv-dialog wide"; d.innerHTML = html; d.hidden = sc.hidden = false;
     const done = () => { d.hidden = sc.hidden = true; d.className = "rv-dialog"; d.onkeydown = null; if (back && back.focus) back.focus(); };
     d.querySelectorAll("[data-close]").forEach((b) => (b.onclick = done)); sc.onclick = done;
-    d.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); done(); } };
+    d.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); done(); } trapTab(e, d); };
     (d.querySelector(focusSel || "[data-close]") || d).focus();
     return { d, done };
   }
@@ -1233,7 +1245,7 @@
     const close = () => { store.set("rivis-ui-welcome", "done"); done(); };
     d.querySelector("#w-ok").onclick = close;
     d.querySelector("#w-keys").onclick = () => { close(); showHelp(); };
-    d.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } };
+    d.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } trapTab(e, d); };
   }
   $("tb-help").addEventListener("click", showHelp);
   $("tb-settings").addEventListener("click", showSettings);

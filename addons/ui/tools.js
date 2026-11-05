@@ -166,6 +166,20 @@
     },
   };
 
+  // Esc closes the front window from anywhere (help sheet); a text field keeps Esc for its own clear/blur first
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    if (document.querySelector("#dialog:not([hidden])")) return;
+    if (e.target.closest && e.target.closest("input, textarea, select, [contenteditable]")) return;
+    let front = null, zMax = -1;
+    wins.forEach((w) => {
+      if (!w.shown || w.el.hidden) return;
+      const z = Number(w.el.style.zIndex || 0);
+      if (z >= zMax) { zMax = z; front = w; }
+    });
+    if (front) { e.preventDefault(); close(front.id); }
+  });
+
   window.RivisTools = Object.freeze({
     register(id, def) { defs.set(id, def); },
     has: (id) => defs.has(id),
