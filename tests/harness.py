@@ -122,8 +122,11 @@ SHIMS = {
     # `simctl list devices booted` prints $SHIM_LOG/booted (one "Name (UDID) (Booted)" per line) when a test writes it.
     # `simctl getenv UDID HOME` prints $SHIM_LOG/simctl-home-<UDID> when set (cycle 6: ios off must follow simctl's data path).
     "xcrun": '#!/bin/sh\necho "$@" >> "$SHIM_LOG/xcrun.log"\n'
-             'if [ "$1 $2 $3 $4" = "simctl list devices booted" ] && [ -f "$SHIM_LOG/booted" ]; then cat "$SHIM_LOG/booted"; fi\n'
+             'if [ "$1 $2 $3 $4" = "simctl list devices booted" ] && [ -z "$5" ] && [ -f "$SHIM_LOG/booted" ]; then cat "$SHIM_LOG/booted"; fi\n'
              'if [ "$1 $2" = "simctl getenv" ] && [ "$4" = "HOME" ] && [ -f "$SHIM_LOG/simctl-home-$3" ]; then cat "$SHIM_LOG/simctl-home-$3"; fi\n'
+             # real simctl always answers -j with JSON (an empty listing is {"devices": {}}); Rivis treats empty output
+             # as unreadable, so the shim must not print nothing. Booted rows come from $SHIM_LOG/booted as above.
+             'if [ "$1 $2 $3 $4 $5" = "simctl list devices booted -j" ]; then /usr/bin/python3 -c \'import json,os,re; f=os.path.join(os.environ["SHIM_LOG"],"booted"); rows=[m.groups() for m in (re.search(r"(.+?) \\(([0-9A-Fa-f-]{36})\\) \\(Booted\\)",l) for l in (open(f).read().splitlines() if os.path.exists(f) else [])) if m]; print(json.dumps({"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-0":[{"name":n.strip(),"udid":u,"state":"Booted"} for n,u in rows]}}))\'; fi\n'
              'if [ "$1 $2 $3 $4" = "simctl list devices -j" ]; then /usr/bin/python3 -c \'import glob,json,os; paths=glob.glob(os.path.join(os.environ["HOME"],"Library/Developer/CoreSimulator/Devices/*/data")); print(json.dumps({"devices":{"test":[{"udid":os.path.basename(os.path.dirname(p)),"dataPath":p,"state":"Shutdown"} for p in paths]}}))\'; fi\n'
              'exit 0\n',
     # AppleScript: never the real one (it would read or drive the tester's own browser). `application "X" is running`

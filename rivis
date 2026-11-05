@@ -1737,6 +1737,12 @@ sim_truststore() {
   find "$data/private/var/protected/trustd" -name "TrustStore.sqlite*" -not -name "*-*" 2>/dev/null | head -1
 }
 
+# DeviceHub replaced Simulator.app in Xcode 27; an older selected Xcode still ships Simulator.app
+sim_app_name() {
+  local dev="${DEVELOPER_DIR:-}"; [ -n "$dev" ] || dev=$(xcode-select -p 2>/dev/null) || dev=""
+  if [ -n "$dev" ] && [ -d "$(dirname "${dev%/}")/Applications/DeviceHub.app" ]; then echo DeviceHub; else echo Simulator.app; fi
+}
+
 cmd_ios() {
   local action="${1:-}"; shift || true; local udid="" all=0
   while [ $# -gt 0 ]; do case "$1" in --udid) [ $# -ge 2 ] || die "ios --udid needs a value"; udid="$2"; shift ;; --all) all=1 ;; *) die "ios: unknown option $1" ;; esac; shift; done
@@ -1747,7 +1753,7 @@ cmd_ios() {
     || die "--udid must be a simulator UDID (xcrun simctl list devices)"
   if [ -z "$udid" ]; then
     local booted; booted=$(xcrun simctl list devices booted | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}')
-    [ -z "$booted" ] && die "no booted simulator — boot one in the Simulator app, then retry"
+    [ -z "$booted" ] && die "no booted simulator — boot one in $(sim_app_name), then retry"
     if [ "$all" = 1 ]; then
       local u failed=""; for u in $booted; do
         if (cmd_ios "$action" --udid "$u"); then info "$u: ios $action complete"

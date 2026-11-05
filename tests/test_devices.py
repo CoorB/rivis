@@ -203,6 +203,57 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+def fake_xcode(root, devicehub):
+    """An Xcode.app layout under root: Xcode 27+ ships Contents/Applications/DeviceHub.app, older ones
+    Contents/Developer/Applications/Simulator.app. Returns its Developer dir (what xcode-select -p prints)."""
+    dev = os.path.join(root, "Xcode%s.app" % ("27" if devicehub else "26"), "Contents", "Developer")
+    app = (os.path.join(dev, "..", "Applications", "DeviceHub.app") if devicehub
+           else os.path.join(dev, "Applications", "Simulator.app"))
+    os.makedirs(os.path.normpath(app))
+    return dev
+
+
+class SimulatorAppName(unittest.TestCase):
+    """macOS 27 / Xcode 27 replaced Simulator.app with DeviceHub; an older selected Xcode still has Simulator.app."""
+
+    def test_named_by_the_selected_xcode(self):
+        with tempfile.TemporaryDirectory() as root:
+            new, old = fake_xcode(root, True), fake_xcode(root, False)
+            self.assertEqual(devices.simulator_app(new), "DeviceHub")
+            self.assertEqual(devices.simulator_app(new + "/"), "DeviceHub")
+            self.assertEqual(devices.simulator_app(old), "Simulator.app")
+            with mock.patch.dict(os.environ, {"DEVELOPER_DIR": new}):
+                self.assertEqual(devices.simulator_app(), "DeviceHub")
+            with mock.patch.dict(os.environ, {"DEVELOPER_DIR": old}):
+                self.assertEqual(devices.simulator_app(), "Simulator.app")
+
+    def test_falls_back_to_simulator_app_when_xcode_select_fails(self):
+        import subprocess as sp
+        env = {k: v for k, v in os.environ.items() if k != "DEVELOPER_DIR"}
+        for exc in (FileNotFoundError("xcode-select"), sp.TimeoutExpired("xcode-select", 3)):
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(devices.subprocess, "run", side_effect=exc):
+                self.assertEqual(devices.simulator_app(), "Simulator.app")
+
+    def test_messages_name_the_app_this_mac_has(self):
+        import subprocess as sp
+        with tempfile.TemporaryDirectory() as root:
+            for dh, name in ((True, "DeviceHub"), (False, "Simulator.app")):
+                with mock.patch.dict(os.environ, {"DEVELOPER_DIR": fake_xcode(root, dh)}):
+                    self.assertIn("quit %s and Xcode" % name, devices.simctl_problem("timeout", ""))
+                    def fake(*a, **k):
+                        return sp.CompletedProcess(a[0], 0, "not json", "")
+                    with mock.patch.object(devices.subprocess, "run", side_effect=fake):
+                        self.assertIn("Quit %s" % name, devices.ios_status("")[1])
+
+    def test_doctor_gives_the_same_answer(self):
+        import doctor
+        with tempfile.TemporaryDirectory() as root:
+            for dh in (True, False):
+                with mock.patch.dict(os.environ, {"DEVELOPER_DIR": fake_xcode(root, dh)}):
+                    self.assertEqual(doctor.simulator_app(), devices.simulator_app())
+
+
 class SimctlProblems(unittest.TestCase):
     """Night QA lane A: every `xcrun simctl` failure was shown as 'Xcode command-line tools are not installed', even
     with Xcode installed (license not accepted, Command Line Tools selected, a hung CoreSimulator)."""

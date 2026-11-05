@@ -414,6 +414,7 @@ class UiSmoke(UiBase):
         wait_for(lambda: "iOS Simulators" in self.panel_text(), 15, 0.2, "devices tab rendered")
         text = self.panel_text()
         self.assertIn("No simulator is booted", text)
+        self.assertRegex(text, r"Start one from Xcode or (DeviceHub|Simulator\.app)")
         self.assertIn("adb was not found", text)                     # hermetic env: no Android SDK
         self.assertIn("rivis setup", text)
         shot(page, "devices")

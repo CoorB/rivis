@@ -1170,7 +1170,7 @@
       if (list === null) return `<h4>${title}</h4><div class="sub">${none}</div>`;
       const todo = list.filter((d) => !d.ready).length;
       return `<h4>${title}${todo > 1 ? ` <button class="lnk" data-dsetup="${platform}" data-id="all" data-name="all" data-play="${list.some((d) => d.play && !d.ca_ok) ? 1 : ""}" ${busy ? "disabled" : ""}>Set up all ${todo}</button>` : ""}</h4>` +
-        (list.length ? list.map((d) => row(platform, d)).join("") : `<div class="sub">${platform === "ios" ? "No simulator is booted. Start one from Xcode or Simulator.app — it shows up here." : "No emulator is running. Start one from Android Studio's Device Manager — it shows up here."}</div>`);
+        (list.length ? list.map((d) => row(platform, d)).join("") : `<div class="sub">${platform === "ios" ? `No simulator is booted. Start one from Xcode or ${esc(dev.sim_app || "Simulator.app")} — it shows up here.` : "No emulator is running. Start one from Android Studio's Device Manager — it shows up here."}</div>`);
     };
     const consent = devConsent ? `
       <div class="card on" style="cursor:default;display:block">

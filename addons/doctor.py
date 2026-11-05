@@ -597,6 +597,17 @@ def _sim_truststores(udid):
     return out
 
 
+def simulator_app():
+    """Same answer as devices.simulator_app() (kept here because doctor runs isolated, without addons/ on sys.path)."""
+    dev = os.environ.get("DEVELOPER_DIR") or ""
+    if not dev:
+        rc, out, _ = run(["xcode-select", "-p"])
+        dev = (out or "").strip() if rc == 0 else ""
+    if dev and os.path.isdir(os.path.join(os.path.dirname(dev.rstrip("/")), "Applications", "DeviceHub.app")):
+        return "DeviceHub"
+    return "Simulator.app"
+
+
 def check_ios(rep, confdir):
     if not MAC:
         return
@@ -611,7 +622,7 @@ def check_ios(rep, confdir):
         if m:
             booted.append((m.group(1).strip(), m.group(2)))
     if not booted:
-        rep.add(sec, INFO, "no booted simulator", "boot one in Simulator.app to test iOS")
+        rep.add(sec, INFO, "no booted simulator", "boot one in %s to test iOS" % simulator_app())
         return
     ca = os.path.join(confdir, "mitmproxy-ca-cert.pem")
     try:

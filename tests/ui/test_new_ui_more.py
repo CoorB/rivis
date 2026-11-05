@@ -309,7 +309,8 @@ class MoreWindows(UiBase):
     def test_devices_shortcut_absent_devices_and_consent(self):
         import json
         fake = {"ios": [], "android": [{"id": "emulator-5590", "name": "Pixel Play", "os": "Android 15", "ready": False,
-                                         "ca_ok": False, "proxy_ok": False, "play": True}], "magisk": False, "job": None}
+                                         "ca_ok": False, "proxy_ok": False, "play": True}], "magisk": False, "job": None,
+                "sim_app": "DeviceHub"}
         requested = []
         self.page.route("**/proxy/api/devices", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(fake)))
         self.page.route("**/proxy/api/device_setup", lambda r: (requested.append(r.request.post_data), r.fulfill(status=200, content_type="application/json", body='{"id": 1}')))
@@ -318,6 +319,7 @@ class MoreWindows(UiBase):
         w = self.win_open("devices")
         wait_for(lambda: "Pixel Play" in w.inner_text(), 8, 0.1, "device")
         self.assertIn("No simulator is booted", w.inner_text())
+        self.assertIn("Start one from Xcode or DeviceHub", w.inner_text())        # the app the server named
         w.locator('[data-device="emulator-5590"]').click()
         self.assertIn("Settings screens", w.inner_text())
         self.assertEqual(requested, [])

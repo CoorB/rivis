@@ -105,13 +105,29 @@ def _sim_trusted(udid, want):
     return False
 
 
+def simulator_app(developer_dir=None):
+    """The app a tester boots simulators in: "DeviceHub" when the selected Xcode ships it (Xcode 27+, where it
+    replaced Simulator.app), else "Simulator.app". Decided by the selected Xcode (DEVELOPER_DIR, else
+    xcode-select -p), not by the macOS version: an older Xcode on a new macOS still has Simulator.app."""
+    dev = developer_dir or os.environ.get("DEVELOPER_DIR") or ""
+    if not dev:
+        try:
+            dev = subprocess.run(["xcode-select", "-p"], capture_output=True, text=True, timeout=3,
+                                 stdin=subprocess.DEVNULL).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            dev = ""
+    if dev and os.path.isdir(os.path.join(os.path.dirname(dev.rstrip("/")), "Applications", "DeviceHub.app")):
+        return "DeviceHub"
+    return "Simulator.app"
+
+
 def simctl_problem(rc, err):
     """What a tester can do when `xcrun simctl` fails — not every failure means 'Xcode is not installed'."""
     low = (err or "").lower()
     if rc == "missing":
         return "Xcode is not installed (no xcrun). Install Xcode from the App Store to use iOS Simulators."
     if rc == "timeout":
-        return "xcrun simctl did not answer within %d s. Try again; if it persists, quit Simulator.app and Xcode." % QUICK
+        return "xcrun simctl did not answer within %d s. Try again; if it persists, quit %s and Xcode." % (QUICK, simulator_app())
     if "license" in low:
         return "Xcode's license has not been accepted yet: open Xcode once and accept it, then reopen this tab."
     if "unable to find utility" in low or "commandlinetools" in low or "not a developer tool" in low:
@@ -142,7 +158,7 @@ def ios_status(want):
     devices = _booted(want, out)
     if devices is None:
         return None, ("xcrun simctl returned a listing this version cannot read. "
-                      "Quit Simulator.app and try again; if it persists, reboot the Mac.")
+                      "Quit %s and try again; if it persists, reboot the Mac." % simulator_app())
     return devices, None
 
 

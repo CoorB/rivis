@@ -1775,7 +1775,13 @@ class StatusUiStop(CliBase):
         self.assertIn("paste a cURL command", r.stderr)
         r = self.refused("ios", "on")
         self.assertIn("no booted simulator", r.stderr)
-        self.assertIn("Simulator app", r.stderr)
+        # DeviceHub on Xcode 27+, Simulator.app on an older selected Xcode (DEVELOPER_DIR = xcode-select's answer)
+        for dh, name in ((True, "DeviceHub"), (False, "Simulator.app")):
+            dev = os.path.join(self.home, "Xcode%d.app" % (27 if dh else 26), "Contents", "Developer")
+            os.makedirs(os.path.join(dev, "..", "Applications", "DeviceHub.app") if dh
+                        else os.path.join(dev, "Applications", "Simulator.app"), exist_ok=True)
+            r = self.refused("ios", "on", env=dict(self.env, DEVELOPER_DIR=dev, SKIP_CLT_CHECK="1"))
+            self.assertIn("boot one in %s" % name, r.stderr)
         adb = os.path.join(self.home, "adb")
         with open(adb, "w") as fh:
             fh.write('#!/bin/sh\n[ "$1" = devices ] && printf "List of devices attached\\nR58M12\\tdevice\\n"\nexit 0\n')

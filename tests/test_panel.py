@@ -594,6 +594,7 @@ class Ops(LiveCase):
         st = wait_for(lambda: (lambda d: None if d.get("pending") else d)(self.panel.ok("devices", {})), 20, 0.3,
                       "the background device check")
         self.assertIn("ios", st)
+        self.assertIn(st.get("sim_app"), ("DeviceHub", "Simulator.app"))  # what the panels tell the tester to open
         self.assertIsNone(st["android"])                                  # hermetic env: no adb
         self.bad("device_setup", {"platform": "ios", "target": "../x"}, "udid")
         self.bad("device_setup", {"platform": "android", "target": "R58M1"}, "serial")
