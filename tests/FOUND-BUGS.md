@@ -178,3 +178,48 @@ a visible "rules.json has an error: <reason>" banner.
   `trusted_files(state_dir)` → `{"/", "t", "m", "p", …}` instead of empty / a clear refusal.
 - **Expected:** require `files` to be a list; anything else → empty set (same as corrupt JSON).
 - **Test:** `test_cli.py::TrustedFiles::test_trusted_files_string_value_does_not_invent_paths`.
+
+## B20 — FIXED — `scripts` coerces a wrong-shaped `rules`/`scripts` field to `[]` then saves over the file
+- **Where:** `addons/scripts_cli.py` `load`: after `json.load`, `if not isinstance(cfg.get("rules"), list): cfg["rules"] = []`
+  (same for `scripts`). Truncated JSON raised an uncaught `JSONDecodeError` traceback.
+- **Repro:** hand-edit `rules.json` to `"rules": "oops"` (or truncate to `{`); run `rivis scripts on s1` → exit with a
+  traceback (truncated) or save a file whose `rules` list is empty (wrong shape), wiping every rule. The damaged
+  bytes are gone.
+- **Expected:** refuse with a plain sentence naming the file; leave the on-disk bytes untouched. A leading BOM on
+  an otherwise valid file is stripped and accepted.
+- **Fix:** refuse bad JSON / wrong shape via `die(...)`; strip a leading BOM; never coerce a present non-list field.
+  PowerShell `Read-RulesConfig` refuses the same shapes.
+- **Test:** `test_cli.py::Scripts::test_corrupt_rules_json_is_refused_and_never_wiped_by_scripts`
+  (and `test_powershell.py::Commands::test_wrong_shaped_rules_are_refused_and_not_wiped_by_scripts`).
+
+## B21 — FIXED — corrupt `composer/vars.json` hides every saved request in panel state
+- **Where:** `addons/proxy_panel.py` `composer_state`: one `try` around `store.list()` and `store.variables()`;
+  any variables error returned `names: []`.
+- **Repro:** save a request, truncate `composer/vars.json` to `{`; `GET /proxy/api/state` → `composer.names` is `[]`
+  even though `composer/kept.json` is intact. Tools → Compose looks empty; Save Variables with `{}` would overwrite
+  the recoverable file.
+- **Expected:** 200 with the real `names` list, `vars: {}`, and a non-empty `error`. BOM-prefixed valid vars still load.
+- **Fix:** list names first; catch variables failures separately. `ComposerStore.load` / `variables` strip a leading BOM.
+- **Test:** `test_panel.py::Ops::test_corrupt_composer_vars_json_does_not_hide_saved_requests`
+  (and `test_compose.py::Store::test_leading_bom_on_saved_request_and_variables_is_stripped`).
+
+## B22 — FIXED — panel collection list / entries reject a leading UTF-8 BOM that replay accepts
+- **Where:** `addons/proxy_panel.py` collections listing and `coll_entries` / `coll_entry_delete` / `coll_export` used
+  bare `json.load`; `proxy_collections.load_coll` already strips via `without_leading_bom`.
+- **Repro:** Notepad-save a collection (UTF-8 BOM). Replay still works; the panel marks the collection `broken: true`
+  and `coll_entries` returns 400.
+- **Expected:** same parse as `load_coll` — list count and entries work.
+- **Fix:** read with `encoding="utf-8"` and `without_leading_bom` before `migrate_collection`.
+- **Test:** `test_collections_sessions.py::Collections::test_collection_file_with_leading_bom_is_readable_in_the_panel`.
+
+## B23 — FIXED — corrupt user `project.json` dumps four JSONDecodeError tracebacks then continues
+- **Where:** `rivis` `project_value` (startup): `json.load(open(...))` with no try/except; command substitution kept
+  going so `status` printed `project: id ()` after four tracebacks. `projects show` used `json.tool`, which also
+  refused a leading BOM.
+- **Repro:** truncate `~/.rivis/profiles/<id>/project.json` to `{` or empty; run `rivis --project <id> status` →
+  traceback noise, empty label/hosts, file untouched but no clear refusal. BOM-prefixed valid JSON failed `projects show`.
+- **Expected:** exit non-zero with one plain sentence naming the profile path; leave the file alone. BOM-prefixed
+  valid JSON loads.
+- **Fix:** `project_value` strips leading BOM/whitespace, refuses empty/non-object, exits 1 with a sentence; callers
+  use `|| exit 1`. `projects show` uses the same strip. PowerShell startup refuses a damaged profile the same way.
+- **Test:** `test_cli.py::Projects::test_corrupt_project_json_refuses_with_a_plain_sentence`.

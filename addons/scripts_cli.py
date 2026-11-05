@@ -9,8 +9,12 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from proxy_common import SAFE_NAME, atomic_json, atomic_write_text, migrate_rules, user_regex
+from proxy_common import PRODUCT, SAFE_NAME, atomic_json, atomic_write_text, migrate_rules, user_regex, without_leading_bom
 from proxy_scripts import find_node, node_missing_message
+
+
+def die(msg):
+    raise SystemExit(PRODUCT["cli"] + ": " + msg)
 
 TEMPLATES = {
     "py": {
@@ -31,12 +35,26 @@ TEMPLATES = {
 
 
 def load(path):
+    # Refuse a damaged rules.json out loud and never coerce a wrong-shaped rules/scripts field to [] —
+    # a later on/off/new/rm would otherwise save and wipe the user's rules (FOUND-BUGS B20).
     try:
-        with open(path, encoding="utf-8") as fh: cfg = json.load(fh)
-    except FileNotFoundError: cfg = {}
-    cfg = migrate_rules(cfg)
-    if not isinstance(cfg.get("rules"), list): cfg["rules"] = []
-    if not isinstance(cfg.get("scripts"), list): cfg["scripts"] = []
+        with open(path, encoding="utf-8") as fh:
+            text = without_leading_bom(fh.read())
+        cfg = json.loads(text) if text else {}
+    except FileNotFoundError:
+        cfg = {}
+    except ValueError as e:
+        die("%s is not valid JSON: %s — fix it (%s rules edit) or restore it" % (path, e, PRODUCT["cli"]))
+    try:
+        cfg = migrate_rules(cfg)
+    except ValueError as e:
+        die("%s: %s — fix it (%s rules edit) or restore it" % (path, e, PRODUCT["cli"]))
+    if not isinstance(cfg.get("rules", []), list):
+        die("%s: rules.json must be an object with a rules list" % path)
+    if "scripts" in cfg and not isinstance(cfg["scripts"], list):
+        die("%s: scripts must be a list — fix it (%s rules edit) or restore it" % (path, PRODUCT["cli"]))
+    cfg.setdefault("rules", [])
+    cfg.setdefault("scripts", [])
     return cfg
 
 

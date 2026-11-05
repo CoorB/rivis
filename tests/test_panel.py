@@ -843,6 +843,31 @@ class Ops(LiveCase):
                          ("compose_get", {"flow_id": "nope"})):
             self.bad(op, body)
 
+    def test_corrupt_composer_vars_json_does_not_hide_saved_requests(self):
+        # composer_state() caught variables() errors and returned names: [] — Tools → Compose looked empty even
+        # though every *.json request file was still on disk. A later Save Variables with {} would wipe the file.
+        self.panel.ok("compose_vars", {"vars": {"base": self.up.url("")}})
+        self.panel.ok("compose_save", {"name": "kept", "spec": {"method": "GET", "url": "{{base}}/echo"}, "overwrite": True})
+        path = self.inst.path("composer", "vars.json")
+        kept = open(path, encoding="utf-8").read()
+        for payload in ("", "{", "null", "[]", '{"base": 1}',
+                        "\ufeff" + json.dumps({"base": self.up.url("")})):
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            code, body = self.panel.get("/proxy/api/state")
+            self.assertEqual(code, 200, "vars.json %r -> HTTP %s" % (payload[:40], code))
+            doc = json.loads(body)["composer"]
+            self.assertEqual(doc.get("names"), ["kept"], repr(payload[:40]))
+            if payload.startswith("\ufeff"):
+                self.assertEqual(doc.get("vars"), {"base": self.up.url("")})
+                self.assertFalse(doc.get("error"))
+            else:
+                self.assertEqual(doc.get("vars"), {})
+                self.assertTrue(doc.get("error"), repr(payload[:40]))
+            self.assertEqual(open(path, encoding="utf-8").read(), payload)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(kept)
+
     def test_compose_from_call_keeps_original_json_bytes(self):
         # R3A-02: reformatting signed JSON before Compose changes the request.
         raw = '{"a":1}'

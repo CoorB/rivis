@@ -167,6 +167,16 @@ class Store(unittest.TestCase):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 self.store.save_variables(bad)
 
+    def test_leading_bom_on_saved_request_and_variables_is_stripped(self):
+        path = os.path.join(self.store.directory, "ping.json")
+        os.makedirs(self.store.directory, mode=0o700, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\ufeff" + json.dumps({"method": "GET", "url": "https://h.test/"}))
+        self.assertEqual(self.store.load("ping")["method"], "GET")
+        with open(os.path.join(self.store.directory, "vars.json"), "w", encoding="utf-8") as fh:
+            fh.write("  \ufeff" + json.dumps({"edge": "https://e.test"}))
+        self.assertEqual(self.store.variables(), {"edge": "https://e.test"})
+
 
 if __name__ == "__main__":
     unittest.main()

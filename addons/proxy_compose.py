@@ -4,7 +4,7 @@ import os
 import re
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
-from proxy_common import SAFE_NAME, atomic_json, confined_path
+from proxy_common import SAFE_NAME, atomic_json, confined_path, without_leading_bom
 
 VAR_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*}}")
 METHOD_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,32}$")
@@ -170,7 +170,7 @@ class ComposerStore:
 
     def load(self, name):
         with open(self._path(name), encoding="utf-8") as fh:
-            value = json.load(fh)
+            value = json.loads(without_leading_bom(fh.read()))
         if not isinstance(value, dict):
             raise ValueError("saved request is not an object")
         return value
@@ -197,7 +197,7 @@ class ComposerStore:
         path = self._vars_path()
         try:
             with open(path, encoding="utf-8") as fh:
-                value = json.load(fh)
+                value = json.loads(without_leading_bom(fh.read()))
         except FileNotFoundError:
             return {}
         if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):

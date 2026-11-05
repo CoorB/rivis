@@ -139,7 +139,15 @@ if (-not $ProfileDir -and $projectSource -eq "current-project") {
   $Project = "default"; $ProfileDir = Profile-Dir $Project
 }
 if (-not $ProfileDir) { throw "unknown project '$Project'" }
-$ProjectConfig = Get-Content -Raw (Join-Path $ProfileDir "project.json") | ConvertFrom-Json
+$ProjectJsonPath = Join-Path $ProfileDir "project.json"
+try {
+  $ProjectConfig = Get-Content -Raw -LiteralPath $ProjectJsonPath | ConvertFrom-Json
+  if ($null -eq $ProjectConfig -or ($ProjectConfig -is [System.Array]) -or ($ProjectConfig -is [string]) -or ($ProjectConfig -is [ValueType])) {
+    throw "top level must be an object"
+  }
+} catch {
+  Die "project profile $ProjectJsonPath is damaged ($($_.Exception.Message)) — fix the JSON or recreate the project"
+}
 $Port    = Config-Env "PORT" 8080
 $WebPort = Config-Env "WEB_PORT" 8083
 $MaxFlowsText = Config-Env "MAX_FLOWS" 5000
@@ -440,8 +448,13 @@ function Read-RulesConfig($Path = $RulesPath) {
   elseif (($cfg.schema_version -isnot [int] -and $cfg.schema_version -isnot [long]) -or $cfg.schema_version -lt 0) { Die "rules.json schema_version must be a non-negative integer" }
   elseif ($cfg.schema_version -gt 1) { Die "rules.json schema version $($cfg.schema_version) is newer than this Rivis supports (1); upgrade Rivis" }
   elseif ($cfg.schema_version -eq 0) { $cfg.schema_version = 1 }
+  # A string / number "rules" must not be coerced into an array and saved (bash scripts_cli refused the same shape).
   if ($null -eq $cfg.rules) { $cfg | Add-Member -NotePropertyName rules -NotePropertyValue @() }
+  elseif ($cfg.rules -is [string] -or $cfg.rules -is [ValueType]) { Die "${Path}: rules.json must be an object with a rules list" }
   else { $cfg.rules = @($cfg.rules) }
+  if ($null -ne $cfg.scripts -and ($cfg.scripts -is [string] -or $cfg.scripts -is [ValueType])) {
+    Die "${Path}: scripts must be a list — fix it or restore it"
+  }
   return $cfg
 }
 

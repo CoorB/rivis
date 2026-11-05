@@ -349,6 +349,28 @@ class Projects(CliBase):
             json.dump({"id": "neo", "label": "Mine", "hosts": "x"}, fh)
         self.assertRegex(self.ok("projects", "list").stdout, r"neo\s+Mine")
 
+    def test_corrupt_project_json_refuses_with_a_plain_sentence(self):
+        # Every rivis command reads profiles/<id>/project.json at startup. A truncated or wrong-shaped file used
+        # to dump a Python traceback four times and then continue with empty hosts/label.
+        self.ok("projects", "new", "bank-b", "--label", "Bank B", "--hosts", r"api\.bank-b\.test")
+        path = os.path.join(self.state, "profiles", "bank-b", "project.json")
+        good = open(path, encoding="utf-8").read()
+        for payload in ("", "{", "[]", "null", "5", '"x"',
+                        "\ufeff" + good):
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            if payload.startswith("\ufeff"):
+                r = self.ok("--project", "bank-b", "projects", "show", "bank-b")
+                self.assertIn("Bank B", r.stdout)
+                self.assertNotIn("Traceback", r.stderr)
+            else:
+                r = self.refused("--project", "bank-b", "status", msg="project profile")
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertIn("damaged", r.stderr)
+                self.assertEqual(open(path, encoding="utf-8").read(), payload)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(good)
+
     def test_first_use_copies_example_rules_with_private_modes(self):
         self.ok("rules", "list")
         rf = self.rules_file()
@@ -912,6 +934,34 @@ class Scripts(CliBase):
     def test_list_refuses_trailing_arguments(self):
         # before: offline `scripts list EXTRA` listed; with a running panel the extras were dropped entirely
         self.refused("scripts", "list", "EXTRA", msg="usage:")
+
+    def test_corrupt_rules_json_is_refused_and_never_wiped_by_scripts(self):
+        # scripts_cli.load used to coerce a non-list "rules" / "scripts" to [] and then save on on/off/new/rm,
+        # silently emptying the user's rules. Truncated JSON raised a traceback instead of a plain sentence.
+        self.ok("rules", "add", "keep-me", "match=/x", "action=block")
+        self.ok("scripts", "new", "s1", "--lang", "py")
+        path = self.rules_file()
+        before = open(path).read()
+        for payload, needle in (("{", "not valid JSON"),
+                                ("[]", "must be an object"),
+                                ('{"rules": "oops", "scripts": []}', "rules list"),
+                                ('{"rules": [], "scripts": "oops"}', "scripts must be a list"),
+                                ("\ufeff" + before, None)):
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            if needle is None:
+                out = self.ok("scripts", "list").stdout             # a leading BOM is not damage
+                self.assertIn("s1", out)
+                self.assertIn("keep-me", open(path, encoding="utf-8-sig").read())
+            else:
+                r = self.refused("scripts", "on", "s1", msg=needle)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertEqual(open(path, encoding="utf-8").read(), payload)
+                r = self.refused("scripts", "list", msg=needle)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertEqual(open(path, encoding="utf-8").read(), payload)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(before)
 
     def test_edit_runs_the_editor(self):
         self.ok("scripts", "new", "ed", "--lang", "js")

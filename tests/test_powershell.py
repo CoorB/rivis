@@ -163,6 +163,25 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertNotRegex(no_args, r'@\("start".*"help"\)')
         self.assertIn('use -Insecure only when the upstream certificate cannot be validated', self.src)
 
+    def test_damaged_user_project_json_is_refused_at_startup(self):
+        # Startup used to pipe project.json through ConvertFrom-Json with no shape check; a truncated or
+        # non-object profile threw mid-load and left label/hosts empty the way the bash CLI used to.
+        start = self.src.index('$ProjectJsonPath = Join-Path $ProfileDir "project.json"')
+        end = self.src.index('$Port    = Config-Env "PORT"', start)
+        block = self.src[start:end]
+        self.assertIn('ConvertFrom-Json', block)
+        self.assertIn('top level must be an object', block)
+        self.assertIn('is damaged', block)
+        self.assertIn('Die ', block)
+
+    def test_wrong_shaped_rules_or_scripts_field_is_refused_in_read_rules_config(self):
+        # Read-RulesConfig used to wrap a string "rules" with @() (a character array) and save it; refuse
+        # string/number shapes before Save-RulesConfig can rewrite the file (parity with scripts_cli).
+        block = self.src[self.src.index('function Read-RulesConfig'):self.src.index('function Save-RulesConfig')]
+        self.assertIn('$cfg.rules -is [string] -or $cfg.rules -is [ValueType]', block)
+        self.assertIn('rules.json must be an object with a rules list', block)
+        self.assertIn('scripts must be a list', block)
+
 
 @unittest.skipUnless(HAVE_PWSH, NO_PWSH)
 class Parse(unittest.TestCase):
@@ -639,6 +658,21 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
         cp = self.suite.run(cmd + ["android", "on", "-System"], home=self.home, env=env, timeout=120)
         self.assertNotEqual(cp.returncode, 0)
         self.assertIn("NOT in the system store", cp.stdout + cp.stderr)
+
+    def test_wrong_shaped_rules_are_refused_and_not_wiped_by_scripts(self):
+        # Parity with bash scripts_cli: a hand-edited rules.json whose "rules" is a string must not be
+        # rewritten to [] (or a character array) by `scripts on`.
+        self.ok("rules", "add", "keep-me", "match=/x", "action=block")
+        self.ok("scripts", "new", "s1", "-Lang", "py")
+        path = self.rules_file()
+        before = open(path, encoding="utf-8").read()
+        damaged = '{"schema_version": 1, "rules": "oops", "scripts": []}'
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(damaged)
+        self.bad("scripts", "on", "s1", msg="rules list")
+        self.assertEqual(open(path, encoding="utf-8").read(), damaged)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(before)
 
     def test_scripts_new_list_on_off_rm(self):
         self.ok("scripts", "new", "hello", "-Lang", "py", "-Match", "/api")

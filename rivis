@@ -177,12 +177,39 @@ if ! PROJECT_PROFILE="$(profile_dir "$PROJECT")"; then
 fi
 PROJECT_JSON="$PROJECT_PROFILE/project.json"
 project_value() {
-  /usr/bin/python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2],""); print(v if not isinstance(v,(dict,list)) else json.dumps(v))' "$PROJECT_JSON" "$1"
+  # A damaged user profile must stop with a plain sentence — never dump four JSONDecodeError
+  # tracebacks and then continue with an empty label/hosts (FOUND-BUGS B23).
+  /usr/bin/python3 -I -c '
+import json, sys
+cli, path, key = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    text = open(path, encoding="utf-8").read()
+    while text:
+        trimmed = text.lstrip()
+        if trimmed.startswith("\ufeff"):
+            text = trimmed[1:]
+            continue
+        text = trimmed
+        break
+    else:
+        text = ""
+    if not text:
+        raise ValueError("file is empty")
+    doc = json.loads(text)
+    if not isinstance(doc, dict):
+        raise ValueError("top level must be an object")
+except Exception as e:
+    sys.stderr.write("%s: project profile %s is damaged (%s) — fix the JSON or recreate the project (%s projects new)\n"
+                     % (cli, path, e, cli))
+    sys.exit(1)
+v = doc.get(key, "")
+print(v if not isinstance(v, (dict, list)) else json.dumps(v))
+' "$CLI" "$PROJECT_JSON" "$1"
 }
-PROJECT_LABEL="$(project_value label)"
-PROJECT_HOSTS="$(project_value hosts)"
-PROJECT_ANDROID="$(project_value android_packages)"
-PROJECT_IOS="$(project_value ios_bundle_ids)"
+PROJECT_LABEL="$(project_value label)" || exit 1
+PROJECT_HOSTS="$(project_value hosts)" || exit 1
+PROJECT_ANDROID="$(project_value android_packages)" || exit 1
+PROJECT_IOS="$(project_value ios_bundle_ids)" || exit 1
 PROJECT_STATE="$STATE_ROOT/projects/$PROJECT"
 
 PORT="$(env_value PORT 8080)"
@@ -432,7 +459,26 @@ PY
       local id="${1:-$PROJECT}" dir
       valid_id "$id" || die "invalid project ID '$id'"
       dir="$(profile_dir "$id")" || die "unknown project '$id'"
-      /usr/bin/python3 -I -m json.tool "$dir/project.json"
+      /usr/bin/python3 -I -c '
+import json, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+while text:
+    t = text.lstrip()
+    if t.startswith("\ufeff"):
+        text = t[1:]
+        continue
+    text = t
+    break
+else:
+    text = ""
+if not text:
+    sys.stderr.write("project profile is empty\n"); sys.exit(1)
+doc = json.loads(text)
+if not isinstance(doc, dict):
+    sys.stderr.write("project profile top level must be an object\n"); sys.exit(1)
+json.dump(doc, sys.stdout, indent=2, ensure_ascii=False)
+sys.stdout.write("\n")
+' "$dir/project.json" || die "project profile $dir/project.json is damaged — fix the JSON or recreate the project"
       ;;
     new)
       [ $# -ge 1 ] || die "usage: $CLI projects new ID --label LABEL --hosts REGEX"

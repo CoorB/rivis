@@ -40,7 +40,7 @@ from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRESETS,
                           atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
                           confined_path, migrate_collection, migrate_rules, owned_mock_file, project_profile,
                           project_profiles, project_state, tls_config, tls_covering, tls_update,
-                          throttle_shorthand, user_regex, without_hop_headers)
+                          throttle_shorthand, user_regex, without_hop_headers, without_leading_bom)
 from proxy_codegen import TARGETS, generate
 import proxy_redact
 import devices
@@ -1148,8 +1148,8 @@ class ProxyPanel:
                         key = (path, st.st_mtime_ns, st.st_size)
                         cached = self._coll_count_cache.get(key)
                         if cached is None:
-                            with open(path) as fh:
-                                doc = migrate_collection(json.load(fh))
+                            with open(path, encoding="utf-8") as fh:
+                                doc = migrate_collection(json.loads(without_leading_bom(fh.read())))
                             cached = (len(doc.get("entries", [])), doc.get("created"))
                             self._coll_count_cache = {k: v for k, v in self._coll_count_cache.items() if k[0] != path}
                             self._coll_count_cache[key] = cached
@@ -1458,11 +1458,17 @@ class ProxyPanel:
         return ComposerStore(COMPOSE_DIR)
 
     def composer_state(self):
+        # Keep listing saved requests when only vars.json is damaged — hiding names made Compose look empty
+        # and invited a Save Variables that would overwrite the recoverable file with {}.
         store = self.composer()
         try:
-            return {"names": store.list(), "vars": store.variables(), "error": None}
-        except (OSError, ValueError) as e:
+            names = store.list()
+        except OSError as e:
             return {"names": [], "vars": {}, "error": str(e)}
+        try:
+            return {"names": names, "vars": store.variables(), "error": None}
+        except (OSError, ValueError) as e:
+            return {"names": names, "vars": {}, "error": str(e)}
 
     DROP_ON_COMPOSE = frozenset(("content-length", "connection", "keep-alive", "proxy-connection",
                                  "transfer-encoding", "te", "trailer", "upgrade"))
@@ -2443,22 +2449,22 @@ class ProxyPanel:
                 os.remove(path)
         elif op == "coll_entries":
             self.flush_collection(a["name"])
-            with open(self.coll_file(a["name"])) as fh:
-                doc = migrate_collection(json.load(fh))
+            with open(self.coll_file(a["name"]), encoding="utf-8") as fh:
+                doc = migrate_collection(json.loads(without_leading_bom(fh.read())))
             return {"entries": [{"i": i, "method": e["method"], "host": e["host"], "path": e["path"],
                                  "query": e.get("query", ""), "status": e["status"]}
                                 for i, e in enumerate(doc.get("entries", []))]}
         elif op == "coll_entry_delete":
             path = self.coll_file(a["name"])
             self.flush_collection(a["name"], forget=True)
-            with open(path) as fh:
-                doc = migrate_collection(json.load(fh))
+            with open(path, encoding="utf-8") as fh:
+                doc = migrate_collection(json.loads(without_leading_bom(fh.read())))
             doc["entries"] = [e for i, e in enumerate(doc.get("entries", [])) if i != int(a["i"])]
             self._write_coll(doc)
         elif op == "coll_export":      # HAR, downloaded by the browser to this workstation only
             self.flush_collection(a["name"])
-            with open(self.coll_file(a["name"])) as fh:
-                doc = migrate_collection(json.load(fh))
+            with open(self.coll_file(a["name"]), encoding="utf-8") as fh:
+                doc = migrate_collection(json.loads(without_leading_bom(fh.read())))
             return self._har_reply(self.to_har(doc), a)
         elif op == "coll_import":
             # review R5: a name already in use silently replaced that recording. Refused unless overwrite is set, and

@@ -331,6 +331,23 @@ class Collections(LiveCase):
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode), 0o700)
 
+    def test_collection_file_with_leading_bom_is_readable_in_the_panel(self):
+        # load_coll (replay) strips a leading BOM; the panel's list / coll_entries used bare json.load, so a
+        # Notepad-saved collection showed as broken and coll_entries returned 400 while replay still worked.
+        self.reset_state(collections=self.coll())
+        self.record("bommed")
+        self.fetch("/json/small")
+        self.panel.ok("coll_stop")
+        path = self.inst.path("collections", "bommed.json")
+        body = open(path, encoding="utf-8").read()
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\ufeff" + body)
+        items = self.panel.state()["collections"]["items"]
+        row = next(r for r in items if r["name"] == "bommed")
+        self.assertFalse(row.get("broken"), row)
+        self.assertGreaterEqual(row.get("count", 0), 1)
+        self.assertGreaterEqual(len(self.entries("bommed")), 1)
+
     def test_invalid_input_returns_json_errors(self):
         self.reset_state(collections=self.coll())
         for op, body in (("coll_record", {"name": "../x"}), ("coll_record", {"name": ""}),
