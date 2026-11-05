@@ -206,6 +206,19 @@ class ReviewA(CliBase):
         self.assertIn("To upgrade, download the new release zip", readme)
         self.assertIn("signed updates when configured; otherwise install the new release zip", reference)
 
+    def test_reference_documents_default_unverified_upstream_and_verify_flag(self):
+        # Without this, REFERENCE treated --insecure as an opt-in and omitted --verify-upstream from start.
+        doc = open(os.path.join(harness.REPO, "docs", "REFERENCE.md")).read()
+        self.assertIn("Upstream HTTPS is not verified by default", doc)
+        self.assertIn("--verify-upstream", doc)
+        self.assertIn("rivis start [--project-only] [--insecure|--dev] [--verify-upstream]", doc)
+        self.assertIn("rivis bug-report", doc)
+        self.assertIn("rivis lan [list]", doc)
+        coming = open(os.path.join(harness.REPO, "docs", "COMING-FROM-PROXYMAN.md")).read()
+        self.assertIn("**Main window** (default)", coming)
+        self.assertIn("`⌥⌘L` / `⌥⌘R` / `⌥⌘B`", coming)
+        self.assertIn("**Classic view**", coming)
+
 
 class BugReport(CliBase):
     def test_runs_without_options_under_bash_3_2(self):
@@ -1515,9 +1528,26 @@ class StatusUiStop(CliBase):
     def test_android_and_ios_without_devices(self):
         r = self.refused("android", "on")
         self.assertIn("adb not found", r.stdout + r.stderr)
+        self.assertIn("platform-tools", r.stdout + r.stderr)
         r = self.refused("ios", "frob")
         self.assertIn("usage", r.stderr + r.stdout)
         r = self.refused("android", "frob")
+
+    def test_messages_say_what_to_do_next(self):
+        # Lane c/messages: die/info text must name the next step, not only the failure.
+        r = self.refused("compose", "--from-curl")
+        self.assertIn("paste a cURL command", r.stderr)
+        r = self.refused("ios", "on")
+        self.assertIn("no booted simulator", r.stderr)
+        self.assertIn("Simulator app", r.stderr)
+        adb = os.path.join(self.home, "adb")
+        with open(adb, "w") as fh:
+            fh.write('#!/bin/sh\n[ "$1" = devices ] && printf "List of devices attached\\nR58M12\\tdevice\\n"\nexit 0\n')
+        os.chmod(adb, 0o755)
+        r = self.cli("android", "on", "-s", "R58M12", "--manual", env=dict(self.env, ADB=adb))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("physical devices need a separate approval", r.stdout + r.stderr)
+        self.assertIn("--lan", r.stdout + r.stderr)
 
 
 class CertAndCa(CliBase):

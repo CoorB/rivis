@@ -4,8 +4,9 @@ Rivis is a mitmproxy-based toolkit, not a Proxyman clone — but most of the day
 directly, under the same generic industry names (Map Local, Breakpoint, Network Conditions, Compose, Diff,
 Copy as cURL, SSL proxying, Scripting). This page is the honest translation guide.
 
-The same table is built into the UI: click the Help (`?`) button in the brand bar, top-right → **Coming from
-Proxyman?**. Each row there has an **Open →** link that takes you straight to the place in the panel.
+In the classic view (`rivis ui --classic`), the same table is under Help (`?`) → **Coming from Proxyman?**; each row
+has an **Open →** link into the drawer. The main window's Help (`?`) lists its own shortcuts and a short Proxyman
+note; use this page for the full mapping.
 
 ## The three biggest differences
 
@@ -30,7 +31,7 @@ stream as they arrive; see the [Rules section](REFERENCE.md#rules) for the editi
 | **Certificate → Install on iOS Simulator / Android Emulator** | **Tools → Devices**: each booted simulator and running emulator with a **Set up** button (Google Play emulators ask once to restart). Terminal: `rivis setup`. |
 | **Certificate → Install on iOS / Android physical device** | `rivis start --lan`, then **Tools → Devices → Phones and tablets**: scan the QR code on the phone for the setup page and certificate, set its Wi-Fi proxy to the address shown, and **Allow** it. Unlike Proxyman, a device that has not been allowed is refused. |
 | **Install the certificate in the Android emulator's system store** | **Tools → Devices → Add to system store** on the emulator's row, or `rivis android on --system`. For apps that trust only system certificates (most release builds). Does not bypass pinning. |
-| **Map Local** (answer a call from a saved response) | On the call: **This call → Map Local this call…**; or the **Map Local** tab to add one by host and path. Edits body, status and headers; one mock per endpoint. |
+| **Map Local** (answer a call from a saved response) | On the call: **Map Local** (toolbar, right-click, or classic **This call → Map Local this call…**). Edits body, status and headers; switch saved variants for the same endpoint, or use a folder of files. |
 | **Breakpoint** | **This call → Breakpoint** (Request / Response). A matching call pauses and a sheet opens by itself with Continue / Skip / Abort. Manage all breakpoints in the **Breakpoints** tab. |
 | **Network Conditions** (throttle) | **Tools → Network** tab → traffic profiles (3G, LTE, high-latency VPN, packet loss, or a manual profile with your own latency / bandwidth / loss). Can be limited to URLs matching a pattern (a regex, e.g. `neo\.sa` for your API host). |
 | **No Caching** | **Tools → Network** tab → **No caching** switch, or `rivis nocache on\|off\|status`. Strips `If-None-Match` / `If-Modified-Since` (and the other conditional headers) from requests and marks responses `no-store` without `ETag` / `Last-Modified`, so the app always fetches fresh content. Per project; Map Local answers are not touched. |
@@ -51,17 +52,34 @@ stream as they arrive; see the [Rules section](REFERENCE.md#rules) for the editi
 
 ## Keyboard shortcuts
 
-Proxyman's shortcuts are `⌘`-based; in a browser tab most `⌘` combinations are already claimed by the browser,
-so Rivis uses `⌥⇧` (Alt+Shift) chords for its own actions. Single-key mitmweb shortcuts work when the call
-list is focused, and never while focus is anywhere in the Rivis panel (a field, a button, a sheet).
+The **main window** (default) uses Proxyman-style `⌥⌘` (Alt+Cmd) tool chords. The **classic view**
+(`rivis ui --classic`) uses `⌥⇧` (Alt+Shift) instead, because mitmweb already claims many `⌘` combinations.
+Single-key mitmweb shortcuts work when the call list is focused in classic view, and never while focus is in the
+Rivis panel (a field, a button, a sheet).
 
-Everything Rivis opens takes the keyboard: the chords move focus into the drawer (Compose lands in its URL field),
-Edit & Repeat, a paused call's sheet (also when it opens by itself) and the Map Local editor focus their first
-field. `Tab` / `⇧Tab` stay inside what is open, and `Esc` closes it the way its own button does — Cancel on Edit &
-Repeat, Back on an editor, hide on a paused call's sheet (the call stays paused; the Tools button reopens it), close
-on the drawer. Focus then goes back to where it was.
+Everything Rivis opens takes the keyboard: tools, Edit & Repeat, a paused call's sheet and the Map Local editor
+focus their first field. `Tab` / `⇧Tab` stay inside what is open, and `Esc` closes it the way its own button does.
+Focus then goes back to where it was.
 
-**Rivis**
+**Main window** (default)
+
+| Keys | Action |
+|---|---|
+| `⌥⌘F` | Filter the list |
+| `⌘F` | Search in the request or response body |
+| `⌘K` | Find or pin a domain in the sidebar |
+| `⇧⌘L` | Follow the newest call |
+| `⇧⌘⌫` | Clear the list (asks first) |
+| `⌥⌘L` / `⌥⌘R` / `⌥⌘B` | Map Local / Map Remote / Breakpoint |
+| `⌥⌘N` / `⌥⌘A` / `⌥⌘X` | No Caching / TLS hosts to decrypt / Block List |
+| `⌥⌘C` / `⌥⌘D` | Compose / Devices |
+| `⌥1` … `⌥9` | Saved filters |
+| `↑` `↓` | Move through the list |
+| `⌫` | Delete the selected call |
+| `?` | Shortcut sheet |
+| `Esc` | Close the front window |
+
+**Classic view** (`rivis ui --classic`)
 
 | Keys | Action |
 |---|---|
@@ -81,7 +99,7 @@ on the drawer. Focus then goes back to where it was.
 | `?` | Shortcut sheet |
 | `Esc` | Close the open sheet, editor or drawer (focus goes back where it was) |
 
-**Built into mitmweb** (call list focused)
+**Built into mitmweb** (classic call list focused)
 
 | Keys | Action |
 |---|---|

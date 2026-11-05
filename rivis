@@ -260,7 +260,7 @@ ensure_ca() {
   mitmdump --listen-host 127.0.0.1 --listen-port 0 --set confdir="$CONFDIR" >/dev/null 2>&1 & local p=$!
   for _ in $(seq 1 20); do [ -f "$CA_PEM" ] && break; sleep 0.5; done
   kill "$p" 2>/dev/null; wait "$p" 2>/dev/null
-  [ -f "$CA_PEM" ] || die "CA was not generated in $CONFDIR"
+  [ -f "$CA_PEM" ] || die "CA was not generated in $CONFDIR — install the pinned mitmproxy, then run $CLI start again"
 }
 
 ca_hash()   { openssl x509 -inform PEM -subject_hash_old -noout -in "$CA_PEM"; }
@@ -373,8 +373,8 @@ ensure_rules() {
   secure_dirs
   [ -f "$RULES" ] && return
   local example="$PROJECT_PROFILE/rules.example.json"
-  [ -f "$example" ] || die "rules example not found: $example"
-  local tmp; tmp=$(mktemp "$PROJECT_STATE/.rules.XXXXXX") || die "cannot create temporary rules file"
+  [ -f "$example" ] || die "project '$PROJECT' has no rules.example.json (profile incomplete — reinstall or recreate the project)"
+  local tmp; tmp=$(mktemp "$PROJECT_STATE/.rules.XXXXXX") || die "cannot create rules for project '$PROJECT' (check free space and write permission on $PROJECT_STATE)"
   cp "$example" "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$RULES" || { rm -f "$tmp"; die "cannot create $RULES"; }
   info "created $RULES from project '$PROJECT' (all rules off)"
 }
@@ -531,7 +531,7 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
         die "start already in progress on UI port $WEB_PORT; retry after it finishes"
       fi
       rm -rf "$start_guard"
-      mkdir "$start_guard" 2>/dev/null || die "start already in progress on UI port $WEB_PORT"
+      mkdir "$start_guard" 2>/dev/null || die "start already in progress on UI port $WEB_PORT; retry after it finishes"
     fi
     printf '%s\n' "$$" > "$start_guard/pid"
   fi
@@ -1036,7 +1036,7 @@ cmd_mock() {
   if [ "$curl_rc" -ne 0 ]; then
     rm -f "$body_tmp"
     [ "$curl_rc" -eq 23 ] && die "could not save the response body: write failed (check project folder and free space)"
-    die "could not read the response body (curl exit $curl_rc)"
+    die "could not read the response body from the running proxy — is $CLI still up? Try $CLI mock again"
   fi
   /usr/bin/python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$body_tmp" 2>/dev/null \
     || file="${file%.json}.txt"
@@ -1082,7 +1082,7 @@ cmd_tls() {
 }
 cmd_compose() {
   if [ "${1:-}" = "--from-curl" ]; then
-    [ $# -eq 2 ] || die "compose --from-curl FILE|-"
+    [ $# -eq 2 ] || die "usage: $CLI compose --from-curl FILE|-   (paste a cURL command; sends nothing)"
     /usr/bin/python3 -I "$SCRIPT_DIR/addons/compose_cli.py" from-curl "$2"
     return
   fi
@@ -1094,7 +1094,7 @@ cmd_compose() {
           local tokfile="$TOKEN_FILE"
           /usr/bin/python3 -I "$SCRIPT_DIR/addons/compose_cli.py" send "$@" --dir "$PROJECT_STATE/composer" \
             --port "$WEB_PORT" --token-file "$tokfile" --project "$PROJECT" ;;
-    *) die "compose list | send NAME" ;;
+    *) die "usage: $CLI compose list | send NAME [--var name=value] [--no-wait] | --from-curl FILE|-" ;;
   esac
 }
 
@@ -1114,7 +1114,7 @@ no_device_msg() {
 
 pick_serial() {
   local s devices q1 q2
-  devices=$("$ADB" devices) || die "adb devices failed"
+  devices=$("$ADB" devices) || die "adb devices failed — is the Android SDK platform-tools installed, and is adb on PATH?"
   if [ -n "${SERIAL:-}" ]; then s="$SERIAL"
   else
     s=$(printf '%s\n' "$devices" | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
@@ -1123,10 +1123,10 @@ pick_serial() {
   [ "$(echo "$s" | wc -l | tr -d ' ')" -gt 1 ] && die "several emulators running — pass -s SERIAL: $(echo $s)"
   printf '%s\n' "$devices" | awk -v serial="$s" '$1 == serial && $2 == "device" {found=1} END {exit !found}' \
     || die "$s: not an attached device (adb devices)"
-  [[ "$s" =~ ^emulator-[0-9]+$ ]] || die "physical devices need a separate approval"
-  q1=$("$ADB" -s "$s" shell getprop ro.kernel.qemu 2>/dev/null | tr -d '\r') || die "$s: could not verify emulator status"
-  q2=$("$ADB" -s "$s" shell getprop ro.boot.qemu 2>/dev/null | tr -d '\r') || die "$s: could not verify emulator status"
-  [ "$q1" = 1 ] || [ "$q2" = 1 ] || die "physical devices need a separate approval"
+  [[ "$s" =~ ^emulator-[0-9]+$ ]] || die "physical devices need a separate approval — start with --lan, then allow the phone in Tools → Devices"
+  q1=$("$ADB" -s "$s" shell getprop ro.kernel.qemu 2>/dev/null | tr -d '\r') || die "$s: could not verify emulator status (adb shell failed — is the emulator still running?)"
+  q2=$("$ADB" -s "$s" shell getprop ro.boot.qemu 2>/dev/null | tr -d '\r') || die "$s: could not verify emulator status (adb shell failed — is the emulator still running?)"
+  [ "$q1" = 1 ] || [ "$q2" = 1 ] || die "physical devices need a separate approval — start with --lan, then allow the phone in Tools → Devices"
   echo "$s"
 }
 
@@ -1233,7 +1233,7 @@ run_android_magisk() {
 android_settings_route() {
   local s="$1" magisk_dir="${2:-}" limit="${RIVIS_ANDROID_SETUP_TIMEOUT:-45}" before after rc prior now step label
   [[ "$limit" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk "BEGIN {exit !($limit > 0)}" \
-    || die "RIVIS_ANDROID_SETUP_TIMEOUT must be a positive number of seconds"
+    || die "Android setup timeout must be a positive number of seconds (RIVIS_ANDROID_SETUP_TIMEOUT)"
   prior=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') || die "$s: could not read the proxy before Settings setup"
   before=$(date +%s)
   rc=0
@@ -1246,7 +1246,7 @@ android_settings_route() {
     info "$s: step $step/5: ${label}…"
     /usr/bin/python3 -I "$SCRIPT_DIR/addons/android_settings_timeout.py" "$limit" "$SCRIPT_DIR/rivis" "$s" "$step"
     rc=$?
-    [ "$rc" = 0 ] || { info "$s: step $step/5 failed: $label (exit $rc)"; break; }
+    [ "$rc" = 0 ] || { info "$s: step $step/5 failed: $label — check the emulator screen, or finish the CA install by hand in Settings"; break; }
   done
   after=$(date +%s)
   info "$s: Settings route finished in $((after-before)) s"
@@ -1403,7 +1403,7 @@ cmd_android() {
     *) die "android: unknown option $1" ;; esac; shift; done
   case "$action" in on|off) ;; *) die "usage: $CLI android on|off [-s SERIAL | --all] [--manual] [--strict] [--system]" ;; esac
   [ "$system" = 1 ] && [ -n "$strict" ] && die "android: --system and --strict do not go together (on a Google Play image the system store lasts only for the temporary boot)"
-  [ -x "$ADB" ] || die "adb not found"
+  [ -x "$ADB" ] || die "adb not found (install Android SDK platform-tools, or put adb on PATH)"
   if [ "$all" = 1 ]; then
     [ -z "${SERIAL:-}" ] || die "android: pass -s or --all, not both"
     local e list failed=""; list=$("$ADB" devices | awk '/^emulator-[0-9]+\tdevice$/{print $1}')
@@ -1424,16 +1424,16 @@ cmd_android() {
   local rooted_by_us=0
   if ! have_root "$s" && "$ADB" -s "$s" root >/dev/null 2>&1; then rooted_by_us=1; fi
   sleep 2
-  "$ADB" -s "$s" wait-for-device || die "$s: wait-for-device failed"
+  "$ADB" -s "$s" wait-for-device || die "$s: wait-for-device failed — is the emulator still booting? Retry when adb devices shows it as device"
   case "$action" in
     on)
       local ca_ok=0                    # set only once the CA is verified on the emulator (review R7)
       local sys_ok=""                  # --system: 1 verified, 0 failed
       if have_root "$s"; then
         info "$s: choosing adb-root path (root shell available)"
-        "$ADB" -s "$s" push "$CA_PEM" "/data/local/tmp/$h.0" >/dev/null 2>&1 || die "push failed"
+        "$ADB" -s "$s" push "$CA_PEM" "/data/local/tmp/$h.0" >/dev/null 2>&1 || die "$s: could not copy the CA onto the emulator (adb push failed) — is the emulator still running?"
         "$ADB" -s "$s" shell "mkdir -p /data/misc/user/0/cacerts-added && cp /data/local/tmp/$h.0 $dst \
-          && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0" || die "install failed"
+          && chmod 644 $dst && chown system:system $dst && rm /data/local/tmp/$h.0" || die "$s: could not install the CA in the user store (adb shell failed) — retry, or use a Google Play image's Settings route"
         ca_history_add
         info "$s: CA installed in user store ($h.0)"; android_record "$s"; ca_ok=1
         if [ "$system" = 1 ]; then
@@ -1461,7 +1461,7 @@ cmd_android() {
         [ "$auto_ui" = 1 ] && [ -z "$magisk_dir" ] && info "$s: one-click setup unavailable — Magisk $magisk_ver not found next to $PRODUCT_NAME (install from the release zip, or set ${ENV_PREFIX}_MAGISK_DIR); using the slower Settings route"
         local limit="${RIVIS_ANDROID_SETUP_TIMEOUT:-45}" check_rc=0
         [[ "$limit" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk "BEGIN {exit !($limit > 0)}" \
-          || die "RIVIS_ANDROID_SETUP_TIMEOUT must be a positive number of seconds"
+          || die "Android setup timeout must be a positive number of seconds (RIVIS_ANDROID_SETUP_TIMEOUT)"
         if [ "$auto_ui" = 1 ]; then
           /usr/bin/python3 -I "$SCRIPT_DIR/addons/android_settings_timeout.py" "$limit" "$SCRIPT_DIR/rivis" "$s" 0 || check_rc=$?
           [ "$check_rc" = 124 ] && { info "$s: CA trust check timed out after ${limit} s; proxy left off"; return 124; }
@@ -1501,23 +1501,23 @@ cmd_android() {
         exit 2
       fi
       [ "$ca_ok" = 1 ] || info "$s: --proxy-only: proxy on without a verified CA (you installed it by hand)"
-      "$ADB" -s "$s" shell settings put global http_proxy "10.0.2.2:$PORT" || die "$s: setting the proxy failed"
+      "$ADB" -s "$s" shell settings put global http_proxy "10.0.2.2:$PORT" || die "$s: setting the proxy failed — is the emulator still running?"
       local now; now=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') \
-        || die "$s: could not verify the proxy"
-      [ "$now" = "10.0.2.2:$PORT" ] || die "$s: setting the proxy failed"
+        || die "$s: could not verify the proxy — is the emulator still running?"
+      [ "$now" = "10.0.2.2:$PORT" ] || die "$s: setting the proxy failed (got '$now', wanted 10.0.2.2:$PORT)"
       android_proxy_mark "$s" on
       info "$s: proxy → 10.0.2.2:$PORT. Run a *Debug* variant (release builds pin TLS)."
       if [ -z "$(port_owner "$PORT")" ]; then
-        info "WARNING: nothing listens on :$PORT yet — run '$CLI start' or the emulator has no internet"
+        info "nothing listens on :$PORT yet — run '$CLI start' first, or the emulator will have no internet"
       fi
       if [ "$sys_ok" = 0 ]; then die "$s: --system: the CA is NOT in the system store (user store and proxy are set)"; fi
       ;;
     off)
       # proxy first: it is what cuts the emulator's network if left behind
-      "$ADB" -s "$s" shell settings put global http_proxy :0 || die "$s: clearing the proxy failed"
+      "$ADB" -s "$s" shell settings put global http_proxy :0 || die "$s: clearing the proxy failed — is the emulator still running?"
       local now; now=$("$ADB" -s "$s" shell settings get global http_proxy | tr -d '\r') \
-        || die "$s: could not verify the cleared proxy"
-      case "$now" in ":0"|null) info "$s: proxy cleared" ;; "") die "$s: empty proxy result — could not verify it was cleared" ;; *) die "$s: proxy still set ($now)" ;; esac
+        || die "$s: could not verify the cleared proxy — is the emulator still running?"
+      case "$now" in ":0"|null) info "$s: proxy cleared" ;; "") die "$s: could not verify the proxy was cleared (adb returned empty) — run: adb -s $s shell settings get global http_proxy" ;; *) die "$s: proxy still set ($now) — clear it with: adb -s $s shell settings put global http_proxy :0" ;; esac
       android_proxy_mark "$s" off
       android_system_mark "$s" off
       if have_root "$s"; then
@@ -1613,7 +1613,7 @@ cmd_ios() {
     || die "--udid must be a simulator UDID (xcrun simctl list devices)"
   if [ -z "$udid" ]; then
     local booted; booted=$(xcrun simctl list devices booted | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}')
-    [ -z "$booted" ] && die "no booted simulator"
+    [ -z "$booted" ] && die "no booted simulator — boot one in the Simulator app, then retry"
     if [ "$all" = 1 ]; then
       local u failed=""; for u in $booted; do
         if (cmd_ios "$action" --udid "$u"); then info "$u: ios $action complete"
@@ -1628,7 +1628,7 @@ cmd_ios() {
   case "$action" in
     on)
       ensure_ca
-      xcrun simctl keychain "$udid" add-root-cert "$CA_PEM" || die "add-root-cert failed"
+      xcrun simctl keychain "$udid" add-root-cert "$CA_PEM" || die "$udid: could not install the CA (simctl keychain add-root-cert failed) — is the simulator booted? Retry, or erase and boot it again"
       ca_history_add
       info "$udid: mitmproxy CA trusted. Use a build configured to trust the workstation CA."
       ;;

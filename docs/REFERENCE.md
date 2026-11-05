@@ -76,14 +76,18 @@ Resolution order is `--project ID`, `$<PREFIX>_PROJECT`, `current-project`, then
 ├── web-token                         # default web port login
 ├── web-token-<web-port>              # other web ports keep separate logins
 ├── ui-session.key                    # only with RIVIS_REMEMBER_UI=1: signs the remembered browser session (private, 0600)
+├── lan-devices.json                  # phones/tablets allowed with --lan (0600)
 ├── profiles/<id>/{project.json,rules.example.json}
 └── projects/<id>/
     ├── rules.json
     ├── columns.json                  # visible call columns, in display order
+    ├── filters.json                  # saved list filters (Alt+1…Alt+9)
     ├── mocks/
     ├── scripts/
     ├── collections/
-    └── sessions/
+    ├── sessions/
+    ├── composer/                     # saved Compose requests + vars.json
+    └── client-certs/                 # mTLS client certificates for this project (0700)
 ```
 
 `status` reports the project running on the selected proxy and web ports. If your current selection differs, it
@@ -114,15 +118,18 @@ The profile's `hosts` regex drives the “<label> only” panel view, `record_ma
 ## Daily commands
 
 ```bash
-rivis start [--project-only] [--insecure] [--all] [--no-ios] [--no-open]
-rivis stop | restart | ui | status | cert # status exits 0 when running, 3 when not (for scripts and CI)
+rivis start [--project-only] [--insecure|--dev] [--verify-upstream] [--all] [--no-ios] [--no-open]
+            [--background] [--lan] [--allow-private-hosts REGEX] [--ios-filter SPEC] [--upstream http://host:port]
+rivis stop | restart | ui [--new|--classic] [--url] | status | cert   # status exits 0 when running, 3 when not (for scripts and CI)
+rivis app [--build]                                  # native macOS window (macOS only)
 rivis browser [URL | --current] [--browser chrome|edge|chromium|brave] [--fresh] [--list]   # web apps, see below
 rivis ios on|off [--udid UDID | --all]     # --all: every booted simulator
 rivis android on|off [-s emulator-5554 | --all] [--manual] [--yes] [--strict] [--proxy-only] [--system]   # Play images: one restart, like Proxyman (--strict: back to normal at once, 2–4 min)
 rivis setup                                          # every booted simulator + running emulator
-rivis rules list | on NAME | off NAME | show NAME | rm NAME | edit
+rivis lan [list] | allow IP [NAME] | rm IP           # phones/tablets allowed when started with --lan
+rivis rules list | on NAME | off NAME | show NAME | rm NAME | edit | allow-file PATH | disallow-file PATH | trusted-files
 rivis rules test URL [METHOD]                        # what each rule would do to this call; sends nothing
-rivis health | rollback [VERSION|--list]             # after an upgrade: is it working? / go back a version
+rivis health | rollback [VERSION|--list]             # after an upgrade: is it working? / go back a version (health: 0 ok, 1 unhealthy, 3 not running)
 rivis rules add NAME match=REGEX action=ACTION [key=value ...]
 rivis rules variant NAME add|use|rm VARIANT [file=PATH]
 rivis scripts list | new NAME --lang py|js [--match REGEX] | on NAME | off NAME | edit NAME | rm NAME
@@ -130,12 +137,15 @@ rivis throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|
               [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
 rivis nocache on|off|status                          # No Caching: always fresh content, never an empty 304
 rivis tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
+rivis tls client-cert list | add HOST FILE [--key KEY] [--password-stdin] | rm HOST
 rivis compose list | send NAME [--var name=value] [--no-wait]
 rivis compose --from-curl FILE|-                     # parse a copied cURL command into Compose JSON; sends nothing
 rivis breakpoint [REGEX [--request|--response] [--method M] | off [NAME]]   # no arguments: list; paused calls: Continue in the UI
 rivis mock NAME URL-REGEX
 rivis mocks import-proxyman [PATH] [--dry-run]
-rivis net-reset [--dry-run]
+rivis net-reset [--dry-run|--auto]                   # --auto is what start runs; clears only a previously observed dead Rivis/Proxyman loopback
+rivis doctor [--json] [--no-net] [--fix-safe [--yes]]
+rivis bug-report [--output PATH]                     # redacted support zip (no flows or tokens)
 rivis update [check|install|login|logout|status]     # signed updates when configured; otherwise install the new release zip
 ```
 
@@ -275,15 +285,15 @@ supported yet.
   captured). To capture them, start Rivis with `--allow-private-hosts '^(localhost|127\.0\.0\.1)$'`;
   `rivis browser` then sends them through Rivis too.
 
-Server certificates are checked against what this Mac trusts: Apple's root store plus any root your IT, MDM or you
-marked as trusted in Keychain Access (as Safari and Proxyman do), so networks that inspect HTTPS keep working.
+With `--verify-upstream`, server certificates are checked against what this Mac trusts: Apple's root store plus any
+root your IT, MDM or you marked as trusted in Keychain Access (as Safari does when verification is on).
 `RIVIS_EXTRA_TRUST=/path/root.pem` (several joined with `:`) adds a root the keychain lacks;
-`RIVIS_SYSTEM_TRUST=0` uses mitmproxy's own list only; `--insecure` turns the check off.
-When an upstream certificate fails the check (incomplete chain, expired, self-signed, wrong host), the app gets a
-502 from Rivis whose body names the reason and the fixes, and the call shows as **failed** in the list. A server that
-leaves out its intermediate certificate works in browsers and phones (they fetch the missing intermediate themselves)
-but not through Rivis: pass that host through undecrypted with `rivis tls ignore add HOST` + `rivis tls mode ignore`,
-or start with `--insecure` for a dev server.
+`RIVIS_SYSTEM_TRUST=0` uses mitmproxy's own list only. Without `--verify-upstream` (the default), upstream certificates
+are not checked — like Proxyman. When verification is on and an upstream certificate fails (incomplete chain, expired,
+self-signed, wrong host), the app gets a 502 from Rivis whose body names the reason and the fixes, and the call shows
+as **failed** in the list. A server that leaves out its intermediate certificate works in browsers and phones (they
+fetch the missing intermediate themselves) but not through Rivis with verification on: pass that host through
+undecrypted with `rivis tls ignore add HOST` + `rivis tls mode ignore`, or omit `--verify-upstream` for a dev server.
 
 Large bodies: a body over 64 MB (`RIVIS_STREAM_LARGE_BODIES`, a mitmproxy size such as `256m`) is streamed straight
 to the app and **not kept**: it cannot be viewed, edited by a response rule, mocked from or breakpointed, and the call
@@ -299,9 +309,9 @@ Calls that fail (connection refused, TLS failure, body cut short) show **failed*
 
 Servers on private addresses (VPN, internal DNS): app HTTPS calls, simulator capture and Repeat/Compose reach them on
 any project. Plain-HTTP proxy requests to a private address are refused (403), because a web page could aim the proxy
-port at one (DNS rebinding). With `--insecure`, web pages' own requests to private addresses are blocked too unless
-the host is in the project or matches `--allow-private-hosts`. For a local test server, add its domain to the project's
-`hosts`, or start Rivis with `--allow-private-hosts 'REGEX'`.
+port at one (DNS rebinding). When upstream verification is off (the default, or `--insecure`), web pages' own HTTPS
+requests to private addresses are blocked too unless the host is in the project or matches `--allow-private-hosts`.
+For a local test server, add its domain to the project's `hosts`, or start Rivis with `--allow-private-hosts 'REGEX'`.
 
 `rivis.ps1` supports the same cross-platform commands, including `stop`, `breakpoint`, `mock`, and `setup`.
 Windows has no iOS Simulator, so `setup` says so and configures every running Android emulator (`android on -All`).
@@ -312,12 +322,21 @@ match=neo\.sa loss=5`); GNU-style options use their PowerShell spellings, such a
 `--dev` remains an alias of `--insecure`; `--neo-only` remains an alias of `--project-only`. The legacy
 `neo-mitm` and `neo-mitm.ps1` wrappers select project `neo` unless an explicit project is supplied.
 
+**Upstream HTTPS is not verified by default** (same as Proxyman): `start` prints that certificates are not checked.
+`--insecure` / `--dev` keep that default; `--verify-upstream` (or `<PREFIX>_VERIFY_UPSTREAM=1`) checks server
+certificates against this Mac's trust store. Pass `--verify-upstream` when you need the 502s and failure rows for a
+broken chain, expired cert, or wrong host.
+
 `breakpoint` can save a rule while the proxy is stopped. A running proxy hot-reloads it within about one second;
 wait for that reload before sending the call that should pause.
 
 Environment variables are named from `product.json`: `<PREFIX>_PORT`, `_WEB_PORT`, `_RULES`, `_WEB_PASSWORD`,
 `_CONFDIR`, and `_PROJECT`. Legacy `NEO_MITM_*` variables remain fallback aliases.
-`<PREFIX>_MAX_FLOWS` (default 5000, 1 to 1000000) caps how many calls are kept: the oldest are dropped past it, and the footer shows how many were trimmed. Sessions and HARs saved afterwards contain only the survivors.
+Also: `<PREFIX>_MAX_FLOWS` (default 5000, 1 to 1000000), `_REMEMBER_UI`, `_VERIFY_UPSTREAM`, `_SYSTEM_TRUST`,
+`_EXTRA_TRUST` (PEM paths joined with `:`), `_STREAM_LARGE_BODIES` (default `64m`), `_NODE`, `_HTTP2`,
+`_BROWSER_APPS` (browser binary search path), and `RIVIS_MAGISK_DIR` / `RIVIS_ANDROID_SETUP_TIMEOUT` for Play-image
+Android setup. `<PREFIX>_MAX_FLOWS` caps how many calls are kept: the oldest are dropped past it, and the footer shows
+how many were trimmed. Sessions and HARs saved afterwards contain only the survivors.
 Trimming happens in batches to a low-water mark, so the list can contain fewer than 5000 calls just after trimming.
 
 For simultaneous projects, start each with a different `<PREFIX>_PORT` and `<PREFIX>_WEB_PORT`. Use the same
@@ -412,7 +431,8 @@ configuration active, and a bad individual rule is skipped and shown in the pane
 - **Right-click a call** for Map Local, Breakpoint, Repeat, Edit & Repeat, Compare as A, Copy as cURL / URL, Show
   only this host, decrypt / stop decrypting the host, and Delete.
 - **Compare two calls**: right-click the first → **Compare: set as A**, select the second, open **Compare**
-  (`⌥⇧D`), then click **Compare A with B**. The result lists both URLs and highlights header and body differences.
+  (classic view: `⌥⇧D`; main window: Compare under More), then click **Compare A with B**. The result lists both URLs
+  and highlights header and body differences.
 - **Map Local to your own file anywhere** (e.g. `~/Desktop/mock.json`): `rivis rules add NAME match=REGEX action=map_local
   file=PATH` trusts that file on this machine; for a hand-edited rule run `rivis rules allow-file PATH`
   (`disallow-file`, `trusted-files` to review). Files from shared or imported rules are only read inside the project,
@@ -455,7 +475,8 @@ commented "mitmweb DOM contract" block at the top of `addons/theme.css`; re-chec
 Most of the tools you know carry over under the same generic names (Map Local, Breakpoints, Network Conditions,
 Compose, Diff, Copy as cURL, SSL proxying, Scripting, Sessions). See
 [`docs/COMING-FROM-PROXYMAN.md`](COMING-FROM-PROXYMAN.md) for the full task-by-task mapping, the shortcut
-list, and the three biggest differences. The same table is in the UI under Help (`?`) → **Coming from Proxyman?**
+list, and the three biggest differences. In classic view the same table is under Help (`?`) → **Coming from
+Proxyman?**; the main window Help lists shortcuts and a short note.
 
 ### Compose
 
@@ -666,7 +687,7 @@ mitmproxy version) otherwise.
 | iOS shows DNS but no API calls | Quit another tool that owns the system proxy. |
 | Emulator has no network | Run `rivis android off`, or start the proxy on the configured port. |
 | Client rejects the CA | Install it with `ios on`/`android on` and use a build that trusts the workstation CA. |
-| Upstream certificate cannot validate | Read the 502 body: it names the reason. Incomplete chain, expired, self-signed or wrong-host server: `rivis tls ignore add HOST` + `rivis tls mode ignore` (not captured), or `--insecure` for a dev server. Otherwise your network inspects HTTPS with a root this Mac does not trust: install IT's root in Keychain Access, or `RIVIS_EXTRA_TRUST=/path/root.pem rivis start`. Only if the server's own certificate is invalid (e.g. a dev environment) and the project policy allows it, start with `--insecure`. |
+| Upstream certificate cannot validate | Only when started with `--verify-upstream`. Read the 502 body: it names the reason. Incomplete chain, expired, self-signed or wrong-host server: `rivis tls ignore add HOST` + `rivis tls mode ignore` (not captured), or start without `--verify-upstream` for a dev server. Otherwise your network inspects HTTPS with a root this Mac does not trust: install IT's root in Keychain Access, or `RIVIS_EXTRA_TRUST=/path/root.pem rivis start --verify-upstream`. |
 | 403 *Private upstream destinations are blocked* | The server is on a private address and the call is plain HTTP or from a web page: add its domain to the project's `hosts`, or start with `--allow-private-hosts 'REGEX'`. |
 | A port is occupied | Stop the previous mitmweb instance or choose another `<PREFIX>_PORT`/`_WEB_PORT`. |
 
