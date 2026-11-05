@@ -42,13 +42,15 @@
 #   <cli> rules add NAME match=REGEX|match_wildcard=HOST/PATH action=ACTION [key=value ...]
 #                                 Proxyman-style rules, hot-reloaded, kept across restarts:
 #                                 respond | map_local | status | json_patch | delay |
-#                                 set_header | map_remote | block   (see rules.example.json)
+#                                 set_header | map_remote | replace_body | block   (see rules.example.json)
 #                                 block: optional mode=kill_show|kill|hide (default kill_show =
 #                                 kill and keep the row; kill = kill and hide; hide = forward and hide)
 #                                 match= is a regex on the full URL; match_wildcard= is host/path*
 #                                 (* anything, ? one character) like the Rules window without Regex.
 #                                 set_header: header=NAME value=TEXT [side=request|response];
 #                                 json_patch: set='path=value' (or set='{"path":value}'); map_remote: replace=REGEX with=URL
+#                                 replace_body: find=TEXT replace=TEXT [regex=true] [side=request|response]
+#                                 [count=N|limit=N] — find-and-replace in the body (default response)
 #                                 optional: method=POST operation=GetUser (only that GraphQL operation)
 #   <cli> scripts list|new NAME --lang py|js [--match REGEX] [--template header|json|mock|latency|token|websocket]
 #                                 |on NAME|off NAME|edit NAME|rm NAME

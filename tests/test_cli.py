@@ -658,24 +658,30 @@ class Rules(CliBase):
             "r-delay": ["action=delay", "ms=250"],
             "r-header": ["action=set_header", "header=X-QA", "value=on", "side=response"],
             "r-remote": ["action=map_remote", r"replace=https://a\.test", "with=https://b.test"],
+            "r-body": ["action=replace_body", "find=false", "replace=true", "side=response", "count=1"],
             "r-block": ["action=block", "method=POST"],
         }
         for name, extra in cases.items():
             self.ok("rules", "add", name, "match=/x", *extra)
         rules = {r["name"]: r for r in self.cfg()["rules"]}
-        self.assertEqual(len(rules), 8)
+        self.assertEqual(len(rules), 9)
         self.assertEqual(rules["r-respond"]["headers"], {"X-A": "1"})       # JSON values are parsed
         self.assertEqual(rules["r-delay"]["ms"], 250)
         self.assertEqual(rules["r-patch"]["set"], {"a.b[0]": 1})
+        self.assertEqual(rules["r-body"]["find"], "false")
+        self.assertEqual(rules["r-body"]["replace"], "true")
+        self.assertEqual(rules["r-body"]["count"], 1)
         self.assertEqual(rules["r-block"]["method"], "POST")
 
     def test_rules_add_every_nth_and_offset(self):
         self.ok("rules", "add", "flake", "match=/pay", "action=status", "status=503", "every=3")
         self.ok("rules", "add", "slow", "match=/pay", "action=delay", "ms=50", "every=2", "offset=1")
+        self.ok("rules", "add", "body-nth", "match=/pay", "action=replace_body", "find=a", "replace=b", "every=3")
         rules = {r["name"]: r for r in self.cfg()["rules"]}
         self.assertEqual(rules["flake"]["every"], 3)
         self.assertNotIn("offset", rules["flake"])
         self.assertEqual((rules["slow"]["every"], rules["slow"]["offset"]), (2, 1))
+        self.assertEqual(rules["body-nth"]["every"], 3)
         self.refused("rules", "add", "bad-every", "match=/x", "action=status", "status=500", "every=1",
                      msg="every must be an integer")
         self.refused("rules", "add", "bad-act", "match=/x", "action=json_patch", 'set={"a":1}', "every=3",
@@ -721,12 +727,41 @@ class Rules(CliBase):
         self.assertEqual(rules["p3"]["set"], {"user.name": "PATCHED", "user.role": "admin"})
         self.assertEqual(rules["p4"]["set"], {"user.active": True})
 
+    def test_replace_body_cli_fields_and_rules_test(self):
+        # replace= is the substitution string (not a URL regex), so parentheses and $1 are fine
+        self.ok("rules", "add", "prem", "match=/profile", "action=replace_body",
+                'find="premium": false', 'replace="premium": true', "side=response", "limit=2")
+        self.ok("rules", "add", "re", "match=/x", "action=replace_body",
+                "find=a+", "replace=B", "regex=true", "side=request")
+        rules = {r["name"]: r for r in self.cfg()["rules"]}
+        self.assertEqual(rules["prem"]["find"], '"premium": false')
+        self.assertEqual(rules["prem"]["replace"], '"premium": true')
+        self.assertEqual(rules["prem"]["count"], 2)          # limit= normalised to count=
+        self.assertNotIn("limit", rules["prem"])
+        self.assertIs(rules["re"]["regex"], True)
+        self.assertEqual(rules["re"]["side"], "request")
+        out = self.ok("rules", "test", "https://api.example.test/profile").stdout
+        self.assertRegex(out, r"FIRES\s+prem\s+replaces literal")
+        self.assertIn('"premium": false', out)
+        self.refused("rules", "add", "empty-find", "match=/x", "action=replace_body",
+                     "find=", "replace=y", msg="find must be non-empty")
+        self.refused("rules", "add", "bad-re", "match=/x", "action=replace_body",
+                     "find=(unclosed", "replace=y", "regex=true", msg="bad regex in find")
+        self.refused("rules", "add", "bad-ref", "match=/x", "action=replace_body",
+                     "find=(a)", "replace=\\2", "regex=true", msg="invalid group reference")
+        self.refused("rules", "add", "bad-name", "match=/x", "action=replace_body",
+                     "find=(a)", "replace=\\g<nope>", "regex=true", msg="unknown group name")
+        self.ok("rules", "add", "good-ref", "match=/x", "action=replace_body",
+                "find=(a)", "replace=[\\1]", "regex=true")
+
     def test_required_fields_and_bad_input_are_refused(self):
         self.refused("rules", "add", "a", "action=map_local", msg="needs: file")
         self.refused("rules", "add", "a", "action=status", msg="needs: status")
         self.refused("rules", "add", "a", "action=json_patch", msg="needs: set")
         self.refused("rules", "add", "a", "action=delay", msg="needs: ms")
         self.refused("rules", "add", "a", "action=set_header", msg="needs: header")
+        self.refused("rules", "add", "a", "action=replace_body", "find=x", msg="needs: replace")
+        self.refused("rules", "add", "a", "action=replace_body", "replace=y", msg="needs: find")
         self.refused("rules", "add", "a", "action=map_remote", "replace=x", msg="needs: with")
         # R2A-11: a map_remote whose result is not http(s)+host is refused when added, not at the first call
         self.refused("rules", "add", "a", "action=map_remote", "replace=^.*$", "with=not-a-url", msg="unusable")

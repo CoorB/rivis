@@ -2723,8 +2723,8 @@
   }
 
   // ───────────── All rules ─────────────
-  const ACTION_NAME = { map_local: "Map Local", map_remote: "Map Remote", respond: "Fixed reply", status: "Force status", delay: "Delay", json_patch: "Edit JSON", set_header: "Header", block: "Block", drop: "Block" };
-  const EVERY_RULE_TYPES = { respond: 1, status: 1, delay: 1, block: 1 };
+  const ACTION_NAME = { map_local: "Map Local", map_remote: "Map Remote", respond: "Fixed reply", status: "Force status", delay: "Delay", json_patch: "Edit JSON", replace_body: "Replace body", set_header: "Header", block: "Block", drop: "Block" };
+  const EVERY_RULE_TYPES = { respond: 1, status: 1, delay: 1, block: 1, replace_body: 1 };
   const everyBit = (r) => r.every ? (" · every " + r.every + (r.offset ? ", offset " + r.offset : "")) : "";
   function describe(r) {
     const a = r.action;
@@ -2733,6 +2733,12 @@
     if (a === "status") return "changes the status to " + r.status + everyBit(r);
     if (a === "delay") return "waits " + r.ms + " ms first" + everyBit(r);
     if (a === "json_patch") return "changes " + Object.keys(r.set || {}).join(", ") + " in the JSON reply";
+    if (a === "replace_body") {
+      const n = r.count != null ? r.count : r.limit;
+      return "replaces " + (r.regex ? "regex " : "") + JSON.stringify(r.find) + " with " + JSON.stringify(r.replace)
+        + " in the " + (r.side === "request" ? "request" : "response") + " body"
+        + (n ? (" (first " + n + ")") : "") + everyBit(r);
+    }
     if (a === "set_header") return (r.value == null ? "removes the " : "sets the ") + r.header + " header";
     if (a === "map_remote") return "sends it to " + r.with;
     if (a === "block" || a === "drop") {
@@ -2831,9 +2837,10 @@
     if ($("rnocache")) $("rnocache").onchange = () => run("nocache", { on: $("rnocache").checked }, "No caching " + ($("rnocache").checked ? "on" : "off"));
   }
   // ───────────── Rules tab: the New / Edit form for every type ─────────────
-  const RULE_TYPES = [["respond", "Fixed reply"], ["status", "Force status"], ["json_patch", "Edit JSON"], ["delay", "Delay"], ["set_header", "Header"],
+  const RULE_TYPES = [["respond", "Fixed reply"], ["status", "Force status"], ["json_patch", "Edit JSON"], ["replace_body", "Replace body"], ["delay", "Delay"], ["set_header", "Header"],
     ["map_remote", "Map Remote"], ["block", "Block"], ["map_local", "Map Local"], ["bp", "Breakpoint"], ["script", "Script"], ["throttle", "Network throttle"], ["nocache", "No caching"]];
-  const RULE_KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"], set_header: ["side", "header", "value"], map_remote: ["replace", "with"], block: ["mode"] };
+  const RULE_KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"], set_header: ["side", "header", "value"],
+    map_remote: ["replace", "with"], replace_body: ["find", "replace", "side", "regex", "count", "limit"], block: ["mode"] };
   const BLOCK_MODES = [["kill_show", "Block (show in list)"], ["kill", "Block and hide"], ["hide", "Hide only (forward)"]];
   const blockModeOf = (r) => (r && r.mode) || "kill_show";
   function openRuleForm(type, item) {
@@ -2887,6 +2894,11 @@
       body += fld("status", "Status", `<input type="number" id="rf-status" value="${esc(v.status ?? 503)}" style="width:80px">`);
     } else if (t === "json_patch") {
       body += fld("set", "Set fields", `<textarea id="rf-set" class="grow" rows="4" spellcheck="false" placeholder='{"user.name": "QA", "items[0].price": 1}'>${esc(it ? JSON.stringify(v.set, null, 2) : "")}</textarea>`);
+    } else if (t === "replace_body") {
+      body += fld("side", "Change", `<select id="rf-side"><option value="response" ${v.side !== "request" ? "selected" : ""}>the response</option><option value="request" ${v.side === "request" ? "selected" : ""}>the request</option></select>`);
+      body += fld("find", "Find", txt("find", v.find, '"premium": false') + ` <label class="sub"><input type="checkbox" id="rf-regex" ${v.regex ? "checked" : ""}> Regex</label>`);
+      body += fld("replace", "Replace with", txt("replace", v.replace, '"premium": true'));
+      body += fld("count", "Count", `<input type="number" id="rf-count" min="0" value="${esc(v.count != null ? v.count : (v.limit != null ? v.limit : ""))}" style="width:80px" placeholder="all" title="Empty = every match. 1 = first only.">`);
     } else if (t === "delay") {
       body += fld("ms", "Delay (ms)", `<input type="number" id="rf-ms" value="${esc(v.ms ?? 1000)}" style="width:100px">`);
     } else if (t === "set_header") {
@@ -2948,6 +2960,17 @@
             let o; try { o = jsonParse(val("set")); } catch (x) { throw new Error("Set fields must be a JSON object, e.g. {\"user.name\": \"QA\"}"); }
             if (!o || typeof o !== "object" || Array.isArray(o) || !Object.keys(o).length) throw new Error("Set fields must be a JSON object with at least one path");
             rule.set = o;
+          } else if (t === "replace_body") {
+            rule.side = val("side") || "response";
+            rule.find = val("find");
+            rule.replace = val("replace");
+            if (!rule.find) throw new Error("Enter the text to find");
+            if ($("rf-regex") && $("rf-regex").checked) rule.regex = true;
+            const c = val("count").trim();
+            if (c) {
+              rule.count = Number(c);
+              if (!(rule.count >= 0) || !Number.isInteger(rule.count)) throw new Error("Count must be an integer ≥ 0, or empty for every match");
+            }
           } else if (t === "delay") rule.ms = Number(val("ms"));
           else if (t === "set_header") { rule.side = val("side"); rule.header = val("header").trim(); rule.value = $("rf-remove").checked ? null : val("value"); }
           else if (t === "map_remote") { rule.replace = val("replace"); rule.with = val("with"); }

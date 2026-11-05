@@ -1003,6 +1003,7 @@ ACTION_REQUIREMENTS = {
     "delay": ("ms",),
     "set_header": ("header",),
     "map_remote": ("replace", "with"),
+    "replace_body": ("find", "replace"),
     "block": (),
 }
 ACTIONS = frozenset(ACTION_REQUIREMENTS)

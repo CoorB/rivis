@@ -28,10 +28,14 @@ Actions
   delay       ms                                     hold the request before sending it
   set_header  side request|response, header, value   (value null = remove)
   map_remote  replace (regex), with                  rewrite the URL before it is sent
+  replace_body find, replace, [regex], [side], [count|limit]
+                                                     find-and-replace text in the request or response
+                                                     body (default response; literal find unless regex=true;
+                                                     binary bodies left unchanged; encoding + Content-Length kept)
   block       [mode=kill_show|kill|hide]             Block List: kill+show (default), kill+hide, or
                                                      hide only (forwarded, omitted from the default list)
 
-Optional every=N [offset=K] on status / delay / block / respond: apply only on every Nth matching call
+Optional every=N [offset=K] on status / delay / block / respond / replace_body: apply only on every Nth matching call
 (1-based; offset skips that many matches first). The match counter restarts when the rule is edited.
 
 `file` / `body_file` must live inside the project's state directory (the directory holding
@@ -288,6 +292,69 @@ def _no_body_for(resp):
         resp.content = b""
         for k in ("content-length", "transfer-encoding", "content-encoding"):
             resp.headers.pop(k, None)
+
+
+_BINARY_TYPES = frozenset({
+    "application/octet-stream", "application/pdf", "application/zip", "application/gzip",
+    "application/x-gzip", "application/protobuf", "application/x-protobuf", "application/grpc",
+    "application/msgpack", "application/x-msgpack", "application/wasm",
+})
+
+
+def _body_is_binary(msg):
+    """True when a find-and-replace must not touch this body (images, protobuf, undecodable bytes).
+
+    The NUL test runs on the decoded body: a gzip/br/deflate body almost always holds NUL bytes on the wire
+    while its JSON is plain text, and testing raw_content skipped nearly every real API response."""
+    if not msg.raw_content:
+        return False
+    try:
+        body = msg.get_content(strict=True)
+    except ValueError:          # Content-Encoding the proxy cannot decode
+        return True
+    if not body:
+        return False
+    if b"\x00" in body:
+        return True
+    ctype = (msg.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if ctype.startswith(("image/", "audio/", "video/", "font/")) or ctype in _BINARY_TYPES:
+        return True
+    try:
+        msg.get_text()
+    except (ValueError, UnicodeDecodeError, TypeError):
+        return True
+    return False
+
+
+def _replace_in_body(msg, rule):
+    """Apply a replace_body rule to a request or response. Returns (changed, noop_reason_or_None)."""
+    if _body_is_binary(msg):
+        return False, "matched, but the body is binary (left unchanged)"
+    try:
+        text = msg.get_text()
+    except (ValueError, UnicodeDecodeError, TypeError):
+        return False, "matched, but the body is binary (left unchanged)"
+    if text is None:
+        return False, "matched, but the body is binary (left unchanged)"
+    pattern = rule.get("_find")
+    if pattern is None:
+        pattern = user_regex(rule["find"]) if rule.get("regex") else re.compile(re.escape(rule["find"]))
+    count = rule.get("count", rule.get("limit"))
+    if count is None:
+        count = 0
+    # re.sub count=0 means all; for a literal find, avoid interpreting backrefs in the replacement
+    if rule.get("regex"):
+        try:
+            new, n = pattern.subn(rule["replace"], text, count=count)
+        except (re.error, IndexError) as e:     # a hand-edited rules.json the loader did not see; never raise here
+            return False, "matched, but replace=%r cannot be used: %s" % (rule["replace"], e)
+    else:
+        # literal: replacement is plain text even if it looks like \1
+        new, n = pattern.subn(lambda _m: rule["replace"], text, count=count)
+    if n == 0:
+        return False, "matched, but find=%r was not in the body" % rule["find"]
+    msg.text = new          # re-encodes with the Content-Type charset and Content-Encoding; updates Content-Length
+    return True, None
 
 
 def _compile_rule(source, state_dir, fallback_name=None):
@@ -1208,6 +1275,19 @@ class ProxyRules:
                 else:
                     flow.request.headers[r["header"]] = str(r["value"])
                 self._fired(flow, r, modified=False)
+        for r in self._matching(flow, {"replace_body"}):
+            if r.get("side", "response") != "request":
+                continue
+            if not self._every_tick(r):
+                continue
+            changed, reason = _replace_in_body(flow.request, r)
+            if changed:
+                self._fired(flow, r, modified=False)
+            else:
+                short = "body is binary" if reason and "binary" in reason else "find not in body"
+                _tag_rule(flow, r, " skipped: " + short, modified=False)
+                self._record(r, changed=False, reason=reason)
+                ctx.log.warn(f"proxy_rules: {r['name']}: replace_body left request unchanged: {reason}")
         for r in self._matching(flow, {"delay"}):
             if not self._every_tick(r):
                 continue
@@ -1347,6 +1427,19 @@ class ProxyRules:
                 else:
                     flow.response.headers[r["header"]] = str(r["value"])
                 self._fired(flow, r)
+        for r in self._matching(flow, {"replace_body"}):
+            if r.get("side", "response") != "response":
+                continue
+            if not self._every_tick(r):
+                continue
+            changed, reason = _replace_in_body(flow.response, r)
+            if changed:
+                self._fired(flow, r)
+            else:
+                short = "body is binary" if reason and "binary" in reason else "find not in body"
+                _tag_rule(flow, r, " skipped: " + short, modified=False)
+                self._record(r, changed=False, reason=reason)
+                ctx.log.warn(f"proxy_rules: {r['name']}: replace_body left response unchanged: {reason}")
         if self._throttled(flow):
             lat, _j, down, _u, _l, delay = self.throttle
             sample = flow.metadata.get("proxy_latency", lat)

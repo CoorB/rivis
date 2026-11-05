@@ -41,6 +41,15 @@
       }
     },
     {
+      "name": "example-body",
+      "enabled": false,
+      "match": "example\\.test",
+      "action": "replace_body",
+      "find": "\"premium\": false",
+      "replace": "\"premium\": true",
+      "side": "response"
+    },
+    {
       "name": "example-remote",
       "enabled": false,
       "match": "example\\.test",

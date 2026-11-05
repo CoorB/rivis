@@ -223,6 +223,18 @@ dot-prefixed `set.path=value`, or a JSON object `set='{"path": value}'`:
 rivis rules add patch-user match='/user$' action=json_patch set='user.name=PATCHED' set='user.age=25'
 ```
 
+For `replace_body` (Proxyman Rewrite → Body), `find` is the text to look for and `replace` is the substitution.
+Find is literal by default; `regex=true` treats `find` as a regex. `side=request|response` defaults to
+`response`. Optional `count=` or `limit=` caps how many matches are changed (omit or `0` = all). Binary
+bodies are left alone and tagged. The body's Content-Type charset and Content-Length stay correct.
+Supports the usual `method=`, `operation=`, `match_wildcard=` and `every=` / `offset=` scoping:
+
+```bash
+rivis rules add premium-on match='/profile' action=replace_body find='"premium": false' replace='"premium": true'
+rivis rules add host-swap match='/config' action=replace_body find='api\.prod\.example' replace='api.staging.example' regex=true
+rivis rules add first-flag match='/x' action=replace_body find=false replace=true count=1 side=response
+```
+
 `android on` turns the emulator's proxy on only once the CA is verified on it; otherwise it prints the steps and
 exits with status 2 (not done), so no emulator is left with a proxy it cannot use. After installing the CA by
 hand where Rivis cannot read the emulator's Settings, `--proxy-only` turns the proxy on anyway. `android off`
@@ -657,16 +669,16 @@ tab and log name the script and show the timeout.
 
 ## Rules
 
-Supported actions are `respond`, `map_local`, `status`, `json_patch`, `delay`, `set_header`, `map_remote`, and
-`block`. Every rule (and every breakpoint) may also carry `method=` and `operation=` — the GraphQL operation name —
-so one `/graphql` URL can mock or pause only `GetUser` while leaving `GetCart` alone. The name is the same one Rivis
-shows in the GraphQL viewer (`operationName`, or the named `query` / `mutation` / `subscription` in the document).
-CLI-added rules append in file order; quick panel errors are inserted first so they can override an
+Supported actions are `respond`, `map_local`, `status`, `json_patch`, `replace_body`, `delay`, `set_header`,
+`map_remote`, and `block`. Every rule (and every breakpoint) may also carry `method=` and `operation=` — the GraphQL
+operation name — so one `/graphql` URL can mock or pause only `GetUser` while leaving `GetCart` alone. The name is the
+same one Rivis shows in the GraphQL viewer (`operationName`, or the named `query` / `mutation` / `subscription` in the
+document). CLI-added rules append in file order; quick panel errors are inserted first so they can override an
 older local response. The panel's **Rules** tab lists, creates, edits, switches on/off and deletes every one of them, plus
 breakpoints, scripts and the network throttle / No caching (**New** → pick a type; a rule's name and type stay fixed when
-you edit it, and a Map Local rule opens its own editor). New Map Remote / Force status / Header / Delay (and the other
-rewrite rules) accept a `host/path*` URL with `*` / `?` wildcards by default — tick **Regex** for a full-URL regex, the
-same as Breakpoint. Breakpoints pause requests/responses in mitmweb for editing and continuation.
+you edit it, and a Map Local rule opens its own editor). New Map Remote / Force status / Header / Delay / Replace body
+(and the other rewrite rules) accept a `host/path*` URL with `*` / `?` wildcards by default — tick **Regex** for a
+full-URL regex, the same as Breakpoint. Breakpoints pause requests/responses in mitmweb for editing and continuation.
 
 **Block List modes** (optional `mode=` on `block` rules; default `kill_show` — today's behaviour):
 
@@ -684,9 +696,10 @@ rivis rules add ads match='ads\\.example\\.com' action=block mode=hide
 rivis rules add pay match='/pay' action=block mode=kill_show
 ```
 
-**Every Nth call** (optional): on `status`, `delay`, `block` and `respond` rules, set `every=N` (N ≥ 2) so the action
-applies only on every Nth matching call — for example `every=3` forces a 503 on the 3rd, 6th, 9th… pay call and leaves
-the others alone. An optional `offset=K` (K ≥ 0) skips that many matching calls before the every-Nth cycle starts.
+**Every Nth call** (optional): on `status`, `delay`, `block`, `respond` and `replace_body` rules, set `every=N` (N ≥ 2)
+so the action applies only on every Nth matching call — for example `every=3` forces a 503 on the 3rd, 6th, 9th… pay
+call and leaves the others alone. An optional `offset=K` (K ≥ 0) skips that many matching calls before the every-Nth
+cycle starts.
 The match counter restarts when the rule is edited (not when it is only switched off and on).
 
 ```bash

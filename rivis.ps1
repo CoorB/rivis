@@ -22,6 +22,7 @@ system proxy, one CA per workstation, removed again with `off`.
   .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
   .\<cli>.ps1 rules add NAME match=REGEX|match_wildcard=HOST/PATH action=ACTION [key=value ...]
                                             block: optional mode=kill_show|kill|hide (default kill_show)
+                                            replace_body: find=TEXT replace=TEXT [regex=true] [side=request|response] [count=N|limit=N]
                                             optional: method=POST operation=GetUser (only that GraphQL operation)
   .\<cli>.ps1 rules variant NAME add|use|rm VARIANT [file=PATH]
                                             manage hot-reloaded interception rules (json_patch: set='path=value' or set='{"path":value}')

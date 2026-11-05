@@ -262,6 +262,7 @@ class NewWindowCoverage(UiBase):
             'respond': ('rf-status', '201', '202'),
             'status': ('rf-status', '501', '502'),
             'json_patch': ('rf-set', '{"user.name":"before"}', '{"user.name":"after"}'),
+            'replace_body': ('rf-find', 'before', 'after'),
             'delay': ('rf-ms', '10', '20'),
             'set_header': ('rf-header', 'X-First', 'X-Second'),
         }
@@ -274,6 +275,8 @@ class NewWindowCoverage(UiBase):
                 w.locator('#rf-re').check()
                 w.locator('#rf-match').fill('/echo')
                 w.locator('#' + field).fill(first)
+                if kind == 'replace_body':
+                    w.locator('#rf-replace').fill('x')
                 w.locator('[data-r-save]').click()
                 wait_for(lambda: any(r['name'] == name for r in self.panel.state()['rules']), 8, 0.1, name + ' added')
                 w.locator('[data-rtype="all"]').click()
@@ -282,7 +285,8 @@ class NewWindowCoverage(UiBase):
                 w.locator('[data-r-save]').click()
                 def updated():
                     rule = next((r for r in self.panel.state()['rules'] if r['name'] == name), {})
-                    value = rule.get({'rf-status': 'status', 'rf-set': 'set', 'rf-ms': 'ms', 'rf-header': 'header'}[field])
+                    value = rule.get({'rf-status': 'status', 'rf-set': 'set', 'rf-ms': 'ms',
+                                      'rf-header': 'header', 'rf-find': 'find'}[field])
                     return value == (json.loads(second) if field == 'rf-set' else int(second) if field in ('rf-status', 'rf-ms') else second)
                 wait_for(updated, 8, 0.1, name + ' edited')
                 w.locator('[data-r-del="%s"]' % name).click()

@@ -141,6 +141,15 @@ class RulesTabEveryType(UiBase):
                        lambda: name() == "EDITED" and self.fetch("/json/small").json()["flag"] is True,
                        lambda: name() == "alice")
 
+    def test_replace_body(self):
+        flag = lambda: self.fetch("/json/small").json()["flag"]            # noqa: E731
+        self.lifecycle("h1-body", "replace_body",
+                       dict(match="/json/small$", find='"flag": false', replace='"flag": true'),
+                       lambda: flag() is True,
+                       dict(find='"flag": false', replace='"flag": "qa"'),
+                       lambda: self.fetch("/json/small").json()["flag"] == "qa",
+                       lambda: flag() is False)
+
     def test_delay(self):
         # Comment tags are load-durable; keep a soft lower bound so a no-op delay that still tags would fail.
         def delayed(at_least):

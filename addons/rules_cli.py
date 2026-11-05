@@ -155,12 +155,22 @@ def validate(r):
         status = r["status"]
         if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
             die("status must be an integer from 100 to 599")
-    for k in ("match", "replace"):
-        if k in r:
-            try:
-                user_regex(r[k])
-            except re.error as e:
-                die("bad regex in %s: %s" % (k, e))
+    if "match" in r:
+        try:
+            user_regex(r["match"])
+        except re.error as e:
+            die("bad regex in match: %s" % e)
+    # map_remote's replace is a URL regex; replace_body's replace is the substitution string (not compiled).
+    if a == "map_remote" and "replace" in r:
+        try:
+            user_regex(r["replace"])
+        except re.error as e:
+            die("bad regex in replace: %s" % e)
+    if a == "replace_body" and r.get("regex") and isinstance(r.get("find"), str):
+        try:
+            user_regex(r["find"])
+        except re.error as e:
+            die("bad regex in find: %s" % e)
     if "method" in r and not isinstance(r["method"], str):
         die("method must be text, e.g. method=POST")
     if "operation" in r and not isinstance(r["operation"], str):
@@ -184,10 +194,27 @@ def validate(r):
             die("map_remote with=%r turns a URL into something unusable: %s" % (r["with"], remote_url_problem(out)))
     if a == "map_local" and not os.path.exists(os.path.expanduser(r["file"])):
         die("file not found: %s" % r["file"])
+    if a == "replace_body":
+        if not isinstance(r.get("find"), str) or r["find"] == "":
+            die("replace_body find must be non-empty text")
+        if not isinstance(r.get("replace"), str):
+            die("replace_body replace must be text")
+        if r.get("side", "response") not in ("request", "response"):
+            die("replace_body side must be request or response")
+        if "regex" in r and r["regex"] not in (True, False):
+            die("replace_body regex must be true or false")
+        if "count" in r and "limit" in r and r["count"] != r["limit"]:
+            die("replace_body use count= or limit=, not both with different values")
+        n = r["count"] if "count" in r else r.get("limit")
+        if n is not None:
+            if type(n) is not int or n < 0:
+                die("replace_body count/limit must be an integer ≥ 0 (0 = replace all)")
+            r["count"] = n
+            r.pop("limit", None)
     if "every" in r or "offset" in r:
         from proxy_rule_validation import EVERY_ACTIONS, apply_every_fields
         if a not in EVERY_ACTIONS:
-            die("every/offset only apply to status, delay, block and respond rules")
+            die("every/offset only apply to status, delay, block, respond and replace_body rules")
         try:
             apply_every_fields(r)
         except (TypeError, ValueError) as e:
@@ -490,7 +517,7 @@ def rules_cmd(path, args):
                         r["set"] = {}
                     r["set"][path_part] = value(v)
             else:
-                r[k] = value(v) if k not in ("match", "match_wildcard", "replace", "with", "file", "header", "body") else v
+                r[k] = value(v) if k not in ("match", "match_wildcard", "replace", "with", "file", "header", "body", "find") else v
         created = r.pop("created_mock", None)
         wc = r.pop("match_wildcard", None)
         if wc is not None:

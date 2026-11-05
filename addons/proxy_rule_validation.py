@@ -8,12 +8,24 @@ from proxy_scripts import graphql_ops_match
 
 _TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 
-# status / delay / block / respond can fire only on every Nth matching call (optional start offset).
-EVERY_ACTIONS = frozenset({"respond", "status", "delay", "block"})
+# status / delay / block / respond / replace_body can fire only on every Nth matching call (optional start offset).
+EVERY_ACTIONS = frozenset({"respond", "status", "delay", "block", "replace_body"})
 
 # Block List modes (Proxyman parity). Default kill_show = today's behaviour (kill, keep the row).
 BLOCK_MODES = frozenset({"hide", "kill", "kill_show"})
 DEFAULT_BLOCK_MODE = "kill_show"
+
+
+def replace_template_problem(pattern, replace):
+    """Why a regex replace_body's replace= cannot be used with this find= (a bad \\9 or \\g<name>), or None.
+
+    re parses the substitution template before it searches, so substituting into "" checks it without any body.
+    Python 3.9 raises IndexError for an unknown group name and re.error for the rest."""
+    try:
+        pattern.subn(replace, "")
+    except (re.error, IndexError) as e:
+        return str(e)
+    return None
 
 
 def apply_every_fields(rule):
@@ -21,7 +33,7 @@ def apply_every_fields(rule):
     if "every" not in rule and "offset" not in rule:
         return rule
     if rule.get("action") not in EVERY_ACTIONS:
-        raise ValueError("every/offset only apply to status, delay, block and respond rules")
+        raise ValueError("every/offset only apply to status, delay, block, respond and replace_body rules")
     if "every" not in rule:
         raise ValueError("offset needs every=N (apply on every Nth matching call)")
     every = rule["every"]
@@ -129,6 +141,33 @@ def compile_rule(source, state_dir, fallback_name=None, confdir=None):
             raise ValueError("set_header value must be one line (no line breaks)")
         if rule.get("side", "request") not in ("request", "response"):
             raise ValueError("set_header side must be request or response")
+    elif action == "replace_body":
+        if not isinstance(rule["find"], str) or rule["find"] == "":
+            raise ValueError("replace_body find must be non-empty text")
+        if not isinstance(rule["replace"], str):
+            raise TypeError("replace_body replace must be text")
+        if rule.get("side", "response") not in ("request", "response"):
+            raise ValueError("replace_body side must be request or response")
+        regex = rule.get("regex", False)
+        if regex not in (True, False):
+            raise ValueError("replace_body regex must be true or false")
+        rule["regex"] = bool(regex)
+        # count and limit are the same: how many replacements (0 / omitted = all). Prefer count when both are set.
+        if "count" in rule and "limit" in rule and rule["count"] != rule["limit"]:
+            raise ValueError("replace_body use count= or limit=, not both with different values")
+        n = rule["count"] if "count" in rule else rule.get("limit")
+        if n is not None:
+            if type(n) is not int or n < 0:
+                raise ValueError("replace_body count/limit must be an integer ≥ 0 (0 = replace all)")
+            rule["count"] = n
+            rule.pop("limit", None)
+        if rule["regex"]:
+            rule["_find"] = user_regex(rule["find"])
+            problem = replace_template_problem(rule["_find"], rule["replace"])
+            if problem:
+                raise ValueError("replace_body replace=%r: %s" % (rule["replace"], problem))
+        else:
+            rule["_find"] = re.compile(re.escape(rule["find"]))
     elif action == "block":
         mode = rule.get("mode", DEFAULT_BLOCK_MODE)
         if mode is None or mode == "":
@@ -208,7 +247,8 @@ def compile_rule(source, state_dir, fallback_name=None, confdir=None):
 
 
 _ACTION_LABEL = {"respond": "answers locally", "map_local": "Map Local", "status": "forces a status", "json_patch": "edits JSON fields",
-                 "delay": "adds a delay", "set_header": "sets a header", "map_remote": "rewrites the URL", "block": "blocks the call"}
+                 "delay": "adds a delay", "set_header": "sets a header", "map_remote": "rewrites the URL",
+                 "replace_body": "replaces text in the body", "block": "blocks the call"}
 
 
 def block_mode_effect(mode):
@@ -272,7 +312,9 @@ def explain_rules(sources, state_dir, url, method="GET", confdir=None, body=None
             row["effect"] = "answered locally with %s from %s; the server is not called" % (rule.get("status", 200), what)
             _every_effect(row, rule)
             continue
-        if answered_by and action in ("status", "json_patch") or answered_by and action == "set_header" and rule.get("side") == "response":
+        if (answered_by and action in ("status", "json_patch")
+                or answered_by and action == "set_header" and rule.get("side") == "response"
+                or answered_by and action == "replace_body" and rule.get("side", "response") == "response"):
             row["reason"] = "matches, but '%s' answers this call locally, so there is no server response to change" % answered_by
             continue
         if action == "map_remote":
@@ -300,6 +342,13 @@ def explain_rules(sources, state_dir, url, method="GET", confdir=None, body=None
             side = rule.get("side", "request")
             row["effect"] = ("removes %s header %s" % (side, rule["header"]) if rule.get("value") is None
                              else "sets %s header %s: %s" % (side, rule["header"], rule["value"]))
+        elif action == "replace_body":
+            side = rule.get("side", "response")
+            how = "regex" if rule.get("regex") else "literal"
+            n = rule.get("count", rule.get("limit"))
+            lim = (", first %d" % n) if n else ""
+            row["effect"] = ("replaces %s %r with %r in the %s body%s (binary bodies left unchanged)"
+                             % (how, rule["find"], rule["replace"], side, lim))
         else:
             row["effect"] = _ACTION_LABEL.get(action, action)
         _every_effect(row, rule)

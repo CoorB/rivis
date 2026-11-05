@@ -9,11 +9,13 @@
   const { esc } = A, ui = T.ui;
 
   const TYPES = [["map_remote", "Map Remote"], ["block", "Block List"], ["respond", "Fixed reply"], ["status", "Force status"],
-    ["json_patch", "Edit JSON"], ["delay", "Delay"], ["set_header", "Header"]];
-  const KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"], set_header: ["side", "header", "value"], map_remote: ["replace", "with"], block: ["mode"] };
+    ["json_patch", "Edit JSON"], ["replace_body", "Replace body"], ["delay", "Delay"], ["set_header", "Header"]];
+  const KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"],
+    set_header: ["side", "header", "value"], map_remote: ["replace", "with"],
+    replace_body: ["find", "replace", "side", "regex", "count", "limit"], block: ["mode"] };
   const BLOCK_MODES = [["kill_show", "Block (show in list)"], ["kill", "Block and hide"], ["hide", "Hide only (forward)"]];
   const blockMode = (r) => (r && r.mode) || "kill_show";
-  const EVERY_TYPES = { respond: 1, status: 1, delay: 1, block: 1 };
+  const EVERY_TYPES = { respond: 1, status: 1, delay: 1, block: 1, replace_body: 1 };
   const SCOPE_KEYS = ["match", "method", "operation"];
   const typeName = (a) => (TYPES.find((t) => t[0] === a) || [])[1] || (a === "drop" ? "Block List" : a);
   const isOurs = (r) => r.action !== "map_local";
@@ -24,6 +26,12 @@
     if (a === "status") return "changes the status to " + r.status + everyBit(r);
     if (a === "delay") return "waits " + r.ms + " ms first" + everyBit(r);
     if (a === "json_patch") return "changes " + Object.keys(r.set || {}).join(", ") + " in the JSON reply";
+    if (a === "replace_body") {
+      const n = r.count != null ? r.count : r.limit;
+      return "replaces " + (r.regex ? "regex " : "") + JSON.stringify(r.find) + " with " + JSON.stringify(r.replace)
+        + " in the " + (r.side === "request" ? "request" : "response") + " body"
+        + (n ? (" (first " + n + ")") : "") + everyBit(r);
+    }
     if (a === "set_header") return (r.value == null ? "removes the " : "sets the ") + r.header + " header on the " + (r.side === "response" ? "response" : "request");
     if (a === "map_remote") return "sends it to " + r.with;
     if (a === "block" || a === "drop") {
@@ -139,6 +147,13 @@
       f += row("Status", `<input type="number" id="rf-status" value="${esc(v.status == null ? 503 : v.status)}" style="width:84px">`);
     } else if (t === "json_patch") {
       f += row("Set fields", `<textarea id="rf-set" class="rv-code grow" rows="5" spellcheck="false" placeholder='{"user.name": "QA", "items[0].price": 1}'>${esc(it ? JSON.stringify(v.set, null, 2) : "")}</textarea>`, "path → new value, as JSON");
+    } else if (t === "replace_body") {
+      f += row("On", `<select id="rf-side"><option value="response"${v.side !== "request" ? " selected" : ""}>the response</option><option value="request"${v.side === "request" ? " selected" : ""}>the request</option></select>`);
+      f += row("Find", txt("rf-find", v.find, '"premium": false') + `<label><input type="checkbox" id="rf-regex"${v.regex ? " checked" : ""}> Regex</label>`,
+        "literal text by default; tick Regex for a pattern");
+      f += row("Replace with", txt("rf-replace", v.replace, '"premium": true'));
+      f += row("Count", `<input type="number" id="rf-count" min="0" value="${esc(v.count != null ? v.count : (v.limit != null ? v.limit : ""))}" style="width:84px" placeholder="all">`,
+        "empty = every match; 1 = first only");
     } else if (t === "delay") {
       f += row("Delay", `<input type="number" id="rf-ms" min="0" value="${esc(v.ms == null ? 1000 : v.ms)}" style="width:100px"> ms`);
     } else if (t === "set_header") {
@@ -197,6 +212,17 @@
         let o; try { o = JSON.parse(val("rf-set")); } catch (x) { throw new Error('Set fields must be a JSON object, e.g. {"user.name": "QA"}'); }
         if (!o || typeof o !== "object" || Array.isArray(o) || !Object.keys(o).length) throw new Error("Set fields must be a JSON object with at least one path");
         rule.set = o;
+      } else if (t === "replace_body") {
+        rule.side = val("rf-side") || "response";
+        rule.find = val("rf-find");
+        rule.replace = val("rf-replace");
+        if (!rule.find) throw new Error("Enter the text to find");
+        if (ed.querySelector("#rf-regex").checked) rule.regex = true;
+        const c = val("rf-count").trim();
+        if (c) {
+          rule.count = Number(c);
+          if (!(rule.count >= 0) || !Number.isInteger(rule.count)) throw new Error("Count must be an integer ≥ 0, or empty for every match");
+        }
       } else if (t === "delay") rule.ms = Number(val("rf-ms"));
       else if (t === "set_header") { rule.side = val("rf-side"); rule.header = val("rf-header").trim(); rule.value = ed.querySelector("#rf-remove").checked ? null : val("rf-value"); if (!rule.header) throw new Error("Enter the header name"); }
       else if (t === "map_remote") { rule.replace = val("rf-replace"); rule.with = val("rf-with"); if (!rule.replace || !rule.with) throw new Error("Enter both Replace and With"); }

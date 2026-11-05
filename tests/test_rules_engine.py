@@ -310,6 +310,68 @@ class Actions(LiveCase):
         self.assertEqual(r.json()["name"], "patched")
         self.assertEqual(len(r.json()["items"]), 50)
 
+    def test_replace_body_literal_in_json_and_text(self):
+        self.reset_state(rules=[self.rule("rb", "replace_body", "/json/small",
+                                          find='"flag": false', replace='"flag": true')])
+        r = self.fetch("/json/small")
+        self.assertIs(r.json()["flag"], True)
+        self.assertEqual(r.header("content-length"), str(len(r.body)))
+        self.assertIn("rule:rb", self.comment("/json/small"))
+        self.reset_state(rules=[self.rule("rt", "replace_body", "/text",
+                                          find="not json", replace="WAS json")])
+        self.assertEqual(self.fetch("/text").body, b"WAS json at all")
+
+    def test_replace_body_regex_count_and_request_side(self):
+        self.reset_state(rules=[self.rule("once", "replace_body", "/text",
+                                          find=r"\b\w+\b", replace="X", regex=True, count=1)])
+        self.assertEqual(self.fetch("/text").body, b"X json at all")
+        self.reset_state(rules=[self.rule("req", "replace_body", "/echo",
+                                          find="secret", replace="REDACTED", side="request")])
+        r = self.fetch("/echo", method="POST", data=b'{"token":"secret-value"}',
+                       headers={"Content-Type": "application/json"})
+        self.assertIn("REDACTED-value", r.json()["body"])
+        self.assertNotIn("secret", r.json()["body"])
+
+    def test_replace_body_skips_binary_and_misses(self):
+        self.reset_state(rules=[self.rule("bin", "replace_body", "/big", find="rivis", replace="x")])
+        before = self.fetch("/big?mb=1").body
+        self.assertEqual(len(before), 1048576)
+        self.assertIn("skipped", self.comment("/big?mb=1"))
+        self.assertIn("binary", self.comment("/big?mb=1"))
+        self.reset_state(rules=[self.rule("miss", "replace_body", "/text", find="ZZZ", replace="Y")])
+        self.assertEqual(self.fetch("/text").body, b"not json at all")
+        self.assertIn("skipped", self.comment("/text"))
+
+    def test_replace_body_on_gzip_response(self):
+        # The wire bytes of a gzip body hold NULs; the decoded JSON does not. Replacing must still happen,
+        # and the answer must stay gzip-encoded with a Content-Length that matches the re-encoded bytes.
+        self.reset_state(rules=[self.rule("gz", "replace_body", "/json/gzip",
+                                          find='"name": "zipped"', replace='"name": "qa"')])
+        r = self.fetch("/json/gzip", extra=["--compressed"])
+        self.assertEqual(r.json()["name"], "qa")
+        self.assertEqual(len(r.json()["items"]), 50)
+        self.assertEqual(r.header("content-encoding"), "gzip")
+        self.assertIn("rule:gz", self.comment("/json/gzip"))
+
+    def test_replace_body_bad_backreference_is_skipped_not_raised(self):
+        # A hand-edited rules.json with replace=\9 for a one-group find: the loader skips the rule with a reason,
+        # the call goes through unchanged, and a later good rule in the same file still applies.
+        self.reset_state(rules=[self.rule("bad", "replace_body", "/text", find="(not)", replace="\\9", regex=True),
+                                self.rule("good", "replace_body", "/text", find="json", replace="JSON")])
+        r = self.fetch("/text")
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.body, b"not JSON at all")
+
+    def test_replace_body_every_nth_and_method_scope(self):
+        self.reset_state(rules=[self.rule("nth", "replace_body", "/json/small",
+                                          find='"flag": false', replace='"flag": true', every=2)])
+        self.assertIs(self.fetch("/json/small?n=1").json()["flag"], False)
+        self.assertIs(self.fetch("/json/small?n=2").json()["flag"], True)
+        self.reset_state(rules=[self.rule("post", "replace_body", "/text",
+                                          find="not json", replace="CHANGED", method="POST")])
+        self.assertEqual(self.fetch("/text").body, b"not json at all")          # GET: method scope skips it
+        self.assertEqual(self.fetch("/text", method="POST").body, b"CHANGED at all")
+
     def test_delay(self):
         self.reset_state(rules=[self.rule("d", "delay", "/json/small", ms=700)])
         # Keep a lower bound on the delayed URL (proves sleep ran). The old upper bound on other URLs

@@ -474,12 +474,16 @@ class ProxyPanel:
                 del r["operation"]                 # "" / null = any GraphQL operation
             else:
                 r["operation"] = r["operation"].strip()
-        for k in ("match", "replace"):
-            if k in r:
-                try:
-                    user_regex(r[k])
-                except re.error as e:
-                    raise PanelError(f"bad regex in {k}: {e}")
+        if "match" in r:
+            try:
+                user_regex(r["match"])
+            except re.error as e:
+                raise PanelError(f"bad regex in match: {e}")
+        if r.get("action") == "map_remote" and "replace" in r:
+            try:
+                user_regex(r["replace"])
+            except re.error as e:
+                raise PanelError(f"bad regex in replace: {e}")
         missing = [k for k in ACTION_REQUIREMENTS[r["action"]] if k not in r]
         if missing:                       # the engine would skip it later; say so now, not after a "saved"
             raise PanelError(f"action '{r['action']}' needs: {', '.join(missing)}")
@@ -501,6 +505,18 @@ class ProxyPanel:
             raise PanelError("set must be an object of path: value")
         if r["action"] == "map_remote" and not isinstance(r["with"], str):
             raise PanelError("with must be text")
+        if r["action"] == "replace_body":
+            if not isinstance(r.get("find"), str) or not r["find"]:
+                raise PanelError("find must be non-empty text")
+            if not isinstance(r.get("replace"), str):
+                raise PanelError("replace must be text")
+            if r.get("side", "response") not in ("request", "response"):
+                raise PanelError("side must be request or response")
+            if r.get("regex") and isinstance(r.get("find"), str):
+                try:
+                    user_regex(r["find"])
+                except re.error as e:
+                    raise PanelError(f"bad regex in find: {e}")
 
     def engine_check(self, r):
         """The proxy skips a rule its loader refuses; refuse it here too, so "saved" never means "silently inert"."""
