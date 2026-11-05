@@ -11,6 +11,10 @@ _TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 # status / delay / block / respond can fire only on every Nth matching call (optional start offset).
 EVERY_ACTIONS = frozenset({"respond", "status", "delay", "block"})
 
+# Block List modes (Proxyman parity). Default kill_show = today's behaviour (kill, keep the row).
+BLOCK_MODES = frozenset({"hide", "kill", "kill_show"})
+DEFAULT_BLOCK_MODE = "kill_show"
+
 
 def apply_every_fields(rule):
     """Validate and normalise optional every=N / offset=K on a rule in place. Raises ValueError/TypeError."""
@@ -125,6 +129,13 @@ def compile_rule(source, state_dir, fallback_name=None, confdir=None):
             raise ValueError("set_header value must be one line (no line breaks)")
         if rule.get("side", "request") not in ("request", "response"):
             raise ValueError("set_header side must be request or response")
+    elif action == "block":
+        mode = rule.get("mode", DEFAULT_BLOCK_MODE)
+        if mode is None or mode == "":
+            mode = DEFAULT_BLOCK_MODE
+        if not isinstance(mode, str) or mode not in BLOCK_MODES:
+            raise ValueError("block mode must be hide, kill or kill_show")
+        rule["mode"] = mode
     elif action == "map_local":
         if not isinstance(rule["file"], str):
             raise TypeError("map_local file must be text")
@@ -189,6 +200,8 @@ def compile_rule(source, state_dir, fallback_name=None, confdir=None):
             rule["headers"] = [[str(k), str(v)] for k, v in headers]
         else:
             raise TypeError("headers must be an object or name/value pairs")
+    if action != "block" and "mode" in rule:
+        raise ValueError("mode only applies to block rules (hide, kill or kill_show)")
     apply_every_fields(rule)
     return rule
 
@@ -196,6 +209,15 @@ def compile_rule(source, state_dir, fallback_name=None, confdir=None):
 
 _ACTION_LABEL = {"respond": "answers locally", "map_local": "Map Local", "status": "forces a status", "json_patch": "edits JSON fields",
                  "delay": "adds a delay", "set_header": "sets a header", "map_remote": "rewrites the URL", "block": "blocks the call"}
+
+
+def block_mode_effect(mode):
+    mode = mode or DEFAULT_BLOCK_MODE
+    if mode == "hide":
+        return "forwards the call and hides it from the list"
+    if mode == "kill":
+        return "connection killed and hidden from the list (the app sees a network error)"
+    return "connection killed (the app sees a network error)"
 
 
 def rule_fingerprint(source):
@@ -264,8 +286,10 @@ def explain_rules(sources, state_dir, url, method="GET", confdir=None, body=None
             continue
         row["fires"] = True
         if action == "block":
-            blocked_by = name
-            row["effect"] = "connection killed (the app sees a network error)"
+            mode = rule.get("mode") or DEFAULT_BLOCK_MODE
+            if mode != "hide":
+                blocked_by = name
+            row["effect"] = block_mode_effect(mode)
         elif action == "status":
             row["effect"] = "the server's status becomes %s" % rule["status"]
         elif action == "json_patch":

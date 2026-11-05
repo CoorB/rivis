@@ -188,6 +188,15 @@ def validate(r):
             apply_every_fields(r)
         except (TypeError, ValueError) as e:
             die(str(e))
+    if "mode" in r:
+        from proxy_rule_validation import BLOCK_MODES, DEFAULT_BLOCK_MODE
+        if a != "block":
+            die("mode only applies to block rules (hide, kill or kill_show)")
+        mode = r["mode"]
+        if mode is None or mode == "":
+            r["mode"] = DEFAULT_BLOCK_MODE
+        elif not isinstance(mode, str) or mode not in BLOCK_MODES:
+            die("block mode must be hide, kill or kill_show")
 
 
 def trust_local_files(path, r):

@@ -10,7 +10,9 @@
 
   const TYPES = [["map_remote", "Map Remote"], ["block", "Block List"], ["respond", "Fixed reply"], ["status", "Force status"],
     ["json_patch", "Edit JSON"], ["delay", "Delay"], ["set_header", "Header"]];
-  const KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"], set_header: ["side", "header", "value"], map_remote: ["replace", "with"], block: [] };
+  const KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"], set_header: ["side", "header", "value"], map_remote: ["replace", "with"], block: ["mode"] };
+  const BLOCK_MODES = [["kill_show", "Block (show in list)"], ["kill", "Block and hide"], ["hide", "Hide only (forward)"]];
+  const blockMode = (r) => (r && r.mode) || "kill_show";
   const EVERY_TYPES = { respond: 1, status: 1, delay: 1, block: 1 };
   const SCOPE_KEYS = ["match", "method", "operation"];
   const typeName = (a) => (TYPES.find((t) => t[0] === a) || [])[1] || (a === "drop" ? "Block List" : a);
@@ -24,7 +26,12 @@
     if (a === "json_patch") return "changes " + Object.keys(r.set || {}).join(", ") + " in the JSON reply";
     if (a === "set_header") return (r.value == null ? "removes the " : "sets the ") + r.header + " header on the " + (r.side === "response" ? "response" : "request");
     if (a === "map_remote") return "sends it to " + r.with;
-    if (a === "block" || a === "drop") return "blocks the call (the app gets a network error)" + everyBit(r);
+    if (a === "block" || a === "drop") {
+      const m = blockMode(r);
+      if (m === "hide") return "forwards the call and hides it from the list" + everyBit(r);
+      if (m === "kill") return "blocks the call and hides it from the list" + everyBit(r);
+      return "blocks the call (the app gets a network error)" + everyBit(r);
+    }
     return a;
   };
   const ago = (t) => { const d = Math.max(0, Date.now() / 1000 - t); return d < 5 ? "just now" : d < 60 ? Math.round(d) + " s ago" : d < 3600 ? Math.round(d / 60) + " min ago" : Math.round(d / 3600) + " h ago"; };
@@ -93,7 +100,7 @@
         }).join("") + `</tbody></table>`
         : ui.empty(w.data.type === "all" ? "No rules yet" : "No " + typeName(w.data.type) + " rules", w.data.type === "map_remote"
           ? "Map Remote sends matching calls to another server, e.g. production → staging." : w.data.type === "block"
-          ? "Block List makes matching calls fail, as if the network were down." : "Pick + Add Rule.");
+          ? "Block List can kill matching calls, hide them from the list, or both — e.g. silence analytics without breaking the app." : "Pick + Add Rule.");
       if (hadSel) { const el = list.querySelector(hadSel); if (el) el.focus({ preventScroll: true }); }
       const sel = A.selected();
       w.body.querySelector("[data-r-test]").disabled = !sel;
@@ -134,6 +141,10 @@
       f += row("On", `<select id="rf-side"><option value="request"${v.side !== "response" ? " selected" : ""}>the request</option><option value="response"${v.side === "response" ? " selected" : ""}>the response</option></select>`);
       f += row("Header", txt("rf-header", v.header, "X-QA"));
       f += row("Value", txt("rf-value", v.value, "") + `<label><input type="checkbox" id="rf-remove"${it && v.value == null ? " checked" : ""}> Remove it instead</label>`);
+    } else if (t === "block") {
+      const m = blockMode(v);
+      f += row("Mode", `<select id="rf-mode">${BLOCK_MODES.map(([id, l]) => `<option value="${id}"${id === m ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>`,
+        "Block = app sees a network error. Hide only forwards the call and omits it from the list.");
     }
     if (EVERY_TYPES[t]) {
       f += row("Every Nth", `<input type="number" id="rf-every" min="2" value="${esc(v.every == null ? "" : v.every)}" style="width:84px" placeholder="all">`,
@@ -183,6 +194,7 @@
       } else if (t === "delay") rule.ms = Number(val("rf-ms"));
       else if (t === "set_header") { rule.side = val("rf-side"); rule.header = val("rf-header").trim(); rule.value = ed.querySelector("#rf-remove").checked ? null : val("rf-value"); if (!rule.header) throw new Error("Enter the header name"); }
       else if (t === "map_remote") { rule.replace = val("rf-replace"); rule.with = val("rf-with"); if (!rule.replace || !rule.with) throw new Error("Enter both Replace and With"); }
+      else if (t === "block") { rule.mode = val("rf-mode") || "kill_show"; }
       if ((t === "status" || t === "respond") && !(rule.status >= 100 && rule.status <= 999)) throw new Error("The status must be a number from 100 to 999");
       const keys = [...SCOPE_KEYS, ...KEYS[t]];
       if (EVERY_TYPES[t]) {

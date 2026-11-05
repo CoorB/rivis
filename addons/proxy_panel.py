@@ -235,6 +235,7 @@ class ProxyPanel:
         self.view_project = "default"
         self.active_profile = {"id": "default", "label": "All", "hosts": "", "record_match": "."}
         self._tls_tunnels = False      # is the list filter currently showing tunnel rows?
+        self._hide_blocked = False     # Block List mode=hide|kill: exclude rivis_hidden from the default list
         self._last_good_cfg = {"rules": []}
         self._rules_error = None
         self._bad_cfg = None
@@ -431,6 +432,7 @@ class ProxyPanel:
         except (OSError, ValueError) as exc:
             raise PanelError("rules.json is invalid on disk: %s; fix it before changing rules" % exc)
         atomic_json(self.rules_path, migrate_rules(cfg))
+        self._sync_block_hide_filter(cfg)
         # Apply now, not on the proxy's next once-a-second poll: a breakpoint set in the panel must catch the very next
         # call (on a quiet app that is the only call; seen with a real app, 2026-10-15).
         for addon in self._addons():
@@ -583,6 +585,7 @@ class ProxyPanel:
         tls_cfg = self._bad_cfg if self._rules_error and isinstance(self._bad_cfg, dict) and "tls" in self._bad_cfg else cfg
         tls = self.tls_state(tls_cfg)
         self._sync_view_state()
+        self._sync_block_hide_filter(cfg)
         if (tls["mode"] != "all") != self._tls_tunnels:
             self._tls_tunnels = tls["mode"] != "all"
             self._write_view_filter()      # show / hide the host-only tunnel rows of undecrypted hosts
@@ -1243,6 +1246,22 @@ class ProxyPanel:
         except ValueError as e:
             raise PanelError(str(e))
 
+    @staticmethod
+    def _block_list_hides(cfg):
+        """True when an ON Block List rule uses hide or kill (omit matching calls from the default list)."""
+        for r in cfg.get("rules") or []:
+            if not isinstance(r, dict) or r.get("action") != "block" or r.get("enabled") is False:
+                continue
+            if (r.get("mode") or "kill_show") in ("hide", "kill"):
+                return True
+        return False
+
+    def _sync_block_hide_filter(self, cfg):
+        need = self._block_list_hides(cfg)
+        if need != self._hide_blocked:
+            self._hide_blocked = need
+            self._write_view_filter()
+
     def view_filter(self):
         if self.show_dns:
             base = ""
@@ -1260,6 +1279,10 @@ class ProxyPanel:
         if self.source:
             s = proxy_source.filter_clause(self.source)
             base = f"{base} & {s}" if base else s
+        # Block List hide / kill: matching calls are tagged rivis_hidden and kept out of the default list.
+        if self._hide_blocked:
+            clause = "!~meta '^rivis_hidden:'"
+            base = f"{base} & {clause}" if base else clause
         return base
 
     def _listed(self, f):

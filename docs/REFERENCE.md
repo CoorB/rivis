@@ -638,6 +638,22 @@ older local response. The panel's **Rules** tab lists, creates, edits, switches 
 breakpoints, scripts and the network throttle / No caching (**New** → pick a type; a rule's name and type stay fixed when
 you edit it, and a Map Local rule opens its own editor). Breakpoints pause requests/responses in mitmweb for editing and continuation.
 
+**Block List modes** (optional `mode=` on `block` rules; default `kill_show` — today's behaviour):
+
+| `mode` | App | List |
+|---|---|---|
+| `kill_show` | network error | row shown |
+| `kill` | network error | omitted |
+| `hide` | call goes through | omitted |
+
+Use **Hide only** to silence analytics hosts without breaking the app. In the Block List window (and classic Rules)
+the same choices are labelled **Block (show in list)**, **Block and hide**, and **Hide only (forward)**.
+
+```bash
+rivis rules add ads match='ads\\.example\\.com' action=block mode=hide
+rivis rules add pay match='/pay' action=block mode=kill_show
+```
+
 **Every Nth call** (optional): on `status`, `delay`, `block` and `respond` rules, set `every=N` (N ≥ 2) so the action
 applies only on every Nth matching call — for example `every=3` forces a 503 on the 3rd, 6th, 9th… pay call and leaves
 the others alone. An optional `offset=K` (K ≥ 0) skips that many matching calls before the every-Nth cycle starts.

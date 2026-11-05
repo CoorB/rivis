@@ -516,6 +516,15 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
                  msg="every must be an integer")
         self.bad("rules", "add", msg="usage: rules add NAME")
 
+    def test_rules_add_block_mode_parity_with_bash_cli(self):
+        self.ok("rules", "add", "hide-ads", "match=/ads", "action=block", "mode=hide")
+        self.bash("rules", "add", "kill-x", "match=/x", "action=block", "mode=kill")
+        rules = {r["name"]: r for r in self.cfg()["rules"]}
+        self.assertEqual(rules["hide-ads"]["mode"], "hide")
+        self.assertEqual(rules["kill-x"]["mode"], "kill")
+        self.bad("rules", "add", "bad-mode", "match=/z", "action=block", "mode=abort",
+                 msg="block mode must be hide, kill or kill_show")
+
     def test_rules_variant_parity_with_bash_cli(self):
         self.bash("rules", "add", "multi", "match=/multi", "action=map_local", "body={}")
         self.ok("rules", "variant", "multi", "add", "error")

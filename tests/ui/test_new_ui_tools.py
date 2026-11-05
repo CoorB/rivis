@@ -234,6 +234,29 @@ class ToolWindows(UiBase):
         r = self.fetch("/json/small?nblk=2")
         self.assertNotEqual(getattr(r, "status", 0), 200)
 
+    def test_block_list_hide_only_forwards_and_omits_the_row(self):
+        # Hide only: analytics-style calls still succeed for the app, but stay out of the default list.
+        self.open_new()
+        self.page.keyboard.press(MOD + "+Alt+X")
+        w = self.win_open("rules")
+        w.locator("[data-r-new]").click()
+        w.locator("#rf-type").select_option("block")
+        w.locator("#rf-name").fill("hide-ads")
+        w.locator("#rf-match").fill(r"blkui=hide")
+        wait_for(lambda: w.locator("#rf-mode").count() == 1, 5, 0.1, "mode field")
+        self.assertEqual(w.locator("#rf-mode").input_value(), "kill_show")
+        w.locator("#rf-mode").select_option("hide")
+        w.locator("[data-r-save]").click()
+        wait_for(lambda: any(r.get("name") == "hide-ads" and r.get("mode") == "hide" for r in self.panel.state()["rules"]),
+                 8, 0.1, "hide rule saved")
+        self.page.wait_for_timeout(1200)
+        before = self.page.locator(".rv-tr", has_text="blkui=hide").count()
+        r = self.fetch("/json/small?blkui=hide")
+        self.assertEqual(getattr(r, "status", 0), 200)
+        self.page.wait_for_timeout(1500)
+        self.assertEqual(self.page.locator(".rv-tr", has_text="blkui=hide").count(), before)
+        wait_for(lambda: "hides it from the list" in w.inner_text() or "Hide only" in w.inner_text(), 5, 0.1, "list describes hide")
+
     def test_map_remote_rule_sends_the_call_elsewhere_and_test_explains_it(self):
         self.open_new("/json/small?nmr=1")
         self.page.keyboard.press(MOD + "+Alt+R")

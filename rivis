@@ -43,6 +43,8 @@
 #                                 Proxyman-style rules, hot-reloaded, kept across restarts:
 #                                 respond | map_local | status | json_patch | delay |
 #                                 set_header | map_remote | block   (see rules.example.json)
+#                                 block: optional mode=kill_show|kill|hide (default kill_show =
+#                                 kill and keep the row; kill = kill and hide; hide = forward and hide)
 #                                 set_header: header=NAME value=TEXT [side=request|response];
 #                                 json_patch: set='path=value' (or set='{"path":value}'); map_remote: replace=REGEX with=URL
 #                                 optional: method=POST operation=GetUser (only that GraphQL operation)

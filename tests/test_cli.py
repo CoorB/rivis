@@ -683,6 +683,19 @@ class Rules(CliBase):
         self.refused("rules", "add", "bad-off", "match=/x", "action=block", "offset=1",
                      msg="offset needs every")
 
+    def test_rules_add_block_mode_hide_kill_kill_show(self):
+        self.ok("rules", "add", "b-hide", "match=/ads", "action=block", "mode=hide")
+        self.ok("rules", "add", "b-kill", "match=/x", "action=block", "mode=kill")
+        self.ok("rules", "add", "b-show", "match=/y", "action=block", "mode=kill_show")
+        rules = {r["name"]: r for r in self.cfg()["rules"]}
+        self.assertEqual(rules["b-hide"]["mode"], "hide")
+        self.assertEqual(rules["b-kill"]["mode"], "kill")
+        self.assertEqual(rules["b-show"]["mode"], "kill_show")
+        self.refused("rules", "add", "b-bad", "match=/z", "action=block", "mode=abort",
+                     msg="block mode must be hide, kill or kill_show")
+        self.refused("rules", "add", "b-on-status", "match=/z", "action=status", "status=500", "mode=hide",
+                     msg="mode only applies to block")
+
     def test_b3_json_patch_cli_syntax(self):
         # B3: json_patch set accepts path=value, multiple set flags, comma pairs, and JSON objects
         self.ok("rules", "add", "p1", "match=/json$", "action=json_patch", "set=user.name=PATCHED")

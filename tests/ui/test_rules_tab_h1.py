@@ -187,6 +187,13 @@ class RulesTabEveryType(UiBase):
                        lambda: self.fetch("/echo?h1=block2").status == 200)
         self.assertEqual(self.fetch("/echo?h1=block").status, 200)      # the edited match no longer catches it
 
+    def test_block_hide_only_mode_from_classic_rules(self):
+        # Classic Rules form Mode select (panel.js): Hide only forwards and is stored as mode=hide.
+        self.open()
+        self.new("block", name="h1-hide", match="h1=hideonly", mode="hide")
+        wait_for(lambda: (self.rule_named("h1-hide") or {}).get("mode") == "hide", 8, 0.2, "mode=hide in rules.json")
+        wait_for(lambda: self.fetch("/echo?h1=hideonly").status == 200, 10, 0.3, "hide only still reaches the server")
+
     def test_map_local(self):
         self.open()
         self.rules_tab()

@@ -2699,7 +2699,12 @@
     if (a === "json_patch") return "changes " + Object.keys(r.set || {}).join(", ") + " in the JSON reply";
     if (a === "set_header") return (r.value == null ? "removes the " : "sets the ") + r.header + " header";
     if (a === "map_remote") return "sends it to " + r.with;
-    if (a === "block" || a === "drop") return "blocks the call (the app gets a network error)" + everyBit(r);
+    if (a === "block" || a === "drop") {
+      const m = blockModeOf(r);
+      if (m === "hide") return "forwards the call and hides it from the list" + everyBit(r);
+      if (m === "kill") return "blocks the call and hides it from the list" + everyBit(r);
+      return "blocks the call (the app gets a network error)" + everyBit(r);
+    }
     return a;
   }
   // Rule hit counts (from the proxy) — so an ON rule that never fires is visible, not silent
@@ -2792,7 +2797,9 @@
   // ───────────── Rules tab: the New / Edit form for every type ─────────────
   const RULE_TYPES = [["respond", "Fixed reply"], ["status", "Force status"], ["json_patch", "Edit JSON"], ["delay", "Delay"], ["set_header", "Header"],
     ["map_remote", "Map Remote"], ["block", "Block"], ["map_local", "Map Local"], ["bp", "Breakpoint"], ["script", "Script"], ["throttle", "Network throttle"], ["nocache", "No caching"]];
-  const RULE_KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"], set_header: ["side", "header", "value"], map_remote: ["replace", "with"], block: [] };
+  const RULE_KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"], set_header: ["side", "header", "value"], map_remote: ["replace", "with"], block: ["mode"] };
+  const BLOCK_MODES = [["kill_show", "Block (show in list)"], ["kill", "Block and hide"], ["hide", "Hide only (forward)"]];
+  const blockModeOf = (r) => (r && r.mode) || "kill_show";
   function openRuleForm(type, item) {
     if (type === "map_local") { tab = "map"; editing = null; render(); return; }          // Map Local keeps its own tab and editor
     noteReturn("editor");
@@ -2833,6 +2840,10 @@
     } else if (t === "map_remote") {
       body += fld("replace", "Replace (URL regex)", txt("replace", v.replace, "https://api.example.com/v1"));
       body += fld("with", "With", txt("with", v.with, "https://staging.example.com/v1"));
+    } else if (t === "block") {
+      const m = blockModeOf(v);
+      body += fld("mode", "Mode", `<select id="rf-mode">${BLOCK_MODES.map(([id, l]) => `<option value="${id}" ${id === m ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`);
+      body += `<div class="sub">Block = the app sees a network error. Hide only forwards the call and omits it from the list (e.g. silence analytics).</div>`;
     }
     if (EVERY_RULE_TYPES[t]) {
       body += fld("every", "Every Nth", `<input type="number" id="rf-every" min="2" value="${esc(v.every ?? "")}" style="width:80px" placeholder="all" title="Empty = every matching call. 3 = the 3rd, 6th, 9th…">`);
@@ -2879,6 +2890,7 @@
           } else if (t === "delay") rule.ms = Number(val("ms"));
           else if (t === "set_header") { rule.side = val("side"); rule.header = val("header").trim(); rule.value = $("rf-remove").checked ? null : val("value"); }
           else if (t === "map_remote") { rule.replace = val("replace"); rule.with = val("with"); }
+          else if (t === "block") { rule.mode = val("mode") || "kill_show"; }
           const keys = ["match", "method", "operation", ...RULE_KEYS[t]];
           if (EVERY_RULE_TYPES[t]) {
             keys.push("every", "offset");

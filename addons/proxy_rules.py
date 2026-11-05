@@ -27,7 +27,8 @@ Actions
   delay       ms                                     hold the request before sending it
   set_header  side request|response, header, value   (value null = remove)
   map_remote  replace (regex), with                  rewrite the URL before it is sent
-  block                                              kill the connection (app sees a network error)
+  block       [mode=kill_show|kill|hide]             Block List: kill+show (default), kill+hide, or
+                                                     hide only (forwarded, omitted from the default list)
 
 Optional every=N [offset=K] on status / delay / block / respond: apply only on every Nth matching call
 (1-based; offset skips that many matches first). The match counter restarts when the rule is edited.
@@ -72,7 +73,8 @@ from proxy_common import (PRODUCT, PROFILE_VALUES, atomic_json, STATE_ROOT, brea
                           without_hop_headers)
 import proxy_rule_validation
 importlib.reload(proxy_rule_validation)      # mitmproxy reloads this add-on in place: the validator must see the new proxy_common too
-from proxy_rule_validation import compile_rule, every_applies, rule_fingerprint
+from proxy_rule_validation import (BLOCK_MODES, DEFAULT_BLOCK_MODE, compile_rule, every_applies,
+                                   rule_fingerprint)
 from proxy_scripts import graphql_ops_match
 
 DNS_TIMEOUT = 10        # seconds for the private-address guard's own lookup
@@ -229,6 +231,20 @@ def _tag_rule(flow, rule, suffix="", modified=True):
         flow.metadata["proxy_modified"] = True
     kind = "mock" if rule.get("action") in ("respond", "map_local") else "rule"
     _tag(flow, f"{kind}:{rule['name']}{suffix}")
+
+
+def _hide_flow(flow):
+    """Omit a call from the default list (Block List hide / kill). Tag rivis_hidden; the panel's view_filter
+    excludes it. Do not view.flows.remove — that aborts a still-live hide-only call."""
+    flow.metadata["rivis_hidden"] = "1"
+    if "hidden" not in (flow.comment or "").split():
+        _tag(flow, "hidden")
+    try:
+        view = ctx.master.addons.get("view")
+        if view is not None:
+            view.update([flow])          # re-check the filter now that the tag is set
+    except Exception:
+        pass
 
 
 _CONDITIONAL_HEADERS = ("If-None-Match", "If-Modified-Since", "If-Match", "If-Unmodified-Since", "If-Range")
@@ -1103,7 +1119,14 @@ class ProxyRules:
         for r in self._matching(flow, {"block"}):
             if not self._every_tick(r):
                 continue
+            mode = r.get("mode") or DEFAULT_BLOCK_MODE
+            if mode not in BLOCK_MODES:
+                mode = DEFAULT_BLOCK_MODE
             self._fired(flow, r, modified=False)
+            if mode in ("hide", "kill"):
+                _hide_flow(flow)
+            if mode == "hide":
+                break                                    # forwarded; only the first matching Block List rule applies
             self._flush_hits_soon()                      # a killed call has no response hook
             flow.kill()
             return

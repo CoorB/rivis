@@ -368,6 +368,52 @@ class Actions(LiveCase):
         r = self.fetch("/echo", method="GET")
         self.assertEqual((r.rc, r.status), (0, 200))
 
+    def test_block_modes_kill_show_kill_and_hide(self):
+        def listed(marker):
+            return [f for f in self.inst.flows() if marker in ((f.get("request") or {}).get("path") or "")]
+
+        def stays_out(marker, seconds=1.5):
+            # before==0 + wait_until_equal is vacuous: poll so a late-listed row still fails the test.
+            end = time.time() + seconds
+            while time.time() < end:
+                found = listed(marker)
+                self.assertEqual(found, [], "%s must stay out of the default list" % marker)
+                time.sleep(0.1)
+
+        # kill_show (default): app fails, row stays in the list (today's Block List).
+        self.reset_state(rules=[self.rule("ks", "block", r"bmshow=1", mode="kill_show")])
+        self.panel.state()                                          # apply the hide-capable view filter when needed
+        r = self.fetch("/json/small?bmshow=1")
+        self.assertNotEqual(r.status, 200)
+        self.assertEqual(self.up.hits_for("/json/small?bmshow=1"), [])
+        wait_for(lambda: self.inst.flow_for("/json/small?bmshow=1", timeout=0.05), 5, 0.1, "kill_show row listed")
+        self.assertIn("rule:ks", self.comment("/json/small?bmshow=1"))
+
+        # kill: app fails, row omitted (tagged rivis_hidden; default list length unchanged for that path).
+        self.reset_state(rules=[self.rule("k", "block", r"bmkill=1", mode="kill")])
+        self.panel.state()
+        self.assertIn("rivis_hidden", self.panel.option("view_filter") or "")
+        r = self.fetch("/json/small?bmkill=1")
+        self.assertNotEqual(r.status, 200)
+        self.assertEqual(self.up.hits_for("/json/small?bmkill=1"), [])
+        stays_out("bmkill=1")
+
+        # hide: forwarded (200), omitted from the list — analytics silenced without breaking the app.
+        self.reset_state(rules=[self.rule("h", "block", r"bmhide=1", mode="hide")])
+        self.panel.state()
+        self.assertIn("rivis_hidden", self.panel.option("view_filter") or "")
+        r = self.fetch("/json/small?bmhide=1")
+        self.assertEqual(r.status, 200)
+        self.assertTrue(self.up.hits_for("/json/small?bmhide=1"))
+        stays_out("bmhide=1")
+
+        # missing mode behaves like kill_show (today's default)
+        self.reset_state(rules=[self.rule("def", "block", r"bmdef=1")])
+        self.panel.state()
+        r = self.fetch("/json/small?bmdef=1")
+        self.assertNotEqual(r.status, 200)
+        wait_for(lambda: self.inst.flow_for("/json/small?bmdef=1", timeout=0.05), 5, 0.1, "default block still listed")
+
     def test_method_filter_is_case_insensitive_and_exact(self):
         self.reset_state(rules=[self.rule("r", "respond", "/echo", method="post", body="mocked")])
         self.assertEqual(self.fetch("/echo", method="POST", data="x").text, "mocked")

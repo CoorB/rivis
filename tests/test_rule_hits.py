@@ -231,6 +231,17 @@ class RulesTestCli(CliBase):
         out = self.ok("rules", "test", "https://api.example.test/pay").stdout
         self.assertRegex(out, r"FIRES\s+flake\s+.*on every 3rd matching call \(offset 1\)")
 
+    def test_rules_test_explains_block_modes(self):
+        self.ok("rules", "add", "hide-ads", "match=ads\\.example", "action=block", "mode=hide")
+        self.ok("rules", "add", "kill-pay", "match=/pay", "action=block", "mode=kill")
+        self.ok("rules", "add", "show-x", "match=/x", "action=block", "mode=kill_show")
+        out = self.ok("rules", "test", "https://ads.example.test/pixel").stdout
+        self.assertRegex(out, r"FIRES\s+hide-ads\s+forwards the call and hides it from the list")
+        out = self.ok("rules", "test", "https://api.example.test/pay").stdout
+        self.assertRegex(out, r"FIRES\s+kill-pay\s+connection killed and hidden from the list")
+        out = self.ok("rules", "test", "https://api.example.test/x").stdout
+        self.assertRegex(out, r"FIRES\s+show-x\s+connection killed \(the app sees a network error\)")
+
     def test_rules_test_needs_a_full_url(self):
         r = self.cli("rules", "test", "api.example.test/x")
         self.assertNotEqual(r.returncode, 0)
