@@ -285,6 +285,21 @@ safe_name() { [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]] && [[ "$1" != .* ]] || die "n
 port_owner() { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==2{print $1" pid "$2" "$9}'; }
 port_accepts() { /usr/bin/python3 -I -c 'import socket,sys; s=socket.socket(); s.settimeout(.5); sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))) != 0)' "$1"; }
 
+# Advice for "that port is taken": a pair the kernel says is free right now. The old hint named 18080/18083 no
+# matter what was wrong, so whoever was stuck because 18083 was taken was told to start on 18083.
+free_port_hint() {
+  local p
+  p=$(/usr/bin/python3 -I -c 'import socket
+ss = [socket.socket() for _ in range(2)]
+for s in ss: s.bind(("127.0.0.1", 0))
+print(" ".join(str(s.getsockname()[1]) for s in ss))
+for s in ss: s.close()' 2>/dev/null)
+  case "$p" in
+    *[0-9]" "[0-9]*) echo "quit it, or start on free ports: ${ENV_PREFIX}_PORT=${p%% *} ${ENV_PREFIX}_WEB_PORT=${p##* } $CLI start" ;;
+    *) echo "quit it, or start on a pair of ports nothing else is using: ${ENV_PREFIX}_PORT=<free> ${ENV_PREFIX}_WEB_PORT=<free> $CLI start" ;;
+  esac
+}
+
 secure_dirs() {
   (umask 077; mkdir -p "$STATE_ROOT" "$PROJECT_STATE" "$PROJECT_STATE/mocks" \
     "$PROJECT_STATE/collections" "$PROJECT_STATE/sessions" "$PROJECT_STATE/scripts" "$STATE_ROOT/profiles")
@@ -513,9 +528,9 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
     fi
     printf '%s\n' "$$" > "$start_guard/pid"
   fi
-  local o free_hint="quit it, or start on free ports: ${ENV_PREFIX}_PORT=18080 ${ENV_PREFIX}_WEB_PORT=18083 $CLI start"
-  o=$(port_owner "$PORT"); { [ -n "$o" ] || port_accepts "$PORT"; } && die "port $PORT already taken by another program: ${o:-listener not visible to this account} — $free_hint"
-  o=$(port_owner "$WEB_PORT"); { [ -n "$o" ] || port_accepts "$WEB_PORT"; } && die "UI port $WEB_PORT already taken by another program: ${o:-listener not visible to this account} — $free_hint"
+  local o
+  o=$(port_owner "$PORT"); { [ -n "$o" ] || port_accepts "$PORT"; } && die "port $PORT already taken by another program: ${o:-listener not visible to this account} — $(free_port_hint)"
+  o=$(port_owner "$WEB_PORT"); { [ -n "$o" ] || port_accepts "$WEB_PORT"; } && die "UI port $WEB_PORT already taken by another program: ${o:-listener not visible to this account} — $(free_port_hint)"
   [ "$upstream_set" = 0 ] || atomic_private_text "$UPSTREAM_FILE" "$upstream" || die "could not save upstream proxy setting"
   # how this instance was started, so an in-app update can restart it the same way (addons/update_install.sh)
   if [ -z "${RIVIS_START_INTERNAL:-}" ]; then

@@ -1269,6 +1269,33 @@ class StartArgv(CliBase):
         finally:
             s.close()
 
+    def test_the_taken_port_advice_offers_ports_that_are_actually_free(self):
+        # The advice was the literal "RIVIS_PORT=18080 RIVIS_WEB_PORT=18083" however the start had failed, so
+        # whoever was stuck because 18083 was taken was told to start on 18083. It now names a pair looked up
+        # at the moment it is printed, so two failures do not get the same answer.
+        hints = []
+        for _ in range(2):
+            s = socket.socket()
+            s.bind(("127.0.0.1", 0))
+            s.listen(1)
+            taken = s.getsockname()[1]
+            try:
+                env = dict(self.env, SHIM_DRYRUN="1", RIVIS_PORT=str(taken))
+                r = self.suite.rivis("start", "--no-open", "--no-ios", home=self.home, env=env)
+                self.assertNotEqual(r.returncode, 0)
+                hint = r.stderr.rsplit("\u2014", 1)[-1]
+                self.assertNotIn(str(taken), hint)
+                ports = [int(n) for n in re.findall(r"_(?:WEB_)?PORT=(\d+)", hint)]
+                self.assertEqual(len(ports), 2, hint)
+                for port in ports:                      # free right now, or bind() raises
+                    probe = socket.socket()
+                    probe.bind(("127.0.0.1", port))
+                    probe.close()
+                hints.append(tuple(ports))
+            finally:
+                s.close()
+        self.assertNotEqual(hints[0], hints[1], "the advice is a fixed pair, not ports looked up now")
+
     def test_unknown_option(self):
         self.refused("start", "--bogus", msg="unknown option")
 
@@ -1284,16 +1311,19 @@ class StartArgv(CliBase):
 
     def test_nondefault_web_port_gets_its_own_private_token_and_bootstrap(self):
         # R4A-05: a second project cannot replace the first project's login files.
-        first = dict(self.env, SHIM_DRYRUN="1", RIVIS_WEB_PORT="18083")
-        second = dict(self.env, SHIM_DRYRUN="1", RIVIS_WEB_PORT="18084")
+        # The ports are allocated, not spelled out: `start` refuses a port that is taken on the real machine,
+        # which a fake HOME does not isolate, so a fixed number fails whenever anything else holds it.
+        web_one, web_two = str(harness.free_port()), str(harness.free_port())
+        first = dict(self.env, SHIM_DRYRUN="1", RIVIS_WEB_PORT=web_one)
+        second = dict(self.env, SHIM_DRYRUN="1", RIVIS_WEB_PORT=web_two)
         self.ok("start", "--no-open", "--no-ios", env=first)
-        path = os.path.join(self.state, "web-token-18083")
+        path = os.path.join(self.state, "web-token-" + web_one)
         original = open(path).read()
         self.ok("start", "--no-open", "--no-ios", env=second)
         self.assertEqual(open(path).read(), original)
-        self.assertTrue(os.path.isfile(os.path.join(self.state, "web-token-18084")))
-        self.assertTrue(os.path.isfile(os.path.join(self.state, "web-bootstrap-18083")))
-        self.assertTrue(os.path.isfile(os.path.join(self.state, "web-bootstrap-18084")))
+        self.assertTrue(os.path.isfile(os.path.join(self.state, "web-token-" + web_two)))
+        self.assertTrue(os.path.isfile(os.path.join(self.state, "web-bootstrap-" + web_one)))
+        self.assertTrue(os.path.isfile(os.path.join(self.state, "web-bootstrap-" + web_two)))
         self.assertEqual(mode(path), 0o600)
 
 
