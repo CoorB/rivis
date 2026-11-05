@@ -85,6 +85,7 @@ MITM_PYTHON = (
     "addons/proxy_redact.py",
     "addons/proxy_retention.py",
     "addons/proxy_rules.py",
+    "addons/proxy_quic.py",
     "addons/proxy_source.py",
 )
 
