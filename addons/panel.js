@@ -810,15 +810,21 @@
   }
 
   // ───────────── This call ─────────────
+  // Drop the previous call's markup as soon as the selection moves: Map Local / Breakpoint / Repeat read what is on
+  // screen, so leaving call A painted while call B is selected (viewer still loading) targets the wrong endpoint.
+  const callLoading = (m, id) => {
+    const shown = m.querySelector(".call");
+    if (id && (!shown || shown.dataset.flowId !== id)) m.innerHTML = '<p class="muted">Loading this call…</p>';
+  };
   async function renderCall(m, seq) {
     const id = selectedFlow();
-    if (id && !m.querySelector(".call")) m.innerHTML = '<p class="muted">Loading this call…</p>';   // never a blank tab while it loads
+    callLoading(m, id);   // never a blank tab while it loads — and never the previous call either
     const f = id ? await flowsById(id) : null;
     if (seq !== renderSeq) return;
     if (f && f.type === "tcp") {       // a host that is not decrypted: only the tunnel is visible
       const conn = f.server_conn || {}, hostName = conn.sni || (f.client_conn || {}).sni || (conn.address || [""])[0] || "", portNo = (conn.address || [])[1];
       const tunnelTarget = hostName && portNo && !String(hostName).endsWith(":" + portNo) ? hostName + ":" + portNo : hostName;
-      m.innerHTML = `<div class="call"><span class="m">HOST ONLY</span>${esc(tunnelTarget)}
+      m.innerHTML = `<div class="call" data-flow-id="${esc(f.id)}"><span class="m">HOST ONLY</span>${esc(tunnelTarget)}
           <div class="sub">${ico("lock", "sm")} Not decrypted — you can see the host, but not the URL, headers or body</div></div>
         ${tlsQuickHTML(tunnelTarget)}`;
       wireTlsQuick(f.id, tunnelTarget);
@@ -845,7 +851,7 @@
     const focused = state.focus_host === r.pretty_host, src = sourceOfFlow(f), srcOn = src && state.source === src.key;
     const srcLine = src ? `<div class="sub" id="srcline">From <b>${esc(src.app || deviceName(src))}</b>${src.app ? " on " + esc(deviceName(src)) : ""}${deviceName(src) === (KIND_NAME[src.kind] || src.kind) ? "" : " · " + esc(KIND_NAME[src.kind] || src.kind)}${src.id && src.id !== src.app ? ` · <code>${esc(src.id)}</code>` : ""} · <button class="lnk" id="srconly">${srcOn ? "Showing only this source — show all" : "Show only this " + (src.app ? "app" : "device")}</button></div>` : "";
     m.innerHTML = `
-      <div class="call"><span class="m">${esc(r.method)}</span><span class="u" title="${esc(r.pretty_host + r.path)}"><span class="dim">${esc(r.pretty_host)}</span>${esc(r.path)}</span>
+      <div class="call" data-flow-id="${esc(f.id)}"><span class="m">${esc(r.method)}</span><span class="u" title="${esc(r.pretty_host + r.path)}"><span class="dim">${esc(r.pretty_host)}</span>${esc(r.path)}</span>
         <div class="sub">${s ? "→ " + s.status_code : "no response yet"} · <button class="lnk" id="focus">${focused ? "Showing only this host — show all" : "Show only this host"}</button></div>${srcLine}</div>
       <h4>Map Local ${info("Saves this response and serves it instead of the server's. You can edit its body, status and headers.")}</h4>
       <div class="btns" style="margin-top:0"><button class="b p" id="mock">Map Local this call…</button>${s ? "" : '<span class="sub">no response yet — starts from 200 {}</span>'}</div>
@@ -1882,8 +1888,9 @@
     }
     // two ways a body is only partly on screen: Rivis clips one over VIEW_SOURCE_LIMIT ("showing first …"), and mitmweb
     // draws a long one a screenful at a time behind "Show more". The tree reads the whole body from the proxy instead.
+    // Content-Type often lies (text/plain around JSON): offer Tree whenever the shown text looks like an object/array.
     const label = (controls.querySelector("h5") || {}).textContent || "", clipped = /showing first/i.test(label);
-    const json = /json/i.test(label) || (clipped && /^\s*[{[]/.test(pre.textContent));
+    const json = /json/i.test(label) || /^\s*[{[]/.test(pre.textContent);
     const more = [...view.querySelectorAll("button")].some((b) => /show more/i.test(b.textContent));
     const toggle = tools.querySelector(".rv-tree-toggle"); toggle.hidden = !json; toggle.setAttribute("aria-pressed", String(bodyTree));
     let note = view.querySelector(":scope > .rv-body-note");
@@ -1912,7 +1919,14 @@
           if (data === null) { tree.textContent = treeLimitNote; return; }
           const top = bodyTreeNode(data, null, "$", false, 0); top._rvData = data; tree.appendChild(top); tree.dataset.ready = "1";
           pre.hidden = true; bodySearch();
-        }).catch((e) => { if (bodyMode === mode) tree.textContent = e instanceof SyntaxError ? "This body cannot be parsed as JSON." : "Could not load the body for the tree: " + e.message; });
+        }).catch((e) => {
+          if (bodyMode !== mode) return;
+          // The worker's depth refusal is a SyntaxError with a clear message — keep it. A bare parse error stays generic.
+          const msg = (e && e.message) || String(e);
+          tree.textContent = /nested more than/i.test(msg) ? msg
+            : e instanceof SyntaxError ? "This body cannot be parsed as JSON."
+            : "Could not load the body for the tree: " + msg;
+        });
       }
     }
     pre.hidden = tree.dataset.ready === "1";
@@ -2308,6 +2322,11 @@
       if (f && f.id === press.id) { tr.click(); return; }
     }
   }, true);
+  // Bubble phase: mitmweb has updated the hash. Drop a stale This-call paint in the same turn as the click (the 50 ms
+  // watcher alone left a frame where Map Local still named the previous call).
+  window.addEventListener("click", () => {
+    if ($("drawer").classList.contains("open") && tab === "call" && !editing) callLoading($("main"), selectedFlow());
+  }, false);
   document.addEventListener("contextmenu", (e) => {
     const tr = e.target.closest && e.target.closest(".flow-table tbody tr");
     if (!tr || !flowOf(tr)) { closeCallMenu(); return; }
@@ -3057,7 +3076,11 @@
   async function openPaused(id, auto = false) {
     try { pausedOpen = await api("paused_get", { id }); pausedOpen.sub = "body"; drawPaused(auto);
       if (/NEXT matching call/.test($("toast").textContent)) $("toast").style.display = "none"; }   // it has hit: the hint is stale
-    catch (e) { pausedOpen = null; closeSheet("pause"); toast(e.message, true); }
+    catch (e) {
+      // A polled open that fails (call already released) must not retry every 1.2 s and toast-spam.
+      if (auto) dismissed.add(id);
+      pausedOpen = null; closeSheet("pause"); toast(e.message, true);
+    }
   }
   function drawPaused(auto = false) {
     const p = pausedOpen, isResp = p.phase === "response";
@@ -3161,7 +3184,13 @@
   let lostSince = 0, missed = 0;
   const showLost = (on) => {
     const bar = $("lostbar"), cli = (state && state.product && state.product.cli) || "rivis";
-    if (on) bar.innerHTML = `${esc((state && state.product && state.product.name) || "Rivis")} is not responding (no answer for ${Math.round((Date.now() - lostSince) / 1000)} s) — calls may <b>not</b> be captured, and menu actions will fail. Check it with <code>${esc(cli)} status</code>; if that hangs, run <code>${esc(cli)} restart</code>; if it is stopped, <code>${esc(cli)} start --background</code>.`;
+    if (on) {
+      bar.innerHTML = `${esc((state && state.product && state.product.name) || "Rivis")} is not responding (no answer for ${Math.round((Date.now() - lostSince) / 1000)} s) — calls may <b>not</b> be captured, and menu actions will fail. Check it with <code>${esc(cli)} status</code>; if that hangs, run <code>${esc(cli)} restart</code>; if it is stopped, <code>${esc(cli)} start --background</code>.`;
+      // The last good answer's "N paused" / amber FAB must not stay up — that looks live while nothing answers.
+      $("fab").classList.remove("paused");
+      $("fablabel").textContent = "Tools";
+      if ($("fabdot")) $("fabdot").style.display = "none";
+    }
     bar.classList.toggle("open", on);
   };
   // Another proxy app as the Mac's proxy: the iOS Simulator's calls go there instead (a leftover on a dead port is
@@ -3254,7 +3283,14 @@
       tagCells(); syncColumns(); sizeBuckets(); placeBars(); pullSearch(); drawStrip();
       const waiting = s.paused.filter((x) => !dismissed.has(x.id));
       if (!pausedOpen && waiting.length && !$("pause").classList.contains("open")) openPaused(waiting[0].id, true);
-      if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) { pausedOpen = null; closeSheet("pause"); }
+      // App timeout, CLI abort, or a restart: the call left the queue. Say so — a silent close looks like Cancel and
+      // drops dirty edits with no explanation.
+      if (pausedOpen && !s.paused.some((x) => x.id === pausedOpen.id)) {
+        let dirty = false;
+        try { dirty = !!sheetDirty(); } catch (e) { /* sheet mid-draw */ }
+        pausedOpen = null; closeSheet("pause"); sheetDirty = () => false;
+        toast(dirty ? "That paused call is gone — your edits were not sent" : "That paused call is gone", true);
+      }
       // Never redraw a tab under a held mouse button: the press and the release would land on different elements and the browser
       // drops the click. The next poll catches up.
       if ($("drawer").classList.contains("open") && tab === "net" && !editing && !pointerHeld) {
@@ -3284,7 +3320,11 @@
   };
   window.addEventListener("resize", () => { if ($("drawer").classList.contains("open") && host.style.getPropertyValue("--drawer-w") !== drawerW() + "px") setOpen(true); });
   $("fab").onclick = () => {
-    if (state && state.paused.length && !pausedOpen) { dismissed.clear(); return openPaused(state.paused[0].id); }
+    // While the lost bar is up, state.paused is from the last good answer — do not open a sheet for a call that may
+    // already be gone. The drawer still opens so the engineer can see Tools.
+    if (!$("lostbar").classList.contains("open") && state && state.paused.length && !pausedOpen) {
+      dismissed.clear(); return openPaused(state.paused[0].id);
+    }
     const opening = !$("drawer").classList.contains("open");
     if (!opening) return closeDrawer();   // R6-04/07: click close shares focus and stale-target cleanup with X.
     noteReturn("drawer"); setOpen(true); state = null; render(); refreshViewerSummaries().then(() => {
@@ -3374,13 +3414,18 @@
   };
   let lastSel = selectedFlow();
   noteSelected(lastSel);
+  // 50 ms: hashchange never fires (mitmweb uses replaceState). Clear a stale This-call paint in the same tick as the
+  // selection change so Map Local cannot fire against the previous row while viewer loads.
   setInterval(() => {
     const cur = selectedFlow();
     if (cur === lastSel) return;
     lastSel = cur;
     noteSelected(cur);
-    if ($("drawer").classList.contains("open") && (tab === "call" || tab === "cmp") && !editing) render();
-  }, 300);
+    if ($("drawer").classList.contains("open") && (tab === "call" || tab === "cmp") && !editing) {
+      if (tab === "call") callLoading($("main"), cur);
+      render();
+    }
+  }, 50);
   // ───────────── Help · shortcuts · "Coming from Proxyman?" · settings · empty state ─────────────
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   const KMOD = isMac ? "⌘" : "Ctrl", KALT = isMac ? "⌥" : "Alt", KSHIFT = isMac ? "⇧" : "Shift";
