@@ -431,6 +431,26 @@ class Rules(CliBase):
         self.assertIn("replaced Map Local rule: post-mock", replaced.stdout)
         self.assertEqual({r["name"] for r in self.cfg()["rules"]}, {"get-mock", "post-new"})
 
+    def test_mock_set_preserves_other_graphql_operations_on_same_match(self):
+        # Same URL+method, different GraphQL ops: mock-set must not treat them as one rule.
+        mock_file = os.path.join(self.home, "gql-mock.json")
+        with open(mock_file, "w") as fh:
+            fh.write('{}')
+
+        def set_mock(name, operation):
+            return self.ok("rules", "mock-set", name, "match=/graphql", "action=map_local",
+                           "file=" + mock_file, "method=POST", "operation=" + operation)
+
+        set_mock("user-mock", "GetUser")
+        cart = set_mock("cart-mock", "GetCart")
+        self.assertNotIn("replaced Map Local", cart.stdout)
+        self.assertEqual({r["name"] for r in self.cfg()["rules"]}, {"user-mock", "cart-mock"})
+        self.assertEqual({r["operation"] for r in self.cfg()["rules"]}, {"GetUser", "GetCart"})
+
+        replaced = set_mock("user-new", "GetUser")
+        self.assertIn("replaced Map Local rule: user-mock", replaced.stdout)
+        self.assertEqual({r["name"] for r in self.cfg()["rules"]}, {"cart-mock", "user-new"})
+
     def test_r10_10_unwritable_project_reports_a_single_actionable_error(self):
         self.ok("rules", "add", "r10-10", "match=/x", "action=status", "status=503")
         project = os.path.dirname(self.rules_file())
@@ -542,6 +562,13 @@ class Rules(CliBase):
         self.assertIn("removed hello", self.ok("rules", "rm", "hello").stdout)
         self.assertEqual(self.cfg()["rules"], [])
         self.assertIn("(none)", self.ok("rules", "list").stdout)
+
+    def test_rules_add_stores_graphql_operation(self):
+        self.ok("rules", "add", "gql-user", "match=/graphql", "action=respond", "status=200",
+                "body={}", "method=POST", "operation=GetUser")
+        r = self.cfg()["rules"][0]
+        self.assertEqual((r["method"], r["operation"]), ("POST", "GetUser"))
+        self.assertIn("op=GetUser", self.ok("rules", "list").stdout)
 
     def test_list_on_off_refuse_trailing_arguments(self):
         # before: rules_cli ignored extras; `rules on trail EXTRA` switched the rule on and exited 0
@@ -878,6 +905,12 @@ class Breakpoints(CliBase):
         self.ok("breakpoint", "off")
         self.assertEqual(self.cfg()["breakpoints"], [])
         self.assertIn("none", self.ok("breakpoint").stdout)
+
+    def test_breakpoint_operation_is_stored_and_listed(self):
+        self.ok("breakpoint", r"/graphql", "--request", "--operation", "GetUser")
+        b = self.cfg()["breakpoints"][0]
+        self.assertEqual(b["operation"], "GetUser")
+        self.assertIn("op=GetUser", self.ok("breakpoint").stdout)
 
     def test_pilot_both_phase_flags_pause_both_phases(self):
         # pilot feedback #1: `--request --response` printed ON but stored request:false, response:false

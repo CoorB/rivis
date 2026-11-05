@@ -115,6 +115,28 @@ class RuleHits(LiveCase):
         self.assertTrue(rows["reversed"].get("inert"))
         self.assertEqual(doc["method"], "GET")
 
+    def test_rule_test_explains_graphql_operation_scope_using_the_call_body(self):
+        # Without passing the request body into explain_rules, an operation= rule looks inert for every call.
+        self.reset_state(rules=[self.rule("user-only", "respond", "/graphql", method="POST",
+                                          operation="GetUser", body='{"data":{"ok":true}}')])
+        hdr = {"Content-Type": "application/json"}
+        self.fetch("/graphql", method="POST", headers=hdr,
+                   data=json.dumps({"query": "query GetCart { cart { id } }", "operationName": "GetCart"}))
+        cart = self.inst.flow_for("/graphql")
+        cart_doc = self.panel.ok("rule_test", {"flow_id": cart["id"]})
+        cart_row = {r["name"]: r for r in cart_doc["rules"]}["user-only"]
+        self.assertFalse(cart_row["fires"])
+        self.assertIn("GraphQL operation", cart_row["reason"])
+
+        self.fetch("/graphql", method="POST", headers=hdr,
+                   data=json.dumps({"query": "query GetUser { viewer { name } }", "operationName": "GetUser"}))
+        user = wait_for(lambda: (lambda f: f if f and f["id"] != cart["id"] else None)(self.inst.flow_for("/graphql")),
+                        5, 0.2, "GetUser call listed")
+        user_doc = self.panel.ok("rule_test", {"flow_id": user["id"]})
+        user_row = {r["name"]: r for r in user_doc["rules"]}["user-only"]
+        self.assertTrue(user_row["fires"], user_row)
+        self.assertIn("answered locally", user_row["effect"])
+
     def test_rule_test_explains_a_map_remote_against_the_url_the_app_asked_for(self):
         # the call in the list shows where Map Remote sent it; the test must still explain the rule that sent it there
         self.reset_state(rules=[self.rule("to-echo", "map_remote", "/remote", replace="/remote", **{"with": "/echo"})])

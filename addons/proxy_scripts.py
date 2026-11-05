@@ -191,6 +191,21 @@ def detect_graphql(method, url, body=None, content_type=""):
         return []
 
 
+def graphql_ops_match(wanted, method, url, body=None, content_type=""):
+    """True when wanted is blank (any call) or the request carries that GraphQL operation name."""
+    if not isinstance(wanted, str) or not wanted.strip():
+        return True
+    name = wanted.strip()
+    return any(op.get("name") == name for op in detect_graphql(method, url, body, content_type))
+
+
+def primary_graphql_operation(method, url, body=None, content_type=""):
+    """The one named GraphQL operation on a call, or None when absent, anonymous or ambiguous."""
+    named = [op["name"] for op in detect_graphql(method, url, body, content_type)
+             if op.get("name") and op["name"] != "(anonymous)"]
+    return named[0] if len(named) == 1 else None
+
+
 def _varint(data, pos):
     value = shift = 0
     while pos < len(data) and shift < 70:

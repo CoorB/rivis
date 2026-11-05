@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _paths  # noqa: F401
 import harness
 from harness import LiveCase, wait_for
-from proxy_scripts import decode_grpc_frames, decode_jwt, decode_protobuf, detect_graphql, find_jwts
+from proxy_scripts import (decode_grpc_frames, decode_jwt, decode_protobuf, detect_graphql, find_jwts,
+                           graphql_ops_match, primary_graphql_operation)
 from upstream import GRPC_BODY, JWT_EXPIRED, JWT_FRESH, make_jwt
 
 now = time.time()
@@ -94,6 +95,16 @@ class GraphQL(unittest.TestCase):
         self.assertEqual((ops[0]["type"], ops[0]["name"]), ("mutation", "Explicit"))
         self.assertEqual(detect_graphql("POST", "https://h/g", '{"query": "{ me { id } }"}', "application/json")[0]["name"], "(anonymous)")
         self.assertEqual(detect_graphql("POST", "https://h/g", '{"query": "# hi\\nsubscription S { x }"}', "")[0]["type"], "subscription")
+
+    def test_graphql_ops_match_and_primary_operation(self):
+        body = json.dumps({"query": "query GetUser { viewer { name } }", "operationName": "GetUser"})
+        self.assertTrue(graphql_ops_match("GetUser", "POST", "https://h/g", body, "application/json"))
+        self.assertFalse(graphql_ops_match("GetCart", "POST", "https://h/g", body, "application/json"))
+        self.assertTrue(graphql_ops_match("", "POST", "https://h/g", body, "application/json"))
+        self.assertTrue(graphql_ops_match(None, "GET", "https://h/rest", None, ""))
+        self.assertEqual(primary_graphql_operation("POST", "https://h/g", body, "application/json"), "GetUser")
+        self.assertIsNone(primary_graphql_operation("POST", "https://h/g",
+                                                   json.dumps({"query": "{ me { id } }"}), "application/json"))
 
     def test_batch_get_and_application_graphql(self):
         batch = json.dumps([{"query": "query A { a }"}, {"query": "query B { b }"}, {"nope": 1}])

@@ -45,6 +45,7 @@
 #                                 set_header | map_remote | block   (see rules.example.json)
 #                                 set_header: header=NAME value=TEXT [side=request|response];
 #                                 json_patch: set='path=value' (or set='{"path":value}'); map_remote: replace=REGEX with=URL
+#                                 optional: method=POST operation=GetUser (only that GraphQL operation)
 #   <cli> scripts list|new NAME --lang py|js [--match REGEX]|on NAME|off NAME|edit NAME|rm NAME
 #   <cli> throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]
 #                 [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
@@ -59,9 +60,10 @@
 #                                 or PEM. Per project, kept private; used from the next connection
 #   <cli> compose list | send NAME [--var name=value] [--no-wait]
 #                                 replay a request saved in the panel's Compose tab through the running proxy
-#   <cli> breakpoint [URL-REGEX [--request|--response] [--method M] | off [NAME]]
+#   <cli> breakpoint [URL-REGEX [--request|--response] [--method M] [--operation NAME] | off [NAME]]
 #                                 pause matching calls in the UI to edit them, then Continue
-#                                 (no arguments: list them; off without NAME: remove all)
+#                                 (no arguments: list them; off without NAME: remove all;
+#                                 --operation: only that GraphQL operation name on the same URL)
 #   <cli> mock NAME URL-REGEX              save the last matching response and Map-Local it
 #   <cli> mocks import-proxyman [PATH] [--dry-run]  copy Proxyman Map Local rules and files into this project
 #   <cli> setup                            ios on --all + android on --all: every booted simulator and

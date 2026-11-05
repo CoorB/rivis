@@ -1,6 +1,6 @@
 /* Map Local (⌥⌘L): the rule list on the left, the selected rule's response on the right (status, variants, body,
  * headers), as in Proxyman's Map Local window. Right-click a call → Map Local opens it here on that call's response.
- * Ops: maplocal_add {host, path, method, status, literal_query} → {name, existing}; mock {flow_id} → {name, draft |
+ * Ops: maplocal_add {host, path, method, operation, status, literal_query} → {name, existing}; mock {flow_id} → {name, draft |
  * existing}; mockfile_get {name}; mockfile_put {name, status, headers, content?}; mockvariant {name, action, variant,
  * new_name}; toggle {name, enabled}; delete {name}; maplocal_folder_add {name, base, folder}; proxyman_import {}.
  * A rule made from a call is a draft until it is saved: closing it unsaved deletes it, so it never answers a call. */
@@ -60,7 +60,7 @@
       return `<div role="option" tabindex="-1" data-ml-name="${esc(r.name)}" aria-selected="${r.name === w.data.name}">
         <input type="checkbox" data-ml-on="${esc(r.name)}" aria-label="${esc(r.name)} on" ${r.enabled === false ? "" : "checked"}>
         <span class="rv-ml-row"><b class="rv-mono">${esc(pretty(r))}</b>
-          <span class="rv-win-hint">${esc(r.method || "Any")} · ${esc(st)}${r.base ? " · folder" : ""}${r.active ? " · " + esc(r.active) : ""}${r.draft ? " · not saved" : ""}${h && h.count ? ` · used ${h.count}×` : ""}</span></span></div>`;
+          <span class="rv-win-hint">${esc(r.method || "Any")}${r.operation ? " · " + esc(r.operation) : ""} · ${esc(st)}${r.base ? " · folder" : ""}${r.active ? " · " + esc(r.active) : ""}${r.draft ? " · not saved" : ""}${h && h.count ? ` · used ${h.count}×` : ""}</span></span></div>`;
     }).join("") : ui.empty("No Map Local rules", "Right-click a call → Map Local, or + Add Rule.");
     if (had) { const el = had.startsWith("on:") ? box.querySelector(`[data-ml-on="${CSS.escape(had.slice(3))}"]`) : box.querySelector(`[data-ml-name="${CSS.escape(had)}"]`); if (el) el.focus({ preventScroll: true }); }
   }
@@ -229,14 +229,16 @@
     sheet(w, `<h4>New Map Local rule</h4>
       <div class="rv-form"><label class="grow">URL <input type="text" name="url" spellcheck="false" placeholder="https://api.example.com/v1/accounts/*" required></label></div>
       <div class="rv-form"><label>Method ${ui.methodSelect("mlnm", "", "Any")}</label><label>Status <input type="number" name="status" value="200" min="100" max="999" style="width:84px"></label>
-        <span class="rv-win-hint">* matches anything, ? one character. A full URL with a query matches that query exactly.</span></div>`,
+        <span class="rv-win-hint">* matches anything, ? one character. A full URL with a query matches that query exactly.</span></div>
+      <div class="rv-form"><label class="grow">GraphQL operation <input type="text" name="operation" spellcheck="false" placeholder="GetUser — leave blank for any"></label></div>`,
     async (f) => {
       const url = f.url.value.trim();
       if (!url) throw new Error("Enter the URL to answer");
       if (/\s/.test(url) || !/^(?:https?:\/\/)?[\w*\[\].:?-]+(?:\/[^\s]*)?$/i.test(url))
         throw new Error("Enter a valid HTTP or HTTPS URL, such as https://api.example.com/path/*");
       const parts = ui.splitUrl(url);
-      const r = await A.api("maplocal_add", Object.assign(parts, { method: f.querySelector("#mlnm").value, status: f.status.value, literal_query: /\?[^#]*=/.test(url) }));
+      const r = await A.api("maplocal_add", Object.assign(parts, { method: f.querySelector("#mlnm").value, operation: f.operation.value.trim(),
+        status: f.status.value, literal_query: /\?[^#]*=/.test(url) }));
       A.toast(r.existing ? "Map Local " + r.name + " already exists — opened it" : "Map Local " + r.name + " added: edit its response");
       A.refresh(); A.toolsChanged();
       select(w, r.name);

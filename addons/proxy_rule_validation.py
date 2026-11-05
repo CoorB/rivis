@@ -4,6 +4,7 @@ import os
 from urllib.parse import urlsplit
 
 from proxy_common import ACTION_REQUIREMENTS, ACTIONS, rule_file_path, user_regex
+from proxy_scripts import graphql_ops_match
 
 _TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 
@@ -90,6 +91,10 @@ def compile_rule(source, state_dir, fallback_name=None, confdir=None):
     # "" or null means any method, as for breakpoints and scripts (`rules add … method=$M` with M unset wrote "",
     # which never matched; null crashed every other rule of the call)
     rule["_method"] = (rule.get("method") or "").strip().upper() or None
+    if rule.get("operation") is not None and not isinstance(rule["operation"], str):
+        raise TypeError("operation must be text")
+    # "" or null means any GraphQL operation (and non-GraphQL calls); a name matches detect_graphql's operation name
+    rule["_operation"] = (rule.get("operation") or "").strip() or None
     if action == "map_remote":
         rule["_replace"] = user_regex(rule["replace"])
         if not isinstance(rule["with"], str):
@@ -203,7 +208,7 @@ def rule_fingerprint(source):
     return hashlib.sha1(json.dumps(core, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
 
 
-def explain_rules(sources, state_dir, url, method="GET", confdir=None):
+def explain_rules(sources, state_dir, url, method="GET", confdir=None, body=None, content_type=""):
     """Would each rule fire on this call, and what would it do? Mirrors proxy_rules' matching order: the first matching
     Map Local / respond answers the call, so later mocks and server-side rules never see it. Returns one dict per rule:
     {name, action, enabled, fires, effect | reason}."""
@@ -227,6 +232,9 @@ def explain_rules(sources, state_dir, url, method="GET", confdir=None):
             continue
         if rule["_method"] not in (None, method):
             row["reason"] = "only for %s; this call is %s" % (rule["_method"], method)
+            continue
+        if rule["_operation"] and not graphql_ops_match(rule["_operation"], method, url, body, content_type):
+            row["reason"] = "only for GraphQL operation %r" % rule["_operation"]
             continue
         action = rule["action"]
         if blocked_by:

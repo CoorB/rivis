@@ -4,6 +4,7 @@
   rules_cli.py FILE rules on|off|show|rm NAME
   rules_cli.py FILE rules test URL [METHOD]     what each rule would do to this call (no traffic is sent)
   rules_cli.py FILE rules add NAME match=REGEX action=ACTION [key=value ...]
+                                 optional: method=POST operation=GetUser (GraphQL operation name)
   rules_cli.py FILE rules variant NAME add|use|rm VARIANT [file=PATH]
   rules_cli.py FILE rules edit
   rules_cli.py FILE mocks import-proxyman [PATH] [--dry-run]
@@ -134,11 +135,12 @@ def find(cfg, name):
 
 
 def describe(r, status=None):
-    extra = {k: v for k, v in r.items() if k not in ("name", "enabled", "match", "action", "method", "note", "rivis_created_mock")}
+    extra = {k: v for k, v in r.items() if k not in ("name", "enabled", "match", "action", "method", "operation", "note", "rivis_created_mock")}
     bits = " ".join("%s=%s" % (k, json.dumps(v, ensure_ascii=False)) for k, v in extra.items())
+    scope = ((str(r["method"]) + " ") if r.get("method") else "") + (("op=" + str(r["operation"]) + " ") if r.get("operation") else "")
     return "%-3s %-24s %-10s %s%s  %s" % (
         status or ("ON" if r.get("enabled", True) else "off"), r.get("name", "?"), r.get("action", "?"),
-        (str(r["method"]) + " ") if r.get("method") else "", r.get("match", "."), bits)
+        scope, r.get("match", "."), bits)
 
 
 def proxy_rule_error(path, r):
@@ -169,6 +171,8 @@ def validate(r):
                 die("bad regex in %s: %s" % (k, e))
     if "method" in r and not isinstance(r["method"], str):
         die("method must be text, e.g. method=POST")
+    if "operation" in r and not isinstance(r["operation"], str):
+        die("operation must be text, e.g. operation=GetUser (GraphQL operation name)")
     if a == "delay":
         try:
             ms = float(r["ms"])
@@ -510,6 +514,11 @@ def rules_cmd(path, args):
             r["rivis_created_mock"] = real
         if "method" in r and not str(r["method"] or "").strip():     # method= (empty) means any method
             del r["method"]
+        if "operation" in r:
+            if not str(r["operation"] or "").strip():               # operation= (empty) means any GraphQL op
+                del r["operation"]
+            else:
+                r["operation"] = str(r["operation"]).strip()
         validate(r)
         trust_local_files(path, r)
         reason = proxy_rule_error(path, r)
@@ -519,14 +528,16 @@ def rules_cmd(path, args):
         if cmd == "mock-set":
             if r.get("action") != "map_local":
                 die("mock-set requires action=map_local")
-            # A Map Local rule for another method can serve the same URL independently.
-            # Replace the same named rule, or a rule with both the same match and method.
+            # A Map Local rule for another method or GraphQL operation can serve the same URL independently.
+            # Replace the same named rule, or a rule with the same match, method and operation.
             def is_superseded(old):
                 return (isinstance(old, dict) and old.get("action") == "map_local" and
                         (str(old.get("name", "")).casefold() == name.casefold() or
                          (old.get("match") == r["match"] and
                           str(old.get("method") or "").strip().upper() ==
-                          str(r.get("method") or "").strip().upper())))
+                          str(r.get("method") or "").strip().upper() and
+                          str(old.get("operation") or "").strip() ==
+                          str(r.get("operation") or "").strip())))
 
             superseded = [old.get("name", "?") for old in cfg.get("rules", []) if is_superseded(old)]
             cfg["rules"] = [old for old in cfg.get("rules", []) if not is_superseded(old)]
@@ -626,7 +637,8 @@ def throttle_description(cfg):
 
 def breakpoint_cmd(path, args):
     """breakpoint                         list
-       breakpoint REGEX [--request|--response] [--method M]   add (both phases by default)
+       breakpoint REGEX [--request|--response] [--method M] [--operation NAME]
+                                                      add (both phases by default)
        breakpoint off [NAME]              remove one, or all"""
     cfg = load(path)
     bps = breakpoints(cfg, migrate=bool(args))
@@ -635,8 +647,9 @@ def breakpoint_cmd(path, args):
             print("breakpoints: none")
         for b in bps:
             ph = "+".join(x for x in ("request", "response") if b.get(x))
+            scope = ((b["method"] + " ") if b.get("method") else "") + (("op=" + b["operation"] + " ") if b.get("operation") else "")
             print("  %-3s %-22s %s%s (%s)" % ("ON" if b.get("enabled", True) else "off", b.get("name"),
-                  (b["method"] + " ") if b.get("method") else "", b["match"], ph))
+                  scope, b["match"], ph))
         return
     if args[0] == "off":
         if len(args) > 1:
@@ -649,7 +662,7 @@ def breakpoint_cmd(path, args):
         print("breakpoints off" + (" (" + args[1] + ")" if len(args) > 1 else " (all)") +
               " — calls already paused are sent on unchanged within a second (when the proxy is running)")
         return
-    rx, req, resp, method, i = args[0], False, False, None, 1
+    rx, req, resp, method, operation, i = args[0], False, False, None, None, 1
     while i < len(args):
         if args[i] == "--request":        # the flags name the phases to pause on; both (or neither) = both
             req = True
@@ -657,8 +670,10 @@ def breakpoint_cmd(path, args):
             resp = True
         elif args[i] == "--method" and i + 1 < len(args):
             method = args[i + 1].upper(); i += 1
+        elif args[i] == "--operation" and i + 1 < len(args):
+            operation = args[i + 1].strip() or None; i += 1
         else:
-            die("breakpoint options: --request | --response | --method M")
+            die("breakpoint options: --request | --response | --method M | --operation NAME")
         i += 1
     if not req and not resp:
         req = resp = True
@@ -671,10 +686,14 @@ def breakpoint_cmd(path, args):
     name, n = base, 2
     while name in names:
         name, n = "%s-%d" % (base, n), n + 1
-    bps.append({"name": name, "match": rx, "method": method, "request": req, "response": resp, "enabled": True})
+    row = {"name": name, "match": rx, "method": method, "request": req, "response": resp, "enabled": True}
+    if operation:
+        row["operation"] = operation
+    bps.append(row)
     save(path, cfg)
+    scope = rx + ((" op=" + operation) if operation else "")
     print("breakpoint '%s' ON: %s (%s) — matching calls pause; edit in the project panel, then Continue" %
-          (name, rx, "+".join(x for x, on in (("request", req), ("response", resp)) if on)))
+          (name, scope, "+".join(x for x, on in (("request", req), ("response", resp)) if on)))
 
 
 def mock_cmd(path, args, flows_json, body_file):

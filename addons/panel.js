@@ -995,13 +995,14 @@
         <input type="text" id="mp" class="grow" placeholder="Path" value="/"></div>
       <div class="btns"><select id="mm"><option value="">ANY</option>${["GET", "POST", "PUT", "PATCH", "DELETE"].map((x) => `<option>${x}</option>`).join("")}</select>
         status <input type="number" id="ms2" value="200" style="width:70px">
+        <input type="text" id="mop" class="grow" placeholder="GraphQL operation (optional)" aria-label="GraphQL operation">
         <button class="b p" id="madd">Add rule</button></div>
-      <div class="sub">Wildcards: * and ? in host or path. Faster: select a call and use “Map Local this call”.</div>
+      <div class="sub">Wildcards: * and ? in host or path. Optional GraphQL operation: only that op on the same URL. Faster: select a call and use “Map Local this call”.</div>
       <h4>Rules (${maps.length})</h4>
       ${maps.length ? maps.map(([r, i]) => `
         <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
           <div class="n"><div><b>${esc(pretty(r))}</b></div>
-            <div class="sub">${esc(r.method || "ANY")} · status ${esc(((r.variants || []).find((v) => v.name === r.active) || {}).status || r.status || 200)} · ${esc(r.name)}${r.active ? " · active: " + esc(r.active) : ""}</div></div>
+            <div class="sub">${esc(r.method || "ANY")}${r.operation ? " · " + esc(r.operation) : ""} · status ${esc(((r.variants || []).find((v) => v.name === r.active) || {}).status || r.status || 200)} · ${esc(r.name)}${r.active ? " · active: " + esc(r.active) : ""}</div></div>
           <button class="b" data-edit="${i}">Edit</button><button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
       : emptyState("map", "No Map Local rules yet", "Select a call and use <b>Map Local this call</b>, or add one above with a host and path. <b>*</b> and <b>?</b> are wildcards.")}`;
     let pastedQuery = false;
@@ -1010,7 +1011,7 @@
     $("madd").onclick = async () => {
       split();
       const path = $("mp").value;
-      const res = await run("maplocal_add", { host: $("mh").value, path, method: $("mm").value, status: $("ms2").value,
+      const res = await run("maplocal_add", { host: $("mh").value, path, method: $("mm").value, operation: $("mop").value.trim(), status: $("ms2").value,
         literal_query: pastedQuery || /\?[^#]*=/.test(path) }, (x) => "Map Local '" + x.name + (x.existing ? "' already exists" : "' added"));
       if (res) openEditor(res.name, "madd");
     };
@@ -1026,14 +1027,15 @@
       <div class="btns" style="margin-top:0"><input type="text" id="bh" class="grow" placeholder="Host (or paste a full URL)">
         <input type="text" id="bpth" class="grow" placeholder="Path" value="/*"></div>
       <div class="btns"><select id="bm" aria-label="Method"><option value="">ANY</option>${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((x) => `<option>${x}</option>`).join("")}</select>
+        <input type="text" id="bop" class="grow" placeholder="GraphQL operation (optional)" aria-label="GraphQL operation">
         <span class="sub">Pause at</span>
         <div class="seg" style="margin:0"><button class="on" data-nph="request" aria-pressed="true">Request</button><button class="on" data-nph="response" aria-pressed="true">Response</button></div></div>
       <div class="btns"><button class="b" id="bsel">Use selected call</button><button class="b p" id="badd">Add breakpoint</button>
-        ${info("Request = pause before it reaches the server. Response = pause before the app gets it.")}</div>
+        ${info("Request = pause before it reaches the server. Response = pause before the app gets it. Optional GraphQL operation: only that op.")}</div>
       <h4>Breakpoints (${bps.length})</h4>
       ${bps.length ? bps.map((b, i) => `
         <div class="row">${sw(`data-bi="${i}"`, b.enabled !== false)}
-          <div class="n"><div><b>${esc(pretty(b))}</b></div><div class="sub">${esc(b.method || "Any HTTP method")}</div></div>
+          <div class="n"><div><b>${esc(pretty(b))}</b></div><div class="sub">${esc(b.method || "Any HTTP method")}${b.operation ? " · " + esc(b.operation) : ""}</div></div>
           <button class="chip ${b.request ? "on" : ""}" data-bph="${i}:request" aria-pressed="${!!b.request}" title="Pause at request">Req</button>
           <button class="chip ${b.response ? "on" : ""}" data-bph="${i}:response" aria-pressed="${!!b.response}" title="Pause at response">Resp</button>
           <button class="b d" data-bdel="${i}" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
@@ -1047,7 +1049,7 @@
       if (!f) return toast("Select a call in the list first", true);
       $("bh").value = f.request.pretty_host; $("bpth").value = f.request.path.split("?")[0]; $("bm").value = f.request.method;
     };
-    $("badd").onclick = async () => { split(); const added = await run("bp_add", { host: $("bh").value, path: $("bpth").value, method: $("bm").value, request: ph("request"), response: ph("response") }); if (added) breakpointOn(); };
+    $("badd").onclick = async () => { split(); const added = await run("bp_add", { host: $("bh").value, path: $("bpth").value, method: $("bm").value, operation: $("bop").value.trim(), request: ph("request"), response: ph("response") }); if (added) breakpointOn(); };
     root.querySelectorAll("[data-bi]").forEach((c) => (c.onchange = async () => {
       const updated = await run("bp_update", { name: bps[c.dataset.bi].name, enabled: c.checked }, c.checked ? null : "Breakpoint off");
       if (updated && c.checked) breakpointOn();
@@ -2743,7 +2745,7 @@
       ruleTestHTML() + section("Rules", state.rules.length) + (state.rules.length ? state.rules.map((r, i) => `
       <div class="row">${sw(`data-i="${i}"`, r.enabled !== false)}
         <div class="n"><div><b>${esc(r.name)}</b><span class="tag">${esc(ACTION_NAME[r.action] || r.action)}</span>${outside.includes(r.name) ? `<span class="tag" title="Reads a file outside the project. Allowed only for files you trusted on this machine (${esc(state.product.cli)} rules trusted-files). Edit it in your own editor.">external file</span>` : ""}</div>
-          <div class="sub">${esc(r.method ? r.method + " " : "")}${esc(pretty(r))} — ${esc(describe(r))}</div>
+          <div class="sub">${esc(r.method ? r.method + " " : "")}${r.operation ? esc(r.operation) + " " : ""}${esc(pretty(r))} — ${esc(describe(r))}</div>
           ${(state.rule_warnings || {})[r.name] ? `<div class="sub rule-hits warn" role="alert">${ico("warn", "sm")} ${esc(state.rule_warnings[r.name])}</div>` : ""}${hitHTML(r)}</div>
         ${outside.includes(r.name) || (r.action === "map_local" && r.base) ? "" : `<button class="b" data-edit="${i}">Edit</button>`}
         <button class="b d" data-del="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("")
@@ -2751,7 +2753,7 @@
       section("Breakpoints", bps.length) + (bps.length ? bps.map((b, i) => `
       <div class="row">${sw(`data-rbi="${i}"`, b.enabled !== false)}
         <div class="n"><div><b>${esc(b.name)}</b><span class="tag">Breakpoint</span></div>
-          <div class="sub">${esc(b.method ? b.method + " " : "")}${esc(pretty(b))} — pauses at ${esc([b.request && "request", b.response && "response"].filter(Boolean).join(" and "))}</div></div>
+          <div class="sub">${esc(b.method ? b.method + " " : "")}${b.operation ? esc(b.operation) + " " : ""}${esc(pretty(b))} — pauses at ${esc([b.request && "request", b.response && "response"].filter(Boolean).join(" and "))}</div></div>
         <button class="b" data-rbedit="${i}">Edit</button><button class="b d" data-rbdel="${i}" title="Delete" aria-label="Remove">${ico("x", "sm")}</button></div>`).join("") : '<p class="sub">None.</p>') +
       section("Scripts", scripts.length) + (scripts.length ? scripts.map((x, i) => `
       <div class="row">${sw(`data-rsi="${i}"`, x.enabled !== false)}
@@ -2809,6 +2811,7 @@
       if (it && isRule) body += `<div class="sub"><b>${esc(it.name)}</b></div>`;
       if (t !== "script" || !it) body += fld("match", "URL pattern", txt("match", v.match, "regex, e.g. /api/login — . = every call"));
       if (t !== "script" || !it) body += fld("method", "Method", method(v.method));
+      if (isRule || t === "bp") body += fld("operation", "GraphQL operation", txt("operation", v.operation, "GetUser — leave blank for any"));
     }
     if (t === "respond") {
       body += fld("status", "Status", `<input type="number" id="rf-status" value="${esc(v.status ?? 200)}" style="width:80px">`);
@@ -2862,7 +2865,7 @@
       let op, args, ok;
       try {
         if (isRule) {
-          const rule = { match: val("match").trim(), method: val("method") };
+          const rule = { match: val("match").trim(), method: val("method"), operation: val("operation").trim() };
           if (t === "respond") {
             rule.status = Number(val("status"));
             if (!v.body_file) { const b = val("body"); if (/^\s*[\[{]/.test(b)) { try { rule.body = jsonParse(b); } catch (x) { rule.body = b; } } else rule.body = b; }
@@ -2874,7 +2877,7 @@
           } else if (t === "delay") rule.ms = Number(val("ms"));
           else if (t === "set_header") { rule.side = val("side"); rule.header = val("header").trim(); rule.value = $("rf-remove").checked ? null : val("value"); }
           else if (t === "map_remote") { rule.replace = val("replace"); rule.with = val("with"); }
-          const keys = ["match", "method", ...RULE_KEYS[t]];
+          const keys = ["match", "method", "operation", ...RULE_KEYS[t]];
           if (EVERY_RULE_TYPES[t]) {
             keys.push("every", "offset");
             const e = val("every").trim(), o = val("offset").trim();
@@ -2897,8 +2900,8 @@
           if (!request && !response) throw new Error("Pick Request, Response or both");
           const match = val("match").trim();
           if (!match) throw new Error("URL pattern is required");
-          if (it) { op = "bp_update"; args = { name: it.name, match, method: val("method"), request, response }; ok = "Breakpoint saved"; }
-          else { op = "bp_add"; args = { match, method: val("method"), request, response }; ok = null; }
+          if (it) { op = "bp_update"; args = { name: it.name, match, method: val("method"), operation: val("operation").trim(), request, response }; ok = "Breakpoint saved"; }
+          else { op = "bp_add"; args = { match, method: val("method"), operation: val("operation").trim(), request, response }; ok = null; }
         } else if (t === "script") {
           if (it) return openScript(it.file);
           op = "script_new"; args = { name: val("name").trim(), lang: val("lang"), template: val("template"), match: val("match").trim() || ".", method: val("smethod") }; ok = (x) => "Created " + x.file;

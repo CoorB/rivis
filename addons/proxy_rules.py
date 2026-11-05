@@ -14,6 +14,7 @@ File: the active project's rules.json (option `proxy_rules_file`):
   "no_cache": false,             # No Caching: strip conditional request headers, force no-store responses
   "rules": [
     {"name": "...", "enabled": true, "match": "<regex on full URL>", "method": "GET",
+     "operation": "GetUser",   # optional: only that GraphQL operation (same URL may carry many)
      "action": "<one of below>", ...action fields}
   ]
 }
@@ -72,6 +73,7 @@ from proxy_common import (PRODUCT, PROFILE_VALUES, atomic_json, STATE_ROOT, brea
 import proxy_rule_validation
 importlib.reload(proxy_rule_validation)      # mitmproxy reloads this add-on in place: the validator must see the new proxy_common too
 from proxy_rule_validation import compile_rule, every_applies, rule_fingerprint
+from proxy_scripts import graphql_ops_match
 
 DNS_TIMEOUT = 10        # seconds for the private-address guard's own lookup
 
@@ -155,6 +157,10 @@ def _bp_filter(bps):
     for b in bps:
         if not b.get("enabled", True) or not b.get("match") or not (b.get("request") or b.get("response")):
             continue
+        # GraphQL operation is body-aware: mitmweb's Intercept only sees URL/method, so those breakpoints are
+        # paused by proxy_rules itself (_pause_operation_bp) instead of a fragile ~bq body regex.
+        if (b.get("operation") or "").strip():
+            continue
         # mitmproxy's filter parser un-escapes backslashes inside quotes, so double them
         # (and escape the quote) — otherwise "a\.b" reaches the regex engine as "a.b"
         # and "(\?|$)" as the invalid "(?|$)".
@@ -178,16 +184,22 @@ def _bp_filter(bps):
 
 
 def _local_bps(bps):
-    """Active breakpoints as (url regex, METHOD or None, request?, response?) for calls Rivis answers itself."""
+    """Active breakpoints as (url regex, METHOD or None, operation or None, request?, response?) for local answers."""
     out = []
     for b in bps:
         if b.get("enabled", True) and b.get("match") and (b.get("request") or b.get("response")):
             try:
                 out.append((re.compile(b["match"]), (b.get("method") or "").upper() or None,
+                            (b.get("operation") or "").strip() or None,
                             bool(b.get("request")), bool(b.get("response"))))
             except re.error:
                 continue
     return out
+
+
+def _flow_graphql_args(flow):
+    return (flow.request.method, flow.request.pretty_url,
+            flow.request.raw_content or b"", flow.request.headers.get("content-type", ""))
 
 
 def _set_path(doc, path, value):
@@ -545,10 +557,14 @@ class ProxyRules:
                         or (b.get("method") and b["method"].upper() != f.request.method):
                     continue
                 try:
-                    if user_regex(b["match"]).search(f.request.pretty_url):
-                        return True
+                    if not user_regex(b["match"]).search(f.request.pretty_url):
+                        continue
                 except re.error:
                     continue
+                op = (b.get("operation") or "").strip()
+                if op and not graphql_ops_match(op, *_flow_graphql_args(f)):
+                    continue
+                return True
             return False
         if not old:
             return
@@ -642,14 +658,54 @@ class ProxyRules:
         """Pause a call Rivis answers itself at a matching breakpoint (phase 'request': before the local answer,
         'response': after it, so the mock can be edited). Returns False when it was aborted while paused."""
         current = ctx.options.intercept or None
+        url, method = flow.request.pretty_url, flow.request.method.upper()
+        gargs = _flow_graphql_args(flow)
+        # Operation-scoped breakpoints are never in mitmweb's Intercept filter: pause them here even when Intercept
+        # is off or owned by someone else. URL-only breakpoints still require that we own the intercept filter.
+        op_hit = any(rx.search(url) and (m is None or m == method) and op
+                     and graphql_ops_match(op, *gargs) and (req if phase == "request" else resp)
+                     for rx, m, op, req, resp in getattr(self, "_local_breakpoints", []))
+        if op_hit:
+            if not flow.intercepted:
+                flow.intercept()
+            await flow.wait_for_resume()
+            return flow.error is None
         if flow.intercepted or self._intercept_set is _UNSET or current is None or current != self._intercept_set:
             return True                                        # we do not own breakpoints right now
-        url, method = flow.request.pretty_url, flow.request.method.upper()
-        if any(rx.search(url) and (m is None or m == method) and (req if phase == "request" else resp)
-               for rx, m, req, resp in getattr(self, "_local_breakpoints", [])):
+        if any(rx.search(url) and (m is None or m == method) and not op
+               and (req if phase == "request" else resp)
+               for rx, m, op, req, resp in getattr(self, "_local_breakpoints", [])):
             flow.intercept()
             await flow.wait_for_resume()
         return flow.error is None
+
+    async def _pause_operation_bp(self, flow, phase):
+        """Pause a non-mock call whose breakpoint is scoped to a GraphQL operation (not in mitmweb's Intercept)."""
+        if flow.intercepted or flow.metadata.get("proxy_local"):
+            return True
+        url, method = flow.request.pretty_url, flow.request.method.upper()
+        gargs = _flow_graphql_args(flow)
+        for b in getattr(self, "_held_bps", []):
+            if not b.get("enabled", True) or not b.get(phase) or not b.get("match"):
+                continue
+            op = (b.get("operation") or "").strip()
+            if not op:
+                continue
+            if b.get("method") and b["method"].upper() != method:
+                continue
+            try:
+                if not user_regex(b["match"]).search(url):
+                    continue
+            except re.error:
+                continue
+            if not graphql_ops_match(op, *gargs):
+                continue
+            if phase == "response" and (flow.response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower() == "text/event-stream":
+                continue
+            flow.intercept()
+            await flow.wait_for_resume()
+            return flow.error is None
+        return True
 
     # ── hit counts ───────────────────────────────────────────────
     @property
@@ -793,8 +849,10 @@ class ProxyRules:
 
     def _matching(self, flow, actions):
         url, method = flow.request.pretty_url, flow.request.method.upper()
+        gargs = _flow_graphql_args(flow)
         for r in self.rules:
-            if r.get("action") in actions and r["_re"].search(url) and r.get("_method") in (None, method):
+            if r.get("action") in actions and r["_re"].search(url) and r.get("_method") in (None, method) \
+                    and (not r.get("_operation") or graphql_ops_match(r["_operation"], *gargs)):
                 yield r
 
     def _throttled(self, flow):
@@ -1020,6 +1078,8 @@ class ProxyRules:
             break
         if not answers_locally:
             self._intercept_replay(flow)                       # Repeat: mitmweb's Intercept skips client replays
+            if not await self._pause_operation_bp(flow, "request"):
+                return
         elif not await self._pause_local(flow, "request"):
             return                                             # aborted at the breakpoint
         if self.loss and (self.throttle_re is None or self.throttle_re.search(flow.request.pretty_url)) \
@@ -1206,6 +1266,8 @@ class ProxyRules:
             wait = sample / 2000 + delay / 1000 + ((size * 8 / 1000) / down if down else 0)
             _tag(flow, f"throttle +{int(wait * 1000)}ms")
             await asyncio.sleep(wait)
+        if not await self._pause_operation_bp(flow, "response"):
+            return
         if self._hits_unflushed:
             await self._flush_hits(force=True)           # `rules list` after the response must see applied rules
 

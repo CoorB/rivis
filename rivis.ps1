@@ -21,6 +21,7 @@ system proxy, one CA per workstation, removed again with `off`.
   .\<cli>.ps1 projects list|use|show|new
   .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
   .\<cli>.ps1 rules add NAME match=REGEX action=ACTION [key=value ...]
+                                            optional: method=POST operation=GetUser (only that GraphQL operation)
   .\<cli>.ps1 rules variant NAME add|use|rm VARIANT [file=PATH]
                                             manage hot-reloaded interception rules (json_patch: set='path=value' or set='{"path":value}')
   .\<cli>.ps1 scripts list|new NAME -Lang py|js [-Match REGEX]|on NAME|off NAME|edit NAME|rm NAME
@@ -36,7 +37,7 @@ system proxy, one CA per workstation, removed again with `off`.
                                             hot-reloaded for NEW connections, no restart
   .\<cli>.ps1 compose list | send NAME [-Var name=value] [-NoWait]
                                             replay a request saved in the panel's Compose tab
-  .\<cli>.ps1 breakpoint URL-REGEX [-Request|-Response] [-Method M] | off [NAME] | list
+  .\<cli>.ps1 breakpoint URL-REGEX [-Request|-Response] [-Method M] [-Operation NAME] | off [NAME] | list
   .\<cli>.ps1 mock NAME URL-REGEX
   .\<cli>.ps1 mocks import-proxyman [PATH] [-DryRun]
   .\<cli>.ps1 android on|off [-Serial emulator-5554 | -All] [-ProxyOnly] [-System]
@@ -67,6 +68,7 @@ param(
   [string]$Upstream = "",
   [ValidateSet("chrome","edge","chromium","brave")][string]$Browser = "",
   [Alias("-method")][string]$Method = "",
+  [Alias("-operation")][string]$Operation = "",
   [ValidateSet("py","js")][string]$Lang = "",
   [double]$Loss,
   [Alias("Dev")][switch]$Insecure,
@@ -870,6 +872,7 @@ switch ($Command) {
       $addArgs = @($ruleName)
       if ($Match -and -not (@($Rest) -match '^match=')) { $addArgs += "match=$Match" }
       if ($Method -and -not (@($Rest) -match '^method=')) { $addArgs += "method=$Method" }
+      if ($Operation -and -not (@($Rest) -match '^operation=')) { $addArgs += "operation=$Operation" }
       if (@($Rest).Count) { $addArgs += @($Rest) }
       $previousProject = [Environment]::GetEnvironmentVariable("RIVIS_ACTIVE_PROJECT")
       $previousConf = [Environment]::GetEnvironmentVariable("RIVIS_RULE_CONFDIR")
@@ -1167,8 +1170,8 @@ switch ($Command) {
     # "list" is a PowerShell synonym for no-args (bash treats the word as a regex). Refuse trailing junk
     # so `breakpoint list EXTRA` cannot silently arm a breakpoint named EXTRA.
     if ($Action -and $Action.ToLowerInvariant() -eq "list") {
-      if ($Name -or @($Rest).Count -or $Request -or $Response -or $Method) {
-        Die "breakpoint options: --request | --response | --method M"
+      if ($Name -or @($Rest).Count -or $Request -or $Response -or $Method -or $Operation) {
+        Die "breakpoint options: --request | --response | --method M | --operation NAME"
       }
     } else {
       if ($Action) { $arguments += $Action }
@@ -1177,6 +1180,7 @@ switch ($Command) {
       if ($Request) { $arguments += "--request" }
       if ($Response) { $arguments += "--response" }
       if ($Method) { $arguments += @("--method",$Method) }
+      if ($Operation) { $arguments += @("--operation",$Operation) }
     }
     $python = Get-PythonCommand
     & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath breakpoint @arguments

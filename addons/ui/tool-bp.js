@@ -1,6 +1,6 @@
 /* Breakpoint (⌥⌘B): the rule list, and the paused call, which opens by itself when a call stops, as in Proxyman.
- * Ops (panel API): bp_add {flow_id | host, path | match, method, request, response}, bp_update {name, enabled |
- * match, method, request, response}, bp_delete {name}, paused_get {id}, paused_continue|skip|abort {id, edits},
+ * Ops (panel API): bp_add {flow_id | host, path | match, method, operation, request, response}, bp_update {name, enabled |
+ * match, method, operation, request, response}, bp_delete {name}, paused_get {id}, paused_continue|skip|abort {id, edits},
  * paused_resume_all. A paused call waits for the app's own timeout (about 30–60 s), so the window says so. */
 (() => {
   "use strict";
@@ -60,7 +60,7 @@
       list.innerHTML = bps.length ? `<table class="rv-rtable"><thead><tr><th>On</th><th>Method</th><th>URL</th><th>Request</th><th>Response</th><th></th></tr></thead><tbody>`
         + bps.map((b) => `<tr data-name="${esc(b.name)}"${b.enabled === false ? ' class="off"' : ""}>
             <td><input type="checkbox" data-bp-on="${esc(b.name)}" aria-label="Breakpoint ${esc(b.name)} on" ${b.enabled === false ? "" : "checked"}></td>
-            <td>${esc(b.method || "Any")}</td>
+            <td>${esc(b.method || "Any")}${b.operation ? `<div class="rv-win-hint">${esc(b.operation)}</div>` : ""}</td>
             <td class="rv-mono rv-ell" title="${esc(b.match)}">${esc(b.label || b.match)}</td>
             <td><input type="checkbox" data-bp-ph="request" data-bp-name="${esc(b.name)}" aria-label="Pause the request" ${b.request ? "checked" : ""}></td>
             <td><input type="checkbox" data-bp-ph="response" data-bp-name="${esc(b.name)}" aria-label="Pause the response" ${b.response ? "checked" : ""}></td>
@@ -91,6 +91,8 @@
           placeholder="${isRe ? "regex on the full URL" : "api.example.com/v1/accounts/*"}"></label>
         <label><input type="checkbox" id="bpre" ${isRe ? "checked" : ""}> Regex</label>
       </div>
+      <div class="rv-form"><label class="grow">GraphQL operation <input type="text" id="bpop" spellcheck="false" value="${esc(b && b.operation ? b.operation : "")}" placeholder="GetUser — leave blank for any"></label>
+        <span class="rv-win-hint">Optional: only that operation on the same URL.</span></div>
       <div class="rv-form"><label><input type="checkbox" id="bpq" ${!b || b.request ? "checked" : ""}> Request</label>
         <label><input type="checkbox" id="bpr" ${b && b.response ? "checked" : ""}> Response</label>
         <span class="rv-win-hint">* matches anything, ? one character.</span>
@@ -100,13 +102,14 @@
     ed.querySelector("[data-bp-cancel]").onclick = () => closeEditor(w);
     ed.querySelector("[data-bp-save]").onclick = async () => {
       const url = ed.querySelector("#bpu").value.trim(), method = ed.querySelector("#bpm").value;
+      const operation = ed.querySelector("#bpop").value.trim();
       const request = ed.querySelector("#bpq").checked, response = ed.querySelector("#bpr").checked;
       if (!url) { A.toast("Enter the URL to stop at", true); ed.querySelector("#bpu").focus(); return; }
       if (!request && !response) { A.toast("Pick Request, Response or both", true); return; }
       const re = ed.querySelector("#bpre").checked;
       let r;
-      if (b) r = await ui.run("bp_update", Object.assign({ name: b.name, method, request, response }, re ? { match: url } : { match: wildcardRe(url) }), "Breakpoint saved");
-      else r = await ui.run("bp_add", Object.assign({ method, request, response }, re ? { match: url } : ui.splitUrl(url)), "Breakpoint added — the next matching call pauses");
+      if (b) r = await ui.run("bp_update", Object.assign({ name: b.name, method, operation, request, response }, re ? { match: url } : { match: wildcardRe(url) }), "Breakpoint saved");
+      else r = await ui.run("bp_add", Object.assign({ method, operation, request, response }, re ? { match: url } : ui.splitUrl(url)), "Breakpoint added — the next matching call pauses");
       if (r) closeEditor(w);
     };
     ed.querySelector("#bpu").focus();

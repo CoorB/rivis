@@ -131,6 +131,7 @@ rivis rules list | on NAME | off NAME | show NAME | rm NAME | edit | allow-file 
 rivis rules test URL [METHOD]                        # what each rule would do to this call; sends nothing
 rivis health | rollback [VERSION|--list]             # after an upgrade: is it working? / go back a version (health: 0 ok, 1 unhealthy, 3 not running)
 rivis rules add NAME match=REGEX action=ACTION [key=value ...]
+                                              # optional: method=POST operation=GetUser (only that GraphQL op)
 rivis rules variant NAME add|use|rm VARIANT [file=PATH]
 rivis scripts list | new NAME --lang py|js [--match REGEX] | on NAME | off NAME | edit NAME | rm NAME
 rivis throttle off|3g-urban|lte-congested|high-latency-vpn|packet-loss-8|manual|lte|3g|edge|slow|<ms>ms[/<kbps>kbps]
@@ -140,7 +141,7 @@ rivis tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PA
 rivis tls client-cert list | add HOST FILE [--key KEY] [--password-stdin] | rm HOST
 rivis compose list | send NAME [--var name=value] [--no-wait]
 rivis compose --from-curl FILE|-                     # parse a copied cURL command into Compose JSON; sends nothing
-rivis breakpoint [REGEX [--request|--response] [--method M] | off [NAME]]   # no arguments: list; paused calls: Continue in the UI
+rivis breakpoint [REGEX [--request|--response] [--method M] [--operation NAME] | off [NAME]]   # no arguments: list; paused calls: Continue in the UI
 rivis mock NAME URL-REGEX
 rivis mocks import-proxyman [PATH] [--dry-run]
 rivis net-reset [--dry-run|--auto]                   # --auto is what start runs; clears only a previously observed dead Rivis/Proxyman loopback
@@ -614,7 +615,10 @@ tab and log name the script and show the timeout.
 ## Rules
 
 Supported actions are `respond`, `map_local`, `status`, `json_patch`, `delay`, `set_header`, `map_remote`, and
-`block`. CLI-added rules append in file order; quick panel errors are inserted first so they can override an
+`block`. Every rule (and every breakpoint) may also carry `method=` and `operation=` — the GraphQL operation name —
+so one `/graphql` URL can mock or pause only `GetUser` while leaving `GetCart` alone. The name is the same one Rivis
+shows in the GraphQL viewer (`operationName`, or the named `query` / `mutation` / `subscription` in the document).
+CLI-added rules append in file order; quick panel errors are inserted first so they can override an
 older local response. The panel's **Rules** tab lists, creates, edits, switches on/off and deletes every one of them, plus
 breakpoints, scripts and the network throttle / No caching (**New** → pick a type; a rule's name and type stay fixed when
 you edit it, and a Map Local rule opens its own editor). Breakpoints pause requests/responses in mitmweb for editing and continuation.
@@ -651,8 +655,8 @@ Counts start again when a rule is edited (not when it is only switched off and o
 
 To find out why a rule does or does not change a call, select the call and click **Test against the selected
 call** in the Rules tab, or run `rivis rules test URL [METHOD]`. Each rule gets one line: what it would do, or why it
-does not fire (pattern does not match, other method, an earlier Map Local already answers the call, a blocking
-rule, a Map Remote that would change nothing). Nothing is sent.
+does not fire (pattern does not match, other method, other GraphQL operation, an earlier Map Local already answers
+the call, a blocking rule, a Map Remote that would change nothing). Nothing is sent.
 
 Traffic profiles include 3G Urban, congested LTE, high-latency VPN, packet loss, manual values, and legacy
 profiles. Collection replay keys calls by method, host, path, canonical query, then request-body hash; repeated

@@ -370,6 +370,24 @@ class Actions(LiveCase):
         self.assertEqual(self.fetch("/echo", method="POST", data="x").text, "mocked")
         self.assertEqual(self.fetch("/echo").json()["method"], "GET")
 
+    def test_graphql_operation_scopes_a_map_local_to_one_op_on_the_same_url(self):
+        # Two POSTs to /graphql with different operationName: only GetUser is mocked.
+        mock = self.inst.path("gql-user.json")
+        open(mock, "w").write('{"data":{"viewer":{"name":"MOCKED"}}}')
+        self.reset_state(rules=[self.rule("user", "map_local", "/graphql", method="POST",
+                                          operation="GetUser", file=mock, status=200,
+                                          headers={"Content-Type": "application/json"})])
+        hdr = {"Content-Type": "application/json"}
+        user = self.fetch("/graphql", method="POST", headers=hdr,
+                          data=json.dumps({"query": "query GetUser { viewer { name } }", "operationName": "GetUser"}))
+        self.assertEqual((user.status, user.json()), (200, {"data": {"viewer": {"name": "MOCKED"}}}))
+        self.assertIn("mock:user", self.comment("/graphql"))
+        cart = self.fetch("/graphql", method="POST", headers=hdr,
+                          data=json.dumps({"query": "query GetCart { cart { id } }", "operationName": "GetCart"}))
+        self.assertEqual(cart.status, 200)
+        self.assertEqual(cart.json()["data"]["viewer"]["name"], "alice")
+        self.assertNotIn("mock:user", self.comment("/graphql"))
+
     def test_match_is_a_regex_on_the_full_url_including_query(self):
         self.reset_state(rules=[self.rule("r", "respond", r"\?mode=special$", body="special")])
         self.assertEqual(self.fetch("/echo?mode=special").text, "special")

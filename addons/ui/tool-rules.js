@@ -12,6 +12,7 @@
     ["json_patch", "Edit JSON"], ["delay", "Delay"], ["set_header", "Header"]];
   const KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"], set_header: ["side", "header", "value"], map_remote: ["replace", "with"], block: [] };
   const EVERY_TYPES = { respond: 1, status: 1, delay: 1, block: 1 };
+  const SCOPE_KEYS = ["match", "method", "operation"];
   const typeName = (a) => (TYPES.find((t) => t[0] === a) || [])[1] || (a === "drop" ? "Block List" : a);
   const isOurs = (r) => r.action !== "map_local";
   const everyBit = (r) => r.every ? (" · every " + r.every + (r.offset ? ", offset " + r.offset : "")) : "";
@@ -84,7 +85,7 @@
             : h.noop > 0 ? `<div class="rv-win-hint bad">matched ${h.noop}× but changed nothing — ${esc(h.noop_reason || "")}</div>`
             : h.calls_since >= 10 ? `<div class="rv-win-hint bad">On, but none of the ${h.calls_since} calls since then matched. Select a call it should change and Test.</div>` : "";
           return `<tr${r.enabled === false ? ' class="off"' : ""}><td><input type="checkbox" data-r-on="${esc(r.name)}" aria-label="${esc(r.name)} on" ${r.enabled === false ? "" : "checked"}></td>
-            <td>${esc(r.method || "Any")}</td>
+            <td>${esc(r.method || "Any")}${r.operation ? `<div class="rv-win-hint">${esc(r.operation)}</div>` : ""}</td>
             <td class="rv-mono rv-ell" title="${esc(r.match)}"><b>${esc(r.name)}</b> <span class="rv-badge">${esc(typeName(r.action))}</span><div class="rv-ell-line">${esc(r.match)}</div></td>
             <td>${esc(describe(r))}${warn[r.name] ? `<div class="rv-win-hint bad">${esc(warn[r.name])}</div>` : ""}${hit}</td>
             <td class="rv-act">${outside.includes(r.name) ? `<span class="rv-badge warn" title="Reads a file outside the project: edit it in your own editor">external</span>` : `<button type="button" class="rv-lnk" data-r-edit="${esc(r.name)}">Edit</button>`}
@@ -115,6 +116,7 @@
     if (!it) f += row("Name", txt("rf-name", preset && preset.match ? suggestName(preset.match, t) : "", "letters, digits . _ -"));
     f += row("URL", txt("rf-match", v.match, t === "map_remote" ? "^https://api\\.example\\.com/" : "regex on the URL — . matches every call"), "a regex: . any character, .* anything");
     f += row("Method", ui.methodSelect("rf-method", v.method, "Any"));
+    f += row("GraphQL operation", txt("rf-operation", v.operation, "GetUser"), "optional: only that operation on the same URL");
     if (t === "map_remote") {
       f += row("Replace", txt("rf-replace", v.replace, "https://api.example.com/v1"), "the part of the URL to change (regex)");
       f += row("With", txt("rf-with", v.with, "https://staging.example.com/v1"));
@@ -168,7 +170,7 @@
   async function save(w, it, t) {
     const ed = w.body.querySelector("[data-r-ed]"), val = (id) => (ed.querySelector("#" + id) || {}).value || "", err = ed.querySelector("[data-r-err]");
     try {
-      const rule = { match: val("rf-match").trim(), method: val("rf-method") };
+      const rule = { match: val("rf-match").trim(), method: val("rf-method"), operation: val("rf-operation").trim() };
       if (!rule.match) throw new Error("Enter the URL pattern (. matches every call)");
       if (t === "respond") {
         rule.status = Number(val("rf-status"));
@@ -182,7 +184,7 @@
       else if (t === "set_header") { rule.side = val("rf-side"); rule.header = val("rf-header").trim(); rule.value = ed.querySelector("#rf-remove").checked ? null : val("rf-value"); if (!rule.header) throw new Error("Enter the header name"); }
       else if (t === "map_remote") { rule.replace = val("rf-replace"); rule.with = val("rf-with"); if (!rule.replace || !rule.with) throw new Error("Enter both Replace and With"); }
       if ((t === "status" || t === "respond") && !(rule.status >= 100 && rule.status <= 999)) throw new Error("The status must be a number from 100 to 999");
-      const keys = ["match", "method", ...KEYS[t]];
+      const keys = [...SCOPE_KEYS, ...KEYS[t]];
       if (EVERY_TYPES[t]) {
         keys.push("every", "offset");
         const e = val("rf-every").trim(), o = val("rf-offset").trim();

@@ -69,6 +69,7 @@ BASH_ONLY_FLAGS = {
 PS_ONLY_FLAGS = {
     ("rules", "match"): "PowerShell also accepts -Match; bash uses match= key=value only",
     ("rules", "method"): "PowerShell also accepts -Method on rules add/test; bash uses a positional / method=",
+    ("rules", "operation"): "PowerShell also accepts -Operation on rules add; bash uses operation= key=value only",
     ("throttle", "match"): "PowerShell also accepts -Match; bash uses match= only",
     ("throttle", "loss"): "PowerShell also accepts -Loss; bash uses loss= only",
 }
@@ -197,7 +198,7 @@ def _bash_flags_by_command(bash):
     # Delegated commands: flags live in the usage header / shared Python CLI.
     out["doctor"] = {_canon_flag(x) for x in (
         "--json", "--no-net", "--fix-safe", "--yes", "--allow-profile-network")}
-    out["breakpoint"] = {_canon_flag(x) for x in ("--request", "--response", "--method")}
+    out["breakpoint"] = {_canon_flag(x) for x in ("--request", "--response", "--method", "--operation")}
     out["mocks"] = {_canon_flag("--dry-run")}
     out["tls"] = {_canon_flag(x) for x in ("--key", "--password-stdin")}
     out["compose"] = {_canon_flag(x) for x in ("--var", "--no-wait")}

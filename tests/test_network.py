@@ -1,5 +1,6 @@
 """Network profiles (latency, loss, throttle_match) and breakpoints (request/response pause, edit, skip, abort,
 the ? wildcard, ownership of mitmweb's intercept filter), live through the proxy."""
+import json
 import os
 import sys
 import time
@@ -144,10 +145,12 @@ class NoCaching(LiveCase):
         wait_for(lambda: self.fetch("/etag", headers=self.CONDITIONAL).status == 304, 12, 0.3, "no caching removed")
 
 
-def bp(name="b", match="/echo", request=True, response=False, method=None, enabled=True):
+def bp(name="b", match="/echo", request=True, response=False, method=None, enabled=True, operation=None):
     d = {"name": name, "match": match, "request": request, "response": response, "enabled": enabled}
     if method:
         d["method"] = method
+    if operation:
+        d["operation"] = operation
     return d
 
 
@@ -456,6 +459,19 @@ class Breakpoints(LiveCase):
         self.assertEqual(self.fetch("/echo").status, 200)             # GET, not paused
         self.assertEqual(self.fetch("/json/small").status, 200)       # disabled
         self.assertEqual(self.panel.state()["paused"], [])
+
+    def test_graphql_operation_breakpoint_pauses_only_that_op(self):
+        self.reset_state(breakpoints=[bp("gql", "/graphql", request=True, response=False, operation="GetUser")])
+        hdr = {"Content-Type": "application/json"}
+        other = self.fetch("/graphql", method="POST", headers=hdr,
+                           data=json.dumps({"query": "query GetCart { cart { id } }", "operationName": "GetCart"}))
+        self.assertEqual(other.status, 200)
+        self.assertEqual(self.panel.state()["paused"], [])
+        call = self.bg("/graphql", method="POST", headers=hdr,
+                       data=json.dumps({"query": "query GetUser { viewer { name } }", "operationName": "GetUser"}))
+        p = self.paused()[0]
+        self.panel.ok("paused_skip", {"id": p["id"]})
+        self.assertEqual(call.result().status, 200)
 
     def test_panel_bp_add_wildcard_question_mark(self):
         self.reset_state()

@@ -48,7 +48,8 @@ importlib.reload(devices)
 from proxy_compose import ComposerStore, normalize_request, normalize_url
 from curl_import import parse_curl
 from proxy_rule_validation import compile_rule, explain_rules, map_remote_warning
-from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, find_jwts)
+from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, find_jwts,
+                          graphql_ops_match, primary_graphql_operation)
 import client_certs
 importlib.reload(client_certs)
 import proxy_source        # helpers only (summaries, the list-filter clause); the add-on itself is loaded by the CLI
@@ -479,6 +480,13 @@ class ProxyPanel:
                 raise PanelError("method must be text")
             if not (r["method"] or "").strip():
                 del r["method"]                     # "" / null = any method, as the engine reads it
+        if "operation" in r:
+            if r["operation"] is not None and not isinstance(r["operation"], str):
+                raise PanelError("operation must be text")
+            if not (r["operation"] or "").strip():
+                del r["operation"]                 # "" / null = any GraphQL operation
+            else:
+                r["operation"] = r["operation"].strip()
         for k in ("match", "replace"):
             if k in r:
                 try:
@@ -697,7 +705,9 @@ class ProxyPanel:
         state_dir = os.path.dirname(os.path.abspath(os.path.expanduser(self.rules_path)))
         # a Map Remote already changed the listed URL: explain the rules against the URL the app asked for
         url = f.metadata.get("proxy_original_url") or f.request.pretty_url
-        rows = explain_rules(cfg.get("rules", []), state_dir, url, f.request.method, confdir)
+        body = f.request.raw_content or b""
+        ctype = f.request.headers.get("content-type", "")
+        rows = explain_rules(cfg.get("rules", []), state_dir, url, f.request.method, confdir, body, ctype)
         doc = {"url": url, "method": f.request.method, "rules": rows}
         if url != f.request.pretty_url:
             doc["sent_to"] = f.request.pretty_url
@@ -871,9 +881,28 @@ class ProxyPanel:
         if bp.get("enabled") is False or not bp.get(phase) or (bp.get("method") and bp["method"] != f.request.method):
             return False
         try:
-            return bool(user_regex(bp.get("match") or ".").search(f.request.pretty_url))
+            if not user_regex(bp.get("match") or ".").search(f.request.pretty_url):
+                return False
         except re.error:
             return False
+        op = (bp.get("operation") or "").strip()
+        if op and not graphql_ops_match(op, f.request.method, f.request.pretty_url,
+                                       f.request.raw_content or b"", f.request.headers.get("content-type", "")):
+            return False
+        return True
+
+    @staticmethod
+    def _normalize_operation(value):
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise PanelError("operation must be text")
+        return value.strip() or None
+
+    @staticmethod
+    def _flow_operation(f):
+        return primary_graphql_operation(f.request.method, f.request.pretty_url,
+                                         f.request.raw_content or b"", f.request.headers.get("content-type", ""))
 
     def release_held(self, cfg, changed):
         """A breakpoint that was deleted or switched off lets go of the calls it is holding (unless another still holds them)."""
@@ -1864,12 +1893,14 @@ class ProxyPanel:
             self.save_cfg(cfg)
         elif op == "mock":          # Map Local from the selected call
             f = self.flow(a["flow_id"])
+            flow_op = self._normalize_operation(a["operation"]) if "operation" in a else self._flow_operation(f)
             for r in cfg["rules"]:   # first matching mock wins: reopen it instead of creating a dead duplicate
                 try:
                     matches = re.search(r.get("match") or r"(?!x)x", f.request.pretty_url)
                 except re.error:
                     matches = False
-                if r.get("action") == "map_local" and matches and r.get("method") in (None, "", f.request.method):
+                if (r.get("action") == "map_local" and matches and r.get("method") in (None, "", f.request.method)
+                        and (not r.get("operation") or r.get("operation") == flow_op)):
                     if not self._servable_mock(r):   # an example/template rule whose file is missing or outside
                         continue                     # the project would be switched on and serve nothing
                     if a.get("variant_name"):
@@ -1931,6 +1962,8 @@ class ProxyPanel:
                  "action": "map_local", "file": path,
                  "status": f.response.status_code if f.response else 200,
                  "note": f"from {f.request.method} {f.request.pretty_url[:120]}"}
+            if flow_op:
+                r["operation"] = flow_op
             r["rivis_created_mock"] = os.path.realpath(path)
             if draft:
                 r["draft"] = True
@@ -1973,6 +2006,7 @@ class ProxyPanel:
                 match, method = self.flow_regex(f), f.request.method
                 same = {match, self.flow_regex_before_r6(f)}
                 label = f.request.pretty_host + f.request.path.split("?")[0]
+                operation = self._normalize_operation(a["operation"]) if "operation" in a else self._flow_operation(f)
             elif a.get("match"):          # Rules tab: a regex on the URL, as in rules.json
                 match = a["match"]
                 try:
@@ -1982,17 +2016,25 @@ class ProxyPanel:
                 same = {match}
                 method = (a.get("method") or "").upper() or None
                 label = match
+                operation = self._normalize_operation(a.get("operation"))
             else:
                 match = wildcard_regex(a.get("host"), a.get("path"))
                 same = {match}
                 method = (a.get("method") or "").upper() or None
                 label = (a.get("host") or "") + (a.get("path") or "/")
+                operation = self._normalize_operation(a.get("operation"))
             if not (a.get("request") or a.get("response")):
                 raise PanelError("pick Request, Response or both")
             bps = breakpoints(cfg, migrate=True)
-            for b in bps:                 # same endpoint+method: update phases instead of stacking copies
-                if b.get("match") in same and b.get("method") == method:
-                    b.update(match=match, request=bool(a.get("request")), response=bool(a.get("response")), enabled=True)
+            for b in bps:                 # same endpoint+method+operation: update phases instead of stacking copies
+                if (b.get("match") in same and b.get("method") == method
+                        and (b.get("operation") or None) == operation):
+                    b.update(match=match, request=bool(a.get("request")), response=bool(a.get("response")),
+                             enabled=True)
+                    if operation:
+                        b["operation"] = operation
+                    else:
+                        b.pop("operation", None)
                     self.save_cfg(cfg)
                     return {"name": b["name"]}
             names = {b.get("name") for b in bps}
@@ -2001,8 +2043,11 @@ class ProxyPanel:
             name, i = base, 2
             while name in names:
                 name, i = f"{base}-{i}", i + 1
-            bps.append({"name": name, "label": label, "match": match, "method": method,
-                        "request": bool(a.get("request")), "response": bool(a.get("response")), "enabled": True})
+            row = {"name": name, "label": label, "match": match, "method": method,
+                   "request": bool(a.get("request")), "response": bool(a.get("response")), "enabled": True}
+            if operation:
+                row["operation"] = operation
+            bps.append(row)
             self.save_cfg(cfg)
             return {"name": name}
         elif op == "bp_update":
@@ -2022,6 +2067,12 @@ class ProxyPanel:
                         b["match"], b["label"] = a["match"], a["match"]
                     if "method" in a:
                         b["method"] = (a["method"] or "").upper() or None
+                    if "operation" in a:
+                        op_name = self._normalize_operation(a.get("operation"))
+                        if op_name:
+                            b["operation"] = op_name
+                        else:
+                            b.pop("operation", None)
                     resumed = self.release_held(cfg, [before])     # before the save: the reload it triggers would free them uncounted
                     self.save_cfg(cfg)
                     return {"resumed": resumed}
@@ -2139,10 +2190,12 @@ class ProxyPanel:
             base_name = requested_name or re.sub(r"[^A-Za-z0-9._-]", "-",
                         "mock-" + ((a.get("path") or "/").strip("/").split("/")[-1] or a.get("host", "x")))[:60]
             method = (a.get("method") or "").upper() or None
+            operation = self._normalize_operation(a.get("operation"))
             match = wildcard_regex(a.get("host"), a.get("path"), bool(a.get("literal_query")))
             for existing in cfg["rules"]:
                 if (existing.get("action") == "map_local" and existing.get("match") == match
-                        and existing.get("method") == method):
+                        and existing.get("method") == method
+                        and (existing.get("operation") or None) == operation):
                     existing["enabled"] = True
                     self.save_cfg(cfg)
                     return {"name": existing["name"], "existing": True}
@@ -2170,6 +2223,8 @@ class ProxyPanel:
                 r["rivis_created_mock"] = os.path.realpath(path)
             if method:
                 r["method"] = method
+            if operation:
+                r["operation"] = operation
             self.validate(r)
             cfg["rules"].append(r)
             self.save_cfg(cfg)
