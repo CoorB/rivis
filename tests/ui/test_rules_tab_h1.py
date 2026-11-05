@@ -75,11 +75,16 @@ class RulesTabEveryType(UiBase):
         self.P("#rsave").click()
         self.P("#rtype").wait_for(timeout=10000)
 
+    def entry_named(self, name):
+        """A rule or a breakpoint (breakpoints live in their own list in rules.json)."""
+        cfg = self.inst.cfg()
+        return next((r for r in (cfg.get("rules") or []) + (cfg.get("breakpoints") or []) if r.get("name") == name), None)
+
     def toggle(self, name):
         self.rules_tab()
-        before = self.rule_named(name)["enabled"]
+        before = self.entry_named(name)["enabled"]
         self.row(name).locator(".sw").click()
-        wait_for(lambda: self.rule_named(name)["enabled"] is (not before), 8, 0.1, "rule toggled")
+        wait_for(lambda: self.entry_named(name)["enabled"] is (not before), 8, 0.1, "rule toggled")
 
     def delete(self, name):
         self.rules_tab()

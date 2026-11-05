@@ -245,6 +245,7 @@ class ToolWindows(UiBase):
         w.locator("#rf-type").select_option("block")
         w.locator("#rf-name").fill("hide-ads")
         w.locator("#rf-match").fill(r"blkui=hide")
+        w.locator("#rf-re").check()          # a URL regex fragment: the field reads host/path wildcards unless Regex is on
         wait_for(lambda: w.locator("#rf-mode").count() == 1, 5, 0.1, "mode field")
         self.assertEqual(w.locator("#rf-mode").input_value(), "kill_show")
         w.locator("#rf-mode").select_option("hide")
