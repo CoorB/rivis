@@ -1,6 +1,7 @@
 stages:
   - test
 
+# Merge gate: CLI, PowerShell, rules, panel API, scripts, TLS, installer, security — no browser UI / perf / soak.
 rivis-fast-tests:
   stage: test
   interruptible: true
@@ -12,3 +13,22 @@ rivis-fast-tests:
     expire_in: 14 days
     paths:
       - tests/.artifacts/last-run/
+
+# Browser UI suite (Playwright + Chromium). Slower than the fast gate; runs in parallel with it.
+# Needs Playwright importable by /usr/bin/python3 and a Chromium build — install when missing.
+rivis-ui-tests:
+  stage: test
+  interruptible: true
+  timeout: 90m
+  script:
+    - |
+      /usr/bin/python3 -c 'import playwright' 2>/dev/null || /usr/bin/python3 -m pip install --user playwright
+      /usr/bin/python3 -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(); b.close(); p.stop()' 2>/dev/null \
+        || /usr/bin/python3 -m playwright install chromium
+    - bash tests/run.sh --ui
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - tests/.artifacts/last-run/
+      - tests/.artifacts/*.png

@@ -1,0 +1,38 @@
+name: Browser UI suite
+
+on:
+  push:
+    branches: [main, "ci/**"]
+  pull_request:
+  workflow_dispatch:
+
+# Parallel to the Windows edition job. Not a substitute for the GitLab fast gate.
+jobs:
+  ui:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install mitmweb (PATH) and pytest/Playwright for /usr/bin/python3
+        shell: bash
+        run: |
+          pin=$(sed -n 's/^MITMPROXY_VERSION=//p' install/mirror.conf | head -1)
+          python -m pip install --upgrade pip "mitmproxy==$pin"
+          echo "$(dirname "$(command -v mitmweb)")" >> "$GITHUB_PATH"
+          /usr/bin/python3 -m pip install --user pytest playwright
+          /usr/bin/python3 -m playwright install chromium
+      - name: Browser UI tests
+        shell: bash
+        run: bash tests/run.sh --ui
+      - name: Upload per-module logs and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-logs
+          path: |
+            tests/.artifacts/last-run
+            tests/.artifacts/*.png
+          if-no-files-found: ignore

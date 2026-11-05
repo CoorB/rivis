@@ -74,6 +74,9 @@ for m in $LATER; do run_one "$m"; done
 echo "wall clock: $(( $(date +%s) - START )) s"
 $PY "$HERE/hermetic.py" report "$RES" "$RES/before.snap"
 RC=$?
-mkdir -p "$HERE/.artifacts/last-run" && cp "$RES"/*.log "$RES"/*.json "$HERE/.artifacts/last-run/" 2>/dev/null
+# replace the previous run's logs so CI artifacts (and a local re-open) only show this run
+ART="$HERE/.artifacts/last-run"
+mkdir -p "$ART" && rm -f "$ART"/*.log "$ART"/*.json
+cp "$RES"/*.log "$RES"/*.json "$ART/" 2>/dev/null
 echo "per-module logs: tests/.artifacts/last-run/"
 exit $RC

@@ -12,11 +12,17 @@ import subprocess
 import sys
 import tempfile
 
-HOME = os.path.expanduser("~")
-WATCH = [".rivis", ".mitmproxy", ".neo-mitm", ".zshrc", ".zprofile", ".bash_profile", ".bashrc", ".local/rivis", ".local/bin/rivis"]
+WATCH = [".rivis", ".mitmproxy", ".neo-mitm", ".zshrc", ".zprofile", ".bash_profile", ".bashrc", ".local/rivis", ".local/bin/rivis",
+         # installer and doctor also look here; a suite that escaped the fake HOME would leave fingerprints
+         ".android/adbkey", ".android/adbkey.pub"]
 FORBIDDEN = (8080, 8083, 8090, 8093, 8094, 8095, 9090, 9091)
 _RUN = os.environ.get("RIVIS_TEST_RUN", "")
 PREFIX = "rivis-t-%s-" % _RUN if re.fullmatch(r"[A-Za-z0-9]{1,32}", _RUN) else "rivis-t-"   # same as harness.run_prefix()
+
+
+def home():
+    # resolve at call time (not import): a subprocess test can set HOME without re-importing this module
+    return os.path.expanduser("~")
 
 
 def tree_digest(path):
@@ -63,7 +69,34 @@ def listeners():
 
 
 def forbidden_listeners():
+    # (cmd, name) only — not pid: the user's Rivis or Proxyman may restart mid-run with a new pid; that is not a suite leak
     return sorted((c, n) for _, c, n in listeners() if any(n.endswith(":%d" % p) for p in FORBIDDEN))
+
+
+def suite_pids():
+    """PIDs whose argv still carries this run's temp prefix (rivis-t-<run>-)."""
+    out = subprocess.run(["ps", "-axww", "-o", "pid=,args="], capture_output=True, text=True).stdout
+    pids = set()
+    for line in out.splitlines():
+        line = line.strip()
+        if PREFIX not in line or "hermetic.py" in line:
+            continue
+        parts = line.split(None, 1)
+        try:
+            pids.add(int(parts[0]))
+        except (ValueError, IndexError):
+            continue
+    return pids
+
+
+def suite_on_forbidden():
+    """A suite process listening on a protected port — even when the before/after (cmd,name) set looks unchanged
+    because it replaced the user's Rivis/Proxyman on the same address."""
+    mine = suite_pids()
+    if not mine:
+        return []
+    return sorted((c, n) for pid, c, n in listeners()
+                  if pid in mine and any(n.endswith(":%d" % p) for p in FORBIDDEN))
 
 
 def leftover_processes():
@@ -80,8 +113,9 @@ def scutil():
 
 
 def snap():
-    return {"watch": {w: tree_digest(os.path.join(HOME, w)) for w in WATCH}, "forbidden": forbidden_listeners(),
-            "scutil": scutil(), "tmp": tmp_leftovers(), "top": sorted(os.listdir(HOME))}
+    h = home()
+    return {"watch": {w: tree_digest(os.path.join(h, w)) for w in WATCH}, "forbidden": forbidden_listeners(),
+            "scutil": scutil(), "tmp": tmp_leftovers(), "top": sorted(os.listdir(h))}
 
 
 def main():
@@ -126,11 +160,18 @@ def main():
         for i in xf:
             print("  " + i)
     problems = []
+    # a path added to WATCH after an older snapshot was written must not KeyError the report
     for w, d in before["watch"].items():
-        if after["watch"][w] != d:
+        if after["watch"].get(w) != d:
             problems.append("$HOME/%s changed during the run" % w)
+    for w in after["watch"]:
+        if w not in before["watch"] and after["watch"][w] is not None:
+            problems.append("$HOME/%s appeared during the run" % w)
     if before["forbidden"] != after["forbidden"]:
         problems.append("listeners on protected ports changed: %s -> %s" % (before["forbidden"], after["forbidden"]))
+    held = suite_on_forbidden()
+    if held:
+        problems.append("this run is listening on a protected port: %s" % held[:5])
     if before["scutil"] != after["scutil"]:
         problems.append("system proxy configuration changed")
     new_tmp = [t for t in after["tmp"] if t not in before["tmp"]]
