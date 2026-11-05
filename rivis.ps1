@@ -502,7 +502,9 @@ function Convert-ToNumber($text, $what) {
 # Same validation as proxy_common.tls_host_regex (the add-on turns the pattern into an anchored regex).
 function Test-TlsPattern([string]$pattern) {
   $p = $pattern.Trim().ToLowerInvariant().TrimEnd('.')
-  if (-not $p -or $p.Contains('/') -or $p -match '[\s<>\x80-\uffff]') { Die "TLS host pattern must be a hostname such as *.example.test" }
+  # -cmatch: PowerShell's default -match is case-insensitive, and a case-insensitive
+  # [\x80-\uffff] range wrongly treats ASCII i/k as hits (so api.example.test was refused).
+  if (-not $p -or $p.Contains('/') -or $p -cmatch '[\s<>\x80-\uffff]') { Die "TLS host pattern must be a hostname such as *.example.test" }
   $hostPart = $p
   if (@($p.ToCharArray() | Where-Object { $_ -eq ':' }).Count -eq 1) {
     $i = $p.LastIndexOf(':'); $port = $p.Substring($i + 1)
@@ -1061,6 +1063,7 @@ switch ($Command) {
     }
     $tlsNote = "applies to new connections after the next rules poll; allow a few seconds - no restart; open connections keep their earlier decision"
     if ($sub -eq "list") {
+      if ($Name -or @($Rest).Count) { Die "tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN" }
       Write-Host "tls mode: $($tls.mode)"
       foreach ($which in @("allow","ignore")) {
         Write-Host ("{0}{1}:" -f $which, $(if ($tls.mode -eq $which) { "  (active)" } else { "  (used when mode is $which)" }))
@@ -1080,8 +1083,14 @@ switch ($Command) {
       $pattern = if (@($Rest).Count -eq 1) { $Rest[0] } else { "" }
       if ($verb -notin @("add","rm") -or -not $pattern) { Die "tls $sub add|rm PATTERN" }
       $pattern = Test-TlsPattern $pattern
-      if ($verb -eq "add") { if ($pattern -notin @($tls[$sub])) { $tls[$sub] = @(@($tls[$sub]) + $pattern) }; $message = "$sub added: $pattern" }
-      else { $tls[$sub] = @(@($tls[$sub]) | Where-Object { $_ -ne $pattern }); $message = "$sub removed: $pattern" }
+      # Same refusals as addons/tls_cli.py: a no-op must not print added/removed.
+      if ($verb -eq "add") {
+        if ($pattern -in @($tls[$sub])) { Die "$sub pattern '$pattern' is already on the list" }
+        $tls[$sub] = @(@($tls[$sub]) + $pattern); $message = "$sub added: $pattern"
+      } else {
+        if ($pattern -notin @($tls[$sub])) { Die "no $sub pattern '$pattern'" }
+        $tls[$sub] = @(@($tls[$sub]) | Where-Object { $_ -ne $pattern }); $message = "$sub removed: $pattern"
+      }
     } else { Die "tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN" }
     Save-Tls $cfg $tls
     Write-Host $message
@@ -1155,12 +1164,20 @@ switch ($Command) {
     Ensure-Rules
     Warn-RunningProject
     $arguments = @()
-    if ($Action -and $Action.ToLowerInvariant() -ne "list") { $arguments += $Action }
-    if ($Name) { $arguments += $Name }
-    $arguments += @($Rest)
-    if ($Request) { $arguments += "--request" }
-    if ($Response) { $arguments += "--response" }
-    if ($Method) { $arguments += @("--method",$Method) }
+    # "list" is a PowerShell synonym for no-args (bash treats the word as a regex). Refuse trailing junk
+    # so `breakpoint list EXTRA` cannot silently arm a breakpoint named EXTRA.
+    if ($Action -and $Action.ToLowerInvariant() -eq "list") {
+      if ($Name -or @($Rest).Count -or $Request -or $Response -or $Method) {
+        Die "breakpoint options: --request | --response | --method M"
+      }
+    } else {
+      if ($Action) { $arguments += $Action }
+      if ($Name) { $arguments += $Name }
+      $arguments += @($Rest)
+      if ($Request) { $arguments += "--request" }
+      if ($Response) { $arguments += "--response" }
+      if ($Method) { $arguments += @("--method",$Method) }
+    }
     $python = Get-PythonCommand
     & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath breakpoint @arguments
     exit $LASTEXITCODE

@@ -513,3 +513,58 @@ class CliSurface(unittest.TestCase):
             self.bash_cmds, _ps_implemented_commands(mutated), self.bash_flags, self.ps_flags)
         self.assertIn("scratchcmd", miss_bash,
                       "expected bash missing command 'scratchcmd'; got miss_bash=%r miss_ps=%r" % (miss_bash, miss_ps))
+
+
+class TlsNoopParity(unittest.TestCase):
+    """tls allow|ignore add|rm must refuse no-ops on both CLIs (same exit, same message class)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.suite = Suite.get()
+        if not (os.path.isfile(PWSH) and os.access(PWSH, os.X_OK)):
+            raise AssertionError("pwsh 7 is required for CLI state parity: " + PWSH)
+        cls.bash, cls.ps = _read_clis()
+
+    def test_ps_tls_source_keeps_noop_and_ascii_guards(self):
+        """Source-level net: the -match Unicode range bug and silent add/rm must not return."""
+        tls_block = _ps_block(self.ps, "tls")
+        self.assertIn("already on the list", tls_block)
+        self.assertIn("no $sub pattern", tls_block)
+        self.assertIn("-cmatch", self.ps)
+        self.assertNotRegex(self.ps, r"\$p -match '\[\\s<>\\x80-\\uffff\]'")
+
+    def test_duplicate_add_and_missing_rm_match_across_clis(self):
+        for surface in ("bash", "ps"):
+            with self.subTest(surface=surface):
+                home = self.suite.new_home("tls-noop-" + surface)
+                env = self.suite.cli_env(home)
+                def run(*args):
+                    if surface == "bash":
+                        argv = ["/bin/bash", os.path.join(REPO, "rivis")]
+                    else:
+                        argv = [PWSH, "-NoProfile", "-NonInteractive", "-File", os.path.join(REPO, "rivis.ps1")]
+                    return self.suite.run(argv + list(args), home=home, env=env, timeout=120)
+
+                # Hosts without i/k: under PowerShell's default -match, [\x80-\uffff]
+                # wrongly hits ASCII i/k and would fail this test for the wrong reason.
+                first = run("tls", "allow", "add", "noop.host")
+                self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+                with open(os.path.join(home, ".rivis", "projects", "default", "rules.json")) as fh:
+                    before = json.load(fh)["tls"]
+
+                dup = run("tls", "allow", "add", "NOOP.host")
+                self.assertNotEqual(dup.returncode, 0, "%s claimed a duplicate add succeeded" % surface)
+                self.assertIn("already on the list", dup.stdout + dup.stderr)
+                self.assertNotIn("added", dup.stdout)
+
+                missing = run("tls", "ignore", "rm", "absent.host")
+                self.assertNotEqual(missing.returncode, 0, "%s claimed a missing rm succeeded" % surface)
+                self.assertIn("no ignore pattern", missing.stdout + missing.stderr)
+                self.assertNotIn("removed", missing.stdout)
+
+                trailing = run("tls", "list", "EXTRA")
+                self.assertNotEqual(trailing.returncode, 0, "%s swallowed tls list EXTRA" % surface)
+
+                with open(os.path.join(home, ".rivis", "projects", "default", "rules.json")) as fh:
+                    after = json.load(fh)["tls"]
+                self.assertEqual(after, before)

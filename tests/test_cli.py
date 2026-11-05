@@ -1008,7 +1008,8 @@ class Tls(CliBase):
 
     def test_allow_ignore_add_rm(self):
         self.ok("tls", "allow", "add", "*.Example.test")
-        self.ok("tls", "allow", "add", "*.example.test")           # duplicate (case-insensitive) is a no-op
+        self.refused("tls", "allow", "add", "*.example.test", msg="already on the list")
+        self.refused("tls", "ignore", "rm", "missing.test", msg="no ignore pattern")
         self.ok("tls", "ignore", "add", "pay.example.test:8443")
         t = self.cfg()["tls"]
         self.assertEqual(t["allow"], ["*.example.test"])
@@ -1017,6 +1018,7 @@ class Tls(CliBase):
         self.assertIn(r"^.*\.example\.test(?::\d+)?$", out)
         self.ok("tls", "allow", "rm", "*.example.test")
         self.assertEqual(self.cfg()["tls"]["allow"], [])
+        self.refused("tls", "allow", "rm", "*.example.test", msg="no allow pattern")
         self.ok("tls", "mode", "ignore")
         self.assertIn("TLS decryption: ignore (1 host pattern)", self.stopped_status().stdout)
 

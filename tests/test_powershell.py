@@ -236,7 +236,9 @@ class Commands(unittest.TestCase):
         for pattern in ("<script>", "a>b.test", "مرحبا.example", "café.test", "https://host.test", "host.test:65536"):
             with self.subTest(pattern=pattern):
                 self.bad("tls", "allow", "add", pattern, msg="TLS host pattern")
-        self.ok("tls", "allow", "add", "*.example.test:443")
+        # Hostnames with i/k must work: a case-insensitive [\x80-\uffff] range used to refuse them.
+        self.ok("tls", "allow", "add", "api.example.test:443")
+        self.ok("tls", "ignore", "add", "missing.test")
 
     def test_status_only_queries_an_initialized_android_home(self):
         with open(os.path.join(harness.REPO, "rivis.ps1")) as fh:
@@ -588,6 +590,29 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
             self.bad("tls", "allow", "add", bad)
         self.bad("tls", "mode", "sideways")
         self.assertIn("tls mode: ignore", self.bash("tls", "list"))
+
+    def test_tls_refuses_noop_add_and_rm(self):
+        """Parity with tls_cli: claiming added/removed when the list did not change is a lie."""
+        # Hosts without i/k so a case-insensitive [\x80-\uffff] range cannot mask the noop.
+        self.ok("tls", "allow", "add", "foo.test")
+        before = self.cfg()["tls"]
+        self.bad("tls", "allow", "add", "FOO.test", msg="already on the list")
+        self.bad("tls", "ignore", "rm", "absent.host", msg="no ignore pattern")
+        self.assertEqual(self.cfg()["tls"], before)
+        self.assertNotIn("added", self.ps("tls", "allow", "add", "FOO.test").stdout)
+        self.assertNotIn("removed", self.ps("tls", "ignore", "rm", "absent.host").stdout)
+
+    def test_tls_list_refuses_trailing_arguments(self):
+        self.ok("tls", "list")
+        before = self.cfg()["tls"]
+        self.bad("tls", "list", "EXTRA", msg="tls list")
+        self.assertEqual(self.cfg()["tls"], before)
+
+    def test_breakpoint_list_refuses_trailing_arguments(self):
+        # before: `breakpoint list EXTRA` dropped "list" and added a breakpoint named EXTRA
+        self.ok("rules", "list")
+        self.bad("breakpoint", "list", "EXTRA", msg="breakpoint options")
+        self.assertEqual(self.cfg().get("breakpoints") or [], [])
 
     def test_tls_client_cert_parity_with_bash(self):
         from test_client_certs_0910 import Pki
