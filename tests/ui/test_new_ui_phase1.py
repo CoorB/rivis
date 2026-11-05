@@ -500,6 +500,29 @@ class CycleFive(UiBase):
         wait_for(lambda: bool(self.page.locator('[data-sh-err]').inner_text()), 5)
         self.assertIn('URL', self.page.locator('[data-sh-err]').inner_text())
 
+    def test_a_new_filter_can_be_saved_from_this_window(self):
+        """The window could rename, delete and reorder saved filters but not create one: a new filter still had to
+        be saved from Classic view's star, which reads as half a feature."""
+        name = 'Made Here'
+        try:
+            self.open_new('/echo?save-filter=1')
+            self.assertEqual(self.page.locator('[data-save-filter]').count(), 0)   # nothing typed, nothing to save
+            self.page.locator('#q').fill('~u echo')
+            star = self.page.locator('[data-save-filter]')
+            wait_for(lambda: star.count() == 1, 5)
+            star.click()
+            self.page.locator('#dtext').fill(name)
+            self.page.locator('#dialog button[type=submit]').click()
+            wait_for(lambda: any(r['name'] == name for r in self.panel.state()['saved_filters']), 5)
+            saved = [r for r in self.panel.state()['saved_filters'] if r['name'] == name][0]
+            self.assertEqual(saved['filter'], '~u echo')
+            # it is in the row now, and there is nothing left to offer to save
+            wait_for(lambda: self.page.locator('[data-saved]').filter(has_text=name).count() == 1, 5)
+            wait_for(lambda: self.page.locator('[data-save-filter]').count() == 0, 5)
+        finally:
+            if any(r['name'] == name for r in self.panel.state()['saved_filters']):
+                self.panel.ok('filters_delete', {'name': name})
+
     def test_saved_filters_have_management_menu(self):
         self.panel.ok('filters_save', {'name': 'Cycle Five', 'filter': '~u echo'})
         self.panel.ok('filters_save', {'name': 'Cycle Other', 'filter': '~u text'})

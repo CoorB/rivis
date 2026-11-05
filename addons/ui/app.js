@@ -455,7 +455,12 @@
     $("chips").innerHTML = CHIPS.map(([id, label]) => `<button class="rv-chip" data-chip="${id}" aria-pressed="${S.chip === id}">${esc(label)}</button>`).join("")
       + `<span class="rv-tb-sep"></span>` + STATUS.map((s) => `<button class="rv-chip" data-status="${s}" aria-pressed="${S.status === s}">${s}</button>`).join("");
     const saved = (S.state && S.state.saved_filters) || [];
-    $("saved").innerHTML = saved.map((x, i) => `<button class="rv-chip" data-saved="${i}" aria-pressed="${$("q").value === x.filter}" title="${esc(x.filter)}${i < 9 ? " (" + ALT + (i + 1) + ")" : ""}">★ ${esc(x.name)}</button>`).join("");
+    // the window could rename, delete and reorder saved filters but not make one, so a new filter still had to be
+    // saved from Classic view's star. The star appears next to the row once there is something to save.
+    const current = $("q").value.trim();
+    const isNew = current && !saved.some((x) => x.filter === current) && saved.length < 30;
+    $("saved").innerHTML = saved.map((x, i) => `<button class="rv-chip" data-saved="${i}" aria-pressed="${$("q").value === x.filter}" title="${esc(x.filter)}${i < 9 ? " (" + ALT + (i + 1) + ")" : ""}">★ ${esc(x.name)}</button>`).join("")
+      + (isNew ? `<button class="rv-chip" data-save-filter title="Save this filter">☆ Save filter</button>` : "");
   }
   $("chips").addEventListener("click", (e) => {
     const c = e.target.closest("[data-chip]"), st = e.target.closest("[data-status]");
@@ -464,7 +469,22 @@
     else return;
     drawChips(); rebuildView();
   });
-  $("saved").addEventListener("click", (e) => { const b = e.target.closest("[data-saved]"); if (b) applySaved(Number(b.dataset.saved)); });
+  $("saved").addEventListener("click", async (e) => {
+    if (e.target.closest("[data-save-filter]")) {
+      const filter = $("q").value.trim();
+      if (!filter) return;
+      try {
+        const r = await askText("Save filter", filter, "", async (name) => {
+          if (!name) throw new Error("Name is required");
+          return api("filters_save", { name, filter });
+        });
+        if (!r) return;
+        S.state.saved_filters = r.filters; drawChips();
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    const b = e.target.closest("[data-saved]"); if (b) applySaved(Number(b.dataset.saved));
+  });
   $("saved").addEventListener("contextmenu", (e) => {
     const chip = e.target.closest("[data-saved]"); if (!chip) return;
     e.preventDefault(); closeMenu();
@@ -527,6 +547,7 @@
     if (!ok) {
       document.querySelector(".rv-search").classList.add("bad");
       $("qerr").textContent = "Not a valid filter: " + err;
+      drawChips();                                             // nothing to offer to save while it is invalid
       return;
     }
     S.text = ""; S.expr = v; S.match = new Set();
