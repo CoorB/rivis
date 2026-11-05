@@ -333,12 +333,17 @@ wait for that reload before sending the call that should pause.
 
 Environment variables are named from `product.json`: `<PREFIX>_PORT`, `_WEB_PORT`, `_RULES`, `_WEB_PASSWORD`,
 `_CONFDIR`, and `_PROJECT`. Legacy `NEO_MITM_*` variables remain fallback aliases.
-Also: `<PREFIX>_MAX_FLOWS` (default 5000, 1 to 1000000), `_REMEMBER_UI`, `_VERIFY_UPSTREAM`, `_SYSTEM_TRUST`,
+Also: `<PREFIX>_MAX_FLOWS` (default 5000, 1 to 1000000), `_MAX_WS_MESSAGES` (default 2000), `_MAX_WS_MB` (default 32),
+`_MAX_BODY_MB` (default 512), `_REMEMBER_UI`, `_VERIFY_UPSTREAM`, `_SYSTEM_TRUST`,
 `_EXTRA_TRUST` (PEM paths joined with `:`), `_STREAM_LARGE_BODIES` (default `64m`), `_NODE`, `_HTTP2`,
 `_BROWSER_APPS` (browser binary search path), and `RIVIS_MAGISK_DIR` / `RIVIS_ANDROID_SETUP_TIMEOUT` for Play-image
 Android setup. `<PREFIX>_MAX_FLOWS` caps how many calls are kept: the oldest are dropped past it, and the footer shows
 how many were trimmed. Sessions and HARs saved afterwards contain only the survivors.
 Trimming happens in batches to a low-water mark, so the list can contain fewer than 5000 calls just after trimming.
+`<PREFIX>_MAX_WS_MESSAGES` / `_MAX_WS_MB` cap frames kept on each open WebSocket (oldest dropped first; the call stays
+in the list and is tagged). `<PREFIX>_MAX_BODY_MB` caps total retained HTTP body bytes across every call: when over,
+oldest completed bodies are cleared so an all-day session of PDFs and large JSON cannot grow memory without bound;
+headers and status stay, and the footer notes how many bodies were dropped.
 
 For simultaneous projects, start each with a different `<PREFIX>_PORT` and `<PREFIX>_WEB_PORT`. Use the same
 `<PREFIX>_WEB_PORT` for `ui`, `status`, `stop`, or `restart`; web login and saved start settings belong to that port.

@@ -872,8 +872,16 @@ class ProxyPanel:
     def retention_state(self):
         for addon in self._addons():
             if addon.__class__.__name__ == "ProxyRetention":
-                return {"limit": int(ctx.options.proxy_max_flows), "trimmed": int(getattr(addon, "trimmed", 0))}
-        return {"limit": 5000, "trimmed": 0}
+                return {
+                    "limit": int(ctx.options.proxy_max_flows),
+                    "trimmed": int(getattr(addon, "trimmed", 0)),
+                    "ws_dropped": int(getattr(addon, "ws_dropped", 0)),
+                    "bodies_dropped": int(getattr(addon, "bodies_dropped", 0)),
+                    "body_budget": int(getattr(ctx.options, "proxy_max_body_bytes", 0)),
+                    "ws_message_limit": int(getattr(ctx.options, "proxy_max_ws_messages", 0)),
+                }
+        return {"limit": 5000, "trimmed": 0, "ws_dropped": 0, "bodies_dropped": 0,
+                "body_budget": 0, "ws_message_limit": 0}
 
     @staticmethod
     def _bp_hits(bp, f, phase):

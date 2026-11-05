@@ -157,6 +157,20 @@ $MaxFlows = 0
 if (-not [int]::TryParse($MaxFlowsText, [ref]$MaxFlows) -or $MaxFlows -lt 1 -or $MaxFlows -gt 1000000) {
   throw "${EnvPrefix}_MAX_FLOWS must be an integer from 1 to 1000000"
 }
+$MaxWsMessages = 0
+if (-not [int]::TryParse((Config-Env "MAX_WS_MESSAGES" 2000), [ref]$MaxWsMessages) -or $MaxWsMessages -lt 0 -or $MaxWsMessages -gt 1000000) {
+  throw "${EnvPrefix}_MAX_WS_MESSAGES must be an integer from 0 to 1000000"
+}
+$MaxWsMb = 0
+if (-not [int]::TryParse((Config-Env "MAX_WS_MB" 32), [ref]$MaxWsMb) -or $MaxWsMb -lt 0 -or $MaxWsMb -gt 1024) {
+  throw "${EnvPrefix}_MAX_WS_MB must be an integer from 0 to 1024"
+}
+$MaxBodyMb = 0
+if (-not [int]::TryParse((Config-Env "MAX_BODY_MB" 512), [ref]$MaxBodyMb) -or $MaxBodyMb -lt 0 -or $MaxBodyMb -gt 8192) {
+  throw "${EnvPrefix}_MAX_BODY_MB must be an integer from 0 to 8192"
+}
+$MaxWsBytes = [int64]$MaxWsMb * 1024 * 1024
+$MaxBodyBytes = [int64]$MaxBodyMb * 1024 * 1024
 $ConfDir = Config-Env "CONFDIR" (Join-Path $HOME ".mitmproxy")
 $CaPem   = Join-Path $ConfDir "mitmproxy-ca-cert.pem"
 $CaCer   = Join-Path $ConfDir "mitmproxy-ca-cert.cer"
@@ -753,7 +767,9 @@ switch ($Command) {
               "--set","confdir=$ConfDir","--set","connection_strategy=lazy",
               "--set",("http2=" + $(if ((Config-Env "HTTP2" "0") -eq "1") { "true" } else { "false" })), "--set",("stream_large_bodies=" + (Config-Env "STREAM_LARGE_BODIES" "64m")),
               "-s",(Join-Path $PSScriptRoot "addons\proxy_lan.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_source.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_retention.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_operability.py"),
-              "--set",("proxy_remember_ui=" + $(if ((Config-Env "REMEMBER_UI" "0") -eq "1") { "true" } else { "false" })),"--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project","--set","proxy_max_flows=$MaxFlows","--set","proxy_log_dir=$(Join-Path $StateRoot 'logs')")
+              "--set",("proxy_remember_ui=" + $(if ((Config-Env "REMEMBER_UI" "0") -eq "1") { "true" } else { "false" })),"--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project","--set","proxy_max_flows=$MaxFlows",
+              "--set","proxy_max_ws_messages=$MaxWsMessages","--set","proxy_max_ws_bytes=$MaxWsBytes",
+              "--set","proxy_max_body_bytes=$MaxBodyBytes","--set","proxy_log_dir=$(Join-Path $StateRoot 'logs')")
     if ($lanIps.Count) {
       foreach ($ip in $lanIps) { $margs += @("--mode", ($proxyMode -replace '@\d+$', "@${ip}:$Port")) }
       $margs += @("--set","proxy_lan=true")

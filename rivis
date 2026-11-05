@@ -225,6 +225,18 @@ UPSTREAM_FILE="$STATE_ROOT/upstream-$WEB_PORT"
 MAX_FLOWS="$(env_value MAX_FLOWS 5000)"
 [[ "$MAX_FLOWS" =~ ^[0-9]+$ ]] && [ "$MAX_FLOWS" -ge 1 ] && [ "$MAX_FLOWS" -le 1000000 ] || \
   { echo "$CLI: ${ENV_PREFIX}_MAX_FLOWS must be an integer from 1 to 1000000" >&2; exit 1; }
+# All-day capture caps (see proxy_retention): WebSocket frames and total retained HTTP body bytes.
+MAX_WS_MESSAGES="$(env_value MAX_WS_MESSAGES 2000)"
+[[ "$MAX_WS_MESSAGES" =~ ^[0-9]+$ ]] && [ "$MAX_WS_MESSAGES" -ge 0 ] && [ "$MAX_WS_MESSAGES" -le 1000000 ] || \
+  { echo "$CLI: ${ENV_PREFIX}_MAX_WS_MESSAGES must be an integer from 0 to 1000000" >&2; exit 1; }
+MAX_WS_MB="$(env_value MAX_WS_MB 32)"
+[[ "$MAX_WS_MB" =~ ^[0-9]+$ ]] && [ "$MAX_WS_MB" -ge 0 ] && [ "$MAX_WS_MB" -le 1024 ] || \
+  { echo "$CLI: ${ENV_PREFIX}_MAX_WS_MB must be an integer from 0 to 1024" >&2; exit 1; }
+MAX_BODY_MB="$(env_value MAX_BODY_MB 512)"
+[[ "$MAX_BODY_MB" =~ ^[0-9]+$ ]] && [ "$MAX_BODY_MB" -ge 0 ] && [ "$MAX_BODY_MB" -le 8192 ] || \
+  { echo "$CLI: ${ENV_PREFIX}_MAX_BODY_MB must be an integer from 0 to 8192" >&2; exit 1; }
+MAX_WS_BYTES=$((MAX_WS_MB * 1024 * 1024))
+MAX_BODY_BYTES=$((MAX_BODY_MB * 1024 * 1024))
 CONFDIR="$(env_value CONFDIR "$HOME/.mitmproxy")"
 CA_PEM="$CONFDIR/mitmproxy-ca-cert.pem"
 # adb: the same places the panel's Devices tab looks (addons/devices.py adb_path), so a custom SDK location works in both
@@ -656,7 +668,9 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
               -s "$AUTH_ADDON" -s "$SCRIPT_DIR/addons/proxy_lan.py" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_source.py" -s "$SCRIPT_DIR/addons/proxy_panel.py" -s "$SCRIPT_DIR/addons/proxy_retention.py" -s "$SCRIPT_DIR/addons/proxy_operability.py"
               --set "proxy_auth_token_file=$TOKEN_FILE" --set "proxy_bootstrap_file=$BOOTSTRAP_FILE"
               --set "proxy_remember_ui=$([ "$(env_value REMEMBER_UI 0)" = 1 ] && echo true || echo false)"
-              --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT" --set "proxy_max_flows=$MAX_FLOWS" --set "proxy_log_dir=$STATE_ROOT/logs")
+              --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT" --set "proxy_max_flows=$MAX_FLOWS"
+              --set "proxy_max_ws_messages=$MAX_WS_MESSAGES" --set "proxy_max_ws_bytes=$MAX_WS_BYTES"
+              --set "proxy_max_body_bytes=$MAX_BODY_BYTES" --set "proxy_log_dir=$STATE_ROOT/logs")
   [ -n "$private_hosts" ] && args+=(--set "proxy_private_hosts=$private_hosts")
   if [ -n "$lan_ips" ]; then args+=(${lan_modes[@]+"${lan_modes[@]}"} --set proxy_lan=true); fi
   # local capture: the iOS Simulator shares the Mac network stack and has no proxy

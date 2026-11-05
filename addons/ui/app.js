@@ -1241,6 +1241,8 @@
     $("status").innerHTML = `<span><span class="rv-live${S.live && S.record ? "" : " off"}"></span>${!S.record ? "Paused" : S.live ? "Live" : "Reconnecting…"}</span>`
       + `<span><b>${S.view.length}</b> of ${S.order.length} calls</span>`
       + (st.retention && st.retention.trimmed ? `<span>${st.retention.trimmed} older calls trimmed (keeps up to ${st.retention.limit})</span>` : "")
+      + (st.retention && st.retention.bodies_dropped ? `<span>${st.retention.bodies_dropped} large bodies dropped to free memory</span>` : "")
+      + (st.retention && st.retention.ws_dropped ? `<span>${st.retention.ws_dropped} older WebSocket messages dropped</span>` : "")
       + (S.held.size ? `<span><b>${S.held.size}</b> waiting — press Record</span>` : "")
       + (p.label ? `<span>Project <b>${esc(p.label)}</b></span>` : "")
       + (map.on ? `<span>Map Local on (${map.n})</span>` : "") + (bp.on ? `<span>${bp.n} breakpoint${bp.n === 1 ? "" : "s"}</span>` : "")

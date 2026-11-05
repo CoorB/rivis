@@ -1611,7 +1611,9 @@
       }
       if ((m = t.match(/^(\d+) of (\d+) flows? selected$/))) {
         const kept = state && state.retention && state.retention.limit && state.retention.trimmed ? ` · ${state.retention.trimmed} older calls trimmed (keeps up to ${state.retention.limit}; trims oldest in batches)` : "";   // R4A-02: low-water batches may leave fewer than the cap
-        setAttr(el, "data-rv", (m[1] === "0" ? `${m[2]} call${m[2] === "1" ? "" : "s"}` : `${m[1]} selected · ${m[2]} calls`) + kept); return;
+        const bodies = state && state.retention && state.retention.bodies_dropped ? ` · ${state.retention.bodies_dropped} large bodies dropped to free memory` : "";
+        const ws = state && state.retention && state.retention.ws_dropped ? ` · ${state.retention.ws_dropped} older WebSocket messages dropped` : "";
+        setAttr(el, "data-rv", (m[1] === "0" ? `${m[2]} call${m[2] === "1" ? "" : "s"}` : `${m[1]} selected · ${m[2]} calls`) + kept + bodies + ws); return;
       }
       if ((m = t.match(/^(?:regular|local|transparent|socks5|upstream|reverse)[^@]*@(?:.*:)?(\d+)$/))) {
         setAttr(el, "data-rv", `Proxy 127.0.0.1:${m[1]}` + (state && state.project.label ? ` · ${state.project.label}` : ""));

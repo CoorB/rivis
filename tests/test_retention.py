@@ -16,9 +16,34 @@ from harness import Background, Instance, LiveCase, Suite, wait_for
 class FooterCopy(unittest.TestCase):
     def test_footer_describes_batch_trim(self):
         # R4A-02: the footer must describe the existing low-water policy.
-        panel = open(os.path.join(os.path.dirname(__file__), "..", "addons", "panel.js")).read()
+        root = os.path.join(os.path.dirname(__file__), "..")
+        panel = open(os.path.join(root, "addons", "panel.js")).read()
         self.assertIn("keeps up to ${state.retention.limit}; trims oldest in batches", panel)
         self.assertNotIn("keeps the last ${state.retention.limit}", panel)
+        self.assertIn("large bodies dropped to free memory", panel)
+        self.assertIn("older WebSocket messages dropped", panel)
+        # Standalone /rivis UI status bar must carry the same retention notices as the injected footer.
+        app = open(os.path.join(root, "addons", "ui", "app.js")).read()
+        self.assertIn("large bodies dropped to free memory", app)
+        self.assertIn("older WebSocket messages dropped", app)
+
+
+class CliRetentionCaps(unittest.TestCase):
+    def test_bash_and_powershell_wire_the_same_ws_and_body_caps(self):
+        # Durability uses the bash CLI; without this check a rivis.ps1-only miss ships silently.
+        root = os.path.join(os.path.dirname(__file__), "..")
+        bash = open(os.path.join(root, "rivis")).read()
+        ps1 = open(os.path.join(root, "rivis.ps1")).read()
+        for src in (bash, ps1):
+            self.assertIn("proxy_max_ws_messages", src)
+            self.assertIn("proxy_max_ws_bytes", src)
+            self.assertIn("proxy_max_body_bytes", src)
+        self.assertIn("MAX_WS_MESSAGES", bash)
+        self.assertIn("MAX_WS_MB", bash)
+        self.assertIn("MAX_BODY_MB", bash)
+        self.assertIn('Config-Env "MAX_WS_MESSAGES"', ps1)
+        self.assertIn('Config-Env "MAX_WS_MB"', ps1)
+        self.assertIn('Config-Env "MAX_BODY_MB"', ps1)
 
 
 class TrimSelectionRace(unittest.TestCase):
@@ -66,6 +91,104 @@ class TrimSelectionRace(unittest.TestCase):
             retention.trim()
         self.assertNotIn(flows[0], removed)
         self.assertTrue(removed)
+
+
+class WebsocketMessageCap(unittest.TestCase):
+    def _retention(self):
+        addons = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "addons")
+        sys.path.insert(0, addons)
+        m = types.ModuleType("mitmproxy")
+        m.ctx = types.SimpleNamespace()
+        m.http = types.SimpleNamespace(HTTPFlow=type("HTTPFlow", (), {}))
+        sys.modules.update({"mitmproxy": m})
+        import importlib
+        import proxy_retention as pr
+        importlib.reload(pr)
+        return pr
+
+    def test_oldest_frames_are_dropped_once_the_per_call_cap_is_hit(self):
+        pr = self._retention()
+        msgs = []
+        for i in range(5):
+            msg = mock.Mock()
+            msg.content = ("m%d-" % i).encode() + b"x" * 10
+            msgs.append(msg)
+        flow = mock.Mock()
+        flow.comment = ""
+        flow.metadata = {}
+        flow.websocket = mock.Mock(messages=msgs)
+        opts = mock.Mock(proxy_max_ws_messages=3, proxy_max_ws_bytes=1024 * 1024)
+        retention = pr.ProxyRetention()
+        with mock.patch.object(pr, "ctx", mock.Mock(options=opts)):
+            retention.trim_websocket(flow)
+        self.assertEqual(len(flow.websocket.messages), 3)
+        self.assertEqual(flow.metadata.get("proxy_ws_dropped"), 2)
+        self.assertIn("older messages dropped", flow.comment)
+        self.assertEqual(retention.ws_dropped, 2)
+
+    def test_oldest_frames_are_dropped_once_the_per_call_byte_budget_is_hit(self):
+        # Message-count alone is not enough: a handful of large frames must still trim by bytes.
+        pr = self._retention()
+        msgs = []
+        for i in range(4):
+            msg = mock.Mock()
+            msg.content = ("b%d-" % i).encode() + b"y" * 400
+            msgs.append(msg)
+        flow = mock.Mock()
+        flow.comment = ""
+        flow.metadata = {}
+        flow.websocket = mock.Mock(messages=msgs)
+        # Cap is well below 4×400 bytes; message count stays unlimited so only the byte path fires.
+        opts = mock.Mock(proxy_max_ws_messages=0, proxy_max_ws_bytes=900)
+        retention = pr.ProxyRetention()
+        with mock.patch.object(pr, "ctx", mock.Mock(options=opts)):
+            retention.trim_websocket(flow)
+        self.assertLessEqual(int(flow.metadata.get("proxy_ws_bytes") or 0), 900)
+        self.assertLess(len(flow.websocket.messages), 4)
+        self.assertGreaterEqual(retention.ws_dropped, 1)
+        self.assertIn("older messages dropped", flow.comment)
+
+
+class BodyByteBudget(unittest.TestCase):
+    def test_oldest_completed_bodies_are_cleared_when_over_budget(self):
+        addons = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "addons")
+        sys.path.insert(0, addons)
+        m = types.ModuleType("mitmproxy")
+        m.ctx = types.SimpleNamespace()
+        m.http = types.SimpleNamespace(HTTPFlow=type("HTTPFlow", (), {}))
+        sys.modules.update({"mitmproxy": m})
+        import importlib
+        import proxy_retention as pr
+        importlib.reload(pr)
+        flows = []
+        for i in range(6):
+            f = pr.http.HTTPFlow()
+            f.id = "b%d" % i
+            f.intercepted = False
+            f.live = False
+            f.error = None
+            f.comment = ""
+            f.metadata = {}
+            f.timestamp_start = float(i)
+            f.request = mock.Mock(timestamp_start=float(i), raw_content=b"r" * 100)
+            f.response = mock.Mock(raw_content=b"B" * 1000)
+            flows.append(f)
+        view = mock.Mock()
+        view._store = {f.id: f for f in flows}
+        view.update = mock.Mock()
+        master = mock.Mock(view=view)
+        opts = mock.Mock(proxy_max_body_bytes=2500)   # keep roughly two of the 1100-byte bodies
+        retention = pr.ProxyRetention()
+        with mock.patch.object(pr, "ctx", mock.Mock(master=master, options=opts)), \
+                mock.patch.object(pr.ProxyRetention, "_selected", staticmethod(lambda: set())), \
+                mock.patch.object(pr.ProxyRetention, "_completed", staticmethod(lambda f: True)):
+            retention.trim_bodies()
+        cleared = [f for f in flows if f.response.raw_content is None]
+        kept = [f for f in flows if isinstance(f.response.raw_content, (bytes, bytearray))]
+        self.assertTrue(cleared, "expected oldest bodies to be cleared")
+        self.assertTrue(kept, "expected some bodies to remain under the budget")
+        self.assertGreaterEqual(retention.bodies_dropped, 1)
+        self.assertIn("body dropped to free memory", cleared[0].comment)
 
 
 class Retention(LiveCase):
