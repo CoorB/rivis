@@ -7,9 +7,13 @@ tests/.artifacts/
 # never commit user state or recordings
 **/rules.json
 !projects/**/rules.example.json
+# Upgrade durability fixtures are real ~/.rivis trees; their rules.json and
+# current-project must ship with the suite or every release loses those files.
+!tests/fixtures/upgrade/**/rules.json
 *.flows
 *.har
 web-token
 current-project
+!tests/fixtures/upgrade/**/current-project
 .playwright-mcp/
 .ruff_cache/

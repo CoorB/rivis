@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import time
 import unittest
@@ -91,6 +92,35 @@ def extract_installer(suite, version):
         with zipfile.ZipFile(zpath) as bundle:
             bundle.extractall(dest)
     return root
+
+
+class FixtureIntegrity(unittest.TestCase):
+    """Manifests must list real files that git will actually keep — **/rules.json and current-project
+    are ignored for live user state, so the upgrade trees need an explicit allow."""
+
+    def test_every_manifest_file_is_present_and_not_gitignored(self):
+        versions = [n for n in sorted(os.listdir(FIX)) if os.path.isdir(os.path.join(FIX, n))]
+        self.assertTrue(versions, "no upgrade fixtures under %s" % FIX)
+        for version in versions:
+            root = os.path.join(FIX, version)
+            manifest_path = os.path.join(root, "manifest.json")
+            self.assertTrue(os.path.isfile(manifest_path), manifest_path)
+            files = json.load(open(manifest_path, encoding="utf-8"))["files"]
+            self.assertTrue(files, "%s manifest lists no files" % version)
+            for rel in files:
+                path = os.path.join(root, rel)
+                self.assertTrue(
+                    os.path.lexists(path),
+                    "upgrade fixture %s lists %s but the file is missing on disk" % (version, rel),
+                )
+                ignored = subprocess.run(
+                    ["git", "-C", harness.REPO, "check-ignore", "-q", path]
+                ).returncode
+                self.assertNotEqual(
+                    ignored,
+                    0,
+                    "%s is gitignored — upgrade fixtures must ship with the suite" % path,
+                )
 
 
 class FixtureReads(unittest.TestCase):
