@@ -73,11 +73,17 @@ class TreeWorkerExtremes(unittest.TestCase):
         self.assertTrue(huge["msg"].get("ok"), huge)
         self.assertLess(huge["ms"], 5000, huge)
 
-    def test_invalid_empty_and_bom_json_return_an_error(self):
-        for payload in ('{"a":', "", "\ufeff{\"a\":1}"):
+    def test_invalid_and_empty_json_return_an_error(self):
+        for payload in ('{"a":', ""):
             result = self.run_worker(payload, timeout_ms=3000)
             self.assertIn("error", result["msg"], result)
             self.assertNotEqual(result["msg"]["error"], "TIMEOUT", result)
+
+    def test_a_leading_byte_order_mark_is_not_content(self):
+        # Servers that prepend a BOM send valid JSON; the tree must draw it, not call it broken.
+        result = self.run_worker("\ufeff{\"a\":1}", timeout_ms=3000)
+        self.assertTrue(result["msg"].get("ok"), result)
+        self.assertNotIn("error", result["msg"], result)
 
 
 if __name__ == "__main__":
