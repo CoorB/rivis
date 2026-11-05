@@ -272,6 +272,57 @@ en9: flags=8863<UP> mtu 1500
         self.assertTrue(d.remove("192.168.1.5"))
         self.assertFalse(d.remove("192.168.1.5"))
 
+    def test_corrupt_devices_file_shapes_are_treated_as_empty(self):
+        # Absent, empty, truncated, BOM, wrong JSON shape: list/allow must not raise, and allow still writes a clean file.
+        home = Suite.get().new_home("lan-corrupt")
+        path = os.path.join(home, "lan-devices.json")
+        with patch.object(proxy_lan, "lookup_mac", return_value=None):
+            d = proxy_lan.Devices(path)
+            self.assertEqual(d.rows(), [])
+            for payload in ("", "{", "[]", "null", "5", '{"devices": "nope"}',
+                            "\ufeff" + json.dumps({"devices": [{"ip": "192.168.1.9", "name": "Bommed"}]})):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(payload)
+                d = proxy_lan.Devices(path)
+                self.assertEqual(d.rows(), [], repr(payload[:40]))
+            d.allow("192.168.1.9", "Recovered")
+            self.assertEqual([r["ip"] for r in proxy_lan.Devices(path).rows()], ["192.168.1.9"])
+
+    def test_invalid_device_rows_are_skipped_without_dropping_valid_neighbours(self):
+        path = os.path.join(Suite.get().new_home("lan-mixed"), "lan-devices.json")
+        now = 2_000_000
+        with open(path, "w") as fh:
+            json.dump({"devices": [
+                {"ip": "not-an-ip", "name": "Bad"},
+                {"ip": "192.168.1.7", "name": "Good", "added": now, "last_seen": now},
+                {"name": "NoIp"},
+                None,
+                "skip-me",
+            ]}, fh)
+        with patch.object(proxy_lan.time, "time", return_value=now):
+            rows = proxy_lan.Devices(path).rows()
+            self.assertEqual([(r["ip"], r["name"]) for r in rows], [("192.168.1.7", "Good")])
+            with patch.object(proxy_lan, "lookup_mac", return_value=None):
+                proxy_lan.Devices(path).allow("192.168.1.8", "Other")
+            kept = [(r["ip"], r["name"]) for r in proxy_lan.Devices(path).rows()]
+        self.assertEqual(kept, [("192.168.1.7", "Good"), ("192.168.1.8", "Other")])
+
+    def test_non_numeric_last_seen_does_not_crash_seen(self):
+        # Coverage gap / defect: rows() keeps a non-numeric last_seen (so expiry no longer crashes), but seen()
+        # still compares it with `>` against an int. An allowed phone whose lan-devices.json was edited by hand
+        # (or written by a half-finished tool) then blows up on every proxied call.
+        path = os.path.join(Suite.get().new_home("lan-seen-type"), "lan-devices.json")
+        with open(path, "w") as fh:
+            json.dump({"devices": [{"ip": "192.168.1.5", "name": "Lab", "added": 1,
+                                    "last_seen": "yesterday", "mac": "3a:1b:2c:4d:5e:6f"}]}, fh)
+        d = proxy_lan.Devices(path)
+        self.assertEqual(d.get("192.168.1.5")["name"], "Lab")
+        with patch.object(proxy_lan.time, "time", return_value=2_000_000):
+            d.seen("192.168.1.5")                         # must not raise
+        row = proxy_lan.Devices(path).get("192.168.1.5")
+        self.assertIsNotNone(row)
+        self.assertIsInstance(row["last_seen"], (int, float))
+
     def test_mac_arp_parsing_without_leading_zeros(self):
         """macOS's arp drops leading zeros in each octet; the stored MAC must still match a later lookup."""
         self.assertEqual(proxy_lan.parse_arp("? (192.168.1.6) at 0:1c:42:a:5e:6 on en0 ifscope [ethernet]"), "00:1c:42:0a:5e:06")

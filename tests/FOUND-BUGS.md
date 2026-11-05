@@ -149,3 +149,30 @@ panel state endpoint 500s, so the drawer breaks until the file is fixed. Repro:
 `test_rules_engine.py::HotReload::test_broken_rules_json_keeps_previous_rules_and_never_kills_mitmweb` (write any of
 the listed broken payloads to rules.json, wait 2 s, GET /proxy/api/state). Expected: 200 with the last good state plus
 a visible "rules.json has an error: <reason>" banner.
+
+## B17 — OPEN — non-numeric `last_seen` in `lan-devices.json` crashes `Devices.seen`
+- **Where:** `addons/proxy_lan.py` `Devices.rows` keeps a non-numeric `last_seen` (so expiry no longer does
+  `now - "string"`), but `Devices.seen` still does `(row.get("last_seen") or 0) > now - 60`, which raises
+  `TypeError` when `last_seen` is a string / list.
+- **Repro:** write `lan-devices.json` with `"last_seen": "yesterday"` for an allowed IP; call `Devices.seen(ip)`
+  (happens on every allowed phone call via `_allowed`). → `TypeError: '>' not supported between instances of
+  'str' and 'int'`. The phone's next call through `--lan` fails instead of being proxied.
+- **Expected:** coerce or drop a non-numeric `last_seen` (same spirit as the expiry guard), then refresh it.
+- **Test:** `test_lan_0910.py::LanUnit::test_non_numeric_last_seen_does_not_crash_seen` (failing; coverage lane).
+
+## B18 — OPEN — corrupt `filters.json` makes `GET /proxy/api/state` return HTTP 500
+- **Where:** `addons/proxy_panel.py` `filters_list` only catches `FileNotFoundError`; truncated / BOM / wrong-shaped
+  JSON raises into `state()`, and the GET handler has no try/except (unlike POST, and unlike `columns()` which
+  falls back to defaults).
+- **Repro:** save a filter, truncate `projects/<id>/filters.json` to `{` or write `null`; `GET /proxy/api/state` →
+  500. The Tools drawer stops refreshing until the file is deleted or fixed.
+- **Expected:** 200 with `saved_filters: []` (and ideally a visible error), same resilience as `columns()`.
+- **Test:** `test_panel.py::Ops::test_corrupt_filters_json_does_not_break_state` (failing; coverage lane).
+
+## B19 — OPEN — `trusted_files()` walks a string `files` value character by character
+- **Where:** `addons/proxy_common.py` `trusted_files`: `{p for p in (doc.get("files") …) or [] if isinstance(p, str)}`.
+  A string is iterable of single-character strings, each of which passes `isinstance(p, str)`.
+- **Repro:** write `trusted-files.json` as `{"files": "/tmp/outside-mock.json"}` (forgot the array brackets).
+  `trusted_files(state_dir)` → `{"/", "t", "m", "p", …}` instead of empty / a clear refusal.
+- **Expected:** require `files` to be a list; anything else → empty set (same as corrupt JSON).
+- **Test:** `test_cli.py::TrustedFiles::test_trusted_files_string_value_does_not_invent_paths` (failing; coverage lane).

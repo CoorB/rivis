@@ -993,6 +993,26 @@ class Compose(CliBase):
     def test_list_refuses_trailing_arguments(self):
         self.refused("compose", "list", "EXTRA", msg="compose list")
 
+    def test_list_marks_unreadable_saved_requests_and_variables(self):
+        # A half-written composer/*.json (crash mid-save, or a hand edit) must not abort `compose list`.
+        d = os.path.join(self.state, "projects", "default", "composer")
+        os.makedirs(d)
+        with open(os.path.join(d, "good.json"), "w") as fh:
+            json.dump({"method": "GET", "url": "http://x.test/ok"}, fh)
+        with open(os.path.join(d, "broken.json"), "w") as fh:
+            fh.write("{ not json")
+        with open(os.path.join(d, "array.json"), "w") as fh:
+            fh.write("[]")
+        with open(os.path.join(d, "vars.json"), "w") as fh:
+            fh.write('{"edge": 1}')                              # numbers are refused by ComposerStore.variables
+        out = self.ok("compose", "list").stdout
+        self.assertRegex(out, r"good\s+GET\s+http://x\.test/ok")
+        self.assertRegex(out, r"broken\s+\(unreadable\)")
+        self.assertRegex(out, r"array\s+\(unreadable\)")
+        self.assertIn("variables: unreadable", out)
+        self.refused("compose", "send", "broken", msg="cannot read saved request")
+        self.refused("compose", "send", "array", msg="cannot read saved request")
+
 
 class NetReset(CliBase):
     def test_dry_run_prints_only_and_never_changes_anything(self):
@@ -1772,6 +1792,38 @@ class TrustedFiles(CliBase):
             self.refused("rules", "add", "k" + str(abs(hash(rel)) % 1000), "match=/x", "action=map_local", "file=" + p,
                       msg="refusing")
         self.assertEqual(self.trust_list(), [])
+
+    def test_corrupt_trusted_files_json_is_treated_as_empty(self):
+        # trusted-files.json is separate from rules.json on purpose (F-09). Truncated / BOM / wrong JSON must not
+        # crash allow-file, and must not invent trust from garbage.
+        mine = os.path.join(self.home, "Desktop", "mock2.json")
+        os.makedirs(os.path.dirname(mine))
+        with open(mine, "w") as fh:
+            fh.write("{}")
+        trust = os.path.join(self.state, "projects", "default", "trusted-files.json")
+        os.makedirs(os.path.dirname(trust), exist_ok=True)
+        for payload in ("", "{", "[]", "null",
+                        "\ufeff" + json.dumps({"files": [os.path.realpath(mine)]})):
+            with open(trust, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            out = self.ok("rules", "trusted-files").stdout
+            self.assertNotIn(os.path.realpath(mine), out)
+            self.ok("rules", "allow-file", mine)
+            self.assertEqual(self.trust_list(), [os.path.realpath(mine)])
+            self.ok("rules", "disallow-file", mine)
+            self.assertEqual(self.trust_list(), [])
+
+    def test_trusted_files_string_value_does_not_invent_paths(self):
+        # Defect: trusted_files() iterates doc["files"] when it is a string, so each character becomes a "path".
+        # A hand-edited '{"files":"/abs/mock.json"}' (forgot the array) would trust "a","b","s",… — never the file.
+        trust = os.path.join(self.state, "projects", "default", "trusted-files.json")
+        os.makedirs(os.path.dirname(trust), exist_ok=True)
+        with open(trust, "w") as fh:
+            fh.write('{"files": "/tmp/outside-mock.json"}')
+        sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+        import proxy_common
+        got = proxy_common.trusted_files(os.path.dirname(trust))
+        self.assertEqual(got, set(), "a string files value must not be walked character by character: %r" % got)
 
 
 
