@@ -1777,10 +1777,14 @@ class StatusUiStop(CliBase):
         self.assertIn("no booted simulator", r.stderr)
         # DeviceHub on Xcode 27+, Simulator.app on an older selected Xcode (DEVELOPER_DIR = xcode-select's answer)
         for dh, name in ((True, "DeviceHub"), (False, "Simulator.app")):
-            dev = os.path.join(self.home, "Xcode%d.app" % (27 if dh else 26), "Contents", "Developer")
-            os.makedirs(os.path.join(dev, "..", "Applications", "DeviceHub.app") if dh
-                        else os.path.join(dev, "Applications", "Simulator.app"), exist_ok=True)
-            r = self.refused("ios", "on", env=dict(self.env, DEVELOPER_DIR=dev, SKIP_CLT_CHECK="1"))
+            # A fake Xcode.app whose Developer dir IS this Mac's (xcrun and /usr/bin/python3 need a real one); only the
+            # app next to it differs: DeviceHub.app (Xcode 27+) or none (older Xcode, Simulator.app inside Developer)
+            app = os.path.join(self.home, "Xcode%d.app" % (27 if dh else 26), "Contents")
+            os.makedirs(os.path.join(app, "Applications", "DeviceHub.app") if dh else app, exist_ok=True)
+            dev = os.path.join(app, "Developer")
+            if not os.path.lexists(dev):
+                os.symlink(subprocess.run(["xcode-select", "-p"], capture_output=True, text=True).stdout.strip(), dev)
+            r = self.refused("ios", "on", env=dict(self.env, DEVELOPER_DIR=dev))
             self.assertIn("boot one in %s" % name, r.stderr)
         adb = os.path.join(self.home, "adb")
         with open(adb, "w") as fh:

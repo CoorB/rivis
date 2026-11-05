@@ -3407,7 +3407,9 @@
       pollState = api("state", undefined, 4000);       // aborted at 4 s, so a hung proxy never holds a connection
       const s = await pollState.finally(() => { pollState = null; });
       missed = 0; lostSince = 0; showLost(false);
-      state = s; columns = s.columns || columns; badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow(); showAndroidRestored(s);
+      state = s; columns = s.columns || columns;
+      if (window.RivisTermsGate) window.RivisTermsGate.seen(s.terms);      // the Terms of Use cover reads this poll
+      badges(); showProxyBar(s.system_proxy); showUpdateBar(s); refreshUpdatesRow(); showAndroidRestored(s);
       if ($("drawer").classList.contains("open")) await refreshViewerSummaries();
       // the call list (megabytes at a few thousand calls) is for the Tools drawer's own tabs: skip it while the drawer is
       // closed or the page is hidden (row tags come from mitmweb's own rows), and flowsById() fetches on demand

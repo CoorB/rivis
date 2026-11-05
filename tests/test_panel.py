@@ -138,6 +138,11 @@ class Auth(RestartHelpers, LiveCase):
             self.assertEqual(body, fh.read())
         code, page = self.panel.get("/")
         self.assertIn(b"proxy/panel.js", page)
+        self.assertIn(b"proxy/terms-gate.js", page)                   # the Terms of Use cover is on every page
+        code, body = self.panel.get("/proxy/terms-gate.js")
+        self.assertEqual(code, 200)
+        with open(os.path.join(ADDONS, "terms-gate.js"), "rb") as fh:
+            self.assertEqual(body, fh.read())
 
     def test_unknown_get_op_and_unknown_post_op(self):
         self.assertEqual(self.panel.get("/proxy/api/nope")[0], 404)

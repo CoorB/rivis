@@ -47,6 +47,22 @@ Versions before 0.9.7 have no `rollback` command: after going back to one of the
 `rollback` only switches between versions already installed on this Mac; it never deletes one. Rules, Map Local
 files, sessions and collections are shared by all versions and are not changed.
 
+## Terms of Use
+
+Before first use Rivis shows its Terms of Use and asks you to agree by typing your full name: in the terminal
+(`rivis terms`, or the first command that needs it) or in the Rivis window. Until you agree, nothing that captures,
+decrypts or changes traffic runs; the proxy itself passes no traffic (every call gets a short "Rivis is locked"
+answer), so a start from the Mac app or after an update cannot bypass it. If you do not agree, Rivis stops.
+`rivis stop`, `status`, `android off`, `ios off`, `net-reset`, `doctor` and `terms` always work, so a device can
+always be taken off Rivis again. When the terms text changes you are asked again. Your answer is kept in
+`~/.rivis-terms-acceptance.json` (who, when, which text by SHA-256, this Mac and Rivis version, earlier answers).
+
+```
+rivis terms            # read them and agree
+rivis terms status     # accepted / not accepted / changed since you agreed
+rivis terms show       # print the text
+```
+
 ## Projects
 
 Project profiles hold client-specific labels, host filters, collection/throttle defaults, device identifiers,

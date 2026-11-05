@@ -821,6 +821,21 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
             fh.write("tok-0123456789")
         return posts
 
+    def test_terms_gate_matches_the_bash_cli(self):
+        home = self.suite.new_home("ps-terms", terms=False)
+        env = self.suite.cli_env(home)
+        run = lambda *a: self.suite.run([PWSH, "-NoProfile", "-NonInteractive", "-File",
+                                         os.path.join(harness.REPO, "rivis.ps1")] + list(a), home=home, env=env, timeout=120)
+        cp = run("rules", "list")
+        self.assertEqual(cp.returncode, 10, cp.stdout + cp.stderr)
+        self.assertIn("Terms of Use", cp.stdout + cp.stderr)
+        for args in (("status",), ("terms", "status"), ("terms", "show"), ("help",)):
+            cp = run(*args)
+            self.assertNotEqual(cp.returncode, 10, "%s was gated: %s" % (args, cp.stdout + cp.stderr))
+        self.assertIn("not accepted yet", run("terms", "status").stdout)
+        self.assertIn("Rivis Terms of Use", run("terms", "show").stdout)
+        self.assertIn("proxy_terms.py", open(os.path.join(harness.REPO, "rivis.ps1")).read())   # the proxy is locked too
+
     def test_projects_use_while_pinned_saves_for_next_start(self):
         """While the running proxy is pinned, projects use still saves current-project for the next start."""
         self.ok("projects", "new", "qa", "-Hosts", r"example\.test", "-Label", "QA")

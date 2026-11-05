@@ -67,6 +67,7 @@ SYSTEM_PYTHON = (
     "addons/rules_cli.py",
     "addons/scripts_cli.py",
     "addons/system_trust.py",
+    "addons/terms.py",          # the Terms of Use gate: both CLIs run it with /usr/bin/python3 -I (and mitmweb imports it)
     "addons/tls_cli.py",
     "addons/updater.py",
 )
@@ -87,6 +88,7 @@ MITM_PYTHON = (
     "addons/proxy_rules.py",
     "addons/proxy_quic.py",
     "addons/proxy_source.py",
+    "addons/proxy_terms.py",
 )
 
 # (relpath, rule_id) pairs that are deliberate and must not fail the suite.

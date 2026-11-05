@@ -55,6 +55,8 @@ class ProxymanImport0910(unittest.TestCase):
     def setUp(self):
         self.suite = Suite.get()
         self.home = os.path.join(self.suite.root, self.id().split(".")[-1])
+        os.makedirs(self.home, exist_ok=True)
+        harness.seed_terms_acceptance(self.home)
         self.fixture = os.path.join(harness.REPO, "tests", "fixtures", "proxyman")
         self.source = os.path.join(self.home, "source")
         shutil.copytree(self.fixture, self.source)

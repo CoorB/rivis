@@ -18,6 +18,8 @@ system proxy, one CA per workstation, removed again with `off`.
                                             web apps: a separate browser window with its own profile, pointed
                                             at the proxy and trusting only this CA. Your normal browser, the
                                             system proxy and the certificate store are not touched
+  .\<cli>.ps1 terms [status|show]          read and agree to the Terms of Use (asked before first use; nothing that
+                                            captures traffic runs until you agree; stop/status/off always work)
   .\<cli>.ps1 projects list|use ID|unpin|show|new
   .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
   .\<cli>.ps1 rules add NAME match=REGEX|match_wildcard=HOST/PATH action=ACTION [key=value ...]
@@ -740,7 +742,62 @@ if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report"
 }
 if ($unexpected.Count) { Die "unexpected argument(s): $($unexpected -join ' ')" }
 
+# Terms of Use: the same rules as the bash CLI. addons\terms.py is the one implementation; addons\proxy_terms.py
+# keeps the proxy locked (no traffic passes) while they are not accepted.
+$TermsPy = Join-Path $PSScriptRoot "addons\terms.py"
+function Invoke-TermsPy {
+  $py = Get-PythonCommand
+  $out = & $py.Exe @($py.Prefix) -I $TermsPy @args 2>&1
+  return [PSCustomObject]@{ Out = (@($out) -join "`n").Trim(); Code = $LASTEXITCODE }
+}
+function Show-TermsPrompt {
+  Write-Host ""
+  Write-Host (Invoke-TermsPy text).Out
+  Write-Host ""
+  while ($true) {
+    $typed = Read-Host "Type your full name to agree to these Terms of Use, or press Enter to decline"
+    if (-not $typed) {
+      Invoke-TermsPy decline powershell | Out-Null
+      Write-Host "${Cli}: you did not agree to the Terms of Use, so $ProductName will not run. To read them again: ${Cli}.ps1 terms" -ForegroundColor Red
+      return $false
+    }
+    $r = Invoke-TermsPy accept $typed powershell
+    if ($r.Code -eq 0) { Info "Terms of Use accepted - thank you, $($typed.Trim())."; return $true }
+    Write-Host "  $($r.Out)"
+  }
+}
+$TermsOpen = @("help","version","terms","stop","status","doctor","bug-report","net-reset","update","health")
+if ($Command -notin $TermsOpen -and -not ($Command -in @("android","ios") -and $Action -in @("off",""))) {
+  $terms = Invoke-TermsPy status
+  if ($terms.Code -eq 4) { Die "this copy of $ProductName has no Terms of Use text - reinstall it from the official release" }
+  if ($terms.Code -ne 0) {
+    if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+      Write-Host "${ProductName}: before first use, read and agree to the Terms of Use."
+      if (-not (Show-TermsPrompt)) { exit 10 }
+    } elseif ($Command -notin @("start","ui")) {
+      # nobody at a terminal: start / ui run LOCKED (no traffic) and the window shows the terms
+      Write-Host "${Cli}: the Terms of Use have not been accepted on this computer - run '${Cli}.ps1 terms' in a terminal, or agree in the $ProductName window" -ForegroundColor Red
+      exit 10
+    }
+  }
+}
+
 switch ($Command) {
+  "terms" {
+    $r = Invoke-TermsPy status
+    if ($Action -eq "status") {
+      $says = @{ accepted = "accepted"; changed = "changed since you agreed - run: ${Cli}.ps1 terms"
+                 declined = "declined - $ProductName will not run until you agree (run: ${Cli}.ps1 terms)"
+                 missing = "this copy has no terms text - reinstall it from the official release" }
+      $msg = if ($says.ContainsKey($r.Out)) { $says[$r.Out] } else { "not accepted yet - run: ${Cli}.ps1 terms" }
+      Write-Host "Terms of Use: $msg"; exit $r.Code
+    } elseif ($Action -eq "show") {
+      $t = Invoke-TermsPy text; Write-Host $t.Out; exit $t.Code
+    } elseif ($Action) { Die "usage: terms [status|show]" }
+    if ($r.Code -eq 4) { Die "this copy of $ProductName has no Terms of Use text - reinstall it from the official release" }
+    if ([Console]::IsInputRedirected) { Die "run '${Cli}.ps1 terms' in a terminal (it asks you to type your name), or agree in the $ProductName window" }
+    if (-not (Show-TermsPrompt)) { exit 10 }
+  }
   "app" { Die "the native window is macOS only — use rivis ui" }
   "projects" {
     $subcommand = if ($Action) { $Action.ToLowerInvariant() } else { "list" }
@@ -848,7 +905,7 @@ switch ($Command) {
     }
     $margs = @("--listen-host","127.0.0.1","--mode",$proxyMode,
               "--set","web_host=127.0.0.1","--set","web_port=$WebPort","--set","web_open_browser=false",
-              "-s",(Join-Path $PSScriptRoot "addons\proxy_auth.py"),
+              "-s",(Join-Path $PSScriptRoot "addons\proxy_terms.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_auth.py"),
               "--set","proxy_auth_token_file=$TokenPath","--set","proxy_bootstrap_file=$BootstrapPath",
               "--set","confdir=$ConfDir","--set","connection_strategy=lazy",
               "--set",("http2=" + $(if ((Config-Env "HTTP2" "0") -eq "1") { "true" } else { "false" })), "--set",("stream_large_bodies=" + (Config-Env "STREAM_LARGE_BODIES" "64m")),

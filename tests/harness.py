@@ -259,10 +259,14 @@ class Suite:
                 raise AssertionError("tests must never use the live ports (%s=%s)" % (k, env[k]))
         return env
 
-    def new_home(self, name=None):
+    def new_home(self, name=None, terms=True):
+        """A fake HOME. terms=True: the user has already agreed to the shipped Terms of Use (what every test but the
+        gate's own needs); terms=False: a first run, the gate asks."""
         self._counter += 1
         home = os.path.join(self.root, "home-%s-%d" % (name or "h", self._counter))
         os.makedirs(home, exist_ok=True)
+        if terms:
+            seed_terms_acceptance(home)
         return home
 
     def cli_env(self, home, **extra):
@@ -420,6 +424,19 @@ class Panel:
         assert code == 200, "PUT /options %s -> %s %r" % (name, code, body[:200])
 
 
+def seed_terms_acceptance(home):
+    """Record that this fake HOME's user agreed to the repository's Terms of Use text (addons/terms.py format)."""
+    import hashlib
+    with open(os.path.join(REPO, "terms", "TERMS.md"), "rb") as fh:
+        digest = hashlib.sha256(fh.read()).hexdigest()
+    entry = {"answer": "accepted", "terms_sha256": digest, "terms_title": "Rivis Terms of Use", "at": "2026-01-01T00:00:00+00:00",
+             "name": "Test User", "mac_user": "test", "account_name": "", "host": "test", "version": "dev", "via": "cli"}
+    path = os.path.join(home, ".rivis-terms-acceptance.json")      # outside ~/.rivis: tests create that themselves
+    with open(path, "w") as fh:
+        json.dump({"current": entry, "history": []}, fh)
+    os.chmod(path, 0o600)
+
+
 class Background:
     """Run a blocking call (a curl that will be paused at a breakpoint) in a thread; .result() joins it."""
 
@@ -458,9 +475,9 @@ class Instance:
     """A throw-away Rivis (mitmweb) started through the real `rivis start` CLI."""
 
     def __init__(self, suite, name, project=None, setup=None, extra_env=None, start_args=("--insecure",),
-                 pre=None, node=True, rivis_bin=None, fresh_ca=False, allow_private=True):
+                 pre=None, node=True, rivis_bin=None, fresh_ca=False, allow_private=True, terms=True):
         self.suite, self.name, self.project = suite, name, project or "default"
-        self.home = suite.new_home(name)
+        self.home = suite.new_home(name, terms=terms)
         self.proc = None
         self.extra_env, self.start_args, self.pre, self.setup = extra_env or {}, list(start_args), pre, setup
         if allow_private and "--allow-private-hosts" not in self.start_args:

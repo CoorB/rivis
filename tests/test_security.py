@@ -707,7 +707,9 @@ class Modes(LiveCase):
         self.panel.ok("sess_save", {"name": "w1"})
         self.panel.ok("script_new", {"name": "w2", "lang": "js"})
         top = sorted(os.listdir(self.inst.home))
-        self.assertEqual(top, [".mitmproxy", ".rivis"], top)
+        # the Terms of Use record sits next to the state dir on purpose (addons/terms.py: a state reset must not
+        # erase who agreed); it is the only file Rivis keeps outside .rivis / .mitmproxy
+        self.assertEqual(top, [".mitmproxy", ".rivis", ".rivis-terms-acceptance.json"], top)
 
 
 if __name__ == "__main__":

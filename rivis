@@ -28,6 +28,8 @@
 #                                              (Tools → Devices, or '<cli> lan allow IP'). Setup page + QR code
 #                                              in Tools → Devices. Off by default
 #   <cli> lan [list] | allow IP [NAME] | rm IP   the phones and tablets allowed to use the proxy (--lan)
+#   <cli> terms [status|show]       read and agree to the Terms of Use (asked before first use; nothing that
+#                                 captures traffic runs until you agree; stop/status/off commands always work)
 #   <cli> projects list|use ID|unpin|show ID|new ID --label L --hosts REGEX
 #   <cli> ui [--new|--classic] [--url] | stop | restart | status | cert
 #                                 the new main window is default; --classic opens the fallback view
@@ -709,7 +711,7 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
               # app streams to an HTTP/1.1-only origin each open a new upstream TLS connection. That is especially
               # expensive for TLS 1.2 static-RSA gateways over a VPN. RIVIS_HTTP2=1 opts back in.
               --set "http2=$([ "$(env_value HTTP2 0)" = 1 ] && echo true || echo false)" --set "stream_large_bodies=$(env_value STREAM_LARGE_BODIES 64m)"
-              -s "$AUTH_ADDON" -s "$SCRIPT_DIR/addons/proxy_lan.py" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_source.py" -s "$SCRIPT_DIR/addons/proxy_panel.py" -s "$SCRIPT_DIR/addons/proxy_retention.py" -s "$SCRIPT_DIR/addons/proxy_operability.py"
+              -s "$SCRIPT_DIR/addons/proxy_terms.py" -s "$AUTH_ADDON" -s "$SCRIPT_DIR/addons/proxy_lan.py" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_source.py" -s "$SCRIPT_DIR/addons/proxy_panel.py" -s "$SCRIPT_DIR/addons/proxy_retention.py" -s "$SCRIPT_DIR/addons/proxy_operability.py"
               --set "proxy_auth_token_file=$TOKEN_FILE" --set "proxy_bootstrap_file=$BOOTSTRAP_FILE"
               --set "proxy_remember_ui=$([ "$(env_value REMEMBER_UI 0)" = 1 ] && echo true || echo false)"
               --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT" --set "proxy_project_pinned=$([ "$start_explicit" = 1 ] && echo true || echo false)" --set "proxy_max_flows=$MAX_FLOWS"
@@ -2078,6 +2080,77 @@ cmd_cert() {
 if [ $# -ge 2 ]; then for _a in "${@:2}"; do case "$_a" in -h|--help) usage_for "$1"; exit 0 ;; esac; done; fi
 case "${1:-}" in -h|--help|help|""|cert|doctor|bug-report) ;; *) migrate_legacy || exit 1 ;; esac
 
+# ── Terms of Use (addons/terms.py is the one implementation; addons/proxy_terms.py locks the proxy) ──────────────
+TERMS_PY="$SCRIPT_DIR/addons/terms.py"
+terms_prompt() {   # show the terms in this terminal and ask for a typed name; 0 = agreed
+  local name problem
+  echo
+  if command -v less >/dev/null 2>&1 && [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; then
+    /usr/bin/python3 -I "$TERMS_PY" text | less -FX || true
+  else
+    /usr/bin/python3 -I "$TERMS_PY" text
+  fi
+  echo
+  while :; do
+    printf 'Type your full name to agree to these Terms of Use, or press Enter to decline: '
+    IFS= read -r name || name=""
+    if [ -z "$name" ]; then
+      /usr/bin/python3 -I "$TERMS_PY" decline cli >/dev/null 2>&1 || true
+      echo "$CLI: you did not agree to the Terms of Use, so $PRODUCT_NAME will not run. To read them again: $CLI terms" >&2
+      return 1
+    fi
+    problem=$(/usr/bin/python3 -I "$TERMS_PY" accept "$name" cli 2>&1 >/dev/null) && break
+    echo "  $problem"
+  done
+  info "Terms of Use accepted — thank you, $name."
+}
+cmd_terms() {
+  local st rc
+  case "${1:-}" in
+    status) [ $# -eq 1 ] || die "usage: $CLI terms [status|show]"
+            st=$(/usr/bin/python3 -I "$TERMS_PY" status); rc=$?
+            case "$st" in
+              accepted) echo "Terms of Use: accepted" ;;
+              changed)  echo "Terms of Use: changed since you agreed — run: $CLI terms" ;;
+              declined) echo "Terms of Use: declined — $PRODUCT_NAME will not run until you agree (run: $CLI terms)" ;;
+              missing)  echo "Terms of Use: this copy has no terms text — reinstall it from the official release" ;;
+              *)        echo "Terms of Use: not accepted yet — run: $CLI terms" ;;
+            esac
+            return "$rc" ;;
+    show)   [ $# -eq 1 ] || die "usage: $CLI terms [status|show]"
+            /usr/bin/python3 -I "$TERMS_PY" text ;;
+    "")     /usr/bin/python3 -I "$TERMS_PY" status >/dev/null 2>&1; rc=$?
+            [ "$rc" != 4 ] || die "this copy of $PRODUCT_NAME has no Terms of Use text — reinstall it from the official release"
+            [ -t 0 ] || die "run '$CLI terms' in a terminal (it asks you to type your name), or agree in the $PRODUCT_NAME window"
+            terms_prompt || exit 10 ;;
+    *)      die "usage: $CLI terms [status|show]" ;;
+  esac
+}
+terms_gate() {   # terms_gate "$@" — runs before every command
+  case "${1:-}" in
+    # never gated: help, reading the terms, and everything that stops Rivis or takes it off a device again
+    ""|-h|--help|help|--version|-V|version|terms|stop|status|health|doctor|bug-report|net-reset|uninstall|update) return 0 ;;
+    __*) return 0 ;;     # internal steps rivis runs for itself, after the command that started them passed the gate
+    android|ios) case "${2:-}" in off|"") return 0 ;; esac ;;
+  esac
+  local rc; /usr/bin/python3 -I "$TERMS_PY" status >/dev/null 2>&1; rc=$?
+  [ "$rc" = 0 ] && return 0
+  [ "$rc" != 4 ] || die "this copy of $PRODUCT_NAME has no Terms of Use text ($SCRIPT_DIR/terms) — reinstall it from the official release"
+  if [ -t 0 ] && [ -t 1 ]; then
+    echo "$PRODUCT_NAME: before first use, read and agree to the Terms of Use."
+    terms_prompt || exit 10
+    return 0
+  fi
+  case "${1:-}" in
+    # nobody at a terminal (Mac app from Finder, an update's restart): start LOCKED — the proxy passes no traffic and
+    # the window shows the terms. Never wait on stdin here (that made "Start Rivis" do nothing before).
+    start|restart|rollback|ui|app) return 0 ;;
+  esac
+  echo "$CLI: the Terms of Use have not been accepted on this Mac — run '$CLI terms' in a terminal, or agree in the $PRODUCT_NAME window" >&2
+  exit 10
+}
+terms_gate "$@"
+
 case "${1:-}" in
   projects)  shift; cmd_projects "$@" ;;
   start)     shift; cmd_start "$@" ;;
@@ -2108,6 +2181,7 @@ case "${1:-}" in
   doctor)    shift; cmd_doctor "$@" ;;
   bug-report) shift; cmd_bug_report "$@" ;;
   update)    shift; cmd_update "$@" ;;
+  terms)     shift; cmd_terms "$@" ;;
   uninstall) die "run install.sh --uninstall from the unzipped Rivis release zip (download: https://github.com/CoorB/rivis/releases)" ;;
   cert)      shift; [ $# -eq 0 ] || die "usage: $CLI cert"; cmd_cert ;;
   --version|-V|version)   # installed copies carry VERSION at their root; a repo checkout keeps it in install/

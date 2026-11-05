@@ -1288,6 +1288,7 @@
       const colsChanged = JSON.stringify((S.state || {}).columns) !== JSON.stringify(st.columns);
       const savedChanged = JSON.stringify((S.state || {}).saved_filters) !== JSON.stringify(st.saved_filters);
       S.state = st;
+      if (window.RivisTermsGate) window.RivisTermsGate.seen(st.terms);     // the Terms of Use cover reads this poll
       drawTools(); drawStatus(); sourcesSoon();
       stateFns.forEach((fn) => { try { fn(st); } catch (e) { /* one tool window must not stop the poll */ } });
       drawBanners(st);

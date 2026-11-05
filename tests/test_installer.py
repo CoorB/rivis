@@ -101,7 +101,7 @@ class DryRun(InstallerBase):
             cp = self.ok(*args)
             self.assertIn("dry run finished", cp.stdout) if "--uninstall" not in args else None
             self.assertEqual(snapshot(self.home), before, args)
-        self.assertEqual(sorted(os.listdir(self.home)), [".zshrc"])
+        self.assertEqual(sorted(os.listdir(self.home)), [".rivis-terms-acceptance.json", ".zshrc"])  # the suite's seed + .zshrc
 
     def test_dry_run_prints_the_plan_and_the_safety_promises(self):
         out = self.ok("--dry-run").stdout

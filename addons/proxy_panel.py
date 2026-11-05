@@ -11,6 +11,7 @@ hot-reloads it. If anything here fails it only logs a warning — capture and ru
 
 Tested on mitmproxy 12.2.3. Re-test after any mitmproxy upgrade (already a security-review step).
 """
+import asyncio
 import json
 import hashlib
 import importlib
@@ -54,6 +55,8 @@ from proxy_scripts import (decode_grpc_frames, decode_protobuf, detect_graphql, 
                           graphql_ops_match, primary_graphql_operation)
 import client_certs
 importlib.reload(client_certs)
+import terms
+importlib.reload(terms)
 import proxy_source        # helpers only (summaries, the list-filter clause); the add-on itself is loaded by the CLI
 importlib.reload(proxy_source)
 import panel_mitmweb
@@ -709,8 +712,11 @@ class ProxyPanel:
             self._tls_tunnels = tls["mode"] != "all"
             self._write_view_filter()      # show / hide the host-only tunnel rows of undecrypted hosts
         bps = breakpoints(cfg)
+        terms_state = terms.status()
         return {
             "product": PRODUCT,
+            # the window covers everything with the terms until they are accepted (the proxy is locked meanwhile)
+            "terms": {k: terms_state[k] for k in ("state", "title", "sha256")},
             "active_project": self.active_project,
             "active_project_label": (self.active_profile or {}).get("label") or self.active_project,
             "project_pinned": bool(getattr(ctx.options, "proxy_project_pinned", False)),
@@ -2496,6 +2502,36 @@ class ProxyPanel:
             return self.project_use(a)
         elif op == "project_unpin":
             return self.project_unpin(a)
+        elif op == "terms_status":       # the cover asks this, not "state": it must never add a second state poll
+            st = terms.status()
+            return {"terms": {k: st[k] for k in ("state", "title", "sha256")}}   # every reply already has "state"
+        elif op == "terms_text":
+            cur = terms.current()
+            if cur is None:
+                raise PanelError("this copy has no Terms of Use text; reinstall it from the official release")
+            return {"text": cur["text"], "title": cur["title"], "sha256": cur["sha256"]}
+        elif op == "terms_accept":
+            cur = terms.current()
+            if cur is None:
+                raise PanelError("this copy has no Terms of Use text; reinstall it from the official release")
+            if a.get("sha256") != cur["sha256"]:
+                # agree only to the text that was shown: it changed (or was never fetched) since the page opened
+                raise PanelError("the Terms of Use changed while they were open; read them again")
+            try:
+                entry = terms.accept(a.get("name"), "window")
+            except ValueError as e:
+                raise PanelError(str(e))
+            ctx.log.info("terms: accepted by %s" % entry.get("name"))
+            return {"terms": {"state": terms.ACCEPTED}, "name": entry.get("name")}
+        elif op == "terms_decline":
+            try:
+                terms.decline("window")
+            except ValueError as e:
+                raise PanelError(str(e))
+            ctx.log.warn("terms: declined in the window; stopping")
+            # answer first, then stop: a user who does not agree gets no running Rivis at all
+            asyncio.get_running_loop().call_later(0.5, ctx.master.shutdown)
+            return {"terms": {"state": terms.DECLINED}, "stopping": True}
         elif op == "view":
             if a.get("project") is not None:
                 project_profile(a["project"])  # validate before changing the view
@@ -3151,7 +3187,8 @@ class ProxyPanel:
                         s = s.replace("</head>", THEME_BOOT + "</head>", 1)
                     s = re.sub(r'(src="\./static/index-[\w-]+\.js)"', r'\1?rivis=%s"' % MITMWEB_PATCH_VERSION, s, count=1)
                     if "</body>" in s and "proxy/panel.js" not in s:
-                        s = s.replace("</body>", '<script src="./proxy/panel.js"></script></body>')
+                        s = s.replace("</body>", '<script src="./proxy/terms-gate.js"></script>'
+                                                 '<script src="./proxy/panel.js"></script></body>')
                     chunk = s
                 return super().finish(chunk)
 
@@ -3162,7 +3199,7 @@ class ProxyPanel:
             FILES = {"": ("index.html", "text/html; charset=utf-8"), "app.css": ("app.css", "text/css"),
                      **{js: (js, "application/javascript") for js in (
                          "app.js", "tools.js", "tool-bp.js", "tool-map.js", "tool-rules.js", "tool-scripts.js", "tool-net.js",
-                         "tool-compose.js", "tool-more.js", "tree-worker.js")}}
+                         "tool-compose.js", "tool-more.js", "tree-worker.js", "terms-gate.js")}}
 
             def auth_fail(self, invalid_password):
                 if self.path_args != [""]:
@@ -3177,7 +3214,7 @@ class ProxyPanel:
                 if name not in self.FILES:
                     raise tornado.web.HTTPError(404)
                 fn, ctype = self.FILES[name]
-                with open(os.path.join(HERE, "tree-worker.js" if name == "tree-worker.js" else os.path.join("ui", fn)), "rb") as fh:
+                with open(os.path.join(HERE, name if name in ("tree-worker.js", "terms-gate.js") else os.path.join("ui", fn)), "rb") as fh:
                     data = fh.read()
                 self.set_header("Content-Type", ctype)
                 self.set_header("Cache-Control", "no-store")
@@ -3200,6 +3237,14 @@ class ProxyPanel:
                 with open(os.path.join(HERE, "panel.js"), "rb") as fh:
                     self.set_header("Content-Type", "application/javascript")
                     self.set_header("Cache-Control", "no-store")
+                    self.write(fh.read())
+
+        class TermsGateJS(webapp.RequestHandler):
+            def get(self):          # the Terms of Use cover (both windows load this same file)
+                with open(os.path.join(HERE, "terms-gate.js"), "rb") as fh:
+                    self.set_header("Content-Type", "application/javascript")
+                    self.set_header("Cache-Control", "no-store")
+                    self.set_header("X-Content-Type-Options", "nosniff")
                     self.write(fh.read())
 
         class TreeWorkerJS(webapp.RequestHandler):
@@ -3483,6 +3528,7 @@ class ProxyPanel:
         app.add_handlers(r".*", [
             (r"/", ProxyIndex),
             (r"/proxy/panel\.js", PanelJS),
+            (r"/proxy/terms-gate\.js", TermsGateJS),
             (r"/proxy/tree-worker\.js", TreeWorkerJS),
             (r"/rivis", NewUIRedirect),
             (r"/rivis/(|[a-z-]+\.js|app\.css)", NewUI),
