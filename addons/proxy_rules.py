@@ -1018,7 +1018,10 @@ class ProxyRules:
         return not literal and bool(self.project_hosts_re and self.project_hosts_re.fullmatch(name.rstrip(".")))
 
     async def _resolve(self, host, port):
-        """Addresses for host, without blocking the proxy: a slow resolver must not stall every other call (A6)."""
+        """Addresses for host, without blocking the proxy: a slow resolver must not stall every other call (A6).
+
+        Only global answers are cached. A private / VPN answer changes when FortiClient drops: keeping it for a minute
+        made the next browser call through Rivis still see 403 "private upstream" after DNS had already recovered."""
         now = time.monotonic()
         cached = self._address_cache.get(host)
         if cached and now - cached[0] < 60:
@@ -1029,7 +1032,12 @@ class ProxyRules:
         except (OSError, asyncio.TimeoutError):
             return None
         addresses = {row[4][0] for row in rows}
-        self._address_cache[host] = (now, addresses)
+        try:
+            keep = addresses and all(ipaddress.ip_address(a.strip("[]")).is_global for a in addresses)
+        except ValueError:
+            keep = False
+        if keep:
+            self._address_cache[host] = (now, addresses)
         return addresses
 
     async def _named_project_server(self, flow, ip):

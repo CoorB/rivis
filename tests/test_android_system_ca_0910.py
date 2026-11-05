@@ -128,6 +128,58 @@ class AndroidSystemCa(CliBase):
             self.assertEqual(done, [("emulator-5554", "Test_API_37", True)])
             self.assertTrue(devices.system_ca_present(FAKE_ADB, "emulator-5554", name))
 
+    def test_a_failed_restore_is_retried_on_the_next_boot(self):
+        # Durability: emulator restarts while still booting; the first auto-restore fails and must not block the
+        # next boot for ten minutes. The Devices tab says "coming back" with no manual button on Google APIs images,
+        # so a stuck backoff leaves apps that need the system store without capture until the tester restarts Rivis.
+        self.root_image()
+        self.ok("android", "on", "--system")
+        name = devices.ca_android_name(self.ours)
+        devices._SYSTEM_FAILED.clear()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            with open(os.path.join(self.emu, "boot_id"), "w") as fh:
+                fh.write("boot-2")
+            os.remove(self.system)
+            open(os.path.join(self.emu, "system_fail"), "w").close()
+            self.assertEqual(devices.restore_android_system_ca(FAKE_ADB, self.state, name),
+                             [("emulator-5554", "Test_API_37", False)])
+            self.assertIn("emulator-5554", devices._SYSTEM_FAILED)
+            os.remove(os.path.join(self.emu, "system_fail"))
+            with open(os.path.join(self.emu, "boot_id"), "w") as fh:          # another cold boot
+                fh.write("boot-3")
+            done = devices.restore_android_system_ca(FAKE_ADB, self.state, name)
+            self.assertEqual(done, [("emulator-5554", "Test_API_37", True)],
+                             "a new boot must retry even when the previous attempt failed moments ago")
+            self.assertTrue(devices.system_ca_present(FAKE_ADB, "emulator-5554", name))
+            self.assertNotIn("emulator-5554", devices._SYSTEM_FAILED)
+
+    def test_a_failed_restore_is_retried_after_adb_reconnects(self):
+        # Same boot, but adb drops the emulator (offline / USB renegotiation) and it comes back without the CA:
+        # the failure stamp for a serial that is gone must not outlive the disconnect.
+        self.root_image()
+        self.ok("android", "on", "--system")
+        name = devices.ca_android_name(self.ours)
+        devices._SYSTEM_FAILED.clear()
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            # same boot, CA gone (tmpfs unmounted without a new boot_id — mark no longer matches)
+            os.remove(self.system)
+            try:
+                os.remove(os.path.join(self.emu, "mark"))
+            except OSError:
+                pass
+            open(os.path.join(self.emu, "system_fail"), "w").close()
+            self.assertEqual(devices.restore_android_system_ca(FAKE_ADB, self.state, name),
+                             [("emulator-5554", "Test_API_37", False)])
+            self.assertEqual(devices.restore_android_system_ca(FAKE_ADB, self.state, name), [],
+                             "same boot still backs off briefly so a half-ready emulator is not re-run every tick")
+            open(os.path.join(self.emu, "status"), "w").write("none")          # adb devices: empty
+            self.assertEqual(devices.restore_android_system_ca(FAKE_ADB, self.state, name), [])
+            os.remove(os.path.join(self.emu, "system_fail"))
+            open(os.path.join(self.emu, "status"), "w").write("device")        # back online, same boot
+            done = devices.restore_android_system_ca(FAKE_ADB, self.state, name)
+            self.assertEqual(done, [("emulator-5554", "Test_API_37", True)])
+            self.assertTrue(devices.system_ca_present(FAKE_ADB, "emulator-5554", name))
+
     def test_a_play_image_is_not_restored_but_reported(self):
         self.root_image()
         self.ok("android", "on", "--system")

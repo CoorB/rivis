@@ -81,7 +81,14 @@ def setscreen(v):
 
 
 if cmd == "devices":
-    print("List of devices attached\nemulator-5554\tdevice\n")
+    # status file: "device" (default) | "offline" | "none" (absent from the list — adb dropped it)
+    st = read("status", "device").strip() or "device"
+    if st == "none":
+        print("List of devices attached\n")
+    else:
+        print("List of devices attached\nemulator-5554\t%s\n" % st)
+elif cmd == "shell cat /proc/sys/kernel/random/boot_id":
+    print(read("boot_id", "boot-1").strip())
 elif cmd == "emu avd name" and read("avd").strip():
     print(read("avd").strip() + "\r\nOK\r")
 elif cmd in ("root", "wait-for-device") or cmd.startswith("emu "):

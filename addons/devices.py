@@ -299,35 +299,62 @@ def restore_android_proxy(adb, state_root, proxy_port):
     return restored
 
 
-_SYSTEM_FAILED = {}         # serial → when putting the system store back last failed (retried after SYSTEM_RETRY)
-SYSTEM_RETRY = 600
+_SYSTEM_FAILED = {}         # serial → (when, boot_id) of the last failed put-back; same boot retries after SYSTEM_RETRY
+SYSTEM_RETRY = 45           # long enough that a still-booting emulator is not hammered every watch tick
+
+
+def _emulator_boot_id(adb, serial):
+    _, out = _run([adb, "-s", serial, "shell", "cat", "/proc/sys/kernel/random/boot_id"])
+    line = (out or "").strip().splitlines()
+    return line[0].strip() if line else ""
+
+
+def _system_failed_blocks(serial, boot_id):
+    """True when a recent failure on this same boot should skip another attempt."""
+    prev = _SYSTEM_FAILED.get(serial)
+    if not prev:
+        return False
+    when, failed_boot = prev if isinstance(prev, tuple) else (prev, boot_id)
+    return time.time() - when < SYSTEM_RETRY and failed_boot == boot_id
 
 
 def restore_android_system_ca(adb, state_root, ca_name):
     """The system store does not survive a restart. On an emulator with adb root (Google APIs image) that asked for it
     (`android on --system`), put it back through the CLI's own tested path; a Google Play image cannot be rooted
-    after a normal start, so the Devices tab says it is gone instead. Returns [(serial, avd, ok)]."""
+    after a normal start, so the Devices tab says it is gone instead. Returns [(serial, avd, ok)].
+
+    A failed attempt backs off briefly on the same boot so a half-ready emulator is not re-run every watch tick, but a
+    new boot_id or an adb disconnect clears that stamp: the Devices tab says "coming back" with no manual button on
+    Google APIs images, so a ten-minute lockout after a mid-boot failure left apps without the system CA."""
     wanted = _system_wanted(state_root)
     if not adb or not wanted or not ca_name:
         return []
     rc, out = _run([adb, "devices"])
     if rc != 0:
         return []
-    done = []
+    alive = set()
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) != 2 or parts[1] != "device" or not SERIAL.match(parts[0]):
-            continue
-        s = parts[0]
+        if len(parts) == 2 and parts[1] == "device" and SERIAL.match(parts[0]):
+            alive.add(parts[0])
+    for s in [s for s in _SYSTEM_FAILED if s not in alive]:
+        del _SYSTEM_FAILED[s]                             # gone from adb: next reconnect gets a fresh try
+    done = []
+    for s in sorted(alive):
         avd = avd_name(adb, s)
-        if avd not in wanted or time.time() - _SYSTEM_FAILED.get(s, 0) < SYSTEM_RETRY or system_ca_present(adb, s, ca_name):
+        if avd not in wanted or system_ca_present(adb, s, ca_name):
+            continue
+        boot = _emulator_boot_id(adb, s)
+        if _system_failed_blocks(s, boot):
             continue
         _, btype = _run([adb, "-s", s, "shell", "getprop", "ro.build.type"])
         if btype.strip() == "user":
             continue
         rc, _ = _run([CLI, "android", "on", "-s", s, "--system"], timeout=120)
         if rc != 0:
-            _SYSTEM_FAILED[s] = time.time()
+            _SYSTEM_FAILED[s] = (time.time(), boot)
+        else:
+            _SYSTEM_FAILED.pop(s, None)
         done.append((s, avd, rc == 0))
     return done
 
