@@ -654,7 +654,8 @@
   }
   const kvTable = (rows) => rows.length ? `<table class="rv-kv">${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>` : `<div class="rv-note">None</div>`;
   const queryRows = (f) => { const q = f.request.path.split("?")[1]; if (!q) return []; return q.split("&").map((p) => { const [k, ...v] = p.split("="); const d = (x) => { try { return decodeURIComponent(x.replace(/\+/g, " ")); } catch (e) { return x; } }; return [d(k), d(v.join("="))]; }); };
-  const cookieRows = (f) => { const c = hdr(f.request, "cookie"); return c ? c.split(/;\s*/).filter(Boolean).map((p) => { const i = p.indexOf("="); return [p.slice(0, i), p.slice(i + 1)]; }) : []; };
+  // a Cookie pair with no "=" is rare but legal; indexOf("=") === -1 made slice(0, -1) drop the last character of the name
+  const cookieRows = (f) => { const c = hdr(f.request, "cookie"); return c ? c.split(/;\s*/).filter(Boolean).map((p) => { const i = p.indexOf("="); return i < 0 ? [p, ""] : [p.slice(0, i), p.slice(i + 1)]; }) : []; };
   function paneHead(side, title, tabs, cur) {
     return `<div class="rv-ph"><h2>${title}</h2><div class="rv-tabs" role="tablist">${tabs.map(([id, l]) => `<button class="rv-tab" role="tab" data-pane="${side}" data-tab="${id}" aria-selected="${cur === id}">${l}</button>`).join("")}</div>`
       + `<div class="rv-find"><input type="search" data-find="${side}" placeholder="Search in body (${MOD}F)" aria-label="Search in ${side === "req" ? "request" : "response"} body" value="${esc(findText[side])}"><span class="rv-fc" data-fc="${side}"></span>`

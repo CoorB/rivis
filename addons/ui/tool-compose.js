@@ -13,6 +13,13 @@
       const id = opts && opts.fromFlow;
       if (!id) { if (!w.data.p) { w.body.innerHTML = ui.empty("Pick a call", "Right-click a call in the list → Edit and Repeat."); w.foot.hidden = true; } return; }
       if (w.data.p && w.data.id === id) return;
+      // switching to another call used to wipe typed edits with no question (close already asks; open did not)
+      if (!(opts && opts.force) && w.data.p && w.data.id && w.data.id !== id && changed(w)) {
+        A.ask("Edit a different call?", "Your changes in Edit and Repeat are not saved.", "Replace", true).then((ok) => {
+          if (ok) T.open("repeat", { fromFlow: id, force: true });
+        });
+        return;
+      }
       w.data = { id, p: null, sub: "body" };
       w.body.innerHTML = `<p class="rv-win-hint">Loading…</p>`; w.foot.hidden = true;
       A.api("retry_get", { flow_id: id }).then((p) => { if (w.data.id === id) { w.data.p = p; draw(w); } })
