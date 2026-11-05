@@ -360,7 +360,10 @@ invalid `~` filter is reported and never applied. The list keeps live without a 
 calls wait and are counted), **Follow** keeps the newest call selected. Each pane has Header, Query/Body/Cookies/Raw
 (request) or Body/Tree/Raw (response), and a search inside the body (n of N, Enter / Shift+Enter). The Tree is built
 for JSON bodies up to 2 MB, opens only what you open or what a search finds, and copies a value or its path. Binary
-bodies show as hex; text is shown up to 512 KB. Right-click a call for Copy URL, Copy as cURL, Repeat, Map Local,
+bodies show as hex; text is shown up to 512 KB. Selecting a call with a JWT, GraphQL or gRPC/protobuf body opens the
+same protocol viewer strip the classic **This call** view uses (decoded JWT header/payload with local `exp`, GraphQL
+operation/variables/data/errors, gRPC service/method and field numbers). GraphQL operations seen this session appear
+in the left sidebar; clicking one filters the list (same `graphql_filter` as classic). Right-click a call for Copy URL, Copy as cURL, Repeat, Map Local,
 Breakpoint, Show only this host and Delete. Columns are the project's (the same choice as the classic view's picker).
 Shortcuts: ⌥⌘F filter, ⌘F search in the body, ⌘K find a source, ⇧⌘L follow the newest, ⇧⌘⌫ clear all (asks
 first), ⌥⌘N No Caching, ⌥⌘A TLS decryption: hosts to decrypt, ⌥⌘L / ⌥⌘R / ⌥⌘B Map Local / Map Remote / Breakpoint, ⌥1–⌥9 saved filters, ↑ ↓ calls,
@@ -568,12 +571,14 @@ the lists are *Hosts to decrypt* and *Hosts to leave alone*. It is stored per pr
 
 ### Protocol viewers
 
-The read-only **This call** view detects JWTs in bearer, Cookie and response Set-Cookie headers, URL query values,
-and JSON/form string values (including JSON bodies without a content type), decodes the
-header and payload without claiming signature verification, and renders `exp`, `iat`, and `nbf` in local time.
-It also keeps a session token list keyed by `sub` + `iat`. GraphQL GET and POST/batch calls show operation details,
-variables, and split response data/errors; GraphQL errors receive an `ERR` list marker even with HTTP 200, and the
-operation mini-list filters the flow list. gRPC/protobuf calls show service/method, trailers, and schema-less field
+The read-only **This call** view (classic) and the selected-call strip in the main window (`/rivis/`) share the same
+panel `viewer` / `viewer_summaries` / `graphql_filter` ops. They detect JWTs in bearer, Cookie and response Set-Cookie
+headers, URL query values, and JSON/form string values (including JSON bodies without a content type), decode the
+header and payload without claiming signature verification, and render `exp`, `iat`, and `nbf` in local time.
+They also keep a session token list keyed by `sub` + `iat`. GraphQL GET and POST/batch calls show operation details,
+variables, and split response data/errors; GraphQL errors receive an `ERR` list marker (classic) or a `200 !` status
+(main window) even with HTTP 200, and the operation mini-list (classic This call, or the GraphQL section of the main
+window sidebar) filters the flow list. gRPC/protobuf calls show service/method, trailers, and schema-less field
 numbers. For these messages the panel requests mitmweb 12.2.3's own `gRPC/Protocol Buffer` / `Protocol Buffer`
 content endpoint, with a small schema-less fallback if the native view cannot decode the body. No custom content
 view is registered, so the add-on does not depend on an unstable content-view registration signature. Viewers inspect the current flow store, so they

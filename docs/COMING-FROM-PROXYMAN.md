@@ -49,6 +49,7 @@ stream as they arrive; see the [Rules section](REFERENCE.md#rules) for the editi
 | **Scripting** | **Scripts** tab — JavaScript or Python, enabled per project, run in filename order after rules. (Trusted user code: it runs with your rights; the Node VM drops network/`require` to prevent accidents but is not a security boundary.) |
 | **Save a session** | **Sessions** tab → save, add a note, reopen later, or export HAR. |
 | **Copy as cURL** | **This call → Copy cURL**, or **Copy as…** for many languages. Secrets (Authorization, cookies) are masked by default — untick **Mask secrets** to include them. |
+| **JWT / GraphQL / Protobuf viewers** | Select the call. The main window shows a protocol strip above the request/response panes; classic **This call** shows the same facts (decoded JWT with local `exp`, GraphQL operation/variables/data/errors, gRPC service/method and field numbers). GraphQL operations also appear in the main window sidebar (or classic's operation chips) to filter the list. |
 
 ## Keyboard shortcuts
 

@@ -8,6 +8,7 @@
  *   tools     the panel API (../proxy/api/<op>) that the classic drawer uses: state, nocache, columns_set, export,
  *             mock, bp_add, retry, filters_*. Tool windows (tools.js, tool-*.js) get what they need through
  *             window.RivisApp (below); a tool without a window yet opens in the classic view.
+ *   viewers   the same panel viewer / viewer_summaries / graphql_filter ops the classic This call view uses
  * Everything shown from a call is escaped (esc) before it reaches innerHTML. */
 (() => {
   "use strict";
@@ -69,6 +70,8 @@
     view: [], sel: null, follow: store.get("rivis-ui-follow", "1") === "1", record: true, held: new Map(),
     chip: "all", status: null, text: "", expr: "", match: null, source: null, sort: { col: null, desc: false },
     state: null, live: false,
+    viewers: { tokens: [], graphql_ops: [], graphql_error_ids: [], complete: false },
+    gqlOp: null, gqlIds: null,          // GraphQL operation filter (panel graphql_filter + client-side ids)
     pins: (() => { try { return new Set(JSON.parse(store.get("rivis-ui-pins", "[]"))); } catch (e) { return new Set(); } })(),
   };
   const savePins = () => store.set("rivis-ui-pins", JSON.stringify([...S.pins]));
@@ -120,6 +123,7 @@
     if (!CHIP_TEST[S.chip](f)) return false;
     if (S.status) { const c = f.response ? String(f.response.status_code)[0] : ""; if (c !== S.status[0]) return false; }
     if (S.match && !S.match.has(f.id)) return false;
+    if (S.gqlIds && !S.gqlIds.has(f.id)) return false;
     if (S.text) { let decoded = urlOf(f); try { decoded = decodeURIComponent(decoded); } catch (e) { /* keep the URL as sent */ }
       if (!urlOf(f).toLowerCase().includes(S.text) && !decoded.toLowerCase().includes(S.text) && !(f.request.method || "").toLowerCase().startsWith(S.text)) return false; }
     if (S.source) {
@@ -180,7 +184,11 @@
       case "status":
         if (f.intercepted) return `<span class="rv-paused" title="Paused at a breakpoint: click to edit it">⏸ paused</span>`;
         if (f.error) return `<span class="rv-err" title="${esc(f.error.msg)}">${s ? esc(s.status_code) + " ✕ failed" : "failed"}</span>`;
-        return s ? `<span class="rv-s${String(s.status_code)[0]}">${s.status_code}</span>` : `<span class="rv-muted">…</span>`;
+        if (s) {
+          const gqlErr = (f.comment || "").includes("graphql:error") || (S.viewers.graphql_error_ids || []).includes(f.id);
+          return `<span class="rv-s${String(s.status_code)[0]}">${s.status_code}${gqlErr ? " !" : ""}</span>`;
+        }
+        return `<span class="rv-muted">…</span>`;
       case "size": return esc(fmtBytes(size(f)));
       case "time": case "duration": return esc(fmtMs(duration(f)));
       case "timestamp": return esc(fmtTime(r.timestamp_start));
@@ -586,11 +594,16 @@
     if (dev) html += `<div class="rv-sh">Apps and devices</div>` + dev;
     const top = [...hosts].filter(([h]) => !q || h.toLowerCase().includes(q)).sort((a, b) => b[1] - a[1]).slice(0, 60);
     if (top.length) html += `<div class="rv-sh">Domains</div>` + top.map(([h, n]) => `<button class="rv-src" data-src-host="${esc(h)}" aria-pressed="${!!on({ host: h })}" title="${esc(h)}"><span class="rv-sname">${esc(h)}</span><span class="rv-scount">${n}</span></button>`).join("");
+    const ops = (S.viewers.graphql_ops || []).filter((g) => !q || (g.name || "").toLowerCase().includes(q));
+    if (ops.length) html += `<div class="rv-sh">GraphQL</div>` + ops.map((g) =>
+      `<button class="rv-src" data-gql="${esc(g.name)}" aria-pressed="${S.gqlOp === g.name}" title="${esc(g.name)}"><span class="rv-sname">${esc(g.name)}${g.errors ? " · ERR" : ""}</span><span class="rv-scount">${g.count}</span></button>`).join("");
     $("sources").innerHTML = html;
   }
   $("sources").addEventListener("click", (e) => {
     const un = e.target.closest("[data-unpin]");
     if (un) { S.pins.delete(un.dataset.unpin); savePins(); if (S.source && S.source.host === un.dataset.unpin) { S.source = null; rebuildView(); } drawSources(); return; }
+    const gql = e.target.closest("[data-gql]");
+    if (gql) { setGraphqlFilter(gql.dataset.gql === S.gqlOp ? null : gql.dataset.gql); return; }
     const b = e.target.closest(".rv-src"); if (!b) return;
     if ("srcAll" in b.dataset) S.source = null;
     else if (b.dataset.srcKey) S.source = S.source && S.source.key === b.dataset.srcKey ? null : { key: b.dataset.srcKey };
@@ -612,6 +625,151 @@
   });
   let srcT = 0;
   const sourcesSoon = () => { clearTimeout(srcT); srcT = setTimeout(drawSources, 400); };
+
+  // ── protocol viewers (same panel ops as classic This call) ───────────────────────────────────────────────────────
+  function applyGqlIds(name) {
+    if (!name) { S.gqlIds = null; return; }
+    const op = (S.viewers.graphql_ops || []).find((g) => g.name === name);
+    S.gqlIds = op ? new Set(op.flow_ids || []) : new Set();
+  }
+  async function setGraphqlFilter(name) {
+    const next = name || null;
+    S.gqlOp = next;
+    applyGqlIds(next);
+    drawSources(); rebuildView();
+    toast(next ? "Showing " + next : "GraphQL filter cleared");
+    try {
+      await api("graphql_filter", { name: next });
+      if (S.state) S.state.graphql_operation = next;
+    } catch (e) { toast(e.message, true); }
+    if (!next) loadFlows();            // view_filter loosened: bring the other calls back
+  }
+  let viewerSumPoll = null;
+  function pollViewerSummaries() {
+    if (viewerSumPoll) return viewerSumPoll;
+    viewerSumPoll = api("viewer_summaries", { limit: 12 }, 5000).then((r) => {
+      S.viewers = r.viewers || S.viewers;
+      if (S.gqlOp) applyGqlIds(S.gqlOp);
+      drawSources();
+      if (S.gqlOp) rebuildView();
+      drawList(true);                  // GraphQL ERR markers may have arrived
+      if (!S.viewers.complete) setTimeout(pollViewerSummaries, 400);
+    }).catch(() => {}).finally(() => { viewerSumPoll = null; });
+    return viewerSumPoll;
+  }
+  function colorJSON(src) {
+    const text = String(src == null ? "" : src);
+    let i = 0, out = "";
+    const push = (cls, s) => { out += cls ? `<span class="${cls}">${esc(s)}</span>` : esc(s); };
+    while (i < text.length) {
+      const c = text[i];
+      if (c === '"') {
+        let j = i + 1, escaped = false;
+        while (j < text.length) {
+          const ch = text[j];
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === '"') { j++; break; }
+          j++;
+        }
+        let k = j; while (k < text.length && /\s/.test(text[k])) k++;
+        push(text[k] === ":" ? "jk" : "js", text.slice(i, j));
+        i = j; continue;
+      }
+      if ((c === "-" || (c >= "0" && c <= "9")) && (i === 0 || /[\s,:[{]/.test(text[i - 1]))) {
+        const m = text.slice(i).match(/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/);
+        if (m) { push("jn", m[0]); i += m[0].length; continue; }
+      }
+      const word = text.startsWith("false", i) ? "false" : text.startsWith("true", i) ? "true" : text.startsWith("null", i) ? "null" : "";
+      if (word && (i + word.length === text.length || /[\s,\]}]/.test(text[i + word.length]))) { push("jb", word); i += word.length; continue; }
+      push("", c); i++;
+    }
+    return out;
+  }
+  const jpretty = (value) => colorJSON(JSON.stringify(value, null, 2));
+  function gqlPretty(query) {
+    let out = "", indent = 0, string = false, escapeNext = false, space = false;
+    const pad = () => "  ".repeat(indent);
+    for (const ch of String(query || "")) {
+      if (string) {
+        out += ch;
+        if (escapeNext) escapeNext = false; else if (ch === "\\") escapeNext = true; else if (ch === '"') string = false;
+        continue;
+      }
+      if (ch === '"') { if (space && out && !out.endsWith("\n")) out += " "; space = false; string = true; out += ch; continue; }
+      if (/\s/.test(ch)) { space = true; continue; }
+      if (ch === "{") { out = out.trimEnd() + " {\n"; indent++; out += pad(); space = false; continue; }
+      if (ch === "}") { indent = Math.max(0, indent - 1); out = out.trimEnd() + "\n" + pad() + "}"; space = true; continue; }
+      if (space && out && !out.endsWith("\n") && !out.endsWith("(") && !",:)".includes(ch)) out += " ";
+      out += ch; space = false;
+    }
+    return out.trim();
+  }
+  async function builtinContent(id, side, views) {
+    for (const view of views) {
+      try {
+        const r = await http("../flows/" + encodeURIComponent(id) + "/" + side + "/content/" + encodeURIComponent(view) + ".json?full=1", {}, 15000);
+        if (r.ok) return await r.json();
+      } catch (e) { /* schema-less fallback from the panel viewer */ }
+    }
+    return null;
+  }
+  function grpcText(builtin, fallback) {
+    if (!builtin) return jpretty(fallback);
+    if (Array.isArray(builtin)) return esc(builtin.map((x) => x.text || JSON.stringify(x, null, 2)).join("\n\n"));
+    return esc(typeof builtin.text === "string" ? builtin.text : JSON.stringify(builtin.text != null ? builtin.text : builtin, null, 2));
+  }
+  function viewerHTML(v) {
+    if (!v) return "";
+    let out = "";
+    if (v.tokens && v.tokens.length) {
+      out += `<h3>JWT (${v.tokens.length})</h3>` + v.tokens.map((t) => {
+        const times = Object.entries(t.times || {}).map(([k, x]) => `${esc(k)}: ${esc(x.local)}${x.relative ? " · " + esc(x.relative) : ""}`).join("<br>");
+        return `<div class="rv-vblock"><b>${esc(t.where)}</b> · alg ${esc(t.alg || "—")} · kid ${esc(t.kid || "—")}`
+          + `<div class="rv-note">signature not verified<br>${times}</div>`
+          + `<pre>Header\n${jpretty(t.header)}\n\nPayload\n${jpretty(t.payload)}</pre></div>`;
+      }).join("");
+    }
+    if (v.graphql && v.graphql.length) {
+      out += `<h3>GraphQL</h3>` + v.graphql.map((g) =>
+        `<div class="rv-vblock"><b>${esc(g.type)} ${esc(g.name)}</b><pre>${esc(gqlPretty(g.query))}</pre>`
+        + `<b>Variables</b><pre>${jpretty(g.variables)}</pre></div>`).join("");
+      if (v.graphql_response) {
+        out += `<div class="rv-vblock"><b>Response data</b><pre>${jpretty(v.graphql_response.data)}</pre></div>`;
+        if (v.graphql_response.errors && v.graphql_response.errors.length)
+          out += `<div class="rv-vblock rv-verr"><b>GraphQL errors</b> (HTTP status may still be 200)<pre>${jpretty(v.graphql_response.errors)}</pre></div>`;
+      }
+    }
+    if (v.grpc) {
+      const g = v.grpc;
+      out += `<h3>gRPC / protobuf</h3><div class="rv-vblock"><b>${esc(g.service)}/${esc(g.method)}</b>`
+        + `<div class="rv-note">grpc-status ${esc(g.status != null ? g.status : "—")} · ${esc(g.message || "")}<br>`
+        + `${g.builtin_request || g.builtin_response ? "mitmproxy built-in content view" : esc((g.decoder || "") + " · built-in view unavailable, using fallback")}</div>`
+        + `<b>Request</b><pre>${grpcText(g.builtin_request, g.request || { error: g.request_error })}</pre>`
+        + `<b>Response</b><pre>${grpcText(g.builtin_response, g.response || { error: g.response_error })}</pre></div>`;
+    }
+    return out;
+  }
+  let viewerSeq = 0;
+  async function drawViewer(f, mySig) {
+    const el = $("viewer");
+    if (!f) { el.hidden = true; el.innerHTML = ""; return; }
+    const seq = ++viewerSeq;
+    el.hidden = false;
+    el.innerHTML = `<div class="rv-note">Reading protocol…</div>`;
+    let viewer = null;
+    try { viewer = await api("viewer", { flow_id: f.id }); } catch (e) { if (seq === viewerSeq && D.sig === mySig) { el.hidden = true; el.innerHTML = ""; } return; }
+    if (seq !== viewerSeq || D.sig !== mySig) return;
+    if (viewer && viewer.grpc) {
+      const views = viewer.grpc.content_type === "protobuf" ? ["Protocol Buffer", "gRPC/Protocol Buffer"] : ["gRPC/Protocol Buffer", "Protocol Buffer"];
+      const decoded = await Promise.all([builtinContent(f.id, "request", views), f.response ? builtinContent(f.id, "response", views) : null]);
+      if (seq !== viewerSeq || D.sig !== mySig) return;
+      viewer.grpc.builtin_request = decoded[0]; viewer.grpc.builtin_response = decoded[1];
+    }
+    const html = viewerHTML(viewer);
+    if (!html) { el.hidden = true; el.innerHTML = ""; return; }
+    el.innerHTML = html;
+  }
 
   // ── request | response ───────────────────────────────────────────────────────────────────────────────────────────
   const D = { req: store.get("rivis-ui-req-tab", "header"), res: store.get("rivis-ui-res-tab", "body"), bodies: new Map(), images: [], sig: "" };
@@ -669,6 +827,7 @@
     D.sig = sigOf(f);
     const req = $("pane-req"), res = $("pane-res");
     if (!f) {
+      $("viewer").hidden = true; $("viewer").innerHTML = "";
       req.innerHTML = paneHead("req", "Request", REQ_TABS, D.req) + `<div class="rv-pb"><div class="rv-note">Select a call to see its request.</div></div>`;
       res.innerHTML = paneHead("res", "Response", RES_TABS, D.res) + `<div class="rv-pb"><div class="rv-note">and its response, side by side.</div></div>`;
       return;
@@ -678,7 +837,7 @@
     const sline = f.error ? `<span class="rv-err">${s ? esc(s.status_code) + " · " : ""}Failed: ${esc(f.error.msg)}</span>` : s ? `${s.status_code} ${esc(s.reason || "")}` : "waiting…";
     req.innerHTML = paneHead("req", "Request", REQ_TABS, D.req) + `<div class="rv-pb" data-body="req" tabindex="0"><div class="rv-first">${esc(r.method)} ${esc(urlOf(f))} ${esc(r.http_version || "")}</div><div class="rv-dyn"></div></div>`;
     res.innerHTML = paneHead("res", `Response · ${sline}`, f.websocket ? RES_TABS.concat([["messages", "Messages"]]) : RES_TABS, D.res) + `<div class="rv-pb" data-body="res" tabindex="0"><div class="rv-dyn"></div></div>`;
-    await Promise.all([fillPane(f, "req", mySig), fillPane(f, "res", mySig)]);
+    await Promise.all([fillPane(f, "req", mySig), fillPane(f, "res", mySig), drawViewer(f, mySig)]);
   }
   async function fillPane(f, side, mySig) {
     const el = document.querySelector(`[data-body="${side}"] .rv-dyn`); if (!el) return;
@@ -1106,6 +1265,7 @@
       if (colsChanged) { drawHead(); drawList(true); }
       if (savedChanged) drawChips();
       if (S.source && S.source.key) rebuildView();
+      pollViewerSummaries();
     } catch (e) { /* the feed's own indicator says when Rivis is gone */ }
     pollT = setTimeout(pollState, 2000);
   }
@@ -1166,6 +1326,7 @@
   setFollow(S.follow);
   drawHead(); drawChips(); drawTools(); drawStatus(); drawDetail();
   pollState();
+  pollViewerSummaries();
   loadFlows().then(() => drawSources());
   connect();
   // ── notices (another app holds the Mac proxy, untrusted certificate, update) ─────────────────────────────────────
@@ -1223,7 +1384,7 @@
     const name = (S.state && S.state.product && S.state.product.name) || "Rivis";
     showDialog(`<h3>${esc(name)} — shortcuts</h3><p>Laid out like Proxyman: sources on the left, tools in the toolbar, request and response side by side. Right-click a call for its actions.</p>
       <table class="rv-keys">${KEYS.map(([k, t]) => `<tr><td>${esc(k)}</td><td>${esc(t)}</td></tr>`).join("")}</table>
-      <h4>Coming from Proxyman</h4><p>Map Local, Map Remote, Breakpoint, Block List, No Caching, Scripting and Network are in the toolbar; Compose, Devices, Collections and Sessions are under More. The classic view is still one click away (top right).</p>
+      <h4>Coming from Proxyman</h4><p>Map Local, Map Remote, Breakpoint, Block List, No Caching, Scripting and Network are in the toolbar; Compose, Devices, Collections and Sessions are under More. Select a call to decode JWTs, GraphQL and gRPC the same way as classic This call. The classic view is still one click away (top right).</p>
       <div class="rv-btns"><button class="rv-btn p" data-close>Close</button></div>`);
   }
   function showSettings() {
