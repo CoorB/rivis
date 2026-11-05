@@ -462,8 +462,9 @@ class ProxyPanel:
 
     @staticmethod
     def find(cfg, name):
+        key = (name or "").casefold()
         for r in cfg["rules"]:
-            if r.get("name") == name:
+            if (r.get("name") or "").casefold() == key:
                 return r
         raise PanelError(f"no rule named '{name}'")
 
@@ -1737,7 +1738,7 @@ class ProxyPanel:
             method = (a.get("method") or "").upper() or None
             source = self.script_template(lang, a.get("template") or "header")
             path = self._script_path(filename)
-            if os.path.exists(path):
+            if os.path.lexists(path):
                 raise PanelError("that script already exists")
             os.makedirs(SCRIPT_DIR, mode=0o700, exist_ok=True)
             atomic_write_text(path, source)
@@ -1871,7 +1872,7 @@ class ProxyPanel:
                             raise PanelError("variant name must be 1..64 characters")
                         variants = r.get("variants") or [{"name": "Default", "file": r["file"],
                                                           "status": r.get("status", 200), "headers": r.get("headers", [])}]
-                        if any(v["name"] == variant_name for v in variants):
+                        if any((v.get("name") or "").casefold() == variant_name.casefold() for v in variants):
                             raise PanelError("a variant with that name exists")
                         stem = re.sub(r"[^A-Za-z0-9._-]", "-", r["name"] + "-" + variant_name)[:55].strip(".") or "variant"
                         path = self.mock_path(stem)
@@ -1901,9 +1902,10 @@ class ProxyPanel:
             os.makedirs(MOCK_DIR, exist_ok=True)
             # Rules may have been reset while their mock files remain. Do not overwrite one:
             # a fresh draft needs its own file so its creation can be recorded and discarded.
+            # Names are compared case-folded: Mock.json and mock.json are one inode on APFS default.
             base, suffix = name, 2
-            names = {r.get("name") for r in cfg["rules"]}
-            while name in names or os.path.lexists(path):
+            names = {(r.get("name") or "").casefold() for r in cfg["rules"]}
+            while name.casefold() in names or os.path.lexists(path):
                 tail = f"-{suffix}"
                 name = base[:64 - len(tail)].rstrip(".") + tail
                 path = self.mock_path(name)

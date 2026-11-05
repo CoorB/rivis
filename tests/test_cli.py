@@ -1903,6 +1903,20 @@ class CliNames(CliBase):
         self.ok("rules", "add", "Login", "match=/a", "action=block")
         self.refused("rules", "add", "login", "match=/b", "action=block", msg="exists")
 
+    def test_script_names_are_unique_ignoring_case_even_without_the_file(self):
+        """Metadata must refuse a case alias even when the .py was removed: otherwise a second entry shares one inode."""
+        self.ok("scripts", "new", "Auth", "--lang", "py")
+        path = os.path.join(self.state, "projects", "default", "scripts", "Auth.py")
+        os.unlink(path)
+        self.refused("scripts", "new", "auth", "--lang", "py", msg="already exists")
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual([s["name"] for s in self.cfg()["scripts"]], ["Auth"])
+
+    def test_safe_name_matches_python_safe_name(self):
+        """bash safe_name must reject the same shapes SAFE_NAME does, before mocks/<name> is written."""
+        for bad in ("foo.", "con", "PRN", "aux.txt", "Com1", "nul.x"):
+            self.refused("mock", bad, "/x", msg="letters, digits")
+
 
 class AndroidCaRemoval(CliBase):
     """Review R3: `android off` removed every certificate called "mitmproxy". Every mitmproxy CA has that name and the

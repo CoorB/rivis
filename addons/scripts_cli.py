@@ -45,7 +45,9 @@ def save(path, cfg):
 
 
 def find(cfg, name):
-    hits = [x for x in cfg["scripts"] if x.get("name") == name or x.get("file") == name]
+    key = (name or "").casefold()
+    hits = [x for x in cfg["scripts"]
+            if (x.get("name") or "").casefold() == key or (x.get("file") or "").casefold() == key]
     if not hits: raise SystemExit(f"no script named '{name}'")
     return hits[0]
 
@@ -95,9 +97,11 @@ def main(argv):
         except re.error as e:
             raise SystemExit("bad regex in --match: %s" % e)
         filename = f"{a.name}.{a.lang}"; path = os.path.join(script_dir, filename)
-        if any(x.get("name") == a.name or x.get("file") == filename for x in cfg["scripts"]) or os.path.exists(path):
+        # Case-fold: Auth and auth are one script file on the Mac default volume (and one metadata slot).
+        key, file_key = a.name.casefold(), filename.casefold()
+        if any((x.get("name") or "").casefold() == key or (x.get("file") or "").casefold() == file_key
+               for x in cfg["scripts"]) or os.path.lexists(path):
             raise SystemExit("script already exists")
-        if os.path.exists(path): raise SystemExit("script already exists")
         atomic_write_text(path, TEMPLATES[a.lang][a.template])
         cfg["scripts"].append({"name": a.name, "file": filename, "lang": a.lang, "enabled": True,
                                "match": a.match, "method": a.method.upper() or None})

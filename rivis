@@ -282,7 +282,18 @@ ca_history_field() {  # 1 = sha256, 2 = android hash; current CA first, then eve
     [ -f "$CA_HISTORY" ] && awk -v f="$1" '$f ~ /^[0-9A-Fa-f]+$/ {print $f}' "$CA_HISTORY"; } | awk '!seen[$0]++'
 }
 
-safe_name() { [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]] && [[ "$1" != .* ]] || die "name '$1': letters, digits, . _ - only (max 64, not starting with .)"; }
+# Same shapes as proxy_common.SAFE_NAME: no leading/trailing dot, no Windows device names (CON, aux.txt, …).
+# Checked here so `mock NAME` never writes mocks/NAME before rules_cli can refuse the label.
+safe_name() {
+  local n="$1" lower
+  [[ "$n" =~ ^[A-Za-z0-9._-]{1,64}$ ]] && [[ "$n" != .* ]] && [[ "$n" != *. ]] \
+    || die "name '$1': letters, digits, . _ - only (max 64, not starting or ending with .)"
+  lower=$(printf '%s' "$n" | tr '[:upper:]' '[:lower:]')
+  case "$lower" in
+    con|prn|aux|nul|com[0-9]|lpt[0-9]|con.*|prn.*|aux.*|nul.*|com[0-9].*|lpt[0-9].*)
+      die "name '$1': letters, digits, . _ - only (max 64, not starting or ending with .)" ;;
+  esac
+}
 
 port_owner() { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==2{print $1" pid "$2" "$9}'; }
 port_accepts() { /usr/bin/python3 -I -c 'import socket,sys; s=socket.socket(); s.settimeout(.5); sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))) != 0)' "$1"; }

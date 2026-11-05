@@ -1087,6 +1087,26 @@ class Ops(LiveCase):
         self.assertFalse(os.path.exists(self.inst.path("scripts", "orph.py")))
         self.panel.ok("script_new", {"name": "orph", "lang": "py"})       # the name must still be usable
 
+    def test_script_new_refuses_a_case_folded_sibling(self):
+        """On a case-folding volume Auth.py and auth.py are one file; a second create must not overwrite the first."""
+        self.inst.clear_dir("scripts")
+        self.panel.ok("script_new", {"name": "Auth", "lang": "py"})
+        path = self.inst.path("scripts", "Auth.py")
+        with open(path, "w") as fh:
+            fh.write("# keep-me\n")
+        self.bad("script_new", {"name": "auth", "lang": "py"}, "already exists")
+        self.assertEqual(open(path).read(), "# keep-me\n")
+        self.assertEqual([s["name"] for s in self.panel.state()["scripts"]], ["Auth"])
+
+    def test_maplocal_add_refuses_a_case_folded_sibling(self):
+        """maplocal_add used to compare names literally, then write mocks/<name>.json — overwriting the sibling."""
+        self.panel.ok("maplocal_add", {"name": "Login", "host": "casefold.test", "path": "/a", "body": "FIRST"})
+        path = self.inst.path("mocks", "Login.json")
+        self.assertEqual(open(path).read(), "FIRST")
+        self.bad("maplocal_add", {"name": "login", "host": "casefold.test", "path": "/b", "body": "SECOND"}, "name exists")
+        self.assertEqual(open(path).read(), "FIRST")
+        self.assertEqual([r["name"] for r in self.rules() if r.get("name", "").lower() == "login"], ["Login"])
+
     # -- coverage guard -----------------------------------------------------------------------------------
     def test_every_op_in_the_source_is_exercised_by_some_test(self):
         """Adding a panel op without a test fails this one."""

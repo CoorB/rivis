@@ -126,8 +126,9 @@ def throttle_number(text, name):
 
 
 def find(cfg, name):
+    key = (name or "").casefold()
     for r in cfg.get("rules", []):
-        if isinstance(r, dict) and r.get("name") == name:
+        if isinstance(r, dict) and (r.get("name") or "").casefold() == key:
             return r
     die("no rule named '%s' (%s rules list)" % (name, PRODUCT["cli"]))
 
@@ -362,7 +363,7 @@ def rules_cmd(path, args):
             die("variant name must be 1..64 characters")
         variants = r.get("variants") or [{"name": "Default", "file": r["file"],
                                            "status": r.get("status", 200), "headers": r.get("headers", [])}]
-        selected = next((v for v in variants if v["name"] == name), None)
+        selected = next((v for v in variants if (v.get("name") or "").casefold() == name.casefold()), None)
         if action == "add":
             if selected:
                 die("variant '%s' exists" % name)
@@ -449,7 +450,7 @@ def rules_cmd(path, args):
     elif cmd in ("add", "mock-set"):
         if not SAFE_NAME.fullmatch(name) or name.startswith("."):      # F-17: same rule as the panel
             die("rule name '%s': letters, digits, . _ - only (max 64, not starting with .)" % name)
-        if any(str(r.get("name", "")).lower() == name.lower() and
+        if any(str(r.get("name", "")).casefold() == name.casefold() and
                (cmd != "mock-set" or r.get("action") != "map_local")
                for r in cfg.get("rules", []) if isinstance(r, dict)):
             die("rule '%s' exists — rm it first or pick another name" % name)
@@ -514,7 +515,7 @@ def rules_cmd(path, args):
             # Replace the same named rule, or a rule with both the same match and method.
             def is_superseded(old):
                 return (isinstance(old, dict) and old.get("action") == "map_local" and
-                        (str(old.get("name", "")).lower() == name.lower() or
+                        (str(old.get("name", "")).casefold() == name.casefold() or
                          (old.get("match") == r["match"] and
                           str(old.get("method") or "").strip().upper() ==
                           str(r.get("method") or "").strip().upper())))
