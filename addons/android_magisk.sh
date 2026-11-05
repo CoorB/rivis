@@ -80,8 +80,14 @@ fi
 
 # ---- boot helpers -------------------------------------------------------------------------------------------------
 CACHE="$STATE_DIR/android-ramdisk"; mkdir -p -m 700 "$CACHE"
+# leftover work dirs from a killed patch run; only under STATE_DIR
+for _d in "$CACHE"/.work.*; do
+  [ -d "$_d" ] || continue
+  rm -rf "$_d"
+done
 free_kb=$(df -Pk "$CACHE" | awk 'END {print $4}')
 [[ "$free_kb" =~ ^[0-9]+$ ]] && [ "$free_kb" -ge 2097152 ] || die "less than 2 GiB free for the emulator restart and ramdisk cache ($CACHE); free disk space, then retry"
+TMP_DIR=""; ON_TEMP_BOOT=0
 gone() {   # adb has lost it AND its process has exited (a new boot on the same port must not race the old one)
   local i; for i in $(seq 1 60); do "$ADB" -s "$SERIAL" get-state >/dev/null 2>&1 || break; sleep 1; done
   [ "$i" -lt 60 ] || return 1
@@ -100,10 +106,32 @@ start_avd() {   # start_avd LOG [extra emulator args]
   disown $! 2>/dev/null || true
 }
 restore_stock() {
-  "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1; gone || die "the old emulator process still owns port $PORT; refusing to restart"
+  "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1; gone || die "the old emulator process still owns port $PORT; '$AVD' may still be on the temporary setup boot. Force-quit that emulator, Cold Boot it from Android Studio, or: $CLI_NAME android off -s $SERIAL"
   start_avd "$CACHE/stock.log"
   booted && info "'$AVD' restarted normally" || info "'$AVD' did not come back by itself — Cold Boot it from Android Studio's Device Manager"
 }
+# If setup dies or is interrupted after the temporary boot is started, put the AVD back on a normal boot.
+# Success without --strict disarms ON_TEMP_BOOT on purpose (the AVD stays on that boot until android off).
+cleanup_android_setup() {
+  trap - EXIT INT TERM
+  [ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"
+  TMP_DIR=""
+  "$ADB" -s "$SERIAL" shell rm -rf /data/local/tmp/rivis-magisk >/dev/null 2>&1 || true
+  if [ "$ON_TEMP_BOOT" = 1 ]; then
+    ON_TEMP_BOOT=0
+    info "setup did not finish — restarting '$AVD' normally so it is not left on the temporary boot…"
+    "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1 || true
+    if gone; then
+      start_avd "$CACHE/stock.log"
+      booted && info "'$AVD' restarted normally" || info "'$AVD' did not come back by itself — Cold Boot it from Android Studio's Device Manager"
+    else
+      echo "android: '$AVD' may still be on the temporary setup boot (port $PORT still held). Force-quit the emulator, Cold Boot it from Android Studio, or: $CLI_NAME android off -s $SERIAL" >&2
+    fi
+  fi
+}
+on_signal_android_setup() { cleanup_android_setup; exit 130; }
+trap cleanup_android_setup EXIT
+trap on_signal_android_setup INT TERM
 if [ "$RESTORE" = 1 ]; then
   info "restarting '$AVD' normally (leaving the temporary setup boot)…"
   restore_stock; exit 0
@@ -152,25 +180,25 @@ if [ -s "$PATCHED" ] && [ "$(sha "$PATCHED")" = "$(cat "$PATCHED.sha256" 2>/dev/
   info "patched ramdisk ready (cached)"
 else
   info "patching a copy of the ramdisk with Magisk…"
-  tmp=$(mktemp -d "$CACHE/.work.XXXXXX") || die "cannot create a work directory"
-  trap 'rm -rf "$tmp"; "$ADB" -s "$SERIAL" shell rm -rf /data/local/tmp/rivis-magisk >/dev/null 2>&1' EXIT
-  unzip -p "$APK" "lib/$ABI/libbusybox.so" > "$tmp/busybox" 2>/dev/null && [ -s "$tmp/busybox" ] || die "no busybox for $ABI in the Magisk APK"
+  TMP_DIR=$(mktemp -d "$CACHE/.work.XXXXXX") || die "cannot create a work directory — the emulator was not restarted"
+  tmp=$TMP_DIR
+  unzip -p "$APK" "lib/$ABI/libbusybox.so" > "$tmp/busybox" 2>/dev/null && [ -s "$tmp/busybox" ] || die "no busybox for $ABI in the Magisk APK — the emulator was not restarted"
   echo "$CA_NAME" > "$tmp/rivis_ca.name"
   W=/data/local/tmp/rivis-magisk
   sh_ "rm -rf $W && mkdir -p $W" >/dev/null
   for f in "$tmp/busybox" "$HOST_PATCH" "$HERE/android/rivis_ca.rc" "$HERE/android/rivis_ca.sh" "$HERE/android/rivis_inject.sh" "$HERE/android/rivis_system_ca.sh" "$tmp/rivis_ca.name"; do
-    "$ADB" -s "$SERIAL" push "$f" "$W/" >/dev/null 2>&1 || die "could not copy $(basename "$f") to the emulator"
+    "$ADB" -s "$SERIAL" push "$f" "$W/" >/dev/null 2>&1 || die "could not copy $(basename "$f") to the emulator — the emulator was not restarted"
   done
   "$ADB" -s "$SERIAL" push "$APK" "$W/magisk.apk" >/dev/null 2>&1 && "$ADB" -s "$SERIAL" push "$CA_PEM" "$W/rivis_ca.0" >/dev/null 2>&1 \
-    && "$ADB" -s "$SERIAL" push "$STOCK" "$W/ramdisk.img" >/dev/null 2>&1 || die "could not copy Magisk or the ramdisk to the emulator"
+    && "$ADB" -s "$SERIAL" push "$STOCK" "$W/ramdisk.img" >/dev/null 2>&1 || die "could not copy Magisk or the ramdisk to the emulator — the emulator was not restarted"
   # host_patch.sh works in /data/local/tmp by design: run it from a private copy of that layout
   log="$tmp/patch.log"
   "$ADB" -s "$SERIAL" shell "cd $W && sed 's|cd /data/local/tmp|cd $W|' host_patch.sh > hp.sh && sh hp.sh $W/ramdisk.img" > "$log" 2>&1 \
-    || { tail -5 "$log" >&2; die "Magisk could not patch this ramdisk (API $API)"; }
+    || { tail -5 "$log" >&2; die "Magisk could not patch this ramdisk (API $API) — the emulator was not restarted"; }
   "$ADB" -s "$SERIAL" shell "cd $W && sed 's|cd /data/local/tmp|cd $W|' rivis_inject.sh > ri.sh && sh ri.sh $W/ramdisk.img.magisk" >> "$log" 2>&1 \
-    || { tail -5 "$log" >&2; die "could not add the $PRODUCT_NAME service to the patched ramdisk"; }
-  "$ADB" -s "$SERIAL" pull "$W/ramdisk.img.magisk" "$tmp/patched.img" >/dev/null 2>&1 || die "could not copy the patched ramdisk back"
-  [ -s "$tmp/patched.img" ] && [ "$(sha "$tmp/patched.img")" != "$(sha "$STOCK")" ] || die "Magisk produced no change — refusing"
+    || { tail -5 "$log" >&2; die "could not add the $PRODUCT_NAME service to the patched ramdisk — the emulator was not restarted"; }
+  "$ADB" -s "$SERIAL" pull "$W/ramdisk.img.magisk" "$tmp/patched.img" >/dev/null 2>&1 || die "could not copy the patched ramdisk back — the emulator was not restarted"
+  [ -s "$tmp/patched.img" ] && [ "$(sha "$tmp/patched.img")" != "$(sha "$STOCK")" ] || die "Magisk produced no change — refusing; the emulator was not restarted"
   mv "$tmp/patched.img" "$PATCHED" && chmod 600 "$PATCHED" && sha "$PATCHED" > "$PATCHED.sha256"
   info "patched ramdisk ready"
 fi
@@ -182,16 +210,19 @@ fi
 if [ "$SYSTEM" = 1 ]; then sh_ "rm -f /data/local/tmp/rivis-ca.status && echo 1 > /data/local/tmp/rivis-ca.want-system && sync" >/dev/null
 else sh_ "rm -f /data/local/tmp/rivis-ca.status /data/local/tmp/rivis-ca.want-system && sync" >/dev/null; fi
 info "restarting '$AVD' with the temporary ramdisk…"
-"$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1 || die "the emulator did not accept the stop command"
-gone || die "the emulator did not stop within 60 seconds"
+"$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1 || die "the emulator did not accept the stop command — nothing was restarted; it is still running as before"
+gone || die "the emulator did not stop within 60 seconds (port $PORT still held) — the temporary ramdisk was not used. Force-quit the emulator if it is stuck, Cold Boot from Android Studio, then retry"
 start_avd "$CACHE/rooted.log" -ramdisk "$PATCHED" -no-snapshot-save
-booted || { restore_stock; die "the emulator did not boot with the patched ramdisk (log: $CACHE/rooted.log)"; }
+ON_TEMP_BOOT=1
+booted || { ON_TEMP_BOOT=0; restore_stock; die "the emulator did not boot with the patched ramdisk (log: $CACHE/rooted.log)"; }
 [ "$("$ADB" -s "$SERIAL" emu avd name 2>/dev/null | tr -d '\r' | head -1)" = "$AVD" ] || die "a different emulator answered on $SERIAL"
 st=""; for i in $(seq 1 60); do st=$(sh_ cat /data/local/tmp/rivis-ca.status); [ -n "$st" ] && break; sleep 1; done
 sh_ rm -f /data/local/tmp/rivis-ca.status >/dev/null
 
 # ---- 4. done, or back to stock (--strict / on failure) ---------------------------------------------------------------
 case "$st" in "ok $CA_NAME"|"ok $CA_NAME system"|"ok $CA_NAME system-failed") ok_st=1 ;; *) ok_st=0 ;; esac
+# Disarm before an intentional stock restart or an intentional stay on the temporary boot (EXIT must not undo either).
+ON_TEMP_BOOT=0
 if [ "$STRICT" = 1 ] || [ "$ok_st" = 0 ]; then
   info "restarting '$AVD' normally…"
   restore_stock
@@ -204,6 +235,6 @@ case "$st" in
       *" system-failed") echo "!! $SERIAL: the CA is in the user store, but adding it to the system store failed on this emulator" >&2 ;;
     esac
     [ "$STRICT" = 1 ] || info "'$AVD' runs on the temporary setup boot until its next normal start (now: $CLI_NAME android off -s $SERIAL)" ;;
-  "") die "the one-shot service did not report back — CA not confirmed. Retry, or: $CLI_NAME android on --manual" ;;
-  *) die "the one-shot service failed ($st) — CA not installed. Retry, or: $CLI_NAME android on --manual" ;;
+  "") die "the one-shot service did not report back — CA not confirmed (emulator is back on a normal boot). Retry, or: $CLI_NAME android on --manual" ;;
+  *) die "the one-shot service failed ($st) — CA not installed (emulator is back on a normal boot). Retry, or: $CLI_NAME android on --manual" ;;
 esac

@@ -407,5 +407,194 @@ class ShutdownRace(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 
 
+class TempBootSafety(PlayEmulatorFixture):
+    """After the temporary -ramdisk boot is started, a failure or Ctrl-C must put the AVD back on a normal boot.
+    Leaving it on the Magisk setup boot is the worst outcome of this flow."""
+
+    def emulator_starts(self):
+        read = lambda: [l for l in open(self.log).read().splitlines() if l.startswith("emulator ")]
+        end, last, steady = time.time() + 10, None, 0
+        while time.time() < end:
+            now = read()
+            steady = steady + 1 if now == last and now else 0
+            if steady >= 5:
+                break
+            last = now
+            time.sleep(0.1)
+        return read()
+
+    def test_ctrl_c_during_the_temp_boot_restores_a_normal_boot(self):
+        # boot_completed stays 0 on the -ramdisk start so booted() loops on sleep 1 (SIGINT-interruptible;
+        # a long adb sleep would defer the trap until that child finished). Stock restart sets allow_boot.
+        emu = os.path.join(self.root, "sdk", "emulator", "emulator")
+        open(emu, "w").write('#!/bin/sh\necho emulator "$@" >> "$FAKE_LOG"\nrm -f "$FAKE_DIR/killed"\n'
+                             'case "$*" in *-ramdisk*) rm -f "$FAKE_DIR/allow_boot" ;; *) : > "$FAKE_DIR/allow_boot" ;; esac\n')
+        open(self.adb, "w").write(r'''#!/bin/sh
+echo "$@" >> "$FAKE_LOG"
+case "$*" in
+  *"emu avd name"*) printf '%s\r\nOK\r\n' "$FAKE_AVD" ;;
+  *"emu kill"*) : > "$FAKE_DIR/killed" ;;
+  *"get-state"*) [ -f "$FAKE_DIR/killed" ] && exit 1; echo device ;;
+  *"getprop ro.build.version.sdk"*) echo 36 ;;
+  *"getprop ro.product.cpu.abi"*) echo arm64-v8a ;;
+  *"getprop sys.boot_completed"*)
+    if [ -f "$FAKE_DIR/allow_boot" ]; then echo 1; else echo 0; fi ;;
+  *"cat /data/local/tmp/rivis-ca.status"*) echo "ok c8750f0d.0" ;;
+esac
+exit 0
+''')
+        env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"),
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, FAKE_AVD=self.avd,
+                   FAKE_DIR=self.root, HOME=self.root)
+        # tests/run.sh backgrounds modules with SIGINT ignored; a user's Terminal has the default.
+        p = subprocess.Popen(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", self.magisk, self.state, "--yes"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+                             stdin=subprocess.DEVNULL,
+                             preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+        self.addCleanup(lambda: p.poll() is None and p.kill())
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if os.path.exists(self.log) and any("-ramdisk" in l for l in open(self.log) if l.startswith("emulator ")):
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("temporary boot never started: " + (open(self.log).read() if os.path.exists(self.log) else ""))
+        time.sleep(0.3)                                 # let booted() enter its sleep
+        os.kill(p.pid, signal.SIGINT)
+        try:
+            out, err = p.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            self.fail("setup did not exit after SIGINT")
+        self.assertEqual(p.returncode, 130, out + err)
+        starts = self.emulator_starts()
+        self.assertGreaterEqual(len(starts), 2, starts)
+        self.assertIn("-ramdisk", starts[0])
+        self.assertNotIn("-ramdisk", starts[1], "Ctrl-C left the AVD on the temporary setup boot")
+        self.assertIn("setup did not finish", out + err)
+
+    def test_a_wrong_avd_on_the_port_after_temp_boot_is_put_back(self):
+        # Preflight emu avd name is ours; after the stop for the -ramdisk boot, a different name answers → die + EXIT restore.
+        # Key off kill_count (not a race with the background emulator process creating a marker).
+        open(self.adb, "w").write(r'''#!/bin/sh
+echo "$@" >> "$FAKE_LOG"
+case "$*" in
+  *"emu avd name"*)
+    if [ -f "$FAKE_DIR/kill_count" ]; then printf 'Other_AVD\r\nOK\r\n'
+    else printf '%s\r\nOK\r\n' "$FAKE_AVD"; fi ;;
+  *"emu kill"*) : > "$FAKE_DIR/killed"; : > "$FAKE_DIR/kill_count" ;;
+  *"get-state"*) [ -f "$FAKE_DIR/killed" ] && exit 1; echo device ;;
+  *"getprop ro.build.version.sdk"*) echo 36 ;;
+  *"getprop ro.product.cpu.abi"*) echo arm64-v8a ;;
+  *"getprop sys.boot_completed"*) echo 1 ;;
+  *"cat /data/local/tmp/rivis-ca.status"*) echo "ok c8750f0d.0" ;;
+esac
+exit 0
+''')
+        env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"),
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, FAKE_AVD=self.avd,
+                   FAKE_DIR=self.root, HOME=self.root)
+        r = subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", self.magisk, self.state, "--yes"],
+                           capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("different emulator", r.stderr)
+        starts = self.emulator_starts()
+        self.assertGreaterEqual(len(starts), 2, starts)
+        self.assertIn("-ramdisk", starts[0])
+        self.assertNotIn("-ramdisk", starts[-1], "wrong-AVD failure left the temporary setup boot running")
+        self.assertIn("setup did not finish", r.stdout + r.stderr)
+
+    def test_corrupt_cache_is_rebuilt_and_a_patch_failure_does_not_restart(self):
+        cache = os.path.join(self.state, "android-ramdisk")
+        for name in os.listdir(cache):
+            if name.endswith(".img"):
+                open(os.path.join(cache, name), "wb").write(b"corrupt")
+                open(os.path.join(cache, name + ".sha256"), "w").write("0" * 64 + "\n")
+        r, starts = MagiskRestarts.run_flow(self, "--yes")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("patching a copy", r.stdout)
+        self.assertIn("was not restarted", r.stderr)
+        self.assertEqual(starts, [], "patch failure must not kill/restart the emulator")
+        self.assertNotIn("emu kill", open(self.log).read())
+
+    def test_stale_work_dirs_from_a_killed_patch_are_removed(self):
+        cache = os.path.join(self.state, "android-ramdisk")
+        stale = os.path.join(cache, ".work.STALEDEAD")
+        os.makedirs(stale, exist_ok=True)
+        open(os.path.join(stale, "leftover"), "w").write("from a killed run")
+        r, _ = MagiskRestarts.run_flow(self, "--yes")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.isdir(stale), "stale .work dir left under the ramdisk cache")
+
+    def test_restore_refuses_a_busy_port_with_recovery_advice(self):
+        source = open(SCRIPT).read()
+        self.assertIn("may still be on the temporary setup boot", source)
+        body = source[source.index("restore_stock() {"):source.index("\n}", source.index("restore_stock() {")) + 2]
+        # gone fails immediately: port still held → die must name the temporary boot and how to recover
+        shell = ("set -u\nSERIAL=emulator-5554; AVD=TestPlay; PORT=5554; CACHE=/tmp; CLI_NAME=rivis\n"
+                 "ADB=true; info() { :; }; die() { echo \"android: $*\" >&2; exit 1; }\n"
+                 "gone() { return 1; }\nstart_avd() { :; }\nbooted() { return 0; }\n" + body + "\nrestore_stock\n")
+        result = subprocess.run(["/bin/bash", "-c", shell], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("temporary setup boot", result.stderr)
+        self.assertIn("android off", result.stderr)
+
+    def test_a_refused_stop_command_says_still_running_as_before(self):
+        # emu kill fails before any -ramdisk start: the message must say the stock boot is untouched.
+        open(self.adb, "w").write(r'''#!/bin/sh
+echo "$@" >> "$FAKE_LOG"
+case "$*" in
+  *"emu avd name"*) printf '%s\r\nOK\r\n' "$FAKE_AVD" ;;
+  *"emu kill"*) exit 1 ;;
+  *"get-state"*) echo device ;;
+  *"getprop ro.build.version.sdk"*) echo 36 ;;
+  *"getprop ro.product.cpu.abi"*) echo arm64-v8a ;;
+  *"getprop sys.boot_completed"*) echo 1 ;;
+  *"cat /data/local/tmp/rivis-ca.status"*) echo "ok c8750f0d.0" ;;
+esac
+exit 0
+''')
+        r, starts = MagiskRestarts.run_flow(self, "--yes")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("still running as before", r.stderr)
+        self.assertEqual(starts, [], r.stdout + r.stderr)
+
+    def test_a_stuck_stop_names_the_temporary_ramdisk_was_not_used(self):
+        # get-state never drops after emu kill → gone() times out. A no-op sleep keeps the 60-iteration wait short.
+        bindir = os.path.join(self.root, "bin")
+        os.makedirs(bindir, exist_ok=True)
+        sleep = os.path.join(bindir, "sleep")
+        open(sleep, "w").write("#!/bin/sh\n")
+        os.chmod(sleep, 0o755)
+        open(self.adb, "w").write(r'''#!/bin/sh
+echo "$@" >> "$FAKE_LOG"
+case "$*" in
+  *"emu avd name"*) printf '%s\r\nOK\r\n' "$FAKE_AVD" ;;
+  *"emu kill"*) : > "$FAKE_DIR/killed" ;;
+  *"get-state"*) echo device ;;
+  *"getprop ro.build.version.sdk"*) echo 36 ;;
+  *"getprop ro.product.cpu.abi"*) echo arm64-v8a ;;
+  *"getprop sys.boot_completed"*) echo 1 ;;
+  *"cat /data/local/tmp/rivis-ca.status"*) echo "ok c8750f0d.0" ;;
+esac
+exit 0
+''')
+        env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"),
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, FAKE_AVD=self.avd,
+                   FAKE_DIR=self.root, HOME=self.root, PATH=bindir + os.pathsep + os.environ.get("PATH", ""))
+        r = subprocess.run(["/bin/bash", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0", self.magisk, self.state, "--yes"],
+                           capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("temporary ramdisk was not used", r.stderr)
+        self.assertFalse(os.path.exists(self.log) and any("-ramdisk" in l for l in open(self.log)),
+                         "stuck stop must not start the temporary boot")
+
+    def test_a_failed_service_says_back_on_a_normal_boot(self):
+        r, starts = MagiskRestarts.run_flow(self, "--yes", status="fail: no cert")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("back on a normal boot", r.stderr)
+        self.assertEqual(sorted("-ramdisk" in x for x in starts), [False, True], starts)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
