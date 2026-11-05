@@ -148,8 +148,7 @@ instance using this installation before removing its add-ons, and leaves saved p
 ## From a source checkout (developers)
 
 Only for people working on Rivis itself: the installed copy contains just what is needed to run it (no `install/` or
-`tests/`), and testers can skip this section. A source checkout looks like this; developer setup and the test suite
-are in [docs/REFERENCE.md](docs/REFERENCE.md#from-a-source-checkout-developers).
+`tests/`), and testers can skip this section. A source checkout looks like this:
 
 ```
 rivis              # the command (macOS)        rivis.ps1   # the command (Windows, not in the pilot yet)
@@ -159,6 +158,13 @@ install/           # installer, offline bundle builder
 docs/              # reference, Proxyman comparison, SBOM
 tests/             # automated test suite (bash tests/run.sh --fast)
 ```
+
+### Working on Rivis
+
+Changing Rivis (not just using it): [CONTRIBUTING.md](CONTRIBUTING.md) for checkout, tests and the rules that keep
+the suite off the live proxy; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the process model, state directory
+and add-on map. Command reference for a source checkout is also in
+[docs/REFERENCE.md](docs/REFERENCE.md#from-a-source-checkout-developers).
 
 ---
 
