@@ -400,6 +400,30 @@ class Cli(UpdaterBase):
         self.assertIn("source checkout", r.stdout + r.stderr)
         self.assertFalse(self.gh.blob_headers, "nothing may be downloaded for a source checkout")
 
+    def test_check_yes_installs_without_a_prompt_on_a_non_tty(self):
+        # `update check` on a pipe only announces; --yes must continue (as `install` does) so scripts and the
+        # panel's "Install" path that pass --yes are not silently no-ops.
+        self.sign_in(); self.publish()
+        rivis = os.path.join(self.tool, "rivis")
+        plain = subprocess.run([rivis, "update", "check"], capture_output=True, text=True,
+                               env=self.env(), timeout=120, stdin=subprocess.DEVNULL)
+        self.assertEqual(plain.returncode, 0, plain.stdout + plain.stderr)
+        self.assertIn("is available", plain.stdout)
+        self.assertNotIn("source checkout", plain.stdout + plain.stderr)
+        yes = subprocess.run([rivis, "update", "check", "--yes"], capture_output=True, text=True,
+                             env=self.env(), timeout=120, stdin=subprocess.DEVNULL)
+        self.assertNotEqual(yes.returncode, 0, "check --yes must not stop after announcing on a non-TTY")
+        self.assertIn("source checkout", yes.stdout + yes.stderr)
+        self.assertFalse(self.gh.blob_headers, "nothing may be downloaded for a source checkout")
+
+    def test_update_rejects_an_unknown_option(self):
+        # before: `update status --bogus` ran status and ignored the flag
+        r = subprocess.run([os.path.join(self.tool, "rivis"), "update", "status", "--bogus"],
+                           capture_output=True, text=True, env=self.env(), timeout=60, stdin=subprocess.DEVNULL)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("usage:", r.stdout + r.stderr)
+        self.assertIn("--yes", r.stdout + r.stderr)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

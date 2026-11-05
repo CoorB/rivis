@@ -87,7 +87,9 @@
 #                                 sim/emulator trust, running state, host reachability, disk.
 #                                 --fix-safe does only safe, reversible fixes (asks y/N)
 #   <cli> bug-report [--output PATH]     create a redacted support bundle (no flows or tokens)
-#   <cli> update [check|install|login|logout|status]   signed in-app updates from the public GitHub releases
+#   <cli> update [check|install|login|logout|status] [--yes]
+#                                 signed in-app updates from the public GitHub releases
+#                                 --yes: install without the "Install it now?" prompt (for check; install already does)
 #   <cli> health                  is the running proxy answering, on the installed version? (exit 0 = yes)
 #   <cli> rollback [VERSION|--list]   go back to an earlier installed version and restart with the same options
 set -uo pipefail
@@ -710,7 +712,8 @@ our_listeners() { local pid; for pid in $(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT
 # SHA-256 checks; device-flow sign-in only for a private repo). The install runs detached (addons/update_install.sh) because it stops and restarts this proxy.
 cmd_update() {
   local U=(/usr/bin/python3 -I "$SCRIPT_DIR/addons/updater.py") action="${1:-check}" out yes=0
-  [ "${2:-}" = --yes ] && yes=1
+  [ $# -gt 0 ] && shift
+  while [ $# -gt 0 ]; do case "$1" in --yes) yes=1 ;; *) die "usage: $CLI update [check|install|login|logout|status] [--yes]" ;; esac; shift; done
   case "$action" in
     login|logout) "${U[@]}" "$action" ;;
     status) "${U[@]}" status ;;
@@ -720,8 +723,9 @@ cmd_update() {
       if [ -z "$v" ]; then info "$PRODUCT_NAME $(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["current"])') is up to date"; return 0; fi
       notes=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["available"]["notes"])')
       info "$PRODUCT_NAME $v is available"; [ -n "$notes" ] && printf '%s\n' "$notes" | sed 's/^/    /'
-      [ "$action" = install ] || [ -t 0 ] || return 0
-      if [ "$action" = check ]; then printf 'Install it now? %s restarts by itself. [Y/n] ' "$PRODUCT_NAME"; read -r ans || ans=n
+      # --yes: same as install — proceed without a TTY and without the prompt (panel / scripts)
+      [ "$action" = install ] || [ "$yes" = 1 ] || [ -t 0 ] || return 0
+      if [ "$action" = check ] && [ "$yes" != 1 ]; then printf 'Install it now? %s restarts by itself. [Y/n] ' "$PRODUCT_NAME"; read -r ans || ans=n
         case "$ans" in ""|y|Y|yes) ;; *) return 0 ;; esac; fi
       printf '%s' "$("${U[@]}" status)" | /usr/bin/python3 -I -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["installed"] else 1)' \
         || die "this copy runs from a source checkout — update it with git, not with '$CLI update'"
@@ -732,7 +736,7 @@ cmd_update() {
       disown $! 2>/dev/null || true
       info "installing $PRODUCT_NAME $v in the background (verified: signature + SHA-256). It restarts by itself in about a minute."
       info "log: $STATE_ROOT/updates/install.log" ;;
-    *) die "usage: $CLI update [check|install|login|logout|status]" ;;
+    *) die "usage: $CLI update [check|install|login|logout|status] [--yes]" ;;
   esac
 }
 
