@@ -39,12 +39,14 @@
 #                                 browser's front tab (Chrome, Edge, Brave, Chromium, Safari). --fresh: a
 #                                 temporary profile
 #   <cli> rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
-#   <cli> rules add NAME match=REGEX action=ACTION [key=value ...]
+#   <cli> rules add NAME match=REGEX|match_wildcard=HOST/PATH action=ACTION [key=value ...]
 #                                 Proxyman-style rules, hot-reloaded, kept across restarts:
 #                                 respond | map_local | status | json_patch | delay |
 #                                 set_header | map_remote | block   (see rules.example.json)
 #                                 block: optional mode=kill_show|kill|hide (default kill_show =
 #                                 kill and keep the row; kill = kill and hide; hide = forward and hide)
+#                                 match= is a regex on the full URL; match_wildcard= is host/path*
+#                                 (* anything, ? one character) like the Rules window without Regex.
 #                                 set_header: header=NAME value=TEXT [side=request|response];
 #                                 json_patch: set='path=value' (or set='{"path":value}'); map_remote: replace=REGEX with=URL
 #                                 optional: method=POST operation=GetUser (only that GraphQL operation)

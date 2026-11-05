@@ -3,7 +3,7 @@
   rules_cli.py FILE rules list
   rules_cli.py FILE rules on|off|show|rm NAME
   rules_cli.py FILE rules test URL [METHOD]     what each rule would do to this call (no traffic is sent)
-  rules_cli.py FILE rules add NAME match=REGEX action=ACTION [key=value ...]
+  rules_cli.py FILE rules add NAME match=REGEX|match_wildcard=HOST/PATH action=ACTION [key=value ...]
                                  optional: method=POST operation=GetUser (GraphQL operation name)
   rules_cli.py FILE rules variant NAME add|use|rm VARIANT [file=PATH]
   rules_cli.py FILE rules edit
@@ -27,7 +27,8 @@ if HERE not in sys.path:       # /usr/bin/python3 -I removes the script director
     sys.path.insert(0, HERE)
 from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PROFILE_VALUES, PRODUCT, SAFE_NAME, acquire_state_lock, atomic_json,
                            breakpoints, confined_path, forbidden_file, migrate_rules, owned_mock_file, project_profile,
-                           project_state, remote_url_problem, set_trusted_file, throttle_shorthand, trusted_files, user_regex)
+                           project_state, remote_url_problem, set_trusted_file, throttle_shorthand, trusted_files, user_regex,
+                           wildcard_url_regex)
 from proxy_rule_validation import compile_rule, explain_rules, map_remote_warning, rule_fingerprint
 
 ACTIONS = ACTION_REQUIREMENTS
@@ -486,8 +487,16 @@ def rules_cmd(path, args):
                         r["set"] = {}
                     r["set"][path_part] = value(v)
             else:
-                r[k] = value(v) if k not in ("match", "replace", "with", "file", "header", "body") else v
+                r[k] = value(v) if k not in ("match", "match_wildcard", "replace", "with", "file", "header", "body") else v
         created = r.pop("created_mock", None)
+        wc = r.pop("match_wildcard", None)
+        if wc is not None:
+            if str(r.get("match") or "").strip():
+                die("use match= or match_wildcard=, not both")
+            try:
+                r["match"] = wildcard_url_regex(wc)
+            except ValueError as e:
+                die(str(e))
         if created is not None and (cmd != "mock-set" or created not in (0, 1)):
             die("created_mock is only for mock capture")
         if cmd == "add" and r.get("action") == "map_local" and "body" in r and "file" not in r:

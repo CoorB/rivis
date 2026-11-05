@@ -210,6 +210,7 @@ class ToolWindows(UiBase):
         w.locator("[data-r-new]").click()
         w.locator("#rf-type").select_option("status")
         w.locator("#rf-name").fill("nth-503")
+        w.locator("#rf-re").check()
         w.locator("#rf-match").fill("/json/small\\?nth=")
         w.locator("#rf-status").fill("503")
         w.locator("#rf-every").fill("3")
@@ -263,6 +264,7 @@ class ToolWindows(UiBase):
         w = self.win_open("rules")
         w.locator("[data-r-new]").click()
         w.locator("#rf-name").fill("to-text")
+        w.locator("#rf-re").check()
         w.locator("#rf-match").fill("json/small\\?nmr")
         w.locator("#rf-replace").fill("/json/small")
         w.locator("#rf-with").fill("/text")
@@ -276,6 +278,27 @@ class ToolWindows(UiBase):
         self.row("nmr=2").click(position={"x": rb["width"] - 16, "y": rb["height"] / 2})
         w.locator("[data-r-test]").click()
         wait_for(lambda: "to-text" in w.locator("[data-r-testout]").inner_text() and "fires" in w.locator("[data-r-testout]").inner_text(), 5, 0.1, "explained")
+
+    def test_map_remote_wildcard_url_rewrites_and_dots_stay_literal(self):
+        # Proxyman-style host/path* without Regex: dots in the host are literal, * matches the rest of the path.
+        self.open_new()
+        self.page.keyboard.press(MOD + "+Alt+R")
+        w = self.win_open("rules")
+        w.locator("[data-r-new]").click()
+        self.assertFalse(w.locator("#rf-re").is_checked())
+        w.locator("#rf-name").fill("wc-remote")
+        host = "127.0.0.1"
+        w.locator("#rf-match").fill("%s/json/small*" % host)
+        w.locator("#rf-replace").fill("/json/small")
+        w.locator("#rf-with").fill("/text")
+        w.locator("[data-r-save]").click()
+        wait_for(lambda: any(r["name"] == "wc-remote" for r in self.panel.state()["rules"]), 5, 0.1, "rule")
+        stored = next(r for r in self.panel.state()["rules"] if r["name"] == "wc-remote")["match"]
+        self.assertIn(r"127\.0\.0\.1", stored, "literal dots escaped in the stored regex")
+        self.assertNotRegex("http://127X0X0X1/json/small", stored)
+        self.page.wait_for_timeout(1200)
+        r = self.fetch("/json/small?wc=1")
+        self.assertNotIn("json", dict((k.lower(), v) for k, v in r.headers).get("content-type", ""), "answered by /text")
 
     # ── Scripting, Network, Edit and Repeat ─────────────────────────────────────────────────────────────────────────
     def test_network_no_caching_and_a_throttle_profile(self):

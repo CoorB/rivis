@@ -202,7 +202,7 @@ def _bash_flags_by_command(bash):
     out["mocks"] = {_canon_flag("--dry-run")}
     out["tls"] = {_canon_flag(x) for x in ("--key", "--password-stdin")}
     out["compose"] = {_canon_flag(x) for x in ("--var", "--no-wait")}
-    out["scripts"] = {_canon_flag(x) for x in ("--lang", "--match")}
+    out["scripts"] = {_canon_flag(x) for x in ("--lang", "--match", "--template")}
     # browser: only the user options, not Chromium argv (--no-first-run etc.)
     out["browser"] = {_canon_flag(x) for x in (
         "--browser", "--chrome", "--edge", "--chromium", "--brave",

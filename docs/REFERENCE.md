@@ -130,7 +130,7 @@ rivis lan [list] | allow IP [NAME] | rm IP           # phones/tablets allowed wh
 rivis rules list | on NAME | off NAME | show NAME | rm NAME | edit | allow-file PATH | disallow-file PATH | trusted-files
 rivis rules test URL [METHOD]                        # what each rule would do to this call; sends nothing
 rivis health | rollback [VERSION|--list]             # after an upgrade: is it working? / go back a version (health: 0 ok, 1 unhealthy, 3 not running)
-rivis rules add NAME match=REGEX action=ACTION [key=value ...]
+rivis rules add NAME match=REGEX|match_wildcard=HOST/PATH action=ACTION [key=value ...]
                                               # optional: method=POST operation=GetUser (only that GraphQL op)
 rivis rules variant NAME add|use|rm VARIANT [file=PATH]
 rivis scripts list | new NAME --lang py|js [--match REGEX] | on NAME | off NAME | edit NAME | rm NAME
@@ -203,10 +203,13 @@ The Rules tab offers **Import from Proxyman…** for the default local RuleTree.
 instructions do not specify a file schema; this importer accepts exports that use the same RuleTree JSON shape.
 
 For Map Remote, `match` selects calls, `replace` is the URL regex to replace, and `with` is the replacement URL.
-For example, to send a call from one local server to another:
+`match=` is always a regex on the full URL. Prefer `match_wildcard=host/path*` when you want Proxyman-style
+wildcards (`*` = anything, `?` = one character; dots in the host stay literal) — the Rules window does the same
+by default (tick **Regex** to type a regex instead). For example, to send a call from one local server to another:
 
 ```bash
 rivis rules add move-echo match='/echo' action=map_remote replace='^http://127\.0\.0\.1:50525/echo$' with='http://127.0.0.1:50526/echo'
+rivis rules add to-staging match_wildcard='api.example.com/v1/*' action=map_remote replace='https://api.example.com' with='https://staging.example.com'
 ```
 
 The `replace` pattern must match the full URL, not just the path shown in the call list. `rules add`, `rules list`
@@ -642,7 +645,9 @@ shows in the GraphQL viewer (`operationName`, or the named `query` / `mutation` 
 CLI-added rules append in file order; quick panel errors are inserted first so they can override an
 older local response. The panel's **Rules** tab lists, creates, edits, switches on/off and deletes every one of them, plus
 breakpoints, scripts and the network throttle / No caching (**New** → pick a type; a rule's name and type stay fixed when
-you edit it, and a Map Local rule opens its own editor). Breakpoints pause requests/responses in mitmweb for editing and continuation.
+you edit it, and a Map Local rule opens its own editor). New Map Remote / Force status / Header / Delay (and the other
+rewrite rules) accept a `host/path*` URL with `*` / `?` wildcards by default — tick **Regex** for a full-URL regex, the
+same as Breakpoint. Breakpoints pause requests/responses in mitmweb for editing and continuation.
 
 **Block List modes** (optional `mode=` on `block` rules; default `kill_show` — today's behaviour):
 

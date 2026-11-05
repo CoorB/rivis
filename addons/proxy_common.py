@@ -6,6 +6,7 @@ import re
 import tempfile
 import threading
 import time
+from urllib.parse import urlsplit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with open(os.path.join(ROOT, "product.json")) as _fh:
@@ -791,6 +792,66 @@ def user_regex(pattern, flags=0):
         raise re.error("two repeats in a row that can match the same characters, such as .*.* or \\d+\\d*, can freeze "
                        "the proxy on a long URL; keep one of them")
     return compiled
+
+
+def _host_port_ok(netloc):
+    """Port in host:port must be 1..65535 (same rule as the TLS decryption list)."""
+    host = (netloc or "").strip()
+    if host.startswith("["):
+        end = host.find("]")
+        suffix = host[end + 1:] if end >= 0 else ""
+        if end < 0 or (suffix and (not suffix.startswith(":") or not suffix[1:].isdigit())):
+            raise ValueError("invalid bracketed host port")
+        if not suffix:
+            return
+        possible = suffix[1:]
+    else:
+        if not host or host.count(":") != 1:
+            return
+        _, possible = host.rsplit(":", 1)
+    if possible.isdigit() and not 1 <= int(possible) <= 65535:
+        raise ValueError("host port must be 1..65535")
+
+
+def wildcard_regex(host, path, literal_query=False):
+    """FRTMProxy-style host/path with * and ? wildcards → URL regex used by the rules engine."""
+    def wc(t, star):
+        return "".join(star if c == "*" else "." if c == "?" else re.escape(c) for c in t)
+    host = (host or "").strip()
+    path = (path or "/").strip() or "/"
+    full_url = host.startswith(("http://", "https://"))
+    if full_url:                             # a full URL pasted into the host box
+        parsed = urlsplit(host)
+        host = parsed.netloc.lower()
+        _host_port_ok(host)
+        if parsed.port is not None and not 1 <= parsed.port <= 65535:
+            raise ValueError("host port must be 1..65535")
+        path = (parsed.path or "/") + (("?" + parsed.query) if parsed.query else "")
+        literal_query = bool(parsed.query)
+    else:
+        host = host.lower()
+        _host_port_ok(host)
+    if not host:
+        raise ValueError("host is required")
+    if not path.startswith("/"):
+        path = "/" + path
+    if literal_query and "?" in path:
+        route, query = path.split("?", 1)
+        return r"^https?://" + wc(host, r"[^/:]*") + r"(:\d+)?" + wc(route, ".*") + r"\?" + wc(query, ".*") + "$"
+    return r"^https?://" + wc(host, r"[^/:]*") + r"(:\d+)?" + wc(path, ".*") + r"(\?|$)"
+
+
+def wildcard_url_regex(pattern):
+    """UI/CLI host/path* (or a pasted http(s) URL) → the regex stored as a rule's match."""
+    t = (pattern or "").strip()
+    if not t:
+        raise ValueError("host/path pattern is required (e.g. api.example.com/v1/*)")
+    if t.lower().startswith(("http://", "https://")):
+        return wildcard_regex(t, "/")
+    i = t.find("/")
+    if i < 0:
+        return wildcard_regex(t, "/*")
+    return wildcard_regex(t[:i], t[i:] or "/")
 
 
 def tls_host_regex(pattern):

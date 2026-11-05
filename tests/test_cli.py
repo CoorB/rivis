@@ -696,6 +696,19 @@ class Rules(CliBase):
         self.refused("rules", "add", "b-on-status", "match=/z", "action=status", "status=500", "mode=hide",
                      msg="mode only applies to block")
 
+    def test_rules_add_match_wildcard_escapes_dots_and_expands_stars(self):
+        # Proxyman host/path*: stored as a regex; dots in the host stay literal (* / ? are wildcards).
+        self.ok("rules", "add", "wc", "match_wildcard=api.example.com/v1/*", "action=status", "status=503")
+        match = self.cfg()["rules"][0]["match"]
+        self.assertNotIn("match_wildcard", self.cfg()["rules"][0])
+        self.assertIn(r"api\.example\.com", match)
+        self.assertIn(".*", match)              # path *
+        self.assertRegex("https://api.example.com/v1/accounts", match)
+        self.assertNotRegex("https://apiXexampleYcom/v1/accounts", match)
+        self.refused("rules", "add", "both", "match=/x", "match_wildcard=h/p*", "action=block",
+                     msg="use match= or match_wildcard=")
+        self.refused("rules", "add", "empty-wc", "match_wildcard=", "action=block", msg="host/path")
+
     def test_b3_json_patch_cli_syntax(self):
         # B3: json_patch set accepts path=value, multiple set flags, comma pairs, and JSON objects
         self.ok("rules", "add", "p1", "match=/json$", "action=json_patch", "set=user.name=PATCHED")

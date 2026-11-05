@@ -506,11 +506,14 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
         self.ok("rules", "add", "s-rule", "-Match", "/api/status", "action=status", "status=500")
         self.ok("rules", "add", "patch-rule", "match=/api/user", "action=json_patch", "set=user.name=PATCHED")
         self.ok("rules", "add", "flake", "match=/pay", "action=status", "status=503", "every=3")
+        self.ok("rules", "add", "wc-rule", "match_wildcard=api.example.com/v1/*", "action=status", "status=418")
         rules = {r["name"]: r for r in self.cfg()["rules"]}
         self.assertEqual(rules["b-rule"]["action"], "block")
         self.assertEqual(rules["s-rule"]["status"], 500)
         self.assertEqual(rules["patch-rule"]["set"], {"user.name": "PATCHED"})
         self.assertEqual(rules["flake"]["every"], 3)
+        self.assertIn(r"api\.example\.com", rules["wc-rule"]["match"])
+        self.assertNotIn("match_wildcard", rules["wc-rule"])
         # without every/offset validation this add succeeded and left every=1 on the rule
         self.bad("rules", "add", "bad-every", "match=/x", "action=status", "status=500", "every=1",
                  msg="every must be an integer")

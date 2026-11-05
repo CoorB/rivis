@@ -285,6 +285,37 @@ class Ops(LiveCase):
         self.assertIn("replace is the URL pattern", warning)
         self.assertIn("may never rewrite", warning)
 
+    def test_map_remote_match_wildcard_rewrites_and_dots_stay_literal(self):
+        # match_wildcard=host/path* → stored regex; matching call is rewritten; host dots are not ".".
+        host = "127.0.0.1"
+        self.panel.ok("add", {"rule": {
+            "name": "wc-remote", "action": "map_remote",
+            "match_wildcard": "%s/json/small*" % host,
+            "replace": "/json/small", "with": "/text",
+        }})
+        rule = next(r for r in self.rules() if r["name"] == "wc-remote")
+        self.assertNotIn("match_wildcard", rule)
+        self.assertIn(r"127\.0\.0\.1", rule["match"])
+        self.assertNotRegex("http://127X0X0X1/json/small", rule["match"])
+        def rewritten():
+            r = self.fetch("/json/small?wcpanel=1")
+            ctype = dict((k.lower(), v) for k, v in r.headers).get("content-type", "")
+            return r if "json" not in ctype else None
+        wait_for(rewritten, 8, 0.3, "map_remote via wildcard")
+        self.bad("add", {"rule": {"name": "both", "action": "block", "match": "/x", "match_wildcard": "h/p*"}},
+                 "match or match_wildcard")
+
+    def test_update_match_wildcard_replaces_stored_match(self):
+        # update with match_wildcard must clear the old match and store the converted regex (keys omit match).
+        self.panel.ok("add", {"rule": {"name": "u-wc", "action": "status", "match": "/never-match$", "status": 418}})
+        self.panel.ok("update", {"name": "u-wc", "rule": {"match_wildcard": "api.example.com/v1/*"},
+                                 "keys": ["match_wildcard"]})
+        rule = next(r for r in self.rules() if r["name"] == "u-wc")
+        self.assertNotIn("match_wildcard", rule)
+        self.assertIn(r"api\.example\.com", rule["match"])
+        self.assertNotRegex("https://apiXexampleYcom/v1/x", rule["match"])
+        self.assertRegex("https://api.example.com/v1/accounts", rule["match"])
+
     def test_b6_map_remote_full_url_replace_matching_path_no_false_warning(self):
         # B6: path-only match with full-URL replace must not warn with example.test
         rule = {"name": "mr_full", "action": "map_remote", "match": "/hosts",

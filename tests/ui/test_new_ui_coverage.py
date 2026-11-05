@@ -271,6 +271,7 @@ class NewWindowCoverage(UiBase):
                 w.locator('[data-r-new]').click()
                 w.locator('#rf-type').select_option(kind)
                 w.locator('#rf-name').fill(name)
+                w.locator('#rf-re').check()
                 w.locator('#rf-match').fill('/echo')
                 w.locator('#' + field).fill(first)
                 w.locator('[data-r-save]').click()

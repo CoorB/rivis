@@ -115,13 +115,17 @@
     const ed = w.body.querySelector("[data-r-ed]");
     const t = it ? (it.action === "drop" ? "block" : it.action) : (presetType || (w.data.type !== "all" ? w.data.type : "map_remote"));
     const v = it || preset || {};      // a preset comes from a call (right-click → Map Remote / Block)
+    // existing rules and call presets store a regex; a blank new rule is host/path* like Breakpoint
+    const isRe = !!(it || (preset && preset.match));
     w.data.edit = { name: it ? it.name : null, dirty: false };
     const row = (label, inner, hint) => `<div class="rv-form"><span class="rv-flabel">${label}</span>${inner}${hint ? `<span class="rv-win-hint">${hint}</span>` : ""}</div>`;
     const txt = (id, val, ph) => `<input type="text" id="${id}" class="grow" spellcheck="false" value="${esc(val == null ? "" : val)}" placeholder="${esc(ph || "")}">`;
     let f = "";
     if (!it) f += row("Type", `<select id="rf-type">${TYPES.map(([id, l]) => `<option value="${id}"${id === t ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>`);
     if (!it) f += row("Name", txt("rf-name", preset && preset.match ? suggestName(preset.match, t) : "", "letters, digits . _ -"));
-    f += row("URL", txt("rf-match", v.match, t === "map_remote" ? "^https://api\\.example\\.com/" : "regex on the URL — . matches every call"), "a regex: . any character, .* anything");
+    f += row("URL", txt("rf-match", v.match, isRe ? (t === "map_remote" ? "^https://api\\.example\\.com/" : "regex on the URL — . matches every call")
+      : "api.example.com/v1/accounts/*") + `<label><input type="checkbox" id="rf-re" ${isRe ? "checked" : ""}> Regex</label>`,
+      isRe ? "a regex: . any character, .* anything" : "* matches anything, ? one character");
     f += row("Method", ui.methodSelect("rf-method", v.method, "Any"));
     f += row("GraphQL operation", txt("rf-operation", v.operation, "GetUser"), "optional: only that operation on the same URL");
     if (t === "map_remote") {
@@ -181,8 +185,10 @@
   async function save(w, it, t) {
     const ed = w.body.querySelector("[data-r-ed]"), val = (id) => (ed.querySelector("#" + id) || {}).value || "", err = ed.querySelector("[data-r-err]");
     try {
-      const rule = { match: val("rf-match").trim(), method: val("rf-method"), operation: val("rf-operation").trim() };
-      if (!rule.match) throw new Error("Enter the URL pattern (. matches every call)");
+      let match = val("rf-match").trim();
+      if (!match) throw new Error(ed.querySelector("#rf-re").checked ? "Enter the URL pattern (. matches every call)" : "Enter a host/path, e.g. api.example.com/v1/*");
+      if (!ed.querySelector("#rf-re").checked) match = ui.wildcardRe(match);
+      const rule = { match, method: val("rf-method"), operation: val("rf-operation").trim() };
       if (t === "respond") {
         rule.status = Number(val("rf-status"));
         if (!it || !it.body_file) { const b = val("rf-body"); if (/^\s*[[{]/.test(b)) { try { rule.body = JSON.parse(b); } catch (x) { rule.body = b; } } else rule.body = b; }

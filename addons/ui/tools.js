@@ -155,6 +155,19 @@
       const i = t.indexOf("/");
       return i < 0 ? { host: t, path: "/*" } : { host: t.slice(0, i), path: t.slice(i) || "/" };
     },
+    // the server's wildcard_regex: host/path* → the match regex stored in rules / breakpoints
+    wildcardRe(text) {
+      let { host, path } = ui.splitUrl(text);
+      if (/^https?:\/\//i.test(host)) { try { const u = new URL(host); host = u.host; path = (u.pathname || "/") + (u.search || ""); } catch (e) { /* kept as typed */ } }
+      if (!host) throw new Error("Enter a host/path, e.g. api.example.com/v1/*");
+      const wc = (x, star) => [...x].map((c) => c === "*" ? star : c === "?" ? "." : c.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")).join("");
+      const pth = path.startsWith("/") ? path : "/" + path;
+      if (pth.includes("?")) {
+        const i = pth.indexOf("?"), route = pth.slice(0, i), query = pth.slice(i + 1);
+        return "^https?://" + wc(host.toLowerCase(), "[^/:]*") + "(:\\d+)?" + wc(route, ".*") + "\\?" + wc(query, ".*") + "$";
+      }
+      return "^https?://" + wc(host.toLowerCase(), "[^/:]*") + "(:\\d+)?" + wc(pth, ".*") + "(\\?|$)";
+    },
     // run an op, toast its outcome, refresh the state at once; returns the answer or null
     async run(op, body, ok) {
       try {

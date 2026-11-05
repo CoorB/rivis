@@ -40,7 +40,8 @@ from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRESETS,
                           atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
                           confined_path, migrate_collection, migrate_rules, owned_mock_file, project_profile,
                           project_profiles, project_state, tls_config, tls_covering, tls_update,
-                          throttle_shorthand, user_regex, without_hop_headers, without_leading_bom)
+                          throttle_shorthand, user_regex, without_hop_headers, without_leading_bom,
+                          wildcard_regex as _wildcard_regex, wildcard_url_regex as _wildcard_url_regex)
 from proxy_codegen import TARGETS, generate
 import proxy_redact
 import devices
@@ -121,51 +122,20 @@ def checked_columns(value):
     return value
 
 
-def _host_port_ok(netloc):
-    """Port in host:port must be 1..65535 (same rule as the TLS decryption list)."""
-    host = (netloc or "").strip()
-    if host.startswith("["):
-        end = host.find("]")
-        suffix = host[end + 1:] if end >= 0 else ""
-        if end < 0 or (suffix and (not suffix.startswith(":") or not suffix[1:].isdigit())):
-            raise PanelError("invalid bracketed host port")
-        if not suffix:
-            return
-        possible = suffix[1:]
-    else:
-        if not host or host.count(":") != 1:
-            return
-        _, possible = host.rsplit(":", 1)
-    if possible.isdigit() and not 1 <= int(possible) <= 65535:
-        raise PanelError("host port must be 1..65535")
-
-
 def wildcard_regex(host, path, literal_query=False):
     """FRTMProxy-style host/path with * and ? wildcards → URL regex used by the rules engine."""
-    def wc(t, star):
-        return "".join(star if c == "*" else "." if c == "?" else re.escape(c) for c in t)
-    host = (host or "").strip()
-    path = (path or "/").strip() or "/"
-    full_url = host.startswith(("http://", "https://"))
-    if full_url:                             # a full URL pasted into the host box
-        parsed = urlsplit(host)
-        host = parsed.netloc.lower()
-        _host_port_ok(host)
-        if parsed.port is not None and not 1 <= parsed.port <= 65535:
-            raise PanelError("host port must be 1..65535")
-        path = (parsed.path or "/") + (("?" + parsed.query) if parsed.query else "")
-        literal_query = bool(parsed.query)
-    else:
-        host = host.lower()
-        _host_port_ok(host)
-    if not host:
-        raise PanelError("host is required")
-    if not path.startswith("/"):
-        path = "/" + path
-    if literal_query and "?" in path:
-        route, query = path.split("?", 1)
-        return r"^https?://" + wc(host, r"[^/:]*") + r"(:\d+)?" + wc(route, ".*") + r"\?" + wc(query, ".*") + "$"
-    return r"^https?://" + wc(host, r"[^/:]*") + r"(:\d+)?" + wc(path, ".*") + r"(\?|$)"
+    try:
+        return _wildcard_regex(host, path, literal_query)
+    except ValueError as e:
+        raise PanelError(str(e)) from e
+
+
+def wildcard_url_regex(pattern):
+    """UI/CLI host/path* → the regex stored as a rule's match."""
+    try:
+        return _wildcard_url_regex(pattern)
+    except ValueError as e:
+        raise PanelError(str(e)) from e
 
 
 def http_status(value):
@@ -471,6 +441,18 @@ class ProxyPanel:
             if (r.get("name") or "").casefold() == key:
                 return r
         raise PanelError(f"no rule named '{name}'")
+
+    @staticmethod
+    def apply_match_wildcard(r):
+        """match_wildcard=host/path* → match regex (Proxyman-style); match= stays a regex."""
+        wc = r.pop("match_wildcard", None)
+        if wc is None:
+            return
+        if not isinstance(wc, str) or not wc.strip():
+            raise PanelError("match_wildcard needs a host/path pattern (e.g. api.example.com/v1/*)")
+        if str(r.get("match") or "").strip():
+            raise PanelError("use match or match_wildcard, not both")
+        r["match"] = wildcard_url_regex(wc)
 
     @staticmethod
     def validate(r):
@@ -1878,6 +1860,7 @@ class ProxyPanel:
             if "file" in r or "body_file" in r:
                 raise PanelError("file-backed rules are created with Map Local in the panel, or with the product CLI")
             r.setdefault("enabled", True)
+            self.apply_match_wildcard(r)
             self.validate(r)
             if not str(r.get("match", "")).strip():     # an omitted match used to mean "every call": too easy to break everything
                 raise PanelError("match is required (a regex on the URL; '.' means every call)")
@@ -1915,9 +1898,13 @@ class ProxyPanel:
                 raise PanelError("a rule's file is changed with Map Local in the panel, or with the product CLI")
             if a["name"] in self._rules_outside(cfg):
                 raise PanelError("this rule reads a file outside the project: edit it in your own editor")
-            merged = {k: v for k, v in old.items() if k not in a.get("keys", ())}
+            keys = list(a.get("keys", ()))
+            if "match_wildcard" in new and "match" not in keys:
+                keys.append("match")                 # wildcard becomes the stored match
+            merged = {k: v for k, v in old.items() if k not in keys}
             merged.update(new, name=old["name"], action=old["action"])
             merged.pop("draft", None)                # saved by hand: no longer a discardable draft
+            self.apply_match_wildcard(merged)
             self.validate(merged)
             if not str(merged.get("match", "")).strip():
                 raise PanelError("match is required (a regex on the URL; '.' means every call)")

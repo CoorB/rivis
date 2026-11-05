@@ -2807,6 +2807,21 @@
     if (item && item.action && item.action !== "map_local") editing.type = item.action;
     render();
   }
+  // host/path* → match regex (same as proxy_common.wildcard_url_regex / the main window)
+  const ruleWildcardRe = (text) => {
+    const t = String(text || "").trim();
+    let host, path;
+    if (/^https?:\/\//i.test(t)) { try { const u = new URL(t); host = u.host; path = (u.pathname || "/") + (u.search || ""); } catch (e) { host = t; path = "/"; } }
+    else { const i = t.indexOf("/"); host = i < 0 ? t : t.slice(0, i); path = i < 0 ? "/*" : (t.slice(i) || "/"); }
+    if (!host) throw new Error("Enter a host/path, e.g. api.example.com/v1/*");
+    const wc = (x, star) => [...x].map((c) => c === "*" ? star : c === "?" ? "." : c.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")).join("");
+    const pth = path.startsWith("/") ? path : "/" + path;
+    if (pth.includes("?")) {
+      const qi = pth.indexOf("?"), route = pth.slice(0, qi), query = pth.slice(qi + 1);
+      return "^https?://" + wc(host.toLowerCase(), "[^/:]*") + "(:\\d+)?" + wc(route, ".*") + "\\?" + wc(query, ".*") + "$";
+    }
+    return "^https?://" + wc(host.toLowerCase(), "[^/:]*") + "(:\\d+)?" + wc(pth, ".*") + "(\\?|$)";
+  };
   function renderRuleForm(m) {
     const e = editing, it = e.item, t = e.type, v = it || {};
     const fld = (id, label, inner) => `<div class="btns"><label class="sub" for="rf-${id}" style="min-width:90px">${label}</label>${inner}</div>`;
@@ -2814,11 +2829,17 @@
     const method = (val) => `<select id="rf-method"><option value="">ANY</option>${METHODS.map((x) => `<option ${x === (val || "").toUpperCase() ? "selected" : ""}>${x}</option>`).join("")}</select>`;
     const label = (RULE_TYPES.find((x) => x[0] === t) || [])[1] || t;
     const isRule = t in RULE_KEYS;
+    const matchIsRe = !!it;          // existing rules store a regex; a new rule is host/path* like Breakpoint
     let body = "";
     if (isRule || t === "bp" || t === "script") {
       if (!it && t !== "bp") body += fld("name", "Name", txt("name", "", "letters, digits . _ -"));
       if (it && isRule) body += `<div class="sub"><b>${esc(it.name)}</b></div>`;
-      if (t !== "script" || !it) body += fld("match", "URL pattern", txt("match", v.match, "regex, e.g. /api/login — . = every call"));
+      if (t !== "script" || !it) {
+        const ph = (isRule && !matchIsRe) ? "api.example.com/v1/accounts/*" : "regex, e.g. /api/login — . = every call";
+        body += fld("match", "URL pattern", txt("match", v.match, ph)
+          + (isRule ? ` <label class="sub"><input type="checkbox" id="rf-re" ${matchIsRe ? "checked" : ""}> Regex</label>` : ""));
+        if (isRule && !matchIsRe) body += `<div class="sub">* matches anything, ? one character. Tick Regex for a full-URL regex.</div>`;
+      }
       if (t !== "script" || !it) body += fld("method", "Method", method(v.method));
       if (isRule || t === "bp") body += fld("operation", "GraphQL operation", txt("operation", v.operation, "GetUser — leave blank for any"));
     }
@@ -2878,7 +2899,11 @@
       let op, args, ok;
       try {
         if (isRule) {
-          const rule = { match: val("match").trim(), method: val("method"), operation: val("operation").trim() };
+          let match = val("match").trim();
+          const useRe = !$("rf-re") || $("rf-re").checked;
+          if (!match) throw new Error(useRe ? "URL pattern is required" : "Enter a host/path, e.g. api.example.com/v1/*");
+          if (!useRe) match = ruleWildcardRe(match);
+          const rule = { match, method: val("method"), operation: val("operation").trim() };
           if (t === "respond") {
             rule.status = Number(val("status"));
             if (!v.body_file) { const b = val("body"); if (/^\s*[\[{]/.test(b)) { try { rule.body = jsonParse(b); } catch (x) { rule.body = b; } } else rule.body = b; }

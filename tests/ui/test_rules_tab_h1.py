@@ -46,6 +46,10 @@ class RulesTabEveryType(UiBase):
         self.P("#rtype").select_option(type_)
         self.P("#rnew").click()
         self.P("#rsave").wait_for(timeout=10000)
+        # rewrite rules default to host/path*; cases that pass a regex need Regex ticked.
+        # Breakpoints / scripts have no #rf-re (match stays a regex), so only tick when the box exists.
+        if "match" in fields and "re" not in fields and self.P("#rf-re").count():
+            fields = dict(fields, re=True)
         self.fill(**fields)
         self.P("#rsave").click()
         self.P("#rtype").wait_for(timeout=10000)                # back on the list
@@ -178,6 +182,16 @@ class RulesTabEveryType(UiBase):
                        dict(**{"with": "/json/small"}),
                        lambda: self.fetch("/h1/old").json().get("flag") is False,
                        lambda: path() != "/echo")
+
+    def test_new_rule_wildcard_url_escapes_host_dots(self):
+        # classic Rules form: new rule, Regex off → host/path* with literal dots (same as the Rules window).
+        self.open()
+        self.new("status", name="h1-wc", match="127.0.0.1/json/small*", re=False, status="418")
+        rule = self.rule_named("h1-wc")
+        self.assertIsNotNone(rule)
+        self.assertIn(r"127\.0\.0\.1", rule["match"], "literal dots escaped in the stored regex")
+        self.assertNotRegex("http://127X0X0X1/json/small", rule["match"])
+        wait_for(lambda: self.fetch("/json/small?h1wc=1").status == 418, 10, 0.3, "wildcard status")
 
     def test_block(self):
         blocked = lambda: self.fetch("/echo?h1=block", timeout=8).status == 0                         # noqa: E731
@@ -329,7 +343,8 @@ class RulesTabEveryType(UiBase):
         self.rules_tab()
         self.P("#rtype").select_option("respond")
         self.P("#rnew").click()
-        self.fill(name="h1-bad", match="/x", status="100", body="x")
+        # new rules default to host/path*; these cases intentionally send a regex / bad regex
+        self.fill(name="h1-bad", re=True, match="/x", status="100", body="x")
         self.P("#rsave").click()
         wait_for(lambda: "would skip" in (self.P("#rerr").text_content() or ""), 8, 0.2, "error shown")
         self.assertIsNone(self.rule_named("h1-bad"))

@@ -20,7 +20,7 @@ system proxy, one CA per workstation, removed again with `off`.
                                             system proxy and the certificate store are not touched
   .\<cli>.ps1 projects list|use|show|new
   .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
-  .\<cli>.ps1 rules add NAME match=REGEX action=ACTION [key=value ...]
+  .\<cli>.ps1 rules add NAME match=REGEX|match_wildcard=HOST/PATH action=ACTION [key=value ...]
                                             block: optional mode=kill_show|kill|hide (default kill_show)
                                             optional: method=POST operation=GetUser (only that GraphQL operation)
   .\<cli>.ps1 rules variant NAME add|use|rm VARIANT [file=PATH]
@@ -912,7 +912,7 @@ switch ($Command) {
       if ($LASTEXITCODE) { exit $LASTEXITCODE }
     } elseif ($subcommand -eq "add") {
       $ruleName = if ($Name) { $Name } elseif ($args.Count -gt 0) { [string]$args[0] } else { "" }
-      if (-not $ruleName) { Die "usage: rules add NAME match=REGEX action=ACTION [key=value ...]" }
+      if (-not $ruleName) { Die "usage: rules add NAME match=REGEX|match_wildcard=HOST/PATH action=ACTION [key=value ...]" }
       $python = Get-PythonCommand
       $addArgs = @($ruleName)
       if ($Match -and -not (@($Rest) -match '^match=')) { $addArgs += "match=$Match" }

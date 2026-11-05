@@ -108,21 +108,13 @@
       if (!request && !response) { A.toast("Pick Request, Response or both", true); return; }
       const re = ed.querySelector("#bpre").checked;
       let r;
-      if (b) r = await ui.run("bp_update", Object.assign({ name: b.name, method, operation, request, response }, re ? { match: url } : { match: wildcardRe(url) }), "Breakpoint saved");
+      if (b) r = await ui.run("bp_update", Object.assign({ name: b.name, method, operation, request, response }, re ? { match: url } : { match: ui.wildcardRe(url) }), "Breakpoint saved");
       else r = await ui.run("bp_add", Object.assign({ method, operation, request, response }, re ? { match: url } : ui.splitUrl(url)), "Breakpoint added — the next matching call pauses");
       if (r) closeEditor(w);
     };
     ed.querySelector("#bpu").focus();
   }
   function closeEditor(w) { const ed = w.body.querySelector("[data-bp-ed]"); ed.hidden = true; ed.innerHTML = ""; w.data.edit = null; }
-  // the server's wildcard_regex, for turning an edited wildcard URL into the rule's regex (bp_update takes a regex)
-  const wildcardRe = (t) => {
-    let { host, path } = ui.splitUrl(t);
-    if (/^https?:\/\//i.test(host)) { try { const u = new URL(host); host = u.host; path = u.pathname; } catch (e) { /* kept as typed */ } }
-    const wc = (x, star) => [...x].map((c) => c === "*" ? star : c === "?" ? "." : c.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")).join("");
-    const pth = path.startsWith("/") ? path : "/" + path;
-    return "^https?://" + wc(host.toLowerCase(), "[^/:]*") + "(:\\d+)?" + wc(pth, ".*") + "(\\?|$)";
-  };
 
   // ── the paused call ──────────────────────────────────────────────────────────────────────────────────────────────
   const dismissed = new Set();
