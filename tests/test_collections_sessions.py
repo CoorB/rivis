@@ -351,6 +351,109 @@ class Collections(LiveCase):
         self.assertEqual(code, 400)
         self.assertIn("stop recording", doc["error"])
 
+    def test_null_entries_collection_does_not_disable_other_replays(self):
+        # entries: null used to TypeError inside _reload, leave an empty index, then early-return forever
+        # so every other enabled collection also stopped replaying. (Enable via rules.json: the panel's
+        # collection list still TypeErrors on entries:null when building /proxy/api/state — sister lane.)
+        self.reset_state(collections=self.coll())
+        self.record("keeper")
+        self.fetch("/json/small?keep=1")
+        self.panel.ok("coll_stop")
+        os.makedirs(self.inst.path("collections"), exist_ok=True)
+        with open(self.inst.path("collections", "nulls.json"), "w") as fh:
+            json.dump({"name": "nulls", "created": 1, "entries": None}, fh)
+        cfg = self.inst.cfg()
+        cfg["collections"] = self.coll(replay=["nulls", "keeper"])
+        self.inst.write_cfg(cfg)
+        self.up.reset_hits()
+        r = self.fetch("/json/small?keep=1")
+        self.assertEqual(r.status, 200, r.text)
+        self.assertEqual(r.json()["flag"], False)
+        self.assertEqual(self.up.hits_for("/json/small"), [])
+        self.assertIn("collection:keeper", self.comment("/json/small?keep=1"))
+        self.assertIsNone(self.inst.proc.poll())
+
+    def test_recording_into_a_corrupt_file_starts_fresh(self):
+        # An unreadable collection.json made every response warn and record nothing.
+        self.reset_state(collections=self.coll())
+        os.makedirs(self.inst.path("collections"), exist_ok=True)
+        with open(self.inst.path("collections", "fresh.json"), "w") as fh:
+            fh.write("{broken")
+        self.record("fresh")
+        self.fetch("/text?corrupt-rec=1")
+        self.panel.ok("coll_stop")
+        entries = self.entries("fresh")
+        self.assertEqual([e["path"] for e in entries], ["/text"])
+        doc = json.load(open(self.inst.path("collections", "fresh.json")))
+        self.assertEqual(doc["entries"][0]["path"], "/text")
+
+    def test_corrupt_headers_entry_is_skipped_so_neighbours_still_replay(self):
+        # An entry that indexes on method/host/path but has headers as a string used to raise at serve
+        # time after the cursor advanced: the first matching call went live, and a good sibling that
+        # shared the key was only reached on a later try. Skip at index time so the good one serves first.
+        self.reset_state(collections=self.coll())
+        self.record("keeper")
+        self.fetch("/json/small?keep-hdr=1")
+        self.panel.ok("coll_stop")
+        os.makedirs(self.inst.path("collections"), exist_ok=True)
+        with open(self.inst.path("collections", "badhdr.json"), "w") as fh:
+            json.dump({"name": "badhdr", "created": 1, "entries": [
+                {"method": "GET", "host": "127.0.0.1", "path": "/echo", "query": "mix=1",
+                 "status": 200, "headers": "oops", "text": "should-not-serve", "req_body": ""},
+                {"method": "GET", "host": "127.0.0.1", "path": "/echo", "query": "mix=1",
+                 "status": 200, "headers": [["X-From", "mixed"]], "text": "kept", "req_body": ""},
+                {"method": "GET", "host": "127.0.0.1", "path": "/echo", "query": "short=1",
+                 "status": 200, "headers": [["only-one"]], "text": "nope", "req_body": ""},
+            ]}, fh)
+        cfg = self.inst.cfg()
+        cfg["collections"] = self.coll(replay=["badhdr", "keeper"])
+        self.inst.write_cfg(cfg)
+        time.sleep(1.3)
+        self.up.reset_hits()
+        r = self.fetch("/echo?mix=1")
+        self.assertEqual((r.status, r.text), (200, "kept"), r.text)
+        self.assertEqual([h for h in r.headers if h[0].lower() == "x-from"], [("X-From", "mixed")])
+        self.assertEqual(self.up.hits_for("/echo"), [])
+        # short pair never enters the index either
+        short = self.fetch("/echo?short=1")
+        self.assertNotEqual(short.text, "nope")
+        self.assertEqual(self.fetch("/json/small?keep-hdr=1").json()["flag"], False)
+        self.assertEqual(self.up.hits_for("/json/small"), [])
+        self.assertIsNone(self.inst.proc.poll())
+
+    def test_corrupt_b64_entry_is_skipped_so_neighbours_still_replay(self):
+        # Undecodable b64 raised at serve after the cursor advanced (same class as corrupt headers). A non-string
+        # b64 fell through to "text" and served the wrong body while a good sibling sharing the key waited.
+        self.reset_state(collections=self.coll())
+        self.record("keeper")
+        self.fetch("/json/small?keep-b64=1")
+        self.panel.ok("coll_stop")
+        os.makedirs(self.inst.path("collections"), exist_ok=True)
+        with open(self.inst.path("collections", "badb64.json"), "w") as fh:
+            json.dump({"name": "badb64", "created": 1, "entries": [
+                {"method": "GET", "host": "127.0.0.1", "path": "/echo", "query": "mix=1",
+                 "status": 200, "headers": [], "b64": "!!!not-base64!!!", "req_body": ""},
+                {"method": "GET", "host": "127.0.0.1", "path": "/echo", "query": "mix=1",
+                 "status": 200, "headers": [["X-From", "b64ok"]], "text": "kept-b64", "req_body": ""},
+                {"method": "GET", "host": "127.0.0.1", "path": "/echo", "query": "num=1",
+                 "status": 200, "headers": [], "b64": 12345, "text": "num-b64", "req_body": ""},
+                {"method": "GET", "host": "127.0.0.1", "path": "/echo", "query": "num=1",
+                 "status": 200, "headers": [], "text": "kept-num", "req_body": ""},
+            ]}, fh)
+        cfg = self.inst.cfg()
+        cfg["collections"] = self.coll(replay=["badb64", "keeper"])
+        self.inst.write_cfg(cfg)
+        time.sleep(1.3)
+        self.up.reset_hits()
+        r = self.fetch("/echo?mix=1")
+        self.assertEqual((r.status, r.text), (200, "kept-b64"), r.text)
+        self.assertEqual([h for h in r.headers if h[0].lower() == "x-from"], [("X-From", "b64ok")])
+        self.assertEqual(self.up.hits_for("/echo"), [])
+        num = self.fetch("/echo?num=1")
+        self.assertEqual(num.text, "kept-num", num.text)
+        self.assertEqual(self.fetch("/json/small?keep-b64=1").json()["flag"], False)
+        self.assertEqual(self.up.hits_for("/json/small"), [])
+        self.assertIsNone(self.inst.proc.poll())
 
     def test_import_never_silently_replaces_a_collection(self):
         """Review R5: importing a HAR under a name in use replaced that recording without asking."""

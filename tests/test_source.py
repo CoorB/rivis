@@ -175,6 +175,28 @@ class Parsing(unittest.TestCase):
         self.assertEqual(second["device"], "Pixel_8")
         self.assertNotEqual(first["key"], second["key"])
 
+    def test_sim_names_does_not_cache_an_empty_map_after_a_bad_listing(self):
+        # A devices:null / garbage reply used to stamp {} for 30 s, so every iOS source lost its
+        # simulator name until the window expired — empty looked like "no simulators" rather than "try again".
+        calls = []
+        good = json.dumps({"devices": {"r": [{"udid": UDID_A, "name": "iPhone 17"}]}})
+
+        def runner(argv, timeout=4):
+            calls.append(1)
+            if len(calls) == 1:
+                return '{"devices": null}'
+            if len(calls) == 2:
+                return "not-json"
+            return good
+
+        att = ps.Attributor(runner)
+        self.assertEqual(att.sim_names(), {})
+        self.assertEqual(att.sim_names(), {})          # still retries (stamp not advanced on failure)
+        self.assertEqual(att.sim_names().get(UDID_A.upper()), "iPhone 17")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(att.sim_names().get(UDID_A.upper()), "iPhone 17")  # cached after success
+        self.assertEqual(len(calls), 3)
+
     def test_android_app_only_when_one_app_talks_to_the_proxy(self):
         tcp = ("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
                "   0: 0F02000A:A1B2 0202000A:4850 01 00000000:00000000 00:00000000 00000000 10123 0 1\n"

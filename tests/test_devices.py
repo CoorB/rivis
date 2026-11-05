@@ -61,6 +61,33 @@ class Status(unittest.TestCase):
         with mock.patch.object(devices, "_simctl", return_value=("missing", "", "")):
             self.assertIsNone(devices.ios_devices(self.want))          # no Xcode tools
 
+    def test_unreadable_simctl_listing_is_an_error_not_an_empty_device_list(self):
+        # devices:null raised AttributeError (Snapshot never got a first value). Garbage JSON returned []
+        # so the Devices tab looked like "no simulators booted" instead of naming the failure.
+        for raw in ('{"devices": null}', '{"devices": "oops"}', "not-json-at-all", "[]"):
+            with mock.patch.object(devices, "_simctl", return_value=(0, raw, "")):
+                rows, err = devices.ios_status(self.want)
+            self.assertIsNone(rows, raw)
+            self.assertIsNotNone(err, raw)
+            self.assertIn("cannot read", err, raw)
+            with mock.patch.object(devices, "_simctl", return_value=(0, raw, "")):
+                self.assertIsNone(devices.ios_devices(self.want), raw)
+        # a usable empty listing is still "no booted simulators", not an error
+        with mock.patch.object(devices, "_simctl", return_value=(0, '{"devices": {}}', "")):
+            rows, err = devices.ios_status(self.want)
+        self.assertEqual(rows, [])
+        self.assertIsNone(err)
+        # a runtime bucket that is null is skipped; other runtimes still show
+        listing = {"devices": {
+            "bad": None,
+            "com.apple.CoreSimulator.SimRuntime.iOS-26-0": [
+                {"udid": UDID, "name": "iPhone 17", "state": "Booted"}],
+        }}
+        with mock.patch.object(devices, "_simctl", return_value=(0, json.dumps(listing), "")):
+            rows, err = devices.ios_status("")
+        self.assertIsNone(err)
+        self.assertEqual([d["name"] for d in rows], ["iPhone 17"])
+
     def test_simulator_resolution_and_trust_distinguish_unknown_from_absent(self):
         import doctor
         data = os.path.join(self.home, "shutdown-data")

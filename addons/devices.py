@@ -137,7 +137,13 @@ def ios_status(want):
     rc, out, err = _simctl(["xcrun", "simctl", "list", "devices", "booted", "-j"])
     if rc != 0:
         return None, simctl_problem(rc, err)
-    return _booted(want, out), None
+    # Unreadable JSON used to return [] (looked like "no simulators") or raise on devices:null
+    # (Snapshot kept have=False forever on a first poll). Tell the tester simctl's answer was bad.
+    devices = _booted(want, out)
+    if devices is None:
+        return None, ("xcrun simctl returned a listing this version cannot read. "
+                      "Quit Simulator.app and try again; if it persists, reboot the Mac.")
+    return devices, None
 
 
 def ios_devices(want):
@@ -145,14 +151,29 @@ def ios_devices(want):
 
 
 def _booted(want, out):
+    """Booted simulator rows, or None when the simctl JSON is not a usable listing."""
     try:
-        runtimes = json.loads(out).get("devices", {})
+        data = json.loads(out)
     except ValueError:
-        return []
+        return None
+    if not isinstance(data, dict):
+        return None
+    # Missing "devices" means an empty listing. null / a non-object means the JSON is corrupt —
+    # returning [] here used to look like "no simulators booted".
+    if "devices" not in data:
+        runtimes = {}
+    else:
+        runtimes = data["devices"]
+        if not isinstance(runtimes, dict):
+            return None
     devices = []
     for runtime, items in runtimes.items():
+        if not isinstance(items, list):
+            continue
         os_name = runtime.rsplit(".", 1)[-1].replace("iOS-", "iOS ").replace("-", ".")
         for d in items:
+            if not isinstance(d, dict):
+                continue
             if d.get("state") == "Booted" and UDID.match(d.get("udid", "")):
                 trusted = _sim_trusted(d["udid"], want) if want else None
                 devices.append({"id": d["udid"], "name": d.get("name", "Simulator"), "os": os_name,

@@ -68,13 +68,56 @@ def load_coll(name):
     # locale open() would raise UnicodeDecodeError on replay. without_leading_bom: a file edited in
     # Notepad may start with a UTF-8 BOM; json.load rejects it.
     with open(coll_path(name), encoding="utf-8") as f:
-        return migrate_collection(json.loads(without_leading_bom(f.read())))
+        doc = migrate_collection(json.loads(without_leading_bom(f.read())))
+    # a hand-edited or truncated rewrite can leave "entries" as null / a non-list; treat as empty so
+    # replay and recording never TypeError on `for e in entries` (and never stick on a dead index).
+    if not isinstance(doc.get("entries"), list):
+        doc["entries"] = []
+    return doc
 
 
 def save_coll(doc):
     os.makedirs(COLL_DIR, mode=0o700, exist_ok=True)
     os.chmod(COLL_DIR, 0o700)
     atomic_json(coll_path(doc["name"]), migrate_collection(doc))
+
+
+def _replay_key(entry):
+    """Match key for one recorded call, or None when the entry cannot be replayed."""
+    if not isinstance(entry, dict):
+        return None
+    try:
+        method, host, path = entry["method"], entry["host"], entry["path"]
+        status = entry["status"]
+    except (KeyError, TypeError):
+        return None
+    if not isinstance(method, str) or not isinstance(host, str) or not isinstance(path, str):
+        return None
+    if isinstance(status, bool) or not isinstance(status, int):
+        return None
+    query = entry.get("query", "")
+    if query is None:
+        query = ""
+    elif not isinstance(query, str):
+        return None
+    # headers must be a list of [name, value] pairs: a string / dict / short pair used to index cleanly
+    # then raise at serve time (cursor already advanced), so the call went live while replay looked on.
+    headers = entry.get("headers")
+    if headers is None:
+        headers = []
+    elif not isinstance(headers, list):
+        return None
+    for pair in headers:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            return None
+    if "b64" in entry and entry["b64"] is not None:
+        if not isinstance(entry["b64"], str):
+            return None
+        try:
+            base64.b64decode(entry["b64"], validate=True)
+        except (ValueError, TypeError):
+            return None
+    return (method, host, path, query)
 
 
 def entry_from_flow(f):
@@ -155,6 +198,11 @@ class ProxyCollections:
                 self.recording_docs[name] = load_coll(name)
             except FileNotFoundError:
                 self.recording_docs[name] = {"name": name, "created": time.time(), "entries": []}
+            except (OSError, ValueError) as e:
+                # Corrupt/truncated/non-JSON on disk: start empty rather than fail every response silently.
+                # The next flush replaces the damaged file atomically with whatever was recorded.
+                ctx.log.warn(f"proxy_collections: '{name}' is unreadable ({e}); recording starts empty")
+                self.recording_docs[name] = {"name": name, "created": time.time(), "entries": []}
         return self.recording_docs[name]
 
     def _rules_path(self):
@@ -188,11 +236,20 @@ class ProxyCollections:
             self.index, self.cursor = {}, {}
             for n in replay:
                 try:
-                    for e in load_coll(n)["entries"]:
-                        k = (e["method"], e["host"], e["path"], e.get("query", ""))
-                        self.index.setdefault(k, []).append((n, e))
-                except (OSError, ValueError, KeyError) as e:
+                    entries = load_coll(n)["entries"]
+                except (OSError, ValueError) as e:
                     ctx.log.warn(f"proxy_collections: cannot load '{n}': {e}")
+                    continue
+                skipped = 0
+                for e in entries:
+                    k = _replay_key(e)
+                    if k is None:
+                        skipped += 1
+                        continue
+                    self.index.setdefault(k, []).append((n, e))
+                if skipped:
+                    ctx.log.warn(f"proxy_collections: skipped {skipped} unusable "
+                                 f"{'entry' if skipped == 1 else 'entries'} in '{n}'")
             if replay:
                 ctx.log.info(f"proxy_collections: replaying {', '.join(replay)} ({sum(len(v) for v in self.index.values())} calls)")
 
@@ -222,6 +279,7 @@ class ProxyCollections:
             name, e = same[min(i, len(same) - 1)]
             self.cursor[ck] = i + 1
             # Hand-edited or older imports can store "text": null / a null header value; never call .encode() on None.
+            # headers / b64 were checked in _replay_key before the entry entered the index.
             raw_b64 = e.get("b64") if "b64" in e else None
             if isinstance(raw_b64, str):
                 body = base64.b64decode(raw_b64)

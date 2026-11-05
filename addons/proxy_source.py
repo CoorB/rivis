@@ -539,10 +539,21 @@ class Attributor:
             return names
         out = self.run(["/usr/bin/xcrun", "simctl", "list", "-j", "devices"], timeout=8)
         try:
-            data = json.loads(out)["devices"]
-            names = {d["udid"].upper(): d["name"] for v in data.values() for d in v if d.get("udid") and d.get("name")}
+            raw = json.loads(out)
+            if not isinstance(raw, dict):
+                return names
+            if "devices" not in raw:
+                data = {}
+            else:
+                data = raw["devices"]
+                if not isinstance(data, dict):
+                    # devices:null / wrong shape: do not stamp empty for 30 s — retry next call
+                    return names
+            names = {d["udid"].upper(): d["name"] for v in data.values() for d in (v or [])
+                     if isinstance(d, dict) and d.get("udid") and d.get("name")}
         except (ValueError, KeyError, TypeError, AttributeError):
-            pass
+            # leave the previous stamp alone so the next call retries instead of caching empty for 30 s
+            return names
         self._sims = (time.time(), names)
         return names
 
