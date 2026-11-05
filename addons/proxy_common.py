@@ -435,6 +435,16 @@ _FORBIDDEN_NAMES = ("web-token", "web-bootstrap", TRUSTED_FILES)
 _FORBIDDEN_SUFFIXES = (".pem", ".p12", ".pfx", ".key")
 
 
+def _same_or_under(path, base):
+    """True when path is base or a file inside it. Letter case is ignored so a Mac APFS alias
+    (~/.SSH/id_rsa for ~/.ssh/id_rsa) cannot walk past the check.
+
+    os.path.normcase is a no-op on macOS in Apple's Python 3.9, so compare with casefold.
+    """
+    path, base = path.casefold(), base.casefold()
+    return path == base or path.startswith(base + os.sep)
+
+
 def forbidden_file(path, extra_dirs=()):
     """Why a real path must never be served by a rule, or None. `extra_dirs`: e.g. the running proxy's confdir."""
     real = os.path.realpath(os.path.expanduser(str(path)))
@@ -442,10 +452,13 @@ def forbidden_file(path, extra_dirs=()):
         extra_dirs = (extra_dirs,)
     for d in _FORBIDDEN_DIRS + tuple(x for x in extra_dirs if x and os.path.isabs(os.path.expanduser(x))):
         d = os.path.realpath(os.path.expanduser(d))
-        if real == d or real.startswith(d + os.sep):
+        if _same_or_under(real, d):
             return "it is inside %s (keys and credentials)" % d
     name = os.path.basename(real)
-    if name in _FORBIDDEN_NAMES or re.fullmatch(r"web-(?:token|bootstrap)-[0-9]+", name) or name.lower().endswith(_FORBIDDEN_SUFFIXES):  # R4A-05
+    lower = name.lower()
+    # R4A-05 / case-fold: WEB-TOKEN-8083 is the same inode as web-token-8083 on the Mac default volume
+    if lower in (n.lower() for n in _FORBIDDEN_NAMES) or re.fullmatch(r"web-(?:token|bootstrap)-[0-9]+", lower) \
+            or lower.endswith(_FORBIDDEN_SUFFIXES):
         return "it looks like a key or a %s secret (%s)" % (PRODUCT["name"], name)
     return None
 

@@ -548,6 +548,124 @@ class Argv(LiveCase):
         self.assertEqual(opener.open(self.panel.base + "/proxy/api/state", timeout=10).status, 200)
 
 
+class ForbiddenSecrets(unittest.TestCase):
+    """F-09: keys and Rivis login secrets stay unservable even when a rule names them with a different case.
+
+    On the Mac's default case-insensitive volume, ~/.rivis/WEB-TOKEN-8083 is the same inode as web-token-8083, and
+    ~/.SSH/id_rsa is the same as ~/.ssh/id_rsa. Name and directory checks that compare literally let `rules allow-file`
+    (and `rules add` auto-trust) unlock them, so a map_local rule can return the UI password or an SSH key as a body.
+    """
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="rivis-forbid-")
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.home = os.path.join(self.root, "home")
+        os.makedirs(self.home)
+        self._old_home = os.environ.get("HOME")
+        os.environ["HOME"] = self.home
+        self.addCleanup(self._restore_home)
+
+    def _restore_home(self):
+        if self._old_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._old_home
+
+    def _write(self, rel, text="secret"):
+        path = os.path.join(self.home, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+
+    def test_case_folded_web_token_and_bootstrap_names_are_forbidden(self):
+        sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+        import proxy_common
+        token = self._write(os.path.join(".rivis", "web-token-18083"), "ui-password-must-not-serve")
+        boot = self._write(os.path.join(".rivis", "web-bootstrap"), "bootstrap-nonce")
+        for path in (token, boot,
+                     os.path.join(self.home, ".rivis", "WEB-TOKEN-18083"),
+                     os.path.join(self.home, ".rivis", "Web-Token"),
+                     os.path.join(self.home, ".rivis", "WEB-BOOTSTRAP")):
+            self.assertIsNotNone(proxy_common.forbidden_file(path), path)
+
+    def test_case_folded_ssh_dir_is_forbidden_when_the_volume_folds_case(self):
+        sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+        import proxy_common
+        key = self._write(os.path.join(".ssh", "id_rsa"), "TOP-SECRET-SSH")
+        alias = os.path.join(self.home, ".SSH", "id_rsa")
+        if not (os.path.exists(alias) and os.path.samefile(key, alias)):
+            self.skipTest("this volume does not fold letter case (Linux CI)")
+        self.assertIsNotNone(proxy_common.forbidden_file(alias), alias)
+
+    def test_allow_file_refuses_a_case_folded_ui_token(self):
+        """Concrete CLI path: allow-file of WEB-TOKEN-<port> must not put the UI password on the trust list."""
+        suite = harness.Suite.get()
+        home = suite.new_home("forbid-cli")
+        state = os.path.join(home, ".rivis")
+        proj = os.path.join(state, "projects", "default")
+        os.makedirs(proj, mode=0o700)
+        token = os.path.join(state, "web-token-19083")
+        with open(token, "w") as fh:
+            fh.write("ui-password-must-not-serve")
+        os.chmod(token, 0o600)
+        alias = os.path.join(state, "WEB-TOKEN-19083")
+        if not (os.path.exists(alias) and os.path.samefile(token, alias)):
+            self.skipTest("this volume does not fold letter case (Linux CI)")
+        open(os.path.join(proj, "rules.json"), "w").write('{"schema_version":1,"rules":[]}')
+        env = suite.cli_env(home)
+        cp = suite.rivis("rules", "allow-file", alias, home=home, env=env)
+        self.assertNotEqual(cp.returncode, 0, cp.stdout + cp.stderr)
+        self.assertIn("refusing", (cp.stdout + cp.stderr).lower())
+        trust = os.path.join(proj, "trusted-files.json")
+        self.assertTrue(not os.path.exists(trust) or "WEB-TOKEN" not in open(trust).read().upper())
+
+
+class UiTokenPrivacy(LiveCase):
+    """The UI password never leaves the 0600 token file into argv, logs, or start output."""
+
+    def test_ui_password_is_absent_from_logs_and_start_output(self):
+        secret = self.inst.password
+        self.assertGreaterEqual(len(secret), 16)
+        with open(self.inst.logpath, "rb") as fh:
+            start_log = fh.read().decode("utf-8", "replace")
+        self.assertNotIn(secret, start_log)
+        logs = os.path.join(self.inst.home, ".rivis", "logs")
+        if os.path.isdir(logs):
+            for name in os.listdir(logs):
+                path = os.path.join(logs, name)
+                if os.path.isfile(path):
+                    self.assertNotIn(secret, open(path, encoding="utf-8", errors="replace").read(), path)
+
+
+class HarAndDiagnosticSecrets(LiveCase):
+    """Exported HAR and the rotating diagnostic log mask credential material by default."""
+
+    def test_session_har_masks_authorization_unless_secrets_are_asked_for(self):
+        self.inst.fetch(self.up.url("/echo?harsec=1"), method="POST",
+                        headers=[("Authorization", "Bearer har-secret-token-xyz"),
+                                 ("Content-Type", "application/json")],
+                        data=b'{"access_token":"body-secret-token-xyz","ok":true}')
+        self.panel.ok("sess_save", {"name": "harsec", "overwrite": True, "visible_only": False})
+        doc = self.panel.ok("sess_har", {"name": "harsec"})
+        blob = json.dumps(doc)
+        self.assertTrue(doc["redacted"])
+        self.assertNotIn("har-secret-token-xyz", blob)
+        self.assertNotIn("body-secret-token-xyz", blob)
+
+    def test_diagnostic_log_masks_labeled_secrets(self):
+        sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+        from proxy_common import RotatingTextLog
+        path = os.path.join(self.inst.home, ".rivis", "logs", "claim-redact.log")
+        log = RotatingTextLog(path, max_bytes=1 << 20, backups=1)
+        log.append("info", "Authorization: Bearer diag-secret-token-abc token=diag-query-secret")
+        text = open(path, encoding="utf-8").read()
+        self.assertNotIn("diag-secret-token-abc", text)
+        self.assertNotIn("diag-query-secret", text)
+        self.assertIn("[REDACTED]", text)
+        self.assertEqual(oct(mode(path)), "0o600")
+
+
 class Modes(LiveCase):
     def test_state_files_are_0600_and_dirs_0700_after_every_kind_of_write(self):
         self.fetch("/json/small")
