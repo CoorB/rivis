@@ -487,6 +487,46 @@ class NodeMissing(LiveCase):
 
 
 
+class ScriptBodyEncoding(unittest.TestCase):
+    """JSON scalars returned from a script must stay JSON on the wire (same class of bug as rules respond)."""
+
+    class _Msg:
+        def __init__(self, raw=b'{"x":1}', headers=None):
+            self.raw_content = raw
+            self.status_code = 200
+            self.headers = ScriptBodyEncoding._Headers(headers or {"content-type": "application/json"})
+
+        def get_content(self, strict=False):
+            return self.raw_content
+
+        def set_content(self, content):
+            self.raw_content = content
+
+    class _Headers(dict):
+        def items(self, multi=True):
+            return list(dict.items(self))
+
+        def set_all(self, name, values):
+            self[name] = values[0] if len(values) == 1 else values
+
+    def test_apply_json_null_false_true_and_number_stay_json(self):
+        sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+        import proxy_scripts
+        for value, expected in ((None, b"null"), (False, b"false"), (True, b"true"), (0, b"0"), (1.5, b"1.5")):
+            msg = self._Msg()
+            changed = proxy_scripts.ProxyScripts._apply(
+                msg, {"body": value, "headers": {"content-type": "application/json"}}, response=True)
+            self.assertTrue(changed, repr(value))
+            self.assertEqual(msg.raw_content, expected, repr(value))
+
+    def test_apply_bytes_body_is_not_str_repr(self):
+        sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+        import proxy_scripts
+        msg = self._Msg(raw=b"old")
+        proxy_scripts.ProxyScripts._apply(msg, {"body": b"raw-bytes"}, response=True)
+        self.assertEqual(msg.raw_content, b"raw-bytes")
+
+
 class ListErrorsThroughSymlink(unittest.TestCase):
     def test_live_error_is_shown_when_the_rules_path_goes_through_a_symlink(self):
         # review 0.9.7 #6: the CLI passes the rules path as given (abspath) and the proxy reports its realpath

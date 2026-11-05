@@ -583,6 +583,9 @@ class ProxyScripts:
             if value.get("body_is_base64"):
                 candidate = base64.b64decode(body, validate=True)
                 if candidate != decoded_before: content = candidate
+            elif isinstance(body, (bytes, bytearray)):
+                candidate = bytes(body)
+                if candidate != decoded_before: content = candidate
             elif isinstance(body, (dict, list)):
                 try:
                     semantically_same = json.loads(decoded_before.decode("utf-8")) == body
@@ -590,8 +593,12 @@ class ProxyScripts:
                     semantically_same = False
                 if not semantically_same:
                     content = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            elif isinstance(body, str):
+                candidate = body.encode()
+                if candidate != decoded_before: content = candidate
             else:
-                candidate = str(body).encode()
+                # JSON null/false/true/numbers must stay JSON, not Python's str() (None/False/True).
+                candidate = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                 if candidate != decoded_before: content = candidate
         before = (getattr(msg, "method", None), getattr(msg, "url", None), getattr(msg, "status_code", None),
                   list(msg.headers.items(multi=True)), msg.raw_content)
@@ -855,11 +862,15 @@ class ProxyScripts:
                 if not response_side and isinstance(result, dict) and result.get("__proxy_mock__"):
                     header_map = _normalised_headers(result.get("headers") or {})
                     body = result.get("body", "")
-                    if isinstance(body, (dict, list)):
+                    if isinstance(body, (bytes, bytearray)):
+                        body = bytes(body)
+                    elif isinstance(body, str):
+                        body = body.encode()
+                    else:
+                        # JSON null/false/true/numbers/objects — not Python's str() (None/False/True).
                         body = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                         if "content-type" not in header_map:
                             header_map["content-type"] = ("content-type", ["application/json"])
-                    elif not isinstance(body, bytes): body = str(body).encode()
                     headers = [(name.encode("utf-8"), value.encode("utf-8"))
                                for name, values in header_map.values() for value in values]
                     flow.response = http.Response.make(int(result.get("statusCode", 200)), body, headers)

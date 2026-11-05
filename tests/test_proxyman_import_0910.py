@@ -3,10 +3,52 @@ import json
 import os
 import re
 import shutil
+import sys
+import tempfile
 import unittest
 
 import harness
 from harness import Suite
+
+sys.path.insert(0, os.path.join(harness.REPO, "addons"))
+from proxyman_import import _method, import_proxyman
+
+
+class ProxymanMethodEdgeCases(unittest.TestCase):
+    def test_method_missing_name_skips_instead_of_traceback(self):
+        # Proxyman sometimes writes method.exact as [{}] / [null]. .upper() on None aborted the
+        # whole import with an AttributeError instead of skipping that one rule.
+        for value in ({"exact": [{}]}, {"exact": [None]}, {"exact": [{"name": None}]}, {"exact": [123]}):
+            with self.assertRaises(ValueError):
+                _method(value)
+        self.assertEqual(_method({"exact": [{"name": "GET"}]}), "GET")
+        self.assertEqual(_method({"exact": ["POST"]}), "POST")
+        self.assertIsNone(_method({"exact": ["GET", "POST"]}))
+
+    def test_import_continues_after_a_bad_method_entry(self):
+        tmp = tempfile.mkdtemp(prefix="rivis-t-proxyman-method-")
+        try:
+            src = os.path.join(tmp, "source")
+            os.makedirs(src)
+            with open(os.path.join(src, "ok.json"), "w") as fh:
+                fh.write("HTTP/1.1 200 OK\n\n{}\n")
+            tree = {"nodes": [
+                {"name": "bad-method", "url": "https://api.example.com/bad", "localFile": {"path": "ok.json"},
+                 "isEnabled": True, "regex": "useWildcard", "method": {"exact": [{}]}, "id": "1"},
+                {"name": "good", "url": "https://api.example.com/good", "localFile": {"path": "ok.json"},
+                 "isEnabled": True, "regex": "useWildcard", "id": "2"},
+            ]}
+            with open(os.path.join(src, "MapLocalFiles-RuleTree"), "w") as fh:
+                json.dump(tree, fh)
+            rules = os.path.join(tmp, "rules.json")
+            with open(rules, "w") as fh:
+                json.dump({"rules": []}, fh)
+            summary = import_proxyman(rules, src, dry_run=True)
+            self.assertIn("skipped bad-method:", summary)
+            self.assertIn("would import good", summary)
+            self.assertIn("imported 1, skipped 1", summary)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class ProxymanImport0910(unittest.TestCase):

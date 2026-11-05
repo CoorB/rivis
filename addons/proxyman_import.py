@@ -72,7 +72,12 @@ def _method(value):
     exact = value.get("exact")
     if isinstance(exact, list) and len(exact) == 1:
         item = exact[0]
-        return (item.get("name") if isinstance(item, dict) else item).upper()
+        if isinstance(item, dict):
+            item = item.get("name")
+        # A missing/null name used to call .upper() on None and abort the whole import with a traceback.
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("method entry has no name")
+        return item.upper()
     return None
 
 

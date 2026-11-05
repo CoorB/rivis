@@ -94,6 +94,43 @@ class CurlImport(unittest.TestCase):
                              text=True, capture_output=True, check=True)
         self.assertEqual(json.loads(got.stdout)["spec"]["method"], "DELETE")
 
+    def test_utf8_bom_prefix_is_stripped(self):
+        # Windows editors and some clipboards prefix the paste with U+FEFF; without stripping it the first
+        # token is "\ufeffcurl" and import refuses a perfectly good command.
+        for command in ("\ufeffcurl https://example.test/x", "\ufeff\ncurl -X POST https://example.test/x"):
+            r = parse_curl(command)
+            self.assertEqual(r["spec"]["url"], "https://example.test/x", repr(command))
+
+    def test_json_flag_becomes_post_body_and_headers(self):
+        # curl --json (7.82+) is what docs and many snippets paste; treating it as an unknown flag dropped the
+        # body and left a GET with no Content-Type — Compose then sent the wrong call.
+        r = parse_curl("""curl --json '{"name": "Ada"}' https://api.example.test/v1""")
+        self.assertEqual(r["spec"]["method"], "POST")
+        self.assertEqual(r["spec"]["body"], '{"name": "Ada"}')
+        self.assertEqual(r["spec"]["body_mode"], "raw")
+        self.assertIn(["Content-Type", "application/json", True], r["spec"]["headers"])
+        self.assertIn(["Accept", "application/json", True], r["spec"]["headers"])
+        self.assertEqual(r["ignored"], [])
+        put = parse_curl("""curl --json '{"a":1}' -X PUT https://api.example.test/v1""")
+        self.assertEqual(put["spec"]["method"], "PUT")
+        self.assertEqual(put["spec"]["body"], '{"a":1}')
+
+    def test_json_and_data_at_file_are_refused(self):
+        # Offline import cannot read the QA engineer's disk; @file used to be kept as the literal body
+        # (or, for --json, dropped) so Compose sent the wrong bytes.
+        for command in ("curl --json @payload.json https://example.test",
+                        "curl -d @payload.json https://example.test",
+                        "curl --data-binary @- https://example.test"):
+            with self.assertRaisesRegex(ValueError, r"@file|paste the .+ body"):
+                parse_curl(command)
+
+    def test_explicit_empty_data_keeps_raw_body_mode(self):
+        # curl -d '' is a POST with an empty body. body_mode "none" made Compose treat it as no body at all.
+        r = parse_curl("curl -d '' https://example.test/x")
+        self.assertEqual(r["spec"]["method"], "POST")
+        self.assertEqual(r["spec"]["body"], "")
+        self.assertEqual(r["spec"]["body_mode"], "raw")
+
 
 if __name__ == "__main__":
     unittest.main()

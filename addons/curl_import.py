@@ -109,10 +109,17 @@ def _windows_args(command):
     return args
 
 
+def _ensure_header(headers, name, value):
+    if not any(h[0].lower() == name.lower() for h in headers):
+        headers.append([name, value, True])
+
+
 def parse_curl(command):
     if not isinstance(command, str) or not command.strip():
         raise ValueError("Paste a cURL command")
-    command = command.strip()
+    # U+FEFF (UTF-8 BOM): Notepad and some clipboards prefix a paste with it; strip() leaves it, so the first
+    # token becomes "\ufeffcurl" and a good command is refused.
+    command = command.lstrip("\ufeff").strip()
     if '^"' in command or re.search(r" \^\r?\n", command):     # Windows "Copy as cURL (cmd)"
         args = _windows_args(command)
     else:
@@ -127,7 +134,7 @@ def parse_curl(command):
     method, explicit, get_data, url = "GET", False, False, None
     headers, data, ignored = [], [], []
     values = ("-X", "--request", "-H", "--header", "-d", "--data", "--data-raw", "--data-binary",
-              "--data-urlencode", "-u", "--user", "-b", "--cookie", "--url")
+              "--data-urlencode", "--json", "-u", "--user", "-b", "--cookie", "--url")
     i = 1
     while i < len(args):
         token = args[i]
@@ -155,10 +162,17 @@ def parse_curl(command):
             elif key == "--url":
                 url = attached
             else:
+                # Offline import cannot open the engineer's files; @path used to become the literal body
+                # (or, for --json, be dropped) so Compose sent the wrong call.
+                if attached.startswith("@"):
+                    raise ValueError("%s @file is not imported; paste the body into the command" % key)
                 if key == "--data-urlencode":
                     name, sep, value = attached.partition("=")
                     attached = name + "=" + quote(value, safe="") if sep else quote(attached, safe="")
                 data.append(attached)
+                if key == "--json":
+                    _ensure_header(headers, "Content-Type", "application/json")
+                    _ensure_header(headers, "Accept", "application/json")
         elif token in ("-G", "--get"):
             get_data = True
         elif token in ("--compressed", "-k", "--insecure"):
@@ -185,5 +199,7 @@ def parse_curl(command):
         body = ""
     if not explicit:
         method = "GET" if get_data else "POST" if data else "GET"
-    spec = {"method": method, "url": url, "headers": headers, "body_mode": "raw" if body else "none", "body": body}
+    # An explicit empty -d '' is still a body (curl sends Content-Length: 0); "raw if body" treated it as missing.
+    body_mode = "raw" if (body or (data and not get_data)) else "none"
+    spec = {"method": method, "url": url, "headers": headers, "body_mode": body_mode, "body": body}
     return {"spec": spec, "ignored": ignored}
