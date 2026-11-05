@@ -187,7 +187,7 @@ button, input, select { font: inherit; color: inherit; }
 .rv-toast.show { opacity: 1; }
 .rv-toast.err { background: var(--rv-danger); color: #fff; }
 
-/* ── tool windows (phase 2): float over the main window, drag by the title, resize from the corner ───────────────── */
+/* ── tool windows: float over the main window, drag by the title, resize from the corner ─────────────────────────── */
 .rv-win { position: fixed; z-index: 30; display: flex; flex-direction: column; min-width: 380px; min-height: 220px; max-width: calc(100vw - 8px); max-height: calc(100vh - 8px);
   background: var(--rv-surface); border: 1px solid var(--rv-border-strong); border-radius: 10px; box-shadow: var(--rv-shadow-2); resize: both; overflow: hidden; }
 .rv-win.front { box-shadow: var(--rv-shadow-3); }

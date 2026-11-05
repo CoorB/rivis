@@ -1,7 +1,8 @@
 # Rivis
 
 A free, in-house replacement for **Proxyman**, for mobile QA teams.
-See, pause, change and mock the calls your iOS Simulator or Android emulator makes, from a browser tab.
+See, pause, change and mock the calls your iOS Simulator or Android emulator makes — in a browser tab
+(`rivis ui` / `rivis start`) or, on macOS, in a native Mac window (`rivis app`).
 
 Built on [mitmproxy](https://mitmproxy.org) (unchanged). Runs only on your Mac, only for simulators and emulators.
 
@@ -34,7 +35,8 @@ and inside Rivis: press `?`.
 ```
   iOS Simulator / Android emulator  ──►  Rivis on your Mac (127.0.0.1)  ──►  your app's servers
                                               │
-                                              └── browser tab: call list + Tools panel
+                                              └── browser tab (`rivis ui`) or native Mac window (`rivis app`):
+                                                  call list + tools
 ```
 
 Your Mac's system proxy is never changed, and nothing is reachable from outside your Mac.
@@ -86,10 +88,10 @@ using the updated features. `rivis status` also reports a running version that d
 rivis start --background   # start (keeps running after you close Terminal)
 rivis start --upstream http://proxy.company:3128  # forward calls through an HTTP proxy; saved for later starts
 rivis start --upstream direct  # return to a direct connection
-rivis ui                   # reopen the new main window
+rivis ui                   # reopen the main window in your browser (everyday default)
 rivis ui --new             # same as plain ui
-rivis ui --classic         # classic view fallback for this release
-rivis app                  # open the same view in a native Mac window
+rivis ui --classic         # classic view fallback for this release (browser only)
+rivis app                  # same main window in a native Mac window (Dock icon; macOS only)
 rivis app --build          # rebuild the Mac window and print its path
 rivis browser URL          # web apps: open a separate Chrome/Edge window that goes through Rivis
 rivis browser --current    # the same, for the page open in your browser's front tab
@@ -99,10 +101,12 @@ rivis restart              # restart with saved options; load a new `projects us
 rivis --version            # which version you have
 ```
 
-`rivis start` opens the main window when ready; add `--no-open` to leave the browser closed.
-On Windows, `rivis.ps1 ui` opens the main window and `rivis.ps1 ui -Classic` opens the fallback view.
+`rivis start` opens the main window in your browser when ready; add `--no-open` to leave it closed.
+Use `rivis ui` to reopen that browser tab; use `rivis app` when you want the same UI in its own Mac
+window instead of among browser tabs. On Windows, `rivis.ps1 ui` opens the main window and
+`rivis.ps1 ui -Classic` opens the fallback view (`app` is macOS only).
 
-Everything else is in the browser panel. The full command list is in [docs/REFERENCE.md](docs/REFERENCE.md).
+Everything else is in that UI. The full command list is in [docs/REFERENCE.md](docs/REFERENCE.md).
 `rivis status` and `rivis doctor` show the saved upstream setting. On Windows, use
 `.\rivis.ps1 start -Upstream http://proxy.company:3128` (or `-Upstream direct`).
 

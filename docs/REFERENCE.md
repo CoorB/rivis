@@ -377,8 +377,9 @@ first), ⌥⌘N No Caching, ⌥⌘A TLS decryption: hosts to decrypt, ⌥⌘L / 
 
 Open the mitmweb UI and click the **Tools** button at the right end of the toolbar. Tabs provide This call, Compose, Map Local,
 Breakpoints, Network, Devices, Collections, Compare, Sessions, Scripts, and Rules. The header shows `Rivis / <project label>` (for example `Rivis / NEO`, or `Rivis / All`) and has
-a project selector. That selector changes only the host view; restart with `--project ID` to load a different
-rules file.
+a project selector. That selector changes only the host view. To load another project's rules: if you started without
+`--project`, run `rivis projects use ID` then `rivis restart`; if you started with `--project ID`, stop and start with
+the other id.
 
 Devices and Network are pages inside the **Tools** drawer on the right, not tabs along the top.
 `rivis rules rm NAME` also deletes the mock file owned by that Map Local rule. Files shared with other rules or created separately are kept.
@@ -463,7 +464,8 @@ by a tiny same-origin boot script in `<head>` (the page CSP forbids inline scrip
 - **Compact rows** and the **skin on/off** switch live in the panel's **Settings** (the gear / `?` → Settings).
 - **List tags:** MOCK / RULE / SCRIPT / COMPOSED show as a one-letter glyph (M, R, S, C) and NOT DECRYPTED as `⇄` in the
   first column (the word appears when the list is wide); a GraphQL response with `errors` shows `200 !`. Plain `http://` calls get an amber edge.
-- **Project switch:** the **Show** menu in the drawer header picks *All traffic* or *<project> only* (list view; rules still load via `--project`).
+- **Project switch:** the **Show** menu in the drawer header picks *All traffic* or *<project> only* (list view only).
+  Rules load from the project you started with, or after `projects use` + `rivis restart` when start had no `--project`.
 - **Kill switch:** add `?theme=off` to the URL (or turn the skin off in Settings) to fall back to stock mitmweb;
   `?theme=on` restores it. Both are remembered in `localStorage`, so stock mode persists until you turn it back on.
 - **Response and request bodies:** valid UTF-8 text with little or no ASCII (Arabic, Hebrew, emoji) shows as text
@@ -572,23 +574,30 @@ the lists are *Hosts to decrypt* and *Hosts to leave alone*. It is stored per pr
   turns on mitmproxy's `show_ignored_hosts` and lets the list show those rows when the mode is not `all`; mitmproxy
   warns that this keeps the tunnels' bytes in memory, which adds up over a long session). IP-only
   connections carry no host name, so in `allow` mode they are tunnelled, not decrypted.
+- **HTTP/3 (QUIC)** from the simulator to a host that is not decrypted passes through unmodified (mitmproxy leaves
+  `http3` on; Rivis does not change it): the app keeps working; those calls are not listed or changed.
 - On This call: **Decrypt this host** / **Don't decrypt this host**. In mode `all`, "Don't decrypt" switches to
   `ignore` with that host so everything else stays decrypted; "Decrypt" in mode `all` is a no-op.
 
 ### Protocol viewers
 
-The read-only **This call** view (classic) and the selected-call strip in the main window (`/rivis/`) share the same
-panel `viewer` / `viewer_summaries` / `graphql_filter` ops. They detect JWTs in bearer, Cookie and response Set-Cookie
-headers, URL query values, and JSON/form string values (including JSON bodies without a content type), decode the
-header and payload without claiming signature verification, and render `exp`, `iat`, and `nbf` in local time.
-They also keep a session token list keyed by `sub` + `iat`. GraphQL GET and POST/batch calls show operation details,
-variables, and split response data/errors; GraphQL errors receive an `ERR` list marker (classic) or a `200 !` status
-(main window) even with HTTP 200, and the operation mini-list (classic This call, or the GraphQL section of the main
-window sidebar) filters the flow list. gRPC/protobuf calls show service/method, trailers, and schema-less field
-numbers. For these messages the panel requests mitmweb 12.2.3's own `gRPC/Protocol Buffer` / `Protocol Buffer`
-content endpoint, with a small schema-less fallback if the native view cannot decode the body. No custom content
-view is registered, so the add-on does not depend on an unstable content-view registration signature. Viewers inspect the current flow store, so they
-also work after opening a saved session.
+Both windows show the same facts for a selected call; only the layout differs.
+
+- **Main window** (`rivis ui` / `/rivis/`): a protocol strip above the request/response panes when the call carries a
+  JWT, GraphQL or gRPC/protobuf body. GraphQL operations seen this session appear in the left sidebar; clicking one
+  filters the list. GraphQL errors show as a `200 !` status even with HTTP 200.
+- **Classic view** (`rivis ui --classic`, **This call**): the same decoded JWT (header/payload with local `exp`),
+  GraphQL operation/variables/data/errors, and gRPC service/method and field numbers in the drawer. GraphQL errors
+  get an `ERR` list marker; operation chips on This call filter the list the same way as the main window sidebar.
+
+Under the hood both call the panel `viewer` / `viewer_summaries` / `graphql_filter` ops. They detect JWTs in bearer,
+Cookie and response Set-Cookie headers, URL query values, and JSON/form string values (including JSON bodies without a
+content type), decode the header and payload without claiming signature verification, and render `exp`, `iat`, and
+`nbf` in local time. They also keep a session token list keyed by `sub` + `iat`. For gRPC/protobuf the panel requests
+mitmweb 12.2.3's own `gRPC/Protocol Buffer` / `Protocol Buffer` content endpoint, with a small schema-less fallback if
+the native view cannot decode the body. No custom content view is registered, so the add-on does not depend on an
+unstable content-view registration signature. Viewers inspect the current flow store, so they also work after opening
+a saved session.
 
 ### Scripts
 

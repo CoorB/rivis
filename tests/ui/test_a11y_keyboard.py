@@ -53,6 +53,9 @@ class A11yKeyboard(UiBase):
         key_rows = self.page.evaluate("() => [...document.querySelectorAll('.rv-keys tr')].map((r) => r.innerText)")
         self.assertTrue(any("Compose" in r for r in key_rows), "Compose missing from the shortcuts table")
         self.assertTrue(any("Devices" in r for r in key_rows), "Devices missing from the shortcuts table")
+        help_text = self.page.locator("#dialog").inner_text()
+        self.assertIn("TLS decryption hosts", help_text)
+        self.assertIn("traffic allow list", help_text)
         self.assertEqual(self.errors, [])
 
     def test_toolbar_tools_keep_an_accessible_name_when_labels_collapse(self):

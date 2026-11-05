@@ -10,15 +10,19 @@ note; use this page for the full mapping.
 
 ## The three biggest differences
 
-1. **It runs in a browser tab**, not a native window. The call list, the details pane and the menus are
-   mitmweb; the Rivis tools live in a drawer on the right (the **Tools** button at the right end of the toolbar) and in
-   per-call actions, including a right-click menu on every call. Nothing to install in the menu bar.
+1. **Browser tab by default; optional native Mac window.** `rivis start` / `rivis ui` open the main window in a
+   browser tab. On macOS, `rivis app` opens that same main window in a native Mac window (Dock icon, not buried
+   among browser tabs). The classic view (`rivis ui --classic`) is browser-only: mitmweb's call list with the Rivis
+   tools in a drawer on the right (**Tools**) and per-call actions, including a right-click menu. Nothing to install
+   in the menu bar either way.
 2. **It captures the simulator per-process, with no system proxy.** Rivis does not flip your Mac's system
    proxy, so it never sweeps up traffic from your browser, Slack, or anything else on the machine — only the
    app you pointed at it. (That is also why you will not see the dozens of background tunnels Proxyman shows.)
 3. **There is a project switcher.** A project is a saved profile — a label, a host filter, and its own rules,
-   collections and sessions. Switch the *view* with the **Show** menu in the drawer header (*All traffic* or *<project> only*); load a different project's *rules* by
-   restarting with `--project <id>`.
+   collections and sessions. Switch the *view* with the **Show** menu (*All traffic* or *<project> only*); that does
+   not change which rules are loaded. To load another project's rules: if you started without `--project`, run
+   `rivis projects use <id>` then `rivis restart`; if you started with `--project <id>`, stop and start again with
+   the other id.
 
 For slow downloads, Rivis buffers ordinary HTTP responses before forwarding them to the app. The app may receive the
 first byte only when the download is complete, even with no rules enabled. Server-sent events (`text/event-stream`)

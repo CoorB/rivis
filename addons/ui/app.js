@@ -7,7 +7,7 @@
  *   bodies    ../flows/<id>/<request|response>/content.data
  *   tools     the panel API (../proxy/api/<op>) that the classic drawer uses: state, nocache, columns_set, export,
  *             mock, bp_add, retry, filters_*. Tool windows (tools.js, tool-*.js) get what they need through
- *             window.RivisApp (below); a tool without a window yet opens in the classic view.
+ *             window.RivisApp (below); if RivisTools has not loaded, the toolbar still opens that tool in classic.
  *   viewers   the same panel viewer / viewer_summaries / graphql_filter ops the classic This call view uses
  * Everything shown from a call is escaped (esc) before it reaches innerHTML. */
 (() => {
@@ -406,7 +406,7 @@
   $("tb-follow").onclick = () => setFollow(!S.follow);
   $("tb-clear").onclick = clearAll;
 
-  // ── tools in the toolbar (lit when on; tool windows come in phase 2) ─────────────────────────────────────────────
+  // ── tools in the toolbar (lit when on; each opens its own window via tools.js) ───────────────────────────────────
   const TOOLS = [
     ["map", "Map Local", `${ALT}${MOD}L`], ["remote", "Map Remote", `${ALT}${MOD}R`], ["bp", "Breakpoint", `${ALT}${MOD}B`],
     ["scripts", "Scripting", ""], ["net", "Network", ""], ["block", "Block List", `${ALT}${MOD}X`], ["nocache", "No Caching", `${ALT}${MOD}N`],
@@ -429,7 +429,9 @@
   function drawTools() {
     $("tb-tools").innerHTML = TOOLS.map(([id, label, key]) => {
       const t = toolState(id);
-      return `<button class="rv-tb${t.on ? " on" : ""}" data-tool="${id}" aria-pressed="${t.on}" aria-label="${esc(label)}" title="${esc(label + (key ? " (" + key + ")" : "") + (id === "nocache" ? " — click to switch" : hasWin(id) ? "" : " — opens in the classic view"))}">`
+      // classic fallback only when tools.js has not registered the window (script load failure)
+      const tip = label + (key ? " (" + key + ")" : "") + (id === "nocache" ? " — click to switch" : hasWin(id) ? "" : " — opens in the classic view");
+      return `<button class="rv-tb${t.on ? " on" : ""}" data-tool="${id}" aria-pressed="${t.on}" aria-label="${esc(label)}" title="${esc(tip)}">`
         + `<span class="rv-tb-l">${esc(label)}</span>${t.n ? `<span class="rv-n">${t.n}</span>` : ""}</button>`;
     }).join("") + `<button class="rv-tb" type="button" id="tb-more" aria-haspopup="menu" aria-expanded="false" aria-label="More">More</button>`;
   }
@@ -1386,6 +1388,7 @@
     const name = (S.state && S.state.product && S.state.product.name) || "Rivis";
     showDialog(`<h3>${esc(name)} — shortcuts</h3><p>Laid out like Proxyman: sources on the left, tools in the toolbar, request and response side by side. Right-click a call for its actions.</p>
       <table class="rv-keys">${KEYS.map(([k, t]) => `<tr><td>${esc(k)}</td><td>${esc(t)}</td></tr>`).join("")}</table>
+      <p class="rv-note">${esc(ALT + MOD + "A")} opens TLS decryption hosts. Proxyman users may remember that chord for a traffic allow list; Rivis has no separate allow list.</p>
       <h4>Coming from Proxyman</h4><p>Map Local, Map Remote, Breakpoint, Block List, No Caching, Scripting and Network are in the toolbar; Compose, Devices, Collections and Sessions are under More. Select a call to decode JWTs, GraphQL and gRPC the same way as classic This call. The classic view is still one click away (top right).</p>
       <div class="rv-btns"><button class="rv-btn p" data-close>Close</button></div>`);
   }

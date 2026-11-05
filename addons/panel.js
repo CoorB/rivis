@@ -3474,7 +3474,7 @@
     if (el && $("drawer").classList.contains("open")) el.focus({ preventScroll: true });
     if (again) setTimeout(() => { if ($("drawer").classList.contains("open") && !$("drawer").contains(root.activeElement)) focusDrawer(0); }, 300);
   };
-  // the new main window (/rivis/) opens a tool here until its own tool windows exist (UI phase 2): #rivis-tool=<tab>
+  // deep-link from the main window when its tool scripts failed to load: #rivis-tool=<tab> opens that drawer tab
   const toolLink = location.hash.match(/^#rivis-tool=(map|rules|bp|scripts|net)$/);
   if (toolLink) {
     history.replaceState(null, "", location.pathname + location.search);   // mitmweb's router must not see it

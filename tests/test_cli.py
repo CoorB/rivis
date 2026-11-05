@@ -219,6 +219,20 @@ class ReviewA(CliBase):
         self.assertIn("`⌥⌘L` / `⌥⌘R` / `⌥⌘B`", coming)
         self.assertIn("**Classic view**", coming)
 
+    def test_docs_say_browser_tab_and_native_window_and_how_rules_load(self):
+        # Docs lane: wording must match the code (browser ui + macOS rivis app; Show ≠ rules; HTTP/3 passthrough).
+        readme = open(os.path.join(harness.REPO, "README.md")).read()
+        coming = open(os.path.join(harness.REPO, "docs", "COMING-FROM-PROXYMAN.md")).read()
+        reference = open(os.path.join(harness.REPO, "docs", "REFERENCE.md")).read()
+        self.assertIn("native Mac window (`rivis app`)", readme)
+        self.assertIn("Browser tab by default; optional native Mac window", coming)
+        self.assertNotIn("not a native window", coming)
+        self.assertIn("`rivis projects use <id>` then `rivis restart`", coming)
+        self.assertIn("HTTP/3 (QUIC)", reference)
+        self.assertIn("passes through unmodified", reference)
+        self.assertIn("**Main window** (`rivis ui` / `/rivis/`)", reference)
+        self.assertIn("**Classic view** (`rivis ui --classic`, **This call**)", reference)
+
 
 class BugReport(CliBase):
     def test_runs_without_options_under_bash_3_2(self):

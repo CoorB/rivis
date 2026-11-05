@@ -1,4 +1,4 @@
-/* Rivis main window: tool windows (UI overhaul phase 2). Each tool (Map Local, Map Remote, Breakpoint, Scripting,
+/* Rivis main window: tool windows. Each tool (Map Local, Map Remote, Breakpoint, Scripting,
  * Network, …) has its own window, opened from the toolbar, its shortcut or the right-click menu, as in Proxyman.
  * Windows float over the main window: drag by the title, resize from the corner, Esc closes, the front one is the one
  * last clicked. Position and size are kept per tool (this browser only).

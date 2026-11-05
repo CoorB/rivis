@@ -19,6 +19,7 @@ class ToolNaming(unittest.TestCase):
     def test_the_tls_tool_is_called_tls_decryption_everywhere_it_is_named(self):
         # The Mac menu, the panel's shortcut sheet and the reference all said "Allow List" while the control
         # itself is headed "TLS decryption". A wiki section was written from the wrong one before it was caught.
+        # The shortcuts help may mention Proxyman's "traffic allow list" (lowercase) so testers are not misled.
         surfaces = {"RivisApp.swift": os.path.join(REPO, "addons", "macapp", "RivisApp.swift"),
                     "app.js": os.path.join(REPO, "addons", "ui", "app.js"),
                     "REFERENCE.md": os.path.join(REPO, "docs", "REFERENCE.md")}
@@ -27,6 +28,15 @@ class ToolNaming(unittest.TestCase):
                 text = source.read()
             self.assertFalse("Allow List" in text,     # not assertNotIn: it would print the whole file
                              "%s still calls the TLS decryption tool 'Allow List'" % name)
+
+    def test_shortcuts_help_explains_alt_cmd_a_is_tls_not_proxyman_allow_list(self):
+        with open(os.path.join(REPO, "addons", "ui", "app.js")) as source:
+            text = source.read()
+        self.assertIn("opens TLS decryption hosts", text)
+        self.assertIn("traffic allow list", text)
+        self.assertIn("Rivis has no separate allow list", text)
+        self.assertNotIn("tool windows come in phase 2", text)
+        self.assertNotIn("a tool without a window yet opens in the classic view", text)
 
 
 @unittest.skipUnless(shutil.which("swiftc"), "swiftc is not on PATH")
