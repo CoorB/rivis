@@ -237,6 +237,11 @@ class Projects(CliBase):
         self.assertRegex(out, r"(?m)^  neo\b")
         self.assertNotIn("_template", out)
 
+    def test_list_and_show_refuse_trailing_arguments(self):
+        # before: `projects list EXTRA` / `projects show default EXTRA` ran and ignored the junk
+        self.refused("projects", "list", "EXTRA", msg="usage:")
+        self.refused("projects", "show", "default", "EXTRA", msg="usage:")
+
     def test_use_show_and_current_project_file(self):
         self.ok("projects", "use", "neo")
         cp = os.path.join(self.state, "current-project")
@@ -515,6 +520,15 @@ class Rules(CliBase):
         self.assertIn("removed hello", self.ok("rules", "rm", "hello").stdout)
         self.assertEqual(self.cfg()["rules"], [])
         self.assertIn("(none)", self.ok("rules", "list").stdout)
+
+    def test_list_on_off_refuse_trailing_arguments(self):
+        # before: rules_cli ignored extras; `rules on trail EXTRA` switched the rule on and exited 0
+        self.ok("rules", "add", "trail", "match=/t", "action=block")
+        self.ok("rules", "off", "trail")
+        self.refused("rules", "list", "EXTRA", msg="usage:")
+        self.refused("rules", "on", "trail", "EXTRA", msg="usage:")
+        self.assertFalse(self.cfg()["rules"][0]["enabled"], "trailing junk must not switch a rule on")
+        self.refused("rules", "off", "trail", "EXTRA", msg="usage:")
 
     def test_pilot_rm_deletes_the_rules_own_mock_file_only(self):
         # pilot feedback #5: `rules rm` of a mock left mocks/NAME.json behind; a file the user pointed at stays
@@ -895,6 +909,10 @@ class Scripts(CliBase):
         self.refused("scripts", "frob", "dup", msg="unknown scripts command")
         self.assertFalse(os.path.exists(os.path.join(self.home, "evil.py")))
 
+    def test_list_refuses_trailing_arguments(self):
+        # before: offline `scripts list EXTRA` listed; with a running panel the extras were dropped entirely
+        self.refused("scripts", "list", "EXTRA", msg="usage:")
+
     def test_edit_runs_the_editor(self):
         self.ok("scripts", "new", "ed", "--lang", "js")
         self.ok("scripts", "edit", "ed")          # EDITOR=/usr/bin/true
@@ -946,6 +964,13 @@ class Tls(CliBase):
         self.refused("tls", "bogus")
         self.assertEqual(self.cfg()["tls"]["allow"], [])
 
+    def test_list_and_mode_refuse_trailing_arguments(self):
+        # before: tls_cli ignored extras; `tls mode allow EXTRA` switched mode and exited 0
+        self.refused("tls", "list", "EXTRA", msg="usage:")
+        before = self.cfg()["tls"]["mode"]
+        self.refused("tls", "mode", "allow", "EXTRA", msg="usage:")
+        self.assertEqual(self.cfg()["tls"]["mode"], before, "a trailing argument must not change tls mode")
+
 
 class Compose(CliBase):
     def test_list_empty_and_send_errors_offline(self):
@@ -965,6 +990,9 @@ class Compose(CliBase):
         self.refused("compose", "frob")
         self.refused("compose", "send")
 
+    def test_list_refuses_trailing_arguments(self):
+        self.refused("compose", "list", "EXTRA", msg="compose list")
+
 
 class NetReset(CliBase):
     def test_dry_run_prints_only_and_never_changes_anything(self):
@@ -975,6 +1003,16 @@ class NetReset(CliBase):
         self.assertNotRegex(log, r"(?m)^-set", "net-reset --dry-run must not call a networksetup setter")
         self.assertNotIn("REFUSED", log)
         self.assertIn("-listallnetworkservices", log)
+
+    def test_unknown_or_typo_flags_are_refused(self):
+        # before: only $1 was checked; `net-reset --dryrun` / `--bogus` ran a live clear and exited 0
+        self.refused("net-reset", "--bogus", msg="usage:")
+        self.refused("net-reset", "--dryrun", msg="usage:")
+        self.refused("net-reset", "--dry-run", "--auto", msg="usage:")
+        open(os.path.join(self.suite.shimlog, "networksetup.log"), "w").close()
+        self.refused("net-reset", "--dryrun")
+        self.assertNotRegex(self.suite.shim_log("networksetup.log"), r"(?m)^-set",
+                            "a typo'd dry-run must not reach a networksetup setter")
 
 
 class NeoMitmShim(CliBase):
@@ -1550,12 +1588,48 @@ class StatusUiStop(CliBase):
         self.assertIn("--lan", r.stdout + r.stderr)
 
 
+class UnexpectedArgs(CliBase):
+    """No-arg commands used to swallow trailing junk (PowerShell already refuses it)."""
+
+    def test_status_cert_stop_health_setup_refuse_trailing_arguments(self):
+        for cmd in ("status", "cert", "stop", "health", "setup", "restart"):
+            r = self.refused(cmd, "EXTRA", msg="usage:")
+            self.assertIn(cmd, r.stdout + r.stderr)
+
+    def test_rollback_refuses_trailing_arguments(self):
+        # before: only $1 was read; `rollback --list EXTRA` ignored EXTRA (here: dies on arity first)
+        self.refused("rollback", "--list", "EXTRA", msg="usage:")
+
+
+class SetupExit(CliBase):
+    """`setup` must not exit 0 when android on --all failed inside the logger pipeline."""
+
+    def test_setup_propagates_android_failure(self):
+        # before: cmd_android_logged returned non-zero but setup still set did=1 and exited 0
+        shim = os.path.join(self.home, "setup-bin")
+        os.mkdir(shim)
+        adb = os.path.join(shim, "adb")
+        with open(adb, "w") as fh:
+            fh.write('#!/bin/sh\n'
+                     'if [ "$1" = devices ]; then echo "List of devices attached"; echo "emulator-5554\tdevice"; exit 0; fi\n'
+                     'exit 0\n')
+        os.chmod(adb, 0o755)
+        env = dict(self.env, ADB=adb, PATH=shim + ":" + self.env["PATH"])
+        # no booted sims (default harness xcrun); android path refuses a physical-looking serial → exit 1
+        r = self.cli("setup", env=env)
+        self.assertNotEqual(r.returncode, 0, "setup succeeded after android on --all failed:\n%s\n%s" % (r.stdout, r.stderr))
+        self.assertIn("not done on", r.stdout + r.stderr)
+
+
 class CertAndCa(CliBase):
     def test_cert_prints_fingerprint(self):
         out = self.ok("cert").stdout
         self.assertIn("sha256:", out)
         self.assertRegex(out, r"android:\s+[0-9a-f]{8}\.0")
         self.assertIn(self.env["RIVIS_CONFDIR"], out)
+
+    def test_cert_refuses_trailing_arguments(self):
+        self.refused("cert", "-v", msg="usage:")
 
     def test_ensure_ca_generation_binds_loopback_only(self):
         """No CA yet -> the CLI generates one by running mitmdump. It must not listen beyond 127.0.0.1."""
