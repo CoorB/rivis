@@ -1,7 +1,8 @@
 """Bound mitmweb's in-memory flow store by dropping the oldest safe calls first.
 
-Paused breakpoint calls and the call selected in the panel are never removed. The
-limit is a mitmproxy option so deployments can set it without changing project data.
+Paused breakpoint calls, the call selected in the panel, and calls still on the wire
+are never removed. The limit is a mitmproxy option so deployments can set it without
+changing project data.
 """
 from mitmproxy import ctx, http
 
@@ -43,9 +44,16 @@ class ProxyRetention:
 
     @staticmethod
     def _completed(flow):
+        # Still on the wire (open WebSocket after 101, in-flight HTTP, open TCP/UDP): never treat the
+        # headers/101 snapshot as done, or trim drops the call the tester is watching.
+        if getattr(flow, "live", False):
+            return False
+        websocket = getattr(flow, "websocket", None)
+        if websocket is not None and getattr(websocket, "timestamp_end", None) is None:
+            return False
         if isinstance(flow, http.HTTPFlow):
             return flow.response is not None or flow.error is not None
-        return not bool(getattr(flow, "live", False))
+        return True
 
     def trim(self):
         limit = int(ctx.options.proxy_max_flows)

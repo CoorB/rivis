@@ -1,6 +1,10 @@
 """W5 flow retention: bounded store, oldest-first trim, protected selected/paused calls, restart safety."""
+import base64
+import hashlib
 import os
+import socket
 import sys
+import threading
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -59,6 +63,92 @@ class Retention(LiveCase):
         self.assertIn(paused["id"], {f["id"] for f in flows})
         self.panel.ok("paused_abort", {"id": paused["id"]})
         self.assertNotEqual(call.result().rc, 0)
+
+    def test_in_flight_call_is_never_trimmed(self):
+        call = Background(self.fetch, "/slow?ms=2500&inflight=1", timeout=20)
+        waiting = wait_for(lambda: self.inst.flow_for("inflight=1"), 10, 0.1, "in-flight call")
+        flows = self.fill(35, "inflight-fill")
+        self.assertIn(waiting["id"], {f["id"] for f in flows})
+        self.assertEqual(call.result().status, 200)
+
+
+class OpenWebsocketRetention(unittest.TestCase):
+    """An open WebSocket has a 101 response, so a naive 'has response' check treats it as done and
+    retention can delete it while frames are still flowing."""
+
+    def test_open_websocket_is_never_trimmed(self):
+        suite = Suite.get()
+        up = suite.upstream()
+        inst = Instance(suite, "retention-ws", extra_env={"RIVIS_MAX_FLOWS": "10"}).start()
+        srv = socket.socket()
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        hold = threading.Event()
+        client_holder = []
+
+        def ws_server():
+            srv.settimeout(30)
+            try:
+                conn, _ = srv.accept()
+            except (socket.timeout, OSError):
+                return
+            client_holder.append(conn)
+            req = b""
+            while b"\r\n\r\n" not in req:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                req += chunk
+            key = [line.split(b":", 1)[1].strip() for line in req.split(b"\r\n")
+                   if line.lower().startswith(b"sec-websocket-key")][0]
+            accept = base64.b64encode(hashlib.sha1(key + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest())
+            conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                         b"Sec-WebSocket-Accept: " + accept + b"\r\n\r\n")
+            hold.wait(30)
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+        threading.Thread(target=ws_server, daemon=True).start()
+        proxy = None
+        try:
+            for i in range(6):
+                self.assertEqual(inst.fetch(up.url("/json/small?before=%d" % i)).status, 200)
+            proxy = socket.create_connection(("127.0.0.1", inst.proxy_port), 5)
+            proxy.sendall(("GET http://127.0.0.1:%d/ws?livews=1 HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                           "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                           "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+                           % (port, port)).encode())
+            proxy.settimeout(5)
+            head = b""
+            while b"\r\n\r\n" not in head:
+                head += proxy.recv(4096)
+            self.assertIn(b" 101 ", head.split(b"\r\n")[0])
+            ws = wait_for(lambda: next((f for f in inst.flows()
+                                        if "livews=1" in ((f.get("request") or {}).get("path") or "")), None),
+                          10, 0.1, "open websocket flow")
+            ws_id = ws["id"]
+            for i in range(30):
+                self.assertEqual(inst.fetch(up.url("/json/small?after=%d" % i)).status, 200)
+            flows = wait_for(lambda: (lambda f: f if len(f) <= 10 else None)(inst.flows()),
+                             10, 0.1, "store at cap")
+            self.assertIn(ws_id, {f["id"] for f in flows},
+                          "open WebSocket was trimmed while the client socket was still connected")
+            msg, mask = b"still-here", b"\x01\x02\x03\x04"
+            proxy.sendall(b"\x81" + bytes([0x80 | len(msg)]) + mask +
+                          bytes(b ^ mask[i % 4] for i, b in enumerate(msg)))
+        finally:
+            hold.set()
+            if proxy is not None:
+                try:
+                    proxy.close()
+                except OSError:
+                    pass
+            srv.close()
+            inst.stop()
 
 
 class RestartSafety(unittest.TestCase):
