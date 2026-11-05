@@ -26,7 +26,10 @@ def tree_digest(path):
     n = 0
     for base, dirs, files in os.walk(path):
         if base == path and os.path.basename(path) == ".rivis":
-            for live in ("logs", "browser"):   # the user's own Rivis (and a `rivis browser` window) write here during a run
+            # the user's own Rivis (a `rivis browser` window, an emulator they set up) writes in these while a run
+            # is going: android-ramdisk holds the emulator's console log, appended for as long as it stays on the
+            # setup boot, which made every run on that machine report an unclean $HOME
+            for live in ("logs", "browser", "android-ramdisk"):
                 if live in dirs:
                     dirs.remove(live)
         dirs.sort()

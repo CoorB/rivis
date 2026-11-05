@@ -77,10 +77,11 @@ class LeftoverCheckIgnoresTheUsersLiveRivis(unittest.TestCase):
         home = tempfile.mkdtemp(prefix="rivis-hermetic-")
         try:
             root = os.path.join(home, ".rivis")
-            for d in ("logs", "browser/chrome", "projects/default"):
+            for d in ("logs", "browser/chrome", "projects/default", "android-ramdisk"):
                 os.makedirs(os.path.join(root, d))
             before = hermetic.tree_digest(root)
-            for f in ("logs/mitmweb.log", "browser/chrome/Cookies"):
+            # an emulator the user set up appends to android-ramdisk/rooted.log for as long as it runs
+            for f in ("logs/mitmweb.log", "browser/chrome/Cookies", "android-ramdisk/rooted.log"):
                 open(os.path.join(root, f), "w").write("x")
             self.assertEqual(hermetic.tree_digest(root), before)
             open(os.path.join(root, "projects", "default", "rules.json"), "w").write("{}")
