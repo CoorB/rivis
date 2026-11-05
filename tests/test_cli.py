@@ -1926,5 +1926,36 @@ class AndroidCaRemoval(CliBase):
         self.assertIn("no longer in Settings", out)
 
 
+class SigpipeProneChecks(unittest.TestCase):
+    """`set -o pipefail` + `grep -q` is a trap, so the shapes that can hit it stay out of the CLI.
+
+    grep -q stops at the first match. If the writer is still pushing output it dies of SIGPIPE, the
+    pipeline reports 141, and `&& continue` / `if !` read a match as no match. With a short producer the
+    writer finishes first and it works, which is why this hid for so long. It deleted a browser profile
+    that was in use, the web token of a second running instance, and made the Android setup believe an
+    emulator had exited while it was still holding its port. Use contains(), or capture the output
+    and test it, whenever the producer can be longer than a pipe buffer.
+    """
+
+    PRODUCERS = ("ps ", "printf ", "dumpsys", "/sdcard/proxy-ui.xml")
+
+    def test_no_unbounded_producer_feeds_grep_q(self):
+        for name in ("rivis", "addons/android_magisk.sh"):
+            for n, line in enumerate(open(os.path.join(harness.REPO, name)), 1):
+                quiet = re.search(r"grep\s+(-[A-Za-z]*q|--quiet)", line)
+                if line.lstrip().startswith("#") or not quiet:
+                    continue
+                before = line[:quiet.start()]
+                for producer in self.PRODUCERS:
+                    self.assertFalse(producer in before,
+                                     "%s:%d pipes %r into grep -q; use contains() or capture it instead"
+                                     % (name, n, producer.strip()))
+
+    def test_the_cli_still_has_the_helper_that_replaces_that_pipeline(self):
+        src = open(os.path.join(harness.REPO, "rivis")).read()
+        self.assertIn("contains() {", src)
+        self.assertIn('contains "--user-data-dir=$d" "$running"', src)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

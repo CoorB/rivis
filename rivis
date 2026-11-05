@@ -284,6 +284,10 @@ safe_name() { [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]] && [[ "$1" != .* ]] || die "n
 
 port_owner() { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==2{print $1" pid "$2" "$9}'; }
 port_accepts() { /usr/bin/python3 -I -c 'import socket,sys; s=socket.socket(); s.settimeout(.5); sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))) != 0)' "$1"; }
+# contains NEEDLE HAYSTACK — a literal substring test. Deliberately not `printf | grep -q`: with `set -o
+# pipefail` grep stops at the first match and the writer dies of SIGPIPE, so the pipeline reports 141 and a
+# match reads as no match. On a long process list that deleted a browser profile someone was still using.
+contains() { case "$2" in (*"$1"*) return 0 ;; esac; return 1; }
 
 # Advice for "that port is taken": a pair the kernel says is free right now. The old hint named 18080/18083 no
 # matter what was wrong, so whoever was stuck because 18083 was taken was told to start on 18083.
@@ -499,8 +503,9 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
   # Android-only testers skip the Redirector in the installer; capturing the Simulator without it only brings up macOS
   # prompts. Start without it and say how to turn it on. (An unreadable extension list changes nothing.)
   if [ "$ios" = 1 ] && [ "$(uname)" = Darwin ]; then
-    local ext; ext=$(systemextensionsctl list 2>/dev/null) || ext=""
-    if [ -n "$ext" ] && ! printf '%s\n' "$ext" | grep 'org.mitmproxy.macos-redirector' | grep -q 'activated enabled'; then
+    local ext redirector; ext=$(systemextensionsctl list 2>/dev/null) || ext=""
+    redirector=$(printf '%s\n' "$ext" | grep 'org.mitmproxy.macos-redirector') || redirector=""
+    if [ -n "$ext" ] && ! contains 'activated enabled' "$redirector"; then
       ios=0
       info "iOS Simulator capture is off: the Mitmproxy Redirector is not approved on this Mac (Android emulators, web apps and the proxy work)."
       info "  to capture the Simulator: approve it (re-run the installer, or System Settings → General → Login Items & Extensions → Network Extensions), then $CLI stop && $CLI start"
@@ -657,7 +662,7 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
 }
 
 our_mitmweb() {   # our_mitmweb PID — a mitmweb started from THIS state dir (never another HOME's or user's)
-  ps -o comm= -p "$1" 2>/dev/null | grep -q mitmweb || return 1
+  contains mitmweb "$(ps -o comm= -p "$1" 2>/dev/null)" || return 1
   local args; args=$(ps -ww -o args= -p "$1" 2>/dev/null) || return 1
   case "$args" in *"web_port=$WEB_PORT "*) ;; *) return 1 ;; esac
   case "$args" in *"proxy_auth_token_file=$TOKEN_FILE "*) return 0 ;; esac
@@ -760,7 +765,8 @@ cmd_stop() {   # stop our mitmweb on our ports (only ours — never another app,
   fi
   [ -z "$(our_listeners)" ] || die "ports $PORT/$WEB_PORT are still in use after stopping mitmweb"
   # R4A-05: leave other web ports' credentials intact; an older instance on another port may still use the shared file
-  if [ "$WEB_PORT" != 8083 ] || ! ps -axww -o args= 2>/dev/null | grep -qF "proxy_auth_token_file=$STATE_ROOT/web-token "; then
+  local allargs; allargs=$(ps -axww -o args= 2>/dev/null) || allargs=""
+  if [ "$WEB_PORT" != 8083 ] || ! contains "proxy_auth_token_file=$STATE_ROOT/web-token " "$allargs"; then
     rm -f "$TOKEN_FILE" "$BOOTSTRAP_FILE"
   fi
   rm -rf "$STATE_ROOT/start-guard-$WEB_PORT"
@@ -922,7 +928,7 @@ browser_sweep_fresh() {
   local d running; running=$(ps -axww -o command= 2>/dev/null) && [ -n "$running" ] || return 0
   for d in "$@"; do
     [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || continue
-    printf '%s\n' "$running" | grep -qF -- "--user-data-dir=$d" && continue
+    contains "--user-data-dir=$d" "$running" && continue
     rm -rf "$d"
   done
 }
@@ -1177,12 +1183,13 @@ ui_tap_now() {   # ui_tap_now SERIAL REGEX
   "$ADB" -s "$s" shell input tap $(( ($1+$3)/2 )) $(( ($2+$4)/2 )); sleep 2
 }
 ui_close_dialog() { "$ADB" -s "$1" shell input keyevent KEYCODE_BACK >/dev/null 2>&1; sleep 1; }
-ui_screen_has() { "$ADB" -s "$1" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1; "$ADB" -s "$1" shell cat /sdcard/proxy-ui.xml | grep -qE "text=\"($2)\""; }
+ui_screen_has() { "$ADB" -s "$1" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1
+  [ -n "$("$ADB" -s "$1" shell cat /sdcard/proxy-ui.xml | grep -E "text=\"($2)\"")" ]; }
 open_credentials() {   # Settings → Security → More security → Encryption & credentials
   # NEW_TASK|CLEAR_TASK: a stale screen left on top of the Settings task would hijack the flow
   "$ADB" -s "$1" shell am start -f 0x10008000 -a android.settings.SECURITY_SETTINGS >/dev/null 2>&1
   local t; for t in $(seq 1 20); do   # the Security page takes ~4s; never swipe the launcher
-    "$ADB" -s "$1" shell dumpsys window 2>/dev/null | grep -q "mCurrentFocus=.*com.android.settings" && break
+    [ -n "$("$ADB" -s "$1" shell dumpsys window 2>/dev/null | grep "mCurrentFocus=.*com.android.settings")" ] && break
     sleep 0.5
   done
   sleep 1
@@ -1310,8 +1317,8 @@ ui_list_mentions() {   # ui_list_mentions SERIAL TEXT — on this screen, or one
   for i in 1 2 3 4 5 6 7 8; do
     "$ADB" -s "$s" shell uiautomator dump /sdcard/proxy-ui.xml >/dev/null 2>&1
     x=$("$ADB" -s "$s" shell cat /sdcard/proxy-ui.xml 2>/dev/null)
-    printf '%s' "$x" | grep -qF "\"$t" && return 0
-    if printf '%s' "$x" | grep -qE 'text="(User|USER)"' && [ "$x" = "$prev" ]; then
+    contains "\"$t" "$x" && return 0
+    if [ -n "$(printf '%s' "$x" | grep -E 'text="(User|USER)"')" ] && [ "$x" = "$prev" ]; then
       [ "$swiped" = 1 ] && return 1
       local wh w h; wh=$("$ADB" -s "$s" shell wm size | tr -d '\r' | awk '/size/{print $NF}'); w=${wh%x*}; h=${wh#*x}
       [ -n "$w" ] && [ -n "$h" ] && "$ADB" -s "$s" shell input swipe $((w/2)) $((h*7/10)) $((w/2)) $((h*3/10)) 300 >/dev/null 2>&1
@@ -1514,7 +1521,7 @@ cmd_android() {
         local sys_fp sys_h; sys_h=$(ca_hash 2>/dev/null)
         if [ -n "$sys_h" ]; then
           sys_fp=$("$ADB" -s "$s" shell cat "/system/etc/security/cacerts/$sys_h.0" 2>/dev/null | tr -d '\r' | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 | tr -d :)
-          if [ -n "$sys_fp" ] && ca_history_field 1 | grep -qixF "$sys_fp"; then
+          if [ -n "$sys_fp" ] && [ -n "$(ca_history_field 1 | grep -ixF "$sys_fp")" ]; then
             local rm_out; rm_out=$(android_system_ca "$s" remove) && info "$s: CA removed from the system store" \
               || echo "!! $s: could not remove the CA from the system store (${rm_out:-no answer}); a restart removes it" >&2
           fi
@@ -1527,7 +1534,7 @@ cmd_android() {
           f="/data/misc/user/0/cacerts-added/$hh.0"
           "$ADB" -s "$s" shell "[ -e $f ]" || continue
           fp=$("$ADB" -s "$s" shell cat "$f" 2>/dev/null | tr -d '\r' | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 | tr -d :)
-          if [ -n "$fp" ] && printf '%s\n' "$want" | grep -qixF "$fp"; then
+          if [ -n "$fp" ] && [ -n "$(printf '%s\n' "$want" | grep -ixF "$fp")" ]; then
             "$ADB" -s "$s" shell "rm -f $f"
             "$ADB" -s "$s" shell "[ ! -e $f ]" || die "$s: CA still present at $f"
             removed=$((removed+1))
@@ -1550,7 +1557,8 @@ cmd_android() {
         "$ADB" -s "$s" shell input keyevent KEYCODE_HOME
       fi
       # still on the temporary setup boot of a Google Play emulator (`android on` without --strict)? back to normal now
-      if ps -ax -o args= 2>/dev/null | grep -v "grep " | grep -F -- "-port ${s#emulator-} " | grep -qF -- "-ramdisk $STATE_ROOT/android-ramdisk/"; then
+      local emu; emu=$(ps -ax -o args= 2>/dev/null | grep -v "grep " | grep -F -- "-port ${s#emulator-} ") || emu=""
+      if contains "-ramdisk $STATE_ROOT/android-ramdisk/" "$emu"; then
         ADB="$ADB" "$SCRIPT_DIR/addons/android_magisk.sh" "$s" "$CA_PEM" "${h:-00000000}.0" "-" "$STATE_ROOT" --restore \
           || info "$s: could not restart it normally — Cold Boot it from Android Studio's Device Manager"
       fi

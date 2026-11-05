@@ -9,6 +9,7 @@ import shlex
 import sys
 import shutil
 import subprocess
+import tempfile
 import time
 import unittest
 
@@ -376,6 +377,51 @@ class Browser(unittest.TestCase):
             self.assertFalse([f for f in self.plain.panel.flows() if f["request"]["path"] == marker])
         finally:
             self.kill_test_browsers()
+
+
+class ProfileSweepUnderALongProcessList(unittest.TestCase):
+    """The sweep on its own, against a process list far larger than a pipe buffer.
+
+    `set -o pipefail` plus `grep -q`: grep stops at the first match and the writer is still pushing the
+    rest of the list, so it dies of SIGPIPE and the pipeline reports 141. A profile that IS in use then
+    reads as not in use, and the next `--fresh` run deletes the cookies and logins of a browser someone
+    is working in. It needs a long list and an early match, which is why it only showed up now and then.
+    """
+
+    def sweep(self, tmp, profiles, ps_text):
+        """Run the real browser_sweep_fresh from `rivis` with `ps` replaced by a fixed list."""
+        src = open(os.path.join(harness.REPO, "rivis")).read()
+        start = src.index("browser_sweep_fresh() {")
+        func = src[start:src.index("\n}\n", start) + 3]
+        helper = [ln for ln in src.splitlines() if ln.startswith("contains() {")]
+        bindir = os.path.join(tmp, "bin")
+        os.makedirs(bindir)
+        pslist = os.path.join(tmp, "ps.txt")
+        with open(pslist, "w") as fh:
+            fh.write(ps_text)
+        with open(os.path.join(bindir, "ps"), "w") as fh:
+            fh.write("#!/bin/sh\nexec cat %s\n" % shlex.quote(pslist))
+        os.chmod(os.path.join(bindir, "ps"), 0o755)
+        script = os.path.join(tmp, "sweep.sh")
+        with open(script, "w") as fh:
+            fh.write("set -uo pipefail\n" + "\n".join(helper) + "\n" + func + '\nbrowser_sweep_fresh "$@"\n')
+        env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"])
+        return subprocess.run(["/bin/bash", script] + profiles, env=env, capture_output=True, text=True)
+
+    def test_a_profile_in_use_survives_a_process_list_longer_than_the_pipe(self):
+        tmp = tempfile.mkdtemp(prefix="rivis-t-%s-sweep" % os.environ.get("RIVIS_TEST_RUN", "x"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        busy, stale = (os.path.join(tmp, n) for n in ("tmp-busy01", "tmp-stale1"))
+        for d in (busy, stale):
+            os.makedirs(d)
+        # the match on the FIRST line, then far more than a pipe buffer behind it
+        ps_text = "/fake/browser --user-data-dir=%s\n" % busy + "".join(
+            "/usr/libexec/filler --slot=%06d\n" % i for i in range(12000))
+        self.assertGreater(len(ps_text), 400000, "the list must outlast the pipe buffer")
+        r = self.sweep(tmp, [busy, stale], ps_text)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(os.path.isdir(busy), "a profile a running browser is using was deleted")
+        self.assertFalse(os.path.isdir(stale), "an unused profile should still be swept")
 
 
 if __name__ == "__main__":

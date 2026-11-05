@@ -51,8 +51,12 @@ AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 AVD_DIR=$(sed -n 's/^path=//p' "$AVD_HOME/$AVD.ini" 2>/dev/null | head -1); [ -d "$AVD_DIR" ] || AVD_DIR="$AVD_HOME/$AVD.avd"
 CONFIG="$AVD_DIR/config.ini"
 cfg() { awk -F' *= *' -v k="$1" '$1 == k {print $2; exit}' "$CONFIG"; }   # the emulator rewrites it as "key = value"
+# contains NEEDLE HAYSTACK — a literal substring test. Not `ps | grep -q`: with `set -o pipefail` grep stops at
+# the first match while ps is still writing, ps dies of SIGPIPE and the pipeline reports 141, so a match reads as
+# no match. On the process list below that meant "the emulator has exited" while it was still holding the port.
+contains() { case "$2" in (*"$1"*) return 0 ;; esac; return 1; }
 [ -f "$CONFIG" ] || die "$AVD: no config.ini in $AVD_DIR"
-{ [ "$(cfg PlayStore.enabled)" = true ] || cfg tag.ids | grep -q playstore || cfg tag.id | grep -q playstore; } || die "$AVD is not a Google Play AVD (use adb root instead)"
+{ [ "$(cfg PlayStore.enabled)" = true ] || contains playstore "$(cfg tag.ids)" || contains playstore "$(cfg tag.id)"; } || die "$AVD is not a Google Play AVD (use adb root instead)"
 SYSDIR=$(cfg image.sysdir.1)
 STOCK="$SDK/${SYSDIR%/}/ramdisk.img"
 [ -r "$STOCK" ] || die "$AVD: no ramdisk.img in $SDK/$SYSDIR (this image type is not supported)"
@@ -60,7 +64,8 @@ API=$(sh_ getprop ro.build.version.sdk)
 ABI=$(sh_ getprop ro.product.cpu.abi)
 # Android Studio owns embedded emulator windows through private gRPC flags. Relaunching one
 # as a standalone process loses that ownership; refuse before patching or stopping it.
-if ps -ax -o args= 2>/dev/null | grep -F -- "-avd $AVD " | grep -q -- '-qt-hide-window'; then
+avd_procs=$(ps -ax -o args= 2>/dev/null | grep -F -- "-avd $AVD ") || avd_procs=""
+if contains '-qt-hide-window' "$avd_procs"; then
   die "$AVD is running embedded in Android Studio (-qt-hide-window); Rivis cannot safely restart that Studio-owned emulator with -ramdisk. Start the AVD as a standalone emulator, then retry one-click setup; using Settings now"
 fi
 # Pilot 2026-10-21: an emulator Android Studio started in its own window was restarted here as a standalone process, so
@@ -68,7 +73,7 @@ fi
 emu_pid=$(ps -ax -o pid=,args= 2>/dev/null | grep -F -- "-avd $AVD " | grep -v "grep " | awk 'NR == 1 {print $1}')
 if [ -n "$emu_pid" ]; then
   emu_parent=$(ps -o ppid= -p "$emu_pid" 2>/dev/null | tr -d ' ')
-  if [ -n "$emu_parent" ] && ps -o args= -p "$emu_parent" 2>/dev/null | grep -qiE 'Android Studio|/studio( |$)'; then
+  if [ -n "$emu_parent" ] && [ -n "$(ps -o args= -p "$emu_parent" 2>/dev/null | grep -iE 'Android Studio|/studio( |$)')" ]; then
     die "$AVD was started by Android Studio; Rivis does not restart it (Studio would lose the emulator). Using Settings now — or close it in Studio, start it with the emulator command, and retry one-click setup"
   fi
 fi
@@ -80,7 +85,12 @@ free_kb=$(df -Pk "$CACHE" | awk 'END {print $4}')
 gone() {   # adb has lost it AND its process has exited (a new boot on the same port must not race the old one)
   local i; for i in $(seq 1 60); do "$ADB" -s "$SERIAL" get-state >/dev/null 2>&1 || break; sleep 1; done
   [ "$i" -lt 60 ] || return 1
-  for i in $(seq 1 30); do ps -ax -o args= 2>/dev/null | grep -v "grep " | grep -F -- "-avd $AVD " | grep -qF -- "-port $PORT" || return 0; sleep 1; done
+  local procs
+  for i in $(seq 1 30); do
+    procs=$(ps -ax -o args= 2>/dev/null | grep -v "grep " | grep -F -- "-avd $AVD ") || procs=""
+    case "$procs" in (*"-port $PORT"*) ;; (*) return 0 ;; esac   # self-contained: a test extracts this function alone
+    sleep 1
+  done
   return 1                                         # old process still owns the port; do not race a new boot
 }
 booted() { local i; for i in $(seq 1 300); do [ "$(sh_ getprop sys.boot_completed)" = 1 ] && return 0; sleep 1; done; return 1; }
