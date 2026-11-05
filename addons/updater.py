@@ -171,9 +171,12 @@ def login_start():
     code, doc = _json_post(LOGIN + "/login/device/code", {"client_id": CLIENT_ID})
     if code != 200 or "device_code" not in doc:
         raise UpdateError("GitHub refused the sign-in request: %s" % (doc.get("error_description") or doc.get("error") or code))
+    # interval / expires_in may be JSON null (key present, value None): .get(key, default) then returns None, and
+    # int(None) crashed the sign-in. Treat null like missing.
+    interval, expires_in = doc.get("interval"), doc.get("expires_in")
     return {"user_code": doc["user_code"], "verification_uri": doc["verification_uri"],
-            "device_code": doc["device_code"], "interval": int(doc.get("interval", 5)),
-            "expires_at": time.time() + int(doc.get("expires_in", 900))}
+            "device_code": doc["device_code"], "interval": int(interval if interval is not None else 5),
+            "expires_at": time.time() + int(expires_in if expires_in is not None else 900)}
 
 
 def _store_token(doc):

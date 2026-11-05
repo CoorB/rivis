@@ -35,6 +35,7 @@ class FakeGitHub:
         self.pending = 1                # device polls answered "authorization_pending" before success
         self.private = False
         self.rate_limited = False
+        self.null_device_timing = False  # GitHub may send interval/expires_in as JSON null
         outer = self
 
         class Storage(http.server.BaseHTTPRequestHandler):
@@ -62,8 +63,10 @@ class FakeGitHub:
                 form = dict(x.split("=", 1) for x in self.rfile.read(int(self.headers.get("Content-Length", 0))).decode().split("&") if "=" in x)
                 outer.calls.append(("POST", self.path, form))
                 if self.path == "/login/device/code":
-                    return self.reply(200, {"device_code": "dev-code", "user_code": "WXYZ-1234", "interval": 1,
-                                            "verification_uri": "https://github.com/login/device", "expires_in": 900})
+                    return self.reply(200, {"device_code": "dev-code", "user_code": "WXYZ-1234",
+                                            "interval": None if outer.null_device_timing else 1,
+                                            "verification_uri": "https://github.com/login/device",
+                                            "expires_in": None if outer.null_device_timing else 900})
                 if self.path == "/login/oauth/access_token":
                     outer.token_grants.append(form)
                     if form.get("grant_type", "").endswith("device_code"):
@@ -177,6 +180,16 @@ class SignIn(UpdaterBase):
         self.assertTrue(self.upd("status")[1]["signed_in"])
         self.assertEqual(self.upd("logout")[0], 0)
         self.assertFalse(os.path.exists(self.token_file))
+
+    def test_login_start_tolerates_null_interval_and_expires_in(self):
+        # GitHub may send "interval": null / "expires_in": null. int(None) used to crash login-start with a TypeError
+        # instead of applying the documented defaults (5 s / 900 s).
+        self.gh.null_device_timing = True
+        rc, s = self.upd("login-start")
+        self.assertEqual(rc, 0, s)
+        self.assertEqual(s["user_code"], "WXYZ-1234")
+        self.assertEqual(s["interval"], 5)
+        self.assertGreater(s["expires_at"], time.time() + 800)
 
     def test_an_expired_token_is_refreshed_without_a_secret(self):
         self.gh.private = True; self.sign_in(expires_at=time.time() - 10)

@@ -646,6 +646,15 @@ class Ops(LiveCase):
         self.panel.ok("maplocal_add", {"name": "full-url-js", "host": full_url, "body": "x"})
         self.assertEqual(self.fetch("/bundle.js").header("content-type"), mimetypes.guess_type("/bundle.js")[0])
 
+    def test_maplocal_add_keeps_an_explicit_empty_body(self):
+        # body "" used to become "{}\n" because of `a.get("body") or "{}\n"`, so a deliberate empty mock answered "{}".
+        # Use 200: a 204 must not carry a body, so the client would hide the file contents either way.
+        self.panel.ok("maplocal_add", {"name": "empty-body", "host": "127.0.0.1", "path": "/empty-ml", "body": "",
+                                       "status": 200})
+        r = wait_for(lambda: (lambda x: x if x.status == 200 else None)(self.fetch("/empty-ml")), 8, 0.3, "empty map local")
+        self.assertEqual(r.text, "")
+        self.bad("maplocal_add", {"name": "bad-body", "host": "127.0.0.1", "path": "/bad-ml", "body": 1}, "body must be text")
+
     def test_maplocal_reuses_matching_manual_rule_and_rejects_duplicates(self):
         self.panel.ok("maplocal_add", {"name": "manual", "host": "127.0.0.1:%d" % self.up.http_port,
                                        "path": "/json/small", "body": '{"manual":1}', "status": 218})

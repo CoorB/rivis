@@ -215,8 +215,15 @@ class ProxyCollections:
             i = self.cursor.get(ck, 0)
             name, e = same[min(i, len(same) - 1)]
             self.cursor[ck] = i + 1
-            body = base64.b64decode(e["b64"]) if "b64" in e else e.get("text", "").encode()
-            flow.response = http.Response.make(e["status"], body, [(h.encode(), v.encode()) for h, v in e["headers"]])
+            # Hand-edited or older imports can store "text": null / a null header value; never call .encode() on None.
+            raw_b64 = e.get("b64") if "b64" in e else None
+            if isinstance(raw_b64, str):
+                body = base64.b64decode(raw_b64)
+            else:
+                text = e.get("text")
+                body = text.encode() if isinstance(text, str) else b""
+            hdrs = [(str(h).encode(), str(v if v is not None else "").encode()) for h, v in (e.get("headers") or [])]
+            flow.response = http.Response.make(e["status"], body, hdrs)
             flow.metadata["proxy_local"] = True
             pos = f" {min(i, len(same) - 1) + 1}/{len(same)}" if len(same) > 1 else ""
             flow.comment = (flow.comment + " | " if flow.comment else "") + f"collection:{name}{pos}"

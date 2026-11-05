@@ -198,6 +198,25 @@ class Collections(LiveCase):
         self.assertTrue(any("/ws" in x and "WebSocket" in x for x in doc["skipped"]), doc)
         self.assertEqual([e["path"] for e in self.entries("skipme")], ["/ok"])
 
+    def test_har_with_null_response_text_still_replays(self):
+        # Some HAR exporters write "text": null for an empty body. Import stored None, and replay then crashed
+        # on None.encode() so the app got a broken connection instead of the recorded empty answer.
+        har = {"log": {"entries": [{"request": {"method": "GET", "url": self.up.url("/empty-null"), "headers": []},
+                                    "response": {"status": 204, "headers": [{"name": "X-From", "value": None}],
+                                                 "content": {"size": 0, "mimeType": "application/json", "text": None}}}]}}
+        self.reset_state(collections=self.coll())
+        self.panel.ok("coll_import", {"name": "nullbody", "har": har})
+        stored = json.load(open(self.inst.path("collections", "nullbody.json")))
+        self.assertEqual(stored["entries"][0].get("text"), "")
+        self.assertEqual(stored["entries"][0]["headers"], [["X-From", ""]])
+        self.panel.ok("coll_replay", {"name": "nullbody", "enabled": True})
+        time.sleep(1.3)
+        self.up.reset_hits()
+        r = self.fetch("/empty-null")
+        self.assertEqual(r.status, 204, r.text)
+        self.assertEqual(r.text, "")
+        self.assertEqual(self.up.hits, [])
+
     def test_strict_mode_answers_404_for_unrecorded_calls(self):
         self.reset_state(collections=self.coll())
         self.record("s")

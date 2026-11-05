@@ -164,6 +164,17 @@ class Parsing(unittest.TestCase):
         self.assertEqual(att.loopback_owner("127.0.0.1", 40001, 8089, later), 1001)
         self.assertEqual(len(calls), 2)
 
+    def test_pid_cache_does_not_reuse_a_source_when_only_argv_changed(self):
+        # qemu (and python, node, …) share one executable path across every AVD / script. Caching by path alone
+        # kept the first process's device after the PID was reused by another emulator within the 60s window.
+        qemu = "/sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64"
+        att = ps.Attributor(lambda argv, timeout=4: "")
+        first = att.by_pid(4242, {"path": qemu, "argv": [qemu, "-avd", "Pixel_9"], "env": {}})
+        self.assertEqual(first["device"], "Pixel_9")
+        second = att.by_pid(4242, {"path": qemu, "argv": [qemu, "-avd", "Pixel_8"], "env": {}})
+        self.assertEqual(second["device"], "Pixel_8")
+        self.assertNotEqual(first["key"], second["key"])
+
     def test_android_app_only_when_one_app_talks_to_the_proxy(self):
         tcp = ("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
                "   0: 0F02000A:A1B2 0202000A:4850 01 00000000:00000000 00:00000000 00000000 10123 0 1\n"

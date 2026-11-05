@@ -2336,7 +2336,13 @@ class ProxyPanel:
             os.makedirs(MOCK_DIR, exist_ok=True)
             path = self.mock_path(name)
             created_mock = not os.path.exists(path)
-            atomic_write_text(path, a.get("body") or "{}\n")
+            if "body" in a:
+                if not isinstance(a["body"], str):
+                    raise PanelError("body must be text")
+                body = a["body"]
+            else:
+                body = "{}\n"
+            atomic_write_text(path, body)
             r = {"name": name, "enabled": True, "match": match,
                  "action": "map_local", "file": path,
                  "status": http_status(200 if a.get("status") in (None, "") else a["status"]),
@@ -2917,15 +2923,23 @@ class ProxyPanel:
                        "path": u.path or "/",
                        "query": urlencode(sorted(parse_qsl(u.query, keep_blank_values=True))),
                        "req_body": req_body, "status": int(resp["status"]),
-                       "headers": [[h["name"], h["value"]] for h in resp.get("headers", [])
-                                   if h["name"].lower() not in ("content-encoding", "content-length", "transfer-encoding", "connection")
-                                   and not h["name"].startswith(":")],
+                       "headers": [[str(h["name"]), "" if h.get("value") is None else str(h["value"])]
+                                   for h in resp.get("headers", [])
+                                   if str(h.get("name") or "").lower() not in ("content-encoding", "content-length", "transfer-encoding", "connection")
+                                   and not str(h.get("name") or "").startswith(":")],
                        "recorded_at": _t.time()}
+                # HAR exporters sometimes write "text": null for an empty body, and null header values. .get("text", "")
+                # still returns None when the key is present, and replay then crashed on None.encode().
+                text = c.get("text")
+                if text is None:
+                    text = ""
+                elif not isinstance(text, str):
+                    text = str(text)
                 if c.get("encoding") == "base64":
-                    ent["b64"] = c.get("text", "")
+                    ent["b64"] = text
                     base64.b64decode(ent["b64"])
                 else:
-                    ent["text"] = c.get("text", "")
+                    ent["text"] = text
                 if not ent["host"] or ent["status"] <= 0:
                     why = "failed call (status 0)"
                 elif ent["status"] == 101:

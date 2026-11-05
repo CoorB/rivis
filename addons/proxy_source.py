@@ -484,7 +484,7 @@ class Attributor:
         self.run = runner
         self.own_pid = os.getpid()
         self._lock = threading.Lock()
-        self._pid_cache = {}          # pid → (expires, path, source)
+        self._pid_cache = {}          # pid → (expires, (path, argv, sim_udid), source)
         self._sims = (0.0, {})
         self._adb = (0.0, {})         # AVD → serial
         self._pkgs = {}               # serial → (expires, uid → [packages])
@@ -547,12 +547,19 @@ class Attributor:
         return names
 
     def by_pid(self, pid, snap=None):
-        path = (snap or {}).get("path") or proc_path(pid)
+        # Cache key includes argv (and the simulator UDID): qemu / python / node share one path across every
+        # AVD or script, so path alone reused the first process's source after a PID recycle within 60 s.
+        if snap:
+            path = snap.get("path") or proc_path(pid)
+            argv, env = list(snap.get("argv") or []), dict(snap.get("env") or {})
+        else:
+            path = proc_path(pid)
+            argv, env = proc_args(pid)
+        key = (path, tuple(argv), env.get("SIMULATOR_UDID", ""))
         with self._lock:
             hit = self._pid_cache.get(pid)
-        if hit and hit[0] > time.time() and hit[1] == path:
+        if hit and hit[0] > time.time() and hit[1] == key:
             return hit[2]
-        argv, env = (snap["argv"], snap["env"]) if snap else proc_args(pid)
         names = self.sim_names() if ("CoreSimulator" in path or env.get("SIMULATOR_UDID")) else {}
         src = classify(pid, path, argv, env, names, self.browser_root)
         if src["kind"] == "ios" and src["id"] in SIM_SERVICES and src["id"] != "com.apple.mobilesafari":
@@ -565,7 +572,7 @@ class Attributor:
         with self._lock:
             if len(self._pid_cache) > 512:
                 self._pid_cache.clear()
-            self._pid_cache[pid] = (time.time() + 60, path, src)
+            self._pid_cache[pid] = (time.time() + 60, key, src)
         return src
 
     def running_avds(self):
