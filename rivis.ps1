@@ -18,7 +18,7 @@ system proxy, one CA per workstation, removed again with `off`.
                                             web apps: a separate browser window with its own profile, pointed
                                             at the proxy and trusting only this CA. Your normal browser, the
                                             system proxy and the certificate store are not touched
-  .\<cli>.ps1 projects list|use|show|new
+  .\<cli>.ps1 projects list|use ID|unpin|show|new
   .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
   .\<cli>.ps1 rules add NAME match=REGEX|match_wildcard=HOST/PATH action=ACTION [key=value ...]
                                             block: optional mode=kill_show|kill|hide (default kill_show)
@@ -406,7 +406,7 @@ function Ensure-Rules {
 
 # Rules and scripts load for the running project, which may differ from the selected project. Non-fatal; silent when the proxy is not running.
 function Warn-RunningProject {
-  if (-not (Test-Path $TokenPath)) { return }
+  if (-not $TokenPath -or -not (Test-Path -LiteralPath $TokenPath)) { return }
   try {
     $token = (Get-Content -Raw $TokenPath).Trim()
     if (-not $token) { return }
@@ -416,7 +416,32 @@ function Warn-RunningProject {
     $running = (Invoke-RestMethod -Uri "$base/proxy/api/state" -WebSession $web -UseBasicParsing -TimeoutSec 3).active_project
   } catch { return }
   if ($running -and $running -ne $Project) {
-    [Console]::Error.WriteLine("${Cli}.ps1: warning: the running proxy serves project '$running', not '$Project' - changes to '$Project' apply only after: ${Cli}.ps1 -Project $Project stop, then start")
+    [Console]::Error.WriteLine("${Cli}.ps1: warning: the running proxy serves project '$running', not '$Project' - switch live rules from the Rules menu (or unpin first if started with -Project), or: ${Cli}.ps1 -Project $Project stop, then start")
+  }
+}
+
+# POST /proxy/api/<op> with the UI token + XSRF. Returns the parsed JSON, or $null when the proxy is not running.
+# Throws on an HTTP 4xx/5xx so the caller can surface the panel's error text.
+function Invoke-UiApi([string]$Op, $Body = @{}) {
+  if (-not $TokenPath -or -not (Test-Path -LiteralPath $TokenPath)) { return $null }
+  $token = (Get-Content -Raw $TokenPath).Trim()
+  if (-not $token) { return $null }
+  [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
+  $base = "http://127.0.0.1:$WebPort"
+  try {
+    Invoke-WebRequest -Uri "$base/?token=$([uri]::EscapeDataString($token))" -SessionVariable web -UseBasicParsing -TimeoutSec 3 | Out-Null
+  } catch { return $null }
+  $xsrf = ($web.Cookies.GetCookies($base) | Where-Object { $_.Name -eq "_mitmproxy_xsrf" } | Select-Object -First 1).Value
+  if (-not $xsrf) { return $null }
+  $json = ($Body | ConvertTo-Json -Depth 5 -Compress)
+  try {
+    return Invoke-RestMethod -Uri "$base/proxy/api/$Op" -Method Post -WebSession $web -ContentType "application/json" `
+      -Headers @{ "X-XSRFToken" = $xsrf } -Body $json -UseBasicParsing -TimeoutSec 15
+  } catch {
+    $detail = $null
+    try { $detail = ($_.ErrorDetails.Message | ConvertFrom-Json).error } catch { }
+    if ($detail) { throw $detail }
+    throw
   }
 }
 
@@ -737,7 +762,34 @@ switch ($Command) {
       if (-not $id -or $id -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$' -or -not (Profile-Dir $id)) { Die "unknown project '$id'" }
       New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
       Write-PrivateFile $currentProject $id
-      Info "current project: $id (restart a running proxy to load its rules)"
+      # Save for CLI mutations and the next start. Live rules hot-switch only from the panel Rules menu / API.
+      $running = $null; $pinned = $false
+      if ($TokenPath -and (Test-Path -LiteralPath $TokenPath)) {
+        try {
+          $token = (Get-Content -Raw $TokenPath).Trim()
+          if ($token) {
+            [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
+            $base = "http://127.0.0.1:$WebPort"
+            Invoke-WebRequest -Uri "$base/?token=$([uri]::EscapeDataString($token))" -SessionVariable web -UseBasicParsing -TimeoutSec 3 | Out-Null
+            $st = Invoke-RestMethod -Uri "$base/proxy/api/state" -WebSession $web -UseBasicParsing -TimeoutSec 3
+            $running = $st.active_project
+            $pinned = [bool]$st.project_pinned
+          }
+        } catch { }
+      }
+      if ($pinned -and $running -and $running -ne $id) {
+        Info "current project: $id saved for the next start; live rules stay on '$running' (started with -Project $running). To switch now: ${Cli}.ps1 projects unpin, then pick $id in the Rules menu"
+      } elseif ($running -and $running -ne $id) {
+        Info "current project: $id saved for the next start; live rules are still on '$running' - pick $id in the Rules menu to switch now, or: ${Cli}.ps1 stop, then start"
+      } else {
+        Info "current project: $id (change with: ${Cli}.ps1 projects use ID)"
+      }
+    } elseif ($subcommand -eq "unpin") {
+      try {
+        $cleared = Invoke-UiApi "project_unpin" @{}
+        if ($null -eq $cleared) { Die "no running proxy on :$WebPort - start one first, or just ${Cli}.ps1 projects use ID" }
+        Info "project pin cleared - pick a project in the Rules menu to switch the running proxy's rules (${Cli}.ps1 projects use only saves the next start)"
+      } catch { Die $_.Exception.Message }
     } elseif ($subcommand -eq "show") {
       $id = if ($Name) { $Name } else { $Project }
       if ($id -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$') { Die "invalid project ID '$id'" }
@@ -761,7 +813,7 @@ switch ($Command) {
         Move-Item $temp $dir
       } finally { if (Test-Path $temp) { Remove-Item -Recurse -Force $temp } }
       Info "created user profile $dir"
-    } else { Die "usage: projects list|use ID|show [ID]|new ID -Label LABEL -Hosts REGEX" }
+    } else { Die "usage: projects list|use ID|unpin|show [ID]|new ID -Label LABEL -Hosts REGEX" }
   }
   "start" {
     $chosenUpstream = Get-Upstream
@@ -801,7 +853,7 @@ switch ($Command) {
               "--set","confdir=$ConfDir","--set","connection_strategy=lazy",
               "--set",("http2=" + $(if ((Config-Env "HTTP2" "0") -eq "1") { "true" } else { "false" })), "--set",("stream_large_bodies=" + (Config-Env "STREAM_LARGE_BODIES" "64m")),
               "-s",(Join-Path $PSScriptRoot "addons\proxy_lan.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_rules.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_scripts.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_collections.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_source.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_panel.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_retention.py"),"-s",(Join-Path $PSScriptRoot "addons\proxy_operability.py"),
-              "--set",("proxy_remember_ui=" + $(if ((Config-Env "REMEMBER_UI" "0") -eq "1") { "true" } else { "false" })),"--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project","--set","proxy_max_flows=$MaxFlows",
+              "--set",("proxy_remember_ui=" + $(if ((Config-Env "REMEMBER_UI" "0") -eq "1") { "true" } else { "false" })),"--set","proxy_rules_file=$RulesPath","--set","proxy_project=$Project","--set",("proxy_project_pinned=" + $(if ($projectSource -eq "argument") { "true" } else { "false" })),"--set","proxy_max_flows=$MaxFlows",
               "--set","proxy_max_ws_messages=$MaxWsMessages","--set","proxy_max_ws_bytes=$MaxWsBytes",
               "--set","proxy_max_body_bytes=$MaxBodyBytes","--set","proxy_log_dir=$(Join-Path $StateRoot 'logs')")
     if ($lanIps.Count) {
@@ -1555,6 +1607,21 @@ switch ($Command) {
     $statusRulesPath = $RulesPath
     if (-not (Test-Path $statusRulesPath)) { $statusRulesPath = Join-Path $ProfileDir "rules.example.json" }
     Write-Host "project: $Project ($($ProjectConfig.label))"
+    # $TokenPath is unset when this block is extracted into status.ps1 by the hermetic test; guard before Test-Path.
+    if ($TokenPath -and (Test-Path -LiteralPath $TokenPath) -and (Port-Owner $WebPort)) {
+      try {
+        $token = (Get-Content -Raw $TokenPath).Trim()
+        [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
+        $base = "http://127.0.0.1:$WebPort"
+        Invoke-WebRequest -Uri "$base/?token=$([uri]::EscapeDataString($token))" -SessionVariable web -UseBasicParsing -TimeoutSec 3 | Out-Null
+        $st = Invoke-RestMethod -Uri "$base/proxy/api/state" -WebSession $web -UseBasicParsing -TimeoutSec 3
+        $rulesLabel = if ($st.active_project_label) { $st.active_project_label } else { $st.active_project }
+        if ($rulesLabel) {
+          $pin = if ($st.project_pinned) { " (pinned - unpin with: ${Cli}.ps1 projects unpin)" } else { "" }
+          Write-Host "rules project: $rulesLabel$pin"
+        }
+      } catch { }
+    }
     Write-Host "upstream proxy: $(Get-Upstream)"
     $statusCfg = Read-RulesConfig $statusRulesPath
     $statusTls = Get-Tls $statusCfg

@@ -100,6 +100,45 @@ class ProjectShowToast(UiBase):
 
 
 @unittest.skipIf(PW_REASON, PW_REASON or "")
+class ClassicRulesHotSwitch(UiBase):
+    """Classic drawer Rules select hot-switches Map Local (same project_use path as the new window)."""
+
+    def test_rules_select_hot_switches_map_local(self):
+        import json
+        import shutil
+        home = self.inst.home
+        for pid, label, body in (("cl-a", "Classic A", '{"from":"cl-a"}'), ("cl-b", "Classic B", '{"from":"cl-b"}')):
+            profile = os.path.join(home, ".rivis", "profiles", pid)
+            state = os.path.join(home, ".rivis", "projects", pid)
+            os.makedirs(profile, mode=0o700, exist_ok=True)
+            os.makedirs(os.path.join(state, "mocks"), mode=0o700, exist_ok=True)
+            with open(os.path.join(profile, "project.json"), "w") as fh:
+                json.dump({"id": pid, "label": label, "description": label, "hosts": r"127\.0\.0\.1",
+                           "record_match": ".", "throttle_match": "."}, fh)
+            shutil.copy(os.path.join(harness.REPO, "projects", "_template", "rules.example.json"),
+                        os.path.join(profile, "rules.example.json"))
+            mock = os.path.join(state, "mocks", "m.json")
+            with open(mock, "w") as fh:
+                fh.write(body)
+            with open(os.path.join(state, "rules.json"), "w") as fh:
+                json.dump({"throttle": "off", "throttle_match": ".", "loss": 0, "rules": [
+                    {"name": "m", "enabled": True, "match": r"/cl-hot", "action": "map_local",
+                     "file": mock, "status": 200}]}, fh)
+        self.inst.write_cfg({"rules": []})
+        page = self.open()
+        page.locator("#fab").click()
+        host = page.locator("#proxy-panel-host")
+        wait_for(lambda: host.locator("#rules-project option[value='cl-a']").count() == 1, 10, 0.2, "cl-a listed")
+        host.locator("#rules-project").select_option("cl-a")
+        wait_for(lambda: self.panel.state()["active_project"] == "cl-a", 10, 0.2, "api on cl-a")
+        self.assertEqual(self.fetch("/cl-hot").json(), {"from": "cl-a"})
+        host.locator("#rules-project").select_option("cl-b")
+        wait_for(lambda: self.panel.state()["active_project"] == "cl-b", 10, 0.2, "api on cl-b")
+        self.assertEqual(self.fetch("/cl-hot").json(), {"from": "cl-b"})
+        self.assertEqual(self.errors, [])
+
+
+@unittest.skipIf(PW_REASON, PW_REASON or "")
 class UiScrollRegression(UiBase):
     PROJECT = "neo"
 

@@ -54,7 +54,9 @@ button, input, select { font: inherit; color: inherit; }
 .rv-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--rv-text-3); }
 #tb-record[aria-pressed="true"] .rv-dot { background: var(--rv-danger); }
 #tb-record[aria-pressed="false"] { background: var(--rv-warn-soft); border-color: var(--rv-warn); color: var(--rv-warn); }
-.rv-proj { color: var(--rv-text-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.rv-proj { display: inline-flex; align-items: center; gap: 6px; color: var(--rv-text-2); font-size: 12px; white-space: nowrap; max-width: 280px; }
+.rv-proj .rv-pjt { opacity: .75; }
+.rv-proj select { max-width: 180px; height: 28px; border: 1px solid var(--rv-border); border-radius: 6px; background: var(--rv-surface); color: var(--rv-text); font: inherit; padding: 0 6px; }
 @media (max-width: 1100px) { .rv-tb-l { display: none; } .rv-tb { padding: 0 8px; } }
 
 /* filter bar */

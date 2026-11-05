@@ -74,8 +74,8 @@ if HERE not in sys.path:
 import proxy_common
 importlib.reload(proxy_common)
 from proxy_common import (PRODUCT, PROFILE_VALUES, atomic_json, STATE_ROOT, breakpoints, dns_spoof_map,
-                          project_profile, migrate_rules, remote_url_problem, throttle_shorthand, tls_config,
-                          tls_options, user_regex, without_hop_headers)
+                          project_profile, project_state, migrate_rules, remote_url_problem, throttle_shorthand,
+                          tls_config, tls_options, user_regex, without_hop_headers)
 import proxy_rule_validation
 importlib.reload(proxy_rule_validation)      # mitmproxy reloads this add-on in place: the validator must see the new proxy_common too
 from proxy_rule_validation import (BLOCK_MODES, DEFAULT_BLOCK_MODE, compile_rule, every_applies,
@@ -533,6 +533,8 @@ class ProxyRules:
     def load(self, loader):
         loader.add_option("proxy_rules_file", str, DEFAULT_FILE, "project rules file (JSON, hot-reloaded)")
         loader.add_option("proxy_project", str, "default", "active project profile ID")
+        loader.add_option("proxy_project_pinned", bool, False,
+                          "True when started with --project: refuse hot-switch until unpin")
         loader.add_option("proxy_private_hosts", str, "", "explicit regex allow-list for private upstream hosts")
 
     def running(self):
@@ -545,9 +547,20 @@ class ProxyRules:
                 await self._flush_hits()
         self._poller = asyncio.get_running_loop().create_task(poll())
 
+    def _forget_rule_activity(self):
+        """Hit statistics and every-Nth counters are per rules file: a project switch must not carry a same-named
+        rule's count (or its "matched N times") from the old project into the new one."""
+        self.hits = {}
+        self._parked_hits = {}
+        self._every_counts = {}
+        self._every_fp = {}
+
     def configure(self, updated):
         if "proxy_rules_file" in updated:
-            self.path = os.path.expanduser(ctx.options.proxy_rules_file)
+            new_path = os.path.expanduser(ctx.options.proxy_rules_file)
+            if self.path and os.path.abspath(os.path.expanduser(self.path)) != os.path.abspath(new_path):
+                self._forget_rule_activity()
+            self.path = new_path
             self.mtime = None
             self._reload(force=True)
         if "proxy_private_hosts" in updated:
@@ -562,6 +575,14 @@ class ProxyRules:
                     self.project_hosts_re = re.compile(r"(?:[a-z0-9-]+\.)*(?:%s)" % hosts, re.I)
             except (ValueError, OSError, re.error):
                 self.project_hosts_re = None
+            # a hot-switch may change only proxy_project when the rules path was already correct; still refresh hosts
+            if "proxy_rules_file" not in updated:
+                want = os.path.join(project_state(ctx.options.proxy_project), "rules.json")
+                if os.path.abspath(os.path.expanduser(self.path or "")) != os.path.abspath(want):
+                    self._forget_rule_activity()
+                    self.path = want
+                    self.mtime = None
+                    self._reload(force=True)
 
     # ── file handling ────────────────────────────────────────────
     def _reload(self, force=False):

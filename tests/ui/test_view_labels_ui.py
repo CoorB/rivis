@@ -40,7 +40,10 @@ class ViewLabelsUi(UiBase):
         start = self.P("#bproj").text_content().strip()
         self.assertNotEqual(start, "NEO")
         self.P("#project").select_option("neo")
-        wait_for(lambda: self.P("#bproj").text_content().strip() == "NEO", 8, 0.2, "NEO label while NEO only")
+        wait_for(lambda: self.panel.state()["project_only"] is True, 8, 0.2, "NEO only applied")
+        # The header names the live RULES project (the Rules selector), not the Show filter: Show → NEO only must
+        # not relabel it as NEO, or a tester believes NEO's mocks are live when they are not.
+        self.assertEqual(self.P("#bproj").text_content().strip(), start)
         self.P("#project").select_option("__all")
         wait_for(lambda: self.panel.state()["project_only"] is False, 8, 0.2, "All traffic applied")
         page.reload()

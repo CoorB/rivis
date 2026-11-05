@@ -444,6 +444,16 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
         self.bad("projects", "use", "nosuchproject")
         self.assertIn("qa", self.bash("projects", "list"))                  # the bash edition sees the same state
 
+    def test_projects_use_saves_without_posting_project_use(self):
+        """Parity with bash: CLI projects use saves selection; live switch is the panel Rules / API path."""
+        self.ok("projects", "new", "qa", "-Hosts", r"example\.test", "-Label", "QA")
+        posts = self.fake_proxy("default")
+        out = self.ok("projects", "use", "qa")
+        self.assertIn("current project: qa", out)
+        self.assertIn("Rules menu", out)
+        self.assertEqual(open(os.path.join(self.state, "current-project")).read().strip(), "qa")
+        self.assertFalse(any("/proxy/api/project_use" in p["path"] for p in posts), posts)
+
     def test_project_resolution_flag_env_current(self):
         self.ok("projects", "new", "qa", "-Label", "QA", "-Hosts", r"example\.test")
         self.ok("projects", "use", "qa")
@@ -761,15 +771,42 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
         item = next(s for s in self.cfg()["scripts"] if s["name"] == "wslog")
         self.assertEqual(item["match"], "/chat")
 
-    def fake_proxy(self, active):
+    def fake_proxy(self, active, post_error=None):
         """A stand-in for the proxy UI: serves the login page and /proxy/api/state for the project it 'runs'."""
+        posts = []
+
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
-                body = json.dumps({"active_project": active}).encode() if self.path.startswith("/proxy/api/state") else b"ok"
+                if self.path.startswith("/proxy/api/state"):
+                    body = json.dumps({"active_project": active, "project_pinned": False}).encode()
+                else:
+                    # login: set the XSRF cookie the PowerShell client expects
+                    body = b"ok"
+                    self.send_response(200)
+                    self.send_header("Set-Cookie", "_mitmproxy_xsrf=test-xsrf; Path=/")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                posts.append({"path": self.path, "body": raw.decode("utf-8", "replace"),
+                              "xsrf": self.headers.get("X-XSRFToken")})
+                if post_error:
+                    out = json.dumps({"error": post_error}).encode()
+                    self.send_response(400)
+                else:
+                    out = json.dumps({"active_project": "qa", "state": {"active_project": "qa"}}).encode()
+                    self.send_response(200)
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
 
             def log_message(self, *a):
                 pass
@@ -782,6 +819,58 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
         os.makedirs(self.state, exist_ok=True)
         with open(os.path.join(self.state, "web-token-%d" % port), "w") as fh:
             fh.write("tok-0123456789")
+        return posts
+
+    def test_projects_use_while_pinned_saves_for_next_start(self):
+        """While the running proxy is pinned, projects use still saves current-project for the next start."""
+        self.ok("projects", "new", "qa", "-Hosts", r"example\.test", "-Label", "QA")
+        cur = os.path.join(self.state, "current-project")
+        with open(cur, "w") as fh:
+            fh.write("default\n")
+        posts = []
+        # fake_proxy with project_pinned in state (override via a one-off server)
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path.startswith("/proxy/api/state"):
+                    body = json.dumps({"active_project": "default", "project_pinned": True}).encode()
+                else:
+                    body = b"ok"
+                    self.send_response(200)
+                    self.send_header("Set-Cookie", "_mitmproxy_xsrf=test-xsrf; Path=/")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(length) if length else b""
+                posts.append(self.path)
+                out = json.dumps({"error": "started with --project default — unpin first to switch rules"}).encode()
+                self.send_response(400)
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        self.env["RIVIS_WEB_PORT"] = str(port)
+        os.makedirs(self.state, exist_ok=True)
+        with open(os.path.join(self.state, "web-token-%d" % port), "w") as fh:
+            fh.write("tok-0123456789")
+        out = self.ok("projects", "use", "qa")
+        self.assertIn("live rules stay", out.lower())
+        self.assertEqual(open(cur).read().strip(), "qa")
+        self.assertFalse(any("project_use" in p for p in posts), posts)
 
     def test_running_project_mismatch_warns_without_failing(self):
         self.fake_proxy("neo")
@@ -790,7 +879,7 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
             cp = self.ps(*args)
             self.assertEqual(cp.returncode, 0, (args, cp.stdout, cp.stderr))
             self.assertIn(warn, cp.stderr, args)
-            self.assertIn("stop, then start", cp.stderr, args)
+            self.assertIn("Rules menu", cp.stderr, args)
             self.assertNotIn(warn, cp.stdout, args)
 
     def test_running_project_match_is_silent(self):

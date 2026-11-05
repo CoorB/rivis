@@ -156,7 +156,19 @@ class ProxyCollections:
     def configure(self, updated):
         global COLL_DIR
         if "proxy_project" in updated or "proxy_rules_file" in updated:
-            COLL_DIR = os.path.join(project_state(ctx.options.proxy_project), "collections")
+            new_dir = os.path.join(project_state(ctx.options.proxy_project), "collections")
+            if new_dir != COLL_DIR:
+                # A live project switch: a recording still waiting for its debounced write belongs to the OLD
+                # project. Write it there now, then forget every buffered document, so no later flush can save
+                # (or overwrite) a same-named collection in the new project.
+                self.flush_recording()
+                self.recording_docs.clear()
+                self.dirty.clear()
+                self.deleted.clear()
+                if self.flush_handle:
+                    self.flush_handle.cancel()
+                    self.flush_handle = None
+            COLL_DIR = new_dir
             self.default_record = project_profile(ctx.options.proxy_project).get("record_match") or DEFAULT_RECORD
 
     def flush_recording(self, name=None, forget=False):

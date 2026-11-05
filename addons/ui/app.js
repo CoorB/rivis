@@ -1236,8 +1236,19 @@
   }
 
   // ── status bar ───────────────────────────────────────────────────────────────────────────────────────────────────
+  function drawProjectSelect() {
+    const st = S.state || {}, sel = $("tb-project");
+    if (!sel || sel.tagName !== "SELECT") return;
+    const projects = st.projects || [];
+    const active = st.active_project || "";
+    const html = projects.map((p) =>
+      `<option value="${esc(p.id)}" ${p.id === active ? "selected" : ""}>${esc(p.label || p.id)}${st.project_pinned && p.id === active ? " (pinned)" : ""}</option>`).join("");
+    if (sel.dataset.html !== html) { sel.dataset.html = html; sel.innerHTML = html; }
+    else if (sel.value !== active) sel.value = active;
+  }
   function drawStatus() {
     const st = S.state || {}, p = st.project || {};
+    const rulesLabel = st.active_project_label || st.active_project || p.label || "";
     const port = (st.proxy && st.proxy.port) || (st.listen && st.listen.port) || "";
     const map = toolState("map"), bp = toolState("bp");
     $("status").innerHTML = `<span><span class="rv-live${S.live && S.record ? "" : " off"}"></span>${!S.record ? "Paused" : S.live ? "Live" : "Reconnecting…"}</span>`
@@ -1246,12 +1257,26 @@
       + (st.retention && st.retention.bodies_dropped ? `<span>${st.retention.bodies_dropped} large bodies dropped to free memory</span>` : "")
       + (st.retention && st.retention.ws_dropped ? `<span>${st.retention.ws_dropped} older WebSocket messages dropped</span>` : "")
       + (S.held.size ? `<span><b>${S.held.size}</b> waiting — press Record</span>` : "")
-      + (p.label ? `<span>Project <b>${esc(p.label)}</b></span>` : "")
+      + (rulesLabel ? `<span>Rules <b>${esc(rulesLabel)}</b>${st.project_pinned ? " (pinned)" : ""}</span>` : "")
       + (map.on ? `<span>Map Local on (${map.n})</span>` : "") + (bp.on ? `<span>${bp.n} breakpoint${bp.n === 1 ? "" : "s"}</span>` : "")
       + (st.no_cache ? `<span>No Caching on</span>` : "")
       + (st.lan && st.lan.on ? `<span>Wi-Fi ${esc(st.lan.addresses.join(", "))}</span>` : "");
-    $("tb-project").textContent = p.label ? "Project: " + p.label : "";
+    drawProjectSelect();
   }
+  $("tb-project").addEventListener("change", async () => {
+    const st = S.state || {}, v = $("tb-project").value, prev = st.active_project;
+    if (!v || v === prev) return;
+    const label = ($("tb-project").selectedOptions[0] || {}).textContent.replace(/ \(pinned\)$/, "") || v;
+    try {
+      const r = await api("project_use", { project: v });
+      S.state = r.state || Object.assign({}, st, { active_project: v, active_project_label: label, project_pinned: false });
+      drawStatus(); drawBanners(S.state); drawTools();
+      toast("Rules: " + label);
+    } catch (e) {
+      $("tb-project").value = prev || "";
+      toast(e.message, true);
+    }
+  });
 
   // ── panel state (tools, sources, columns, saved filters) ──────────────────────────────────────────────────────────
   const stateFns = [];
@@ -1347,6 +1372,10 @@
     if (un.length)
       out.push(`<div class="rv-banner warn" role="alert" data-banner="untrusted"><span>A simulator or emulator does not trust the ${esc(name)} certificate, so <b>${esc(un[0].host)}</b>${un.length > 1 ? ` and ${un.length - 1} more` : ""} ${un.length > 1 ? "pass" : "passes"} through without being recorded.</span>`
         + `<button class="rv-btn" data-bn="setup">Set up devices</button><button class="rv-btn" data-bn="retry">Decrypt again</button></div>`);
+    const rulesLabel = st.active_project_label || st.active_project || "";
+    if (rulesLabel)
+      out.push(`<div class="rv-banner info" role="status" data-banner="rules"><span>Rules project: <b>${esc(rulesLabel)}</b>${st.project_pinned ? " — pinned (started with --project)" : ""}</span>`
+        + (st.project_pinned ? `<button class="rv-btn" data-bn="unpin">Unpin</button>` : "") + `</div>`);
     const u = st.update || {};
     if (u.installing) out.push(`<div class="rv-banner info" role="status" data-banner="update"><span>Updating ${esc(name)} to ${esc(u.installing.version)}… It restarts by itself in about a minute, and this page reloads.</span></div>`);
     else if (u.available && store.get("rivis-update-later", "") !== u.available.version)
@@ -1363,6 +1392,7 @@
       if (b.dataset.bn === "retry") { await api("untrusted_retry", {}); toast("Decrypting again from the next connection"); pollState(); }
       if (b.dataset.bn === "update") { await api("update_install", {}, 120000); toast("Updating… it restarts by itself in about a minute"); pollState(); }
       if (b.dataset.bn === "later") { store.set("rivis-update-later", ((st.update || {}).available || {}).version || ""); drawBanners(st); }
+      if (b.dataset.bn === "unpin") { await api("project_unpin", {}); toast("Project pin cleared — choose another project to switch rules"); pollState(); }
     } catch (err) { toast(err.message, true); }
   });
 

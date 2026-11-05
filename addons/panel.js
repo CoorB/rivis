@@ -438,7 +438,7 @@
   <div class="fstrip" id="fstrip"></div>
   <div class="cmenu" id="cmenu" role="menu" aria-label="Call actions"></div>
   <div class="drawer" id="drawer">
-    <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><label class="pj" title="Choose which project's calls the list shows"><span class="pjt">Show</span><select id="project" aria-label="Project shown in the call list"></select></label><label class="pj" title="Show the calls of one device, or of one app on it"><span class="pjt">Source</span><select id="source" aria-label="Device or app shown in the call list"></select></label><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button></header>
+    <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><label class="pj" title="Which project's rules, mocks and scripts are live"><span class="pjt">Rules</span><select id="rules-project" aria-label="Active rules project"></select></label><label class="pj" title="Choose which project's calls the list shows"><span class="pjt">Show</span><select id="project" aria-label="Project shown in the call list"></select></label><label class="pj" title="Show the calls of one device, or of one app on it"><span class="pjt">Source</span><select id="source" aria-label="Device or app shown in the call list"></select></label><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button></header>
     <nav>
       <button data-t="call" class="on">${ico("call", "sm")}This call</button>
       <button data-t="compose">${ico("compose", "sm")}Compose</button>
@@ -770,13 +770,18 @@
     $("fabdot").style.display = active ? "inline-block" : "none";
     $("fab").classList.toggle("paused", state.paused.length > 0);
     const label = state.project.label || state.view_project;
+    const rulesLabel = state.active_project_label || state.active_project || label;
     const product = state.product.name || "Proxy";
     $("ptitle").textContent = product;
-    $("bname").textContent = product; $("bproj").textContent = label;
-    document.title = product + " · " + label;
+    $("bname").textContent = product;
+    $("bproj").textContent = rulesLabel + (state.project_pinned ? " (pinned)" : "");
+    document.title = product + " · " + rulesLabel;
     const options = `<option value="__all" ${state.project_only ? "" : "selected"}>All traffic</option>` +
       state.projects.filter((p) => p.id !== "default").map((p) => `<option value="${esc(p.id)}" ${state.project_only && p.id === state.view_project ? "selected" : ""}>${esc(p.label || p.id)} only</option>`).join("");
     if ($("project").innerHTML !== options) $("project").innerHTML = options;
+    const rulesOpts = (state.projects || []).map((p) =>
+      `<option value="${esc(p.id)}" ${p.id === state.active_project ? "selected" : ""}>${esc(p.label || p.id)}${state.project_pinned && p.id === state.active_project ? " (pinned)" : ""}</option>`).join("");
+    if ($("rules-project") && $("rules-project").innerHTML !== rulesOpts) $("rules-project").innerHTML = rulesOpts;
     sourceOptions();
     $("fablabel").textContent = state.paused.length ? `${state.paused.length} paused` : "Tools";
     $("fab").title = active ? "Tools — rules, breakpoints or network conditions are switched on (Alt+Shift+P)" : "Tools — Map Local, breakpoints, network conditions, scripts (Alt+Shift+P)";
@@ -3464,8 +3469,14 @@
   $("project").onchange = () => {
     const v = $("project").value, label = $("project").selectedOptions[0].textContent.replace(/ only$/, "");
     if (v === "__all") return run("view", { project_only: false, show_dns: state.show_dns }, "Showing all traffic");
-    const hint = v === state.active_project ? "" : ` Its rules load when you start with --project ${v}`;
-    run("view", { project: v, project_only: true, show_dns: false }, `Showing only ${label} calls.${hint}`);
+    run("view", { project: v, project_only: true, show_dns: false }, `Showing only ${label} calls`);
+  };
+  if ($("rules-project")) $("rules-project").onchange = async () => {
+    const v = $("rules-project").value, label = $("rules-project").selectedOptions[0].textContent.replace(/ \(pinned\)$/, "");
+    const prev = state && state.active_project;
+    if (v === prev) return;
+    const r = await run("project_use", { project: v }, `Rules: ${label}`);
+    if (!r && $("rules-project")) $("rules-project").value = prev || "";
   };
   const setSource = (v) => run("source", { source: v || null }, v ? "Showing only " + sourceName(v) : "Showing every source");
   $("source").onchange = () => { const v = $("source").value; $("source").blur();

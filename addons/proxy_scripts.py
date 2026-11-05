@@ -491,6 +491,7 @@ class ProxyScripts:
     def __init__(self):
         self.rules_path = DEFAULT_RULES
         self.project = "default"
+        self.project_epoch = 0             # bumped on a live project switch: old VMs, hosts, contexts and chains end
         self.script_dir = os.path.join(os.path.dirname(DEFAULT_RULES), "scripts")
         self.checked = self.mtime = 0
         self.scripts = []
@@ -517,12 +518,30 @@ class ProxyScripts:
         if "proxy_project" in updated:
             # A project switch must not leak tokens/counters from the previous project's scripts.
             self.clear_shared_state()
+            if ctx.options.proxy_project != self.project:
+                self._forget_project_scripts()
         if "proxy_rules_file" in updated or "proxy_project" in updated:
             self.rules_path = os.path.expanduser(ctx.options.proxy_rules_file)
             self.project = ctx.options.proxy_project
             self.script_dir = os.path.join(project_state(self.project), "scripts")
             os.makedirs(self.script_dir, mode=0o700, exist_ok=True)
             self.mtime = 0
+
+    def _forget_project_scripts(self):
+        """A live project switch: nothing a script kept may reach the new project's same-named script.
+
+        Per-script contexts are dropped, Python hosts (module globals) are stopped, the JS host starts a new scope
+        (fresh VMs), and the epoch ends every hook chain that began on the old project (see _run)."""
+        self.project_epoch += 1
+        self.contexts = {}
+        self.last_errors = {}              # an error of A's auth.js must not show on B's same-named script
+        old, self.python_hosts = self.python_hosts, {}
+        for proc in old.values():
+            if proc.returncode is None:
+                try:
+                    proc.kill()          # asyncio Process.kill is synchronous; a call still reading it fails plainly
+                except ProcessLookupError:
+                    pass
 
     def clear_shared_state(self):
         with self._shared_guard:
@@ -728,13 +747,14 @@ class ProxyScripts:
         async with self.script_locks.setdefault(filename, asyncio.Lock()):
             if filename not in self.python_hosts:
                 await self._start_python_host(item)
+            host = self.python_hosts.get(filename)
             shared = self._shared_snapshot()
             try:
                 msg = await self._python_exchange(filename, {"op": "call", "hook": hook, "context": context,
                                                     "url": url, "request": request, "response": response,
                                                     "message": message, "shared_state": shared[1]})
             except asyncio.TimeoutError as exc:
-                await self._stop_python_host(filename)
+                await self._stop_python_host(filename, host)
                 raise ScriptFailure("timed out after 2 s and was stopped; the call went on unchanged") from exc
         for line in msg.get("logs", []): ctx.log.info(f"script:{item['name']}: {line}")
         if not msg.get("ok"):
@@ -745,7 +765,9 @@ class ProxyScripts:
         return msg.get("result")
 
     async def _python_exchange(self, filename, payload):
-        proc = self.python_hosts[filename]
+        proc = self.python_hosts.get(filename)
+        if proc is None:                 # stopped by a project switch between start and call
+            raise ScriptFailure("the project changed while this script was starting; the call went on unchanged")
         proc.stdin.write((json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode())
         await asyncio.wait_for(proc.stdin.drain(), PYTHON_TIMEOUT)
         line = await asyncio.wait_for(proc.stdout.readline(), PYTHON_TIMEOUT)
@@ -775,8 +797,13 @@ class ProxyScripts:
             await self._stop_python_host(filename)
             raise
 
-    async def _stop_python_host(self, filename):
-        proc = self.python_hosts.pop(filename, None)
+    async def _stop_python_host(self, filename, proc=None):
+        """Stop this file's host; with proc, only that process (a late timeout of an old project's call must not
+        stop the new project's host of the same name)."""
+        current = self.python_hosts.get(filename)
+        proc = current if proc is None else proc
+        if current is proc:
+            self.python_hosts.pop(filename, None)
         if proc and proc.returncode is None:
             proc.kill()
             try: await asyncio.wait_for(proc.wait(), 2)
@@ -879,7 +906,7 @@ class ProxyScripts:
             write_lock = self.node_write_locks[generation]
             self.seq += 1; request_id = self.seq
             shared = self._shared_snapshot()
-            payload = {"id": request_id, "name": item["file"], "code": item["code"], "hook": hook,
+            payload = {"id": request_id, "name": item["file"], "scope": self.project_epoch, "code": item["code"], "hook": hook,
                        "context": context, "url": url, "request": request, "response": response,
                        "message": message, "shared_state": shared[1]}
             loop = asyncio.get_running_loop()
@@ -920,7 +947,10 @@ class ProxyScripts:
         response_side = hook == "on_response"
         request = self._request(flow)
         response = self._message(flow.response, True) if response_side and flow.response else None
+        epoch = self.project_epoch
         for item in self.scripts:
+            if self.project_epoch != epoch:
+                break           # the project changed while an earlier script of this chain ran: the old chain ends here
             if not response_side and flow.response:
                 break
             if not item["_re"].search(flow.request.pretty_url): continue
@@ -1027,7 +1057,10 @@ class ProxyScripts:
         message = self._ws_message(msgs[-1])
         url = flow.request.pretty_url
         request = self._request(flow)
+        epoch = self.project_epoch
         for item in self.scripts:
+            if self.project_epoch != epoch:
+                break
             if not item["_re"].search(url):
                 continue
             if item.get("method") and item["method"].upper() != flow.request.method:

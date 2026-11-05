@@ -24,7 +24,13 @@ function syncSharedState(entry, incoming) {
   };
 }
 
+let currentScope = null;
+
 async function invoke(msg) {
+  // One VM per script per project: a project switch (new scope) must not hand the old project's globals to a
+  // same-named script of the new one. Calls already running keep their own entry.
+  const scope = String(msg.scope ?? "");
+  if (scope !== currentScope) { scripts.clear(); currentScope = scope; }
   let entry = scripts.get(msg.name);
   if (!entry || entry.code !== msg.code) {
     const sandbox = Object.create(null);

@@ -8,6 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import harness                          # noqa: E402
 from harness import wait_for            # noqa: E402
 from test_ui import PW_REASON, UiBase   # noqa: E402
 
@@ -480,7 +481,44 @@ class ToolWindows(UiBase):
         page.wait_for_timeout(1500)
         self.assertFalse(d.is_visible(), "shown once per browser")
 
+    def test_rules_project_select_hot_switches_map_local(self):
+        """Toolbar Rules select reloads the other project's Map Local; the banner names it."""
+        import json
+        import shutil
+        home = self.inst.home
+        for pid, label, body in (("ui-a", "UI A", '{"from":"ui-a"}'), ("ui-b", "UI B", '{"from":"ui-b"}')):
+            profile = os.path.join(home, ".rivis", "profiles", pid)
+            state = os.path.join(home, ".rivis", "projects", pid)
+            os.makedirs(profile, mode=0o700, exist_ok=True)
+            os.makedirs(os.path.join(state, "mocks"), mode=0o700, exist_ok=True)
+            with open(os.path.join(profile, "project.json"), "w") as fh:
+                json.dump({"id": pid, "label": label, "description": label, "hosts": r"127\.0\.0\.1",
+                           "record_match": ".", "throttle_match": "."}, fh)
+            shutil.copy(os.path.join(harness.REPO, "projects", "_template", "rules.example.json"),
+                        os.path.join(profile, "rules.example.json"))
+            mock = os.path.join(state, "mocks", "m.json")
+            with open(mock, "w") as fh:
+                fh.write(body)
+            with open(os.path.join(state, "rules.json"), "w") as fh:
+                json.dump({"throttle": "off", "throttle_match": ".", "loss": 0, "rules": [
+                    {"name": "m", "enabled": True, "match": r"/ui-hot", "action": "map_local",
+                     "file": mock, "status": 200}]}, fh)
+        self.inst.write_cfg({"rules": []})
+        page = self.open_new()
+        wait_for(lambda: page.locator("#tb-project option[value='ui-a']").count() == 1, 10, 0.2, "ui-a listed")
+        wait_for(lambda: "Rules project:" in page.locator("#banners").inner_text(), 10, 0.2, "rules banner")
+        page.locator("#tb-project").select_option("ui-a")
+        wait_for(lambda: self.panel.state()["active_project"] == "ui-a", 10, 0.2, "api on ui-a")
+        wait_for(lambda: "UI A" in page.locator("#banners").inner_text(), 10, 0.2, "banner says UI A")
+        r = self.fetch("/ui-hot")
+        self.assertEqual(r.json(), {"from": "ui-a"})
+        page.locator("#tb-project").select_option("ui-b")
+        wait_for(lambda: self.panel.state()["active_project"] == "ui-b", 10, 0.2, "api on ui-b")
+        wait_for(lambda: "UI B" in page.locator("#banners").inner_text(), 10, 0.2, "banner says UI B")
+        r = self.fetch("/ui-hot")
+        self.assertEqual(r.json(), {"from": "ui-b"})
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
-    import harness
     harness.main()

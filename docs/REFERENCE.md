@@ -62,10 +62,15 @@ rivis --project bank-a status
 rivis rules list --project bank-a
 ```
 
-`projects use` selects the project but does not filter the call list; to hide other apps' calls, set **Show** in the
-Tools header to the project (for example *NEO only*).
-For a proxy started without `--project`, run `rivis restart` after `projects use ID` to load that project's rules.
-A proxy started with `--project ID` keeps that explicit project on restart; stop and start it with another ID to change it.
+`projects use` selects the project for CLI mutations and the next start; it does not filter the call list. Live rules,
+mocks, scripts and Compose variables hot-switch from the **Rules** selector in the panel (or `POST /proxy/api/project_use`)
+for the very next call — no restart. Scripts start clean in the new project (no context, globals or shared state carried
+over, and a script chain already running for the old project stops), rule counters start at zero, a recording still
+being written goes to the old project, and a project whose rules.json cannot be read is refused without changing anything. To hide other apps' calls, set **Show** in the Tools header to the project (for
+example *NEO only*). A proxy started with `--project ID` pins that project until you unpin (`rivis projects unpin`);
+while pinned, the Rules selector refuses a switch, but `projects use` still saves the selection for the next start and
+leaves live rules on the pinned project. An explicit `--project` start still keeps that project on `rivis restart`
+until you start without the flag.
 
 Resolution order is `--project ID`, `$<PREFIX>_PROJECT`, `current-project`, then `default`. Every command accepts
 `--project`. Project state is isolated under:
@@ -391,9 +396,11 @@ first), ⌥⌘N No Caching, ⌥⌘A TLS decryption: hosts to decrypt, ⌥⌘L / 
 ⌫ delete the selected call. The classic view stays as it is (**Classic view** in the toolbar).
 
 Open the mitmweb UI and click the **Tools** button at the right end of the toolbar. Tabs provide This call, Compose, Map Local,
-Breakpoints, Network, Devices, Collections, Compare, Sessions, Scripts, and Rules. The header shows `Rivis / <project label>` (for example `Rivis / NEO`, or `Rivis / All`) and has
-a project selector. That selector changes only the host view. To load another project's rules: if you started without
-`--project`, run `rivis projects use ID` then `rivis restart`; if you started with `--project ID`, stop and start with
+Breakpoints, Network, Devices, Collections, Compare, Sessions, Scripts, and Rules. The header shows `Rivis / <rules project>`
+(for example `Rivis / NEO`) and has a **Rules** selector (hot-switches the live rules, mocks and scripts) plus a **Show**
+selector (filters the call list only). The new main window's toolbar and banner name the same active rules project.
+To load another project's rules without the panel: if you started without `--project`, run `rivis projects use ID`
+then `rivis restart`; if you started with `--project ID`, unpin first (then use the Rules menu), or stop and start with
 the other id.
 
 Devices and Network are pages inside the **Tools** drawer on the right, not tabs along the top.
@@ -479,8 +486,9 @@ by a tiny same-origin boot script in `<head>` (the page CSP forbids inline scrip
 - **Compact rows** and the **skin on/off** switch live in the panel's **Settings** (the gear / `?` → Settings).
 - **List tags:** MOCK / RULE / SCRIPT / COMPOSED show as a one-letter glyph (M, R, S, C) and NOT DECRYPTED as `⇄` in the
   first column (the word appears when the list is wide); a GraphQL response with `errors` shows `200 !`. Plain `http://` calls get an amber edge.
-- **Project switch:** the **Show** menu in the drawer header picks *All traffic* or *<project> only* (list view only).
-  Rules load from the project you started with, or after `projects use` + `rivis restart` when start had no `--project`.
+- **Project switch:** the **Rules** menu (toolbar / drawer) hot-switches the live rules project; **Show** picks *All traffic*
+  or *<project> only* for the call list. A start with `--project` pins until unpin; `projects use` + `rivis restart` also
+  loads rules when start had no `--project`.
 - **Kill switch:** add `?theme=off` to the URL (or turn the skin off in Settings) to fall back to stock mitmweb;
   `?theme=on` restores it. Both are remembered in `localStorage`, so stock mode persists until you turn it back on.
 - **Response and request bodies:** valid UTF-8 text with little or no ASCII (Arabic, Hebrew, emoji) shows as text

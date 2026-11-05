@@ -28,7 +28,7 @@
 #                                              (Tools → Devices, or '<cli> lan allow IP'). Setup page + QR code
 #                                              in Tools → Devices. Off by default
 #   <cli> lan [list] | allow IP [NAME] | rm IP   the phones and tablets allowed to use the proxy (--lan)
-#   <cli> projects list|use ID|show ID|new ID --label L --hosts REGEX
+#   <cli> projects list|use ID|unpin|show ID|new ID --label L --hosts REGEX
 #   <cli> ui [--new|--classic] [--url] | stop | restart | status | cert
 #                                 the new main window is default; --classic opens the fallback view
 #   <cli> app [--build]             open the native macOS window; --build only builds the app
@@ -459,7 +459,7 @@ cmd_projects() {
       while [ $# -gt 0 ]; do
         case "$1" in
           --project|--project=*) shift ;;
-          *) die "usage: $CLI projects list|use ID|show [ID]|new ID --label LABEL --hosts REGEX" ;;
+          *) die "usage: $CLI projects list|use ID|unpin|show [ID]|new ID --label LABEL --hosts REGEX" ;;
         esac
       done
       /usr/bin/python3 -I - "$SCRIPT_DIR/projects" "$STATE_ROOT/profiles" "$PROJECT" <<'PY'
@@ -485,7 +485,38 @@ PY
       valid_id "$1" || die "invalid project ID '$1'"
       profile_dir "$1" >/dev/null || die "unknown project '$1'"
       atomic_private_text "$STATE_ROOT/current-project" "$1" || die "could not save current project"
-      info "current project: $1 (restart a running proxy to load its rules)"
+      # Save for CLI mutations and the next start. Live rules hot-switch only from the panel Rules menu / API
+      # (a start with --project pins that path). Keep selected≠running so warn_running_project still applies.
+      local state_json running pinned
+      state_json=$(ui_curl /proxy/api/state --max-time 3 2>/dev/null) || state_json=""
+      if [ -n "$state_json" ]; then
+        running=$(printf '%s' "$state_json" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("active_project") or "")' 2>/dev/null) || running=""
+        pinned=$(printf '%s' "$state_json" | /usr/bin/python3 -I -c 'import json,sys; print("1" if json.load(sys.stdin).get("project_pinned") else "")' 2>/dev/null) || pinned=""
+        if [ -n "$pinned" ] && [ -n "$running" ] && [ "$running" != "$1" ]; then
+          info "current project: $1 saved for the next start; live rules stay on '$running' (started with --project $running, which a restart keeps). To switch now: $CLI projects unpin, then pick $1 in the Rules menu"
+        elif [ -n "$running" ] && [ "$running" != "$1" ]; then
+          info "current project: $1 saved for the next start; live rules are still on '$running' — pick $1 in the Rules menu to switch now, or: $CLI restart"
+        else
+          info "current project: $1 (change with: $CLI projects use ID)"
+        fi
+      else
+        info "current project: $1 (change with: $CLI projects use ID)"
+      fi
+      ;;
+    unpin)
+      [ $# -eq 0 ] || die "usage: $CLI projects unpin"
+      local out err rc errf
+      errf=$(mktemp) || die "could not create a temp file"
+      out=$(ui_api_post project_unpin "{}" 2>"$errf")
+      rc=$?
+      err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+      if [ "$rc" = 0 ]; then
+        info "project pin cleared — pick a project in the Rules menu to switch the running proxy's rules ($CLI projects use only saves the next start)"
+      elif [ "$rc" = 2 ]; then
+        die "$err"
+      else
+        die "no running proxy on :$WEB_PORT — start one first, or just $CLI projects use ID"
+      fi
       ;;
     show)
       [ $# -le 1 ] || die "usage: $CLI projects show [ID]"
@@ -555,7 +586,7 @@ PY
       mv "$new_tmp" "$STATE_ROOT/profiles/$id" || { rm -rf "$new_tmp"; die "could not install user profile '$id'"; }
       info "created user profile $STATE_ROOT/profiles/$id"
       ;;
-    *) die "usage: $CLI projects list|use ID|show [ID]|new ID --label LABEL --hosts REGEX" ;;
+    *) die "usage: $CLI projects list|use ID|unpin|show [ID]|new ID --label LABEL --hosts REGEX" ;;
   esac
 }
 
@@ -681,7 +712,7 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
               -s "$AUTH_ADDON" -s "$SCRIPT_DIR/addons/proxy_lan.py" -s "$ADDON" -s "$SCRIPT_DIR/addons/proxy_scripts.py" -s "$SCRIPT_DIR/addons/proxy_collections.py" -s "$SCRIPT_DIR/addons/proxy_source.py" -s "$SCRIPT_DIR/addons/proxy_panel.py" -s "$SCRIPT_DIR/addons/proxy_retention.py" -s "$SCRIPT_DIR/addons/proxy_operability.py"
               --set "proxy_auth_token_file=$TOKEN_FILE" --set "proxy_bootstrap_file=$BOOTSTRAP_FILE"
               --set "proxy_remember_ui=$([ "$(env_value REMEMBER_UI 0)" = 1 ] && echo true || echo false)"
-              --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT" --set "proxy_max_flows=$MAX_FLOWS"
+              --set "proxy_rules_file=$RULES" --set "proxy_project=$PROJECT" --set "proxy_project_pinned=$([ "$start_explicit" = 1 ] && echo true || echo false)" --set "proxy_max_flows=$MAX_FLOWS"
               --set "proxy_max_ws_messages=$MAX_WS_MESSAGES" --set "proxy_max_ws_bytes=$MAX_WS_BYTES"
               --set "proxy_max_body_bytes=$MAX_BODY_BYTES" --set "proxy_log_dir=$STATE_ROOT/logs")
   [ -n "$private_hosts" ] && args+=(--set "proxy_private_hosts=$private_hosts")
@@ -804,8 +835,55 @@ ui_curl() {
 # Rules and scripts load for the running project, which may differ from the selected project.
 warn_running_project() {
   local running; running=$(ui_curl /proxy/api/state 2>/dev/null | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("active_project") or "")' 2>/dev/null) || return 0
-  [ -z "$running" ] || [ "$running" = "$PROJECT" ] || echo "$CLI: warning: the running proxy serves project '$running', not '$PROJECT' — changes to '$PROJECT' apply only after: $CLI --project $PROJECT stop && $CLI --project $PROJECT start" >&2
+  [ -z "$running" ] || [ "$running" = "$PROJECT" ] || echo "$CLI: warning: the running proxy serves project '$running', not '$PROJECT' — switch live rules from the Rules menu (or unpin first if started with --project), or: $CLI --project $PROJECT stop && $CLI --project $PROJECT start" >&2
   return 0
+}
+
+# POST /proxy/api/OP with the UI token + XSRF (same scheme as compose send). Prints the JSON body; non-zero on HTTP error.
+# Args: OP [JSON-body]. Silent (return 1) when the proxy is not running.
+ui_api_post() {
+  local op="$1" body="{}"
+  [ $# -ge 2 ] && body="$2"
+  [ -f "$TOKEN_FILE" ] || return 1
+  [ -n "$(port_owner "$WEB_PORT")" ] || return 1
+  RIVIS_UI_API_PORT="$WEB_PORT" RIVIS_UI_API_TOKEN_FILE="$TOKEN_FILE" RIVIS_UI_API_OP="$op" RIVIS_UI_API_BODY="$body" \
+    /usr/bin/python3 -I - <<'PY'
+import http.cookiejar, json, os, secrets, sys, urllib.error, urllib.request
+port, token_file, op = os.environ["RIVIS_UI_API_PORT"], os.environ["RIVIS_UI_API_TOKEN_FILE"], os.environ["RIVIS_UI_API_OP"]
+try:
+    body = json.loads(os.environ.get("RIVIS_UI_API_BODY") or "{}")
+except ValueError:
+    sys.stderr.write("invalid JSON body\n"); sys.exit(2)
+try:
+    with open(token_file) as fh: token = fh.read().strip()
+except OSError:
+    sys.exit(1)
+if not token: sys.exit(1)
+jar = http.cookiejar.CookieJar()
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), urllib.request.ProxyHandler({}))
+base = "http://127.0.0.1:%s" % port
+try:
+    opener.open(base + "/?token=" + token, timeout=5).read()
+except (urllib.error.URLError, OSError):
+    sys.exit(1)
+xsrf = next((c.value for c in jar if c.name == "_mitmproxy_xsrf"), "")
+if not xsrf:
+    xsrf = secrets.token_hex(16)
+    jar.set_cookie(http.cookiejar.Cookie(0, "_mitmproxy_xsrf", xsrf, None, False, "127.0.0.1", True, False, "/",
+                                         True, False, None, False, None, None, {}))
+req = urllib.request.Request(base + "/proxy/api/" + op, data=json.dumps(body).encode(), method="POST",
+                             headers={"Content-Type": "application/json", "X-XSRFToken": xsrf})
+try:
+    with opener.open(req, timeout=15) as resp:
+        sys.stdout.write(resp.read().decode("utf-8", "replace"))
+except urllib.error.HTTPError as e:
+    try: detail = json.load(e).get("error") or ""
+    except ValueError: detail = ""
+    sys.stderr.write(detail + "\n")
+    sys.exit(2)
+except (urllib.error.URLError, OSError):
+    sys.exit(1)
+PY
 }
 our_listeners() { local pid; for pid in $(lsof -t -iTCP:"$PORT" -iTCP:"$WEB_PORT" -sTCP:LISTEN 2>/dev/null | sort -u); do our_mitmweb "$pid" && echo "$pid"; done; true; }
 # ───────────────────────── update ─────────────────────────
@@ -1910,6 +1988,13 @@ cmd_status() {
     echo "selected project: $PROJECT ($PROJECT_LABEL)"
   else
     echo "project: ${running_project:-$PROJECT} ($PROJECT_LABEL)"
+  fi
+  if [ -n "$state_json" ]; then
+    printf '%s' "$state_json" | /usr/bin/python3 -I -c 'import json,sys
+s=json.load(sys.stdin); label=s.get("active_project_label") or s.get("active_project") or ""
+pinned=s.get("project_pinned");
+print("rules project: %s%s" % (label, " (pinned — unpin with: %s projects unpin)" % sys.argv[1] if pinned else ""))
+' "$CLI" 2>/dev/null || true
   fi
   warn_running_project
   echo "upstream proxy: $(saved_upstream)"

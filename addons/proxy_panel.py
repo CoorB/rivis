@@ -36,8 +36,8 @@ if HERE not in sys.path:
 import proxy_common
 importlib.reload(proxy_common)
 from rules_cli import acquire_lock
-from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRESETS, PRODUCT, SAFE_NAME, STATE_ROOT, atomic_json,
-                          atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
+from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRESETS, PRODUCT, ROOT, SAFE_NAME, STATE_ROOT,
+                          atomic_json, atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
                           confined_path, dns_spoof_list, migrate_collection, migrate_rules,
                           normalize_dns_address, normalize_dns_host, owned_mock_file, project_profile,
                           project_profiles, project_state, tls_config, tls_covering, tls_update,
@@ -351,6 +351,124 @@ class ProxyPanel:
         # mitmproxy unescapes filter-string backslashes; double them before quoting.
         return "~d '" + hosts.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
+    @staticmethod
+    def _rules_file_problem(path):
+        """Why the engine would refuse this rules file as a whole (it would keep the previous rules), or None."""
+        try:
+            with open(path) as fh:
+                cfg = migrate_rules(json.load(fh))
+        except (OSError, ValueError) as e:
+            return str(e) or type(e).__name__
+        if not isinstance(cfg, dict):
+            return "top level must be an object"
+        if not isinstance(cfg.get("rules", []), list):
+            return "rules must be a list"
+        if cfg.get("rules") and all(not isinstance(r, dict) for r in cfg["rules"]):
+            return "rules must contain objects"
+        if not isinstance(cfg.get("scripts", []), list):
+            return "scripts must be a list"
+        return None
+
+    def _ensure_project_rules(self, project_id):
+        """Create the project's state dirs and rules.json (from its example) if missing; return the rules path.
+
+        The check-and-create runs under the TARGET project's rules lock (the caller holds the active project's):
+        a CLI that creates and edits that file meanwhile must not have its work replaced by the example."""
+        base = project_state(project_id)
+        for name in ("mocks", "collections", "sessions", "scripts", "composer"):
+            directory = os.path.join(base, name)
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            try:
+                os.chmod(directory, 0o700)
+            except OSError:
+                pass
+        rules = os.path.join(base, "rules.json")
+        if os.path.isfile(rules):
+            return rules
+        same = os.path.abspath(rules) == os.path.abspath(self.rules_path)      # already locked by act()
+        lock = None if same else acquire_lock(rules)
+        try:
+            if os.path.isfile(rules):
+                return rules
+            return self._write_project_example(project_id, rules)
+        finally:
+            if lock is not None:
+                lock.close()
+
+    @staticmethod
+    def _write_project_example(project_id, rules):
+        example = None
+        for root in (os.path.join(STATE_ROOT, "profiles"), os.path.join(ROOT, "projects")):
+            candidate = os.path.join(root, project_id, "rules.example.json")
+            if os.path.isfile(candidate):
+                example = candidate
+                break
+        if example is None:
+            raise PanelError("project '%s' has no rules.example.json" % project_id)
+        with open(example, "rb") as fh:
+            data = fh.read()
+        atomic_write_bytes(rules, data, mode=0o600)
+        return rules
+
+    def project_use(self, a):
+        """Hot-switch the live rules / mocks / scripts / composer vars to another project (no restart)."""
+        project_id = a.get("project")
+        if not isinstance(project_id, str) or not project_id:
+            raise PanelError("project is required")
+        try:
+            profile = project_profile(project_id)
+        except ValueError as e:
+            raise PanelError(str(e))
+        unpin = bool(a.get("unpin"))
+        pinned = bool(getattr(ctx.options, "proxy_project_pinned", False))
+        if unpin and pinned:
+            ctx.options.update(proxy_project_pinned=False)
+            pinned = False
+        if pinned and project_id != self.active_project:
+            raise PanelError("started with --project %s — unpin first to switch rules" % self.active_project)
+        rules = self._ensure_project_rules(project_id)
+        problem = self._rules_file_problem(rules)
+        if problem:
+            # Refuse before anything changes: the engine would keep the OLD project's rules and scripts running
+            # under the new project's name.
+            raise PanelError("project '%s' cannot be used: its rules.json cannot be read (%s). Fix or remove "
+                             "%s, then switch again." % (project_id, problem, rules))
+        try:
+            atomic_write_text(os.path.join(STATE_ROOT, "current-project"), project_id + "\n", mode=0o600)
+        except OSError as e:
+            raise PanelError("could not save current project: %s" % e)
+        if project_id == self.active_project and os.path.abspath(self.rules_path) == os.path.abspath(rules):
+            return {"active_project": project_id, "label": profile.get("label") or project_id,
+                    "project_pinned": bool(getattr(ctx.options, "proxy_project_pinned", False))}
+        ours = (ctx.options.view_filter or "") == (self._panel_view_filter or "")
+        ctx.options.update(proxy_project=project_id, proxy_rules_file=rules)
+        if self.project_only and ours:
+            self._write_view_filter()       # "this project only" must now show the NEW project's hosts
+        for addon in self._addons():
+            name = addon.__class__.__name__
+            if name == "ProxyRules":
+                try:
+                    addon.mtime = None
+                    addon._reload(force=True)
+                except Exception as e:  # noqa: BLE001 - options are set; the once-a-second poll still picks it up
+                    ctx.log.warn(f"panel: could not apply the project switch at once: {e}")
+            elif name == "ProxyScripts":
+                addon.mtime = 0
+        try:
+            self._client_certs = None
+            self._client_certs_sync()
+        except Exception as e:  # noqa: BLE001 - certificates follow on the next connection
+            ctx.log.warn(f"panel: client certificates after project switch: {e}")
+        return {"active_project": project_id, "label": profile.get("label") or project_id,
+                "project_pinned": bool(getattr(ctx.options, "proxy_project_pinned", False))}
+
+    def project_unpin(self, a=None):
+        """Clear the start-with--project pin so the next project_use (or projects use) can hot-switch."""
+        if not bool(getattr(ctx.options, "proxy_project_pinned", False)):
+            return {"project_pinned": False, "active_project": self.active_project}
+        ctx.options.update(proxy_project_pinned=False)
+        return {"project_pinned": False, "active_project": self.active_project}
+
     # ── rules file (same format as rules_cli.py / proxy_rules.py) ────────────────
     @property
     def rules_path(self):
@@ -594,6 +712,8 @@ class ProxyPanel:
         return {
             "product": PRODUCT,
             "active_project": self.active_project,
+            "active_project_label": (self.active_profile or {}).get("label") or self.active_project,
+            "project_pinned": bool(getattr(ctx.options, "proxy_project_pinned", False)),
             "view_project": self.view_project,
             "project": self.view_profile,
             "projects": project_profiles(),
@@ -2372,6 +2492,10 @@ class ProxyPanel:
             cfg["rules"].append(r)
             self.save_cfg(cfg)
             return {"name": name}
+        elif op == "project_use":
+            return self.project_use(a)
+        elif op == "project_unpin":
+            return self.project_unpin(a)
         elif op == "view":
             if a.get("project") is not None:
                 project_profile(a["project"])  # validate before changing the view

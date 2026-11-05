@@ -19,10 +19,11 @@ note; use this page for the full mapping.
    proxy, so it never sweeps up traffic from your browser, Slack, or anything else on the machine — only the
    app you pointed at it. (That is also why you will not see the dozens of background tunnels Proxyman shows.)
 3. **There is a project switcher.** A project is a saved profile — a label, a host filter, and its own rules,
-   collections and sessions. Switch the *view* with the **Show** menu (*All traffic* or *<project> only*); that does
-   not change which rules are loaded. To load another project's rules: if you started without `--project`, run
-   `rivis projects use <id>` then `rivis restart`; if you started with `--project <id>`, stop and start again with
-   the other id.
+   collections and sessions. Switch the live *rules* with the **Rules** menu (no restart). Switch the *view* with
+   **Show** (*All traffic* or *<project> only*). `rivis projects use <id>` selects the project for the CLI and the next
+   start. A start with `--project <id>` pins that rules project until you unpin. You can also
+   `rivis projects use <id>` then `rivis restart` (and if you started with `--project <id>`, stop and start again with
+   the other id).
 
 For slow downloads, Rivis buffers ordinary HTTP responses before forwarding them to the app. The app may receive the
 first byte only when the download is complete, even with no rules enabled. Server-sent events (`text/event-stream`)
