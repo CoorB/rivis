@@ -2684,16 +2684,18 @@
 
   // ───────────── All rules ─────────────
   const ACTION_NAME = { map_local: "Map Local", map_remote: "Map Remote", respond: "Fixed reply", status: "Force status", delay: "Delay", json_patch: "Edit JSON", set_header: "Header", block: "Block", drop: "Block" };
+  const EVERY_RULE_TYPES = { respond: 1, status: 1, delay: 1, block: 1 };
+  const everyBit = (r) => r.every ? (" · every " + r.every + (r.offset ? ", offset " + r.offset : "")) : "";
   function describe(r) {
     const a = r.action;
     if (a === "map_local") { const v = (r.variants || []).find((x) => x.name === r.active); return r.base ? "Map Local folder → " + tilde(r.file) : "answers from a saved response" + (v ? " · " + v.name + " (" + (v.status || r.status || 200) + ")" : r.status ? " (" + r.status + ")" : ""); }
-    if (a === "respond") return "answers with " + r.status;
-    if (a === "status") return "changes the status to " + r.status;
-    if (a === "delay") return "waits " + r.ms + " ms first";
+    if (a === "respond") return "answers with " + r.status + everyBit(r);
+    if (a === "status") return "changes the status to " + r.status + everyBit(r);
+    if (a === "delay") return "waits " + r.ms + " ms first" + everyBit(r);
     if (a === "json_patch") return "changes " + Object.keys(r.set || {}).join(", ") + " in the JSON reply";
     if (a === "set_header") return (r.value == null ? "removes the " : "sets the ") + r.header + " header";
     if (a === "map_remote") return "sends it to " + r.with;
-    if (a === "block" || a === "drop") return "blocks the call (the app gets a network error)";
+    if (a === "block" || a === "drop") return "blocks the call (the app gets a network error)" + everyBit(r);
     return a;
   }
   // Rule hit counts (from the proxy) — so an ON rule that never fires is visible, not silent
@@ -2826,7 +2828,12 @@
     } else if (t === "map_remote") {
       body += fld("replace", "Replace (URL regex)", txt("replace", v.replace, "https://api.example.com/v1"));
       body += fld("with", "With", txt("with", v.with, "https://staging.example.com/v1"));
-    } else if (t === "bp") {
+    }
+    if (EVERY_RULE_TYPES[t]) {
+      body += fld("every", "Every Nth", `<input type="number" id="rf-every" min="2" value="${esc(v.every ?? "")}" style="width:80px" placeholder="all" title="Empty = every matching call. 3 = the 3rd, 6th, 9th…">`);
+      body += fld("offset", "Offset", `<input type="number" id="rf-offset" min="0" value="${esc(v.offset ?? "")}" style="width:80px" placeholder="0" title="Skip this many matching calls before the every-Nth cycle">`);
+    }
+    if (t === "bp") {
       body += fld("pause", "Pause at", `<label><input type="checkbox" id="rf-req" ${!it || v.request ? "checked" : ""}> Request</label> <label><input type="checkbox" id="rf-resp" ${!it || v.response ? "checked" : ""}> Response</label>`);
     } else if (t === "script") {
       if (!it) {
@@ -2867,7 +2874,20 @@
           } else if (t === "delay") rule.ms = Number(val("ms"));
           else if (t === "set_header") { rule.side = val("side"); rule.header = val("header").trim(); rule.value = $("rf-remove").checked ? null : val("value"); }
           else if (t === "map_remote") { rule.replace = val("replace"); rule.with = val("with"); }
-          if (it) { op = "update"; args = { name: it.name, rule, keys: ["match", "method", ...RULE_KEYS[t]] }; ok = "Rule '" + it.name + "' saved"; }
+          const keys = ["match", "method", ...RULE_KEYS[t]];
+          if (EVERY_RULE_TYPES[t]) {
+            keys.push("every", "offset");
+            const e = val("every").trim(), o = val("offset").trim();
+            if (e) {
+              rule.every = Number(e);
+              if (!(rule.every >= 2) || !Number.isInteger(rule.every)) throw new Error("Every Nth must be an integer ≥ 2, or empty for every call");
+              if (o) {
+                rule.offset = Number(o);
+                if (!(rule.offset >= 0) || !Number.isInteger(rule.offset)) throw new Error("Offset must be an integer ≥ 0");
+              }
+            } else if (o) throw new Error("Offset needs Every Nth set (or clear both)");
+          }
+          if (it) { op = "update"; args = { name: it.name, rule, keys }; ok = "Rule '" + it.name + "' saved"; }
           else {
             const name = val("name").trim();
             op = "add"; args = { rule: { name, enabled: true, action: t, ...rule } }; ok = "Rule '" + name + "' is on";

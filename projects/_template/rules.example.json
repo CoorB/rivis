@@ -47,6 +47,14 @@
       "action": "map_remote",
       "replace": "^https://example\\.test/",
       "with": "https://staging.example.test/"
+    },
+    {
+      "name": "example-every-nth",
+      "enabled": false,
+      "match": "example\\.test/pay",
+      "action": "status",
+      "status": 503,
+      "every": 3
     }
   ]
 }

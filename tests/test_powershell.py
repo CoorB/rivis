@@ -503,10 +503,15 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
         self.ok("rules", "add", "b-rule", "match=/api/block", "action=block")
         self.ok("rules", "add", "s-rule", "-Match", "/api/status", "action=status", "status=500")
         self.ok("rules", "add", "patch-rule", "match=/api/user", "action=json_patch", "set=user.name=PATCHED")
+        self.ok("rules", "add", "flake", "match=/pay", "action=status", "status=503", "every=3")
         rules = {r["name"]: r for r in self.cfg()["rules"]}
         self.assertEqual(rules["b-rule"]["action"], "block")
         self.assertEqual(rules["s-rule"]["status"], 500)
         self.assertEqual(rules["patch-rule"]["set"], {"user.name": "PATCHED"})
+        self.assertEqual(rules["flake"]["every"], 3)
+        # without every/offset validation this add succeeded and left every=1 on the rule
+        self.bad("rules", "add", "bad-every", "match=/x", "action=status", "status=500", "every=1",
+                 msg="every must be an integer")
         self.bad("rules", "add", msg="usage: rules add NAME")
 
     def test_rules_variant_parity_with_bash_cli(self):

@@ -618,6 +618,18 @@ Supported actions are `respond`, `map_local`, `status`, `json_patch`, `delay`, `
 older local response. The panel's **Rules** tab lists, creates, edits, switches on/off and deletes every one of them, plus
 breakpoints, scripts and the network throttle / No caching (**New** → pick a type; a rule's name and type stay fixed when
 you edit it, and a Map Local rule opens its own editor). Breakpoints pause requests/responses in mitmweb for editing and continuation.
+
+**Every Nth call** (optional): on `status`, `delay`, `block` and `respond` rules, set `every=N` (N ≥ 2) so the action
+applies only on every Nth matching call — for example `every=3` forces a 503 on the 3rd, 6th, 9th… pay call and leaves
+the others alone. An optional `offset=K` (K ≥ 0) skips that many matching calls before the every-Nth cycle starts.
+The match counter restarts when the rule is edited (not when it is only switched off and on).
+
+```bash
+rivis rules add flake-pay match='/pay' action=status status=503 every=3
+rivis rules add flake-pay match='/pay' action=status status=503 every=3 offset=1   # 4th, 7th, …
+```
+
+In the Rules window (and the classic Rules tab) the same fields are **Every Nth** and **Offset**.
 `text/event-stream` responses stream events to the client as they arrive. Their calls appear in the panel without a
 body; response rules and response breakpoints cannot edit streamed events.
 Other HTTP responses are buffered before Rivis forwards their headers and body. A slow download can therefore deliver

@@ -204,6 +204,11 @@ class RulesTestCli(CliBase):
         self.assertIn("does not match this URL", out)
         self.assertIn("no rule changes this call", out)
 
+    def test_rules_test_notes_every_nth(self):
+        self.ok("rules", "add", "flake", "match=/pay", "action=status", "status=503", "every=3", "offset=1")
+        out = self.ok("rules", "test", "https://api.example.test/pay").stdout
+        self.assertRegex(out, r"FIRES\s+flake\s+.*on every 3rd matching call \(offset 1\)")
+
     def test_rules_test_needs_a_full_url(self):
         r = self.cli("rules", "test", "api.example.test/x")
         self.assertNotEqual(r.returncode, 0)

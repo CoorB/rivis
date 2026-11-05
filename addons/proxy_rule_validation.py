@@ -7,6 +7,36 @@ from proxy_common import ACTION_REQUIREMENTS, ACTIONS, rule_file_path, user_rege
 
 _TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 
+# status / delay / block / respond can fire only on every Nth matching call (optional start offset).
+EVERY_ACTIONS = frozenset({"respond", "status", "delay", "block"})
+
+
+def apply_every_fields(rule):
+    """Validate and normalise optional every=N / offset=K on a rule in place. Raises ValueError/TypeError."""
+    if "every" not in rule and "offset" not in rule:
+        return rule
+    if rule.get("action") not in EVERY_ACTIONS:
+        raise ValueError("every/offset only apply to status, delay, block and respond rules")
+    if "every" not in rule:
+        raise ValueError("offset needs every=N (apply on every Nth matching call)")
+    every = rule["every"]
+    if type(every) is not int or every < 2:
+        raise ValueError("every must be an integer ≥ 2 (every Nth matching call)")
+    rule["every"] = every
+    if "offset" in rule:
+        offset = rule["offset"]
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be an integer ≥ 0")
+        rule["offset"] = offset
+    return rule
+
+
+def every_applies(count, every, offset=0):
+    """True when 1-based matching-call count should fire: (count - offset) divisible by every, after offset."""
+    if every is None:
+        return True
+    return count > offset and (count - offset) % every == 0
+
 
 def map_remote_warning(rule):
     """Warn when a simple match example cannot be changed by replace; regexes in general need a real URL."""
@@ -154,6 +184,7 @@ def compile_rule(source, state_dir, fallback_name=None, confdir=None):
             rule["headers"] = [[str(k), str(v)] for k, v in headers]
         else:
             raise TypeError("headers must be an object or name/value pairs")
+    apply_every_fields(rule)
     return rule
 
 
@@ -209,6 +240,7 @@ def explain_rules(sources, state_dir, url, method="GET", confdir=None):
             row["fires"] = True
             what = rule.get("file") or rule.get("body_file") or "its body"
             row["effect"] = "answered locally with %s from %s; the server is not called" % (rule.get("status", 200), what)
+            _every_effect(row, rule)
             continue
         if answered_by and action in ("status", "json_patch") or answered_by and action == "set_header" and rule.get("side") == "response":
             row["reason"] = "matches, but '%s' answers this call locally, so there is no server response to change" % answered_by
@@ -238,4 +270,14 @@ def explain_rules(sources, state_dir, url, method="GET", confdir=None):
                              else "sets %s header %s: %s" % (side, rule["header"], rule["value"]))
         else:
             row["effect"] = _ACTION_LABEL.get(action, action)
+        _every_effect(row, rule)
     return out
+
+
+def _every_effect(row, rule):
+    if rule.get("every") and row.get("fires") and row.get("effect"):
+        n, off = rule["every"], rule.get("offset") or 0
+        # 2 → 2nd, 3 → 3rd, 4 → 4th, … (every is always ≥ 2)
+        suf = "th" if 10 <= (n % 100) <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+        row["effect"] += (" on every %d%s matching call" % (n, suf)
+                          + (" (offset %d)" % off if off else ""))

@@ -28,6 +28,9 @@ Actions
   map_remote  replace (regex), with                  rewrite the URL before it is sent
   block                                              kill the connection (app sees a network error)
 
+Optional every=N [offset=K] on status / delay / block / respond: apply only on every Nth matching call
+(1-based; offset skips that many matches first). The match counter restarts when the rule is edited.
+
 `file` / `body_file` must live inside the project's state directory (the directory holding
 this rules file; symlinks are resolved, so a link inside the project cannot point out of it).
 A rule pointing anywhere else is skipped at load time with an error — the panel shows it as
@@ -68,7 +71,7 @@ from proxy_common import (PRODUCT, PROFILE_VALUES, atomic_json, STATE_ROOT, brea
                           without_hop_headers)
 import proxy_rule_validation
 importlib.reload(proxy_rule_validation)      # mitmproxy reloads this add-on in place: the validator must see the new proxy_common too
-from proxy_rule_validation import compile_rule, rule_fingerprint
+from proxy_rule_validation import compile_rule, every_applies, rule_fingerprint
 
 DNS_TIMEOUT = 10        # seconds for the private-address guard's own lookup
 
@@ -416,6 +419,8 @@ class ProxyRules:
         self._https_pins = {}
         self.hits = {}              # name → {fp, count, noop, noop_reason, last, since, seen_at_since}
         self._parked_hits = {}      # (name, fp) → hit entry of a rule that is switched off (R9-01)
+        self._every_counts = {}     # name → matching-call count for every=N (restarts on edit)
+        self._every_fp = {}         # name → fingerprint last seen for every=N
         self.calls_seen = 0
         self._hits_dirty = False
         self._hits_unflushed = False
@@ -474,6 +479,8 @@ class ProxyRules:
             self.no_cache = False
             self.skipped_rules = []
             self.failed_rules.clear()      # R3A-01: no removed rule may remain in doctor/panel state
+            self._every_counts.clear()
+            self._every_fp.clear()
             return
         if mtime == self.mtime:
             return
@@ -656,11 +663,17 @@ class ProxyRules:
         # resumes it; an edit changes the fingerprint and so still restarts the count.
         now, keep = time.time(), {}
         parked = self._parked_hits
+        seen = set()
         for index, source in enumerate(sources):
             if not isinstance(source, dict):
                 continue
             name = source.get("name") or f"rule #{index + 1}"
             fp = rule_fingerprint(source)
+            seen.add(name)
+            # every-Nth match counter: restart when the rule is edited (fingerprint changes), not when only toggled
+            if self._every_fp.get(name) != fp:
+                self._every_counts.pop(name, None)
+                self._every_fp[name] = fp
             if not source.get("enabled", True):
                 old = self.hits.get(name)
                 if old and old.get("fp") == fp:
@@ -672,11 +685,31 @@ class ProxyRules:
                 old = parked.pop((name, fp), None)
             keep[name] = old if old and old.get("fp") == fp else {
                 "fp": fp, "count": 0, "noop": 0, "noop_reason": None, "last": None, "since": now, "seen_at_since": self.calls_seen}
+        for name in list(self._every_fp):
+            if name not in seen:
+                self._every_fp.pop(name, None)
+                self._every_counts.pop(name, None)
         while len(parked) > self.PARKED_HITS_MAX:
             parked.pop(next(iter(parked)))
         if keep.keys() != self.hits.keys() or any(keep[n] is not self.hits.get(n) for n in keep):
             self._hits_dirty = True
         self.hits = keep
+
+    def _every_will_apply(self, rule):
+        """Peek: would the next matching call apply this rule? Does not advance the counter."""
+        every = rule.get("every")
+        if every is None:
+            return True
+        return every_applies(self._every_counts.get(rule["name"], 0) + 1, every, rule.get("offset") or 0)
+
+    def _every_tick(self, rule):
+        """Advance the every-Nth match counter for this rule; True when this matching call should apply it."""
+        every = rule.get("every")
+        if every is None:
+            return True
+        n = self._every_counts.get(rule["name"], 0) + 1
+        self._every_counts[rule["name"]] = n
+        return every_applies(n, every, rule.get("offset") or 0)
 
     def _record(self, rule, changed=True, reason=None):
         h = self.hits.get(rule["name"])
@@ -978,7 +1011,13 @@ class ProxyRules:
         self.calls_seen += 1
         if self.hits:
             self._hits_dirty = True        # "ON but never matched" depends on calls seen, not only on hits
-        answers_locally = any(True for _ in self._matching(flow, {"respond", "map_local"}))
+        # every-Nth respond that will skip this call is not a local answer — the server (and Intercept) must still run
+        answers_locally = False
+        for r in self._matching(flow, {"respond", "map_local"}):
+            if r.get("action") == "respond" and not self._every_will_apply(r):
+                continue
+            answers_locally = True
+            break
         if not answers_locally:
             self._intercept_replay(flow)                       # Repeat: mitmweb's Intercept skips client replays
         elif not await self._pause_local(flow, "request"):
@@ -989,6 +1028,8 @@ class ProxyRules:
             flow.kill()
             return
         for r in self._matching(flow, {"block"}):
+            if not self._every_tick(r):
+                continue
             self._fired(flow, r, modified=False)
             self._flush_hits_soon()                      # a killed call has no response hook
             flow.kill()
@@ -1020,6 +1061,8 @@ class ProxyRules:
                     flow.request.headers[r["header"]] = str(r["value"])
                 self._fired(flow, r, modified=False)
         for r in self._matching(flow, {"delay"}):
+            if not self._every_tick(r):
+                continue
             self._fired(flow, r, f" +{r.get('ms', 0)}ms", modified=False)
             await asyncio.sleep(r.get("ms", 0) / 1000)
         if self._throttled(flow):
@@ -1030,6 +1073,8 @@ class ProxyRules:
             size = len(flow.request.raw_content or b"")
             await asyncio.sleep(sample / 2000 + ((size * 8 / 1000) / up if up else 0))
         for r in self._matching(flow, {"respond", "map_local"}):
+            if r.get("action") == "respond" and not self._every_tick(r):
+                continue
             try:
                 selected = next((v for v in r.get("variants", []) if v["name"] == r.get("active")), None)
                 mock = {**r, **selected} if selected else r
@@ -1121,6 +1166,8 @@ class ProxyRules:
         self._reload()
         self._intercept_replay(flow)
         for r in self._matching(flow, {"status"}):
+            if not self._every_tick(r):
+                continue
             flow.response.status_code = int(r["status"])
             flow.response.reason = status_codes.RESPONSES.get(flow.response.status_code, "")   # not "503 OK"
             if r.get("body") is not None or r.get("body_file"):

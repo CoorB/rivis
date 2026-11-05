@@ -119,6 +119,15 @@ class RulesTabEveryType(UiBase):
                        lambda: self.fetch("/status/200").status == 418,
                        lambda: self.fetch("/status/200").status == 200)
 
+    def test_status_every_nth(self):
+        self.open()
+        self.new("status", name="h1-every", match="/json/small\\?h1e=", status="503", every="3")
+        wait_for(lambda: self.rule_named("h1-every") and self.rule_named("h1-every").get("every") == 3, 8, 0.2, "every=3")
+        wait_for(lambda: [self.fetch("/json/small?h1e=%d" % i).status for i in range(3)] == [200, 200, 503],
+                 10, 0.3, "every 3rd is 503")
+        self.rules_tab()
+        wait_for(lambda: "every 3" in self.row("h1-every").inner_text(), 5, 0.2, "list shows every Nth")
+
     def test_json_patch(self):
         name = lambda: self.fetch("/json/small").json()["user"]["name"]    # noqa: E731
         self.lifecycle("h1-patch", "json_patch", dict(match="/json/small$", set='{"user.name": "PATCHED"}'),

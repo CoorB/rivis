@@ -202,6 +202,25 @@ class ToolWindows(UiBase):
         wait_for(lambda: self.fetch("/json/small?nadd=3").status == 200, 5, 0.2, "off → live again")
 
     # ── Map Remote, Block List and the other rules ──────────────────────────────────────────────────────────────────
+    def test_every_nth_force_status_from_the_rules_window(self):
+        # Every 3rd matching call gets 503 — same sequence the engine test proves, driven from the new UI.
+        self.open_new()
+        self.page.keyboard.press(MOD + "+Alt+R")
+        w = self.win_open("rules")
+        w.locator("[data-r-new]").click()
+        w.locator("#rf-type").select_option("status")
+        w.locator("#rf-name").fill("nth-503")
+        w.locator("#rf-match").fill("/json/small\\?nth=")
+        w.locator("#rf-status").fill("503")
+        w.locator("#rf-every").fill("3")
+        w.locator("[data-r-save]").click()
+        wait_for(lambda: any(r.get("name") == "nth-503" and r.get("every") == 3 for r in self.panel.state()["rules"]),
+                 8, 0.1, "every=3 rule saved")
+        self.page.wait_for_timeout(1200)
+        statuses = [self.fetch("/json/small?nth=%d" % i).status for i in range(6)]
+        self.assertEqual(statuses, [200, 200, 503, 200, 200, 503])
+        wait_for(lambda: "every 3" in w.inner_text(), 5, 0.1, "list shows every Nth")
+
     def test_block_from_the_menu_then_the_call_fails(self):
         self.open_new("/json/small?nblk=1")
         self.menu("nblk=1", "block")

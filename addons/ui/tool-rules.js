@@ -11,17 +11,19 @@
   const TYPES = [["map_remote", "Map Remote"], ["block", "Block List"], ["respond", "Fixed reply"], ["status", "Force status"],
     ["json_patch", "Edit JSON"], ["delay", "Delay"], ["set_header", "Header"]];
   const KEYS = { respond: ["status", "body"], status: ["status"], json_patch: ["set"], delay: ["ms"], set_header: ["side", "header", "value"], map_remote: ["replace", "with"], block: [] };
+  const EVERY_TYPES = { respond: 1, status: 1, delay: 1, block: 1 };
   const typeName = (a) => (TYPES.find((t) => t[0] === a) || [])[1] || (a === "drop" ? "Block List" : a);
   const isOurs = (r) => r.action !== "map_local";
+  const everyBit = (r) => r.every ? (" · every " + r.every + (r.offset ? ", offset " + r.offset : "")) : "";
   const describe = (r) => {
     const a = r.action;
-    if (a === "respond") return "answers " + r.status + " without calling the server";
-    if (a === "status") return "changes the status to " + r.status;
-    if (a === "delay") return "waits " + r.ms + " ms first";
+    if (a === "respond") return "answers " + r.status + " without calling the server" + everyBit(r);
+    if (a === "status") return "changes the status to " + r.status + everyBit(r);
+    if (a === "delay") return "waits " + r.ms + " ms first" + everyBit(r);
     if (a === "json_patch") return "changes " + Object.keys(r.set || {}).join(", ") + " in the JSON reply";
     if (a === "set_header") return (r.value == null ? "removes the " : "sets the ") + r.header + " header on the " + (r.side === "response" ? "response" : "request");
     if (a === "map_remote") return "sends it to " + r.with;
-    if (a === "block" || a === "drop") return "blocks the call (the app gets a network error)";
+    if (a === "block" || a === "drop") return "blocks the call (the app gets a network error)" + everyBit(r);
     return a;
   };
   const ago = (t) => { const d = Math.max(0, Date.now() / 1000 - t); return d < 5 ? "just now" : d < 60 ? Math.round(d) + " s ago" : d < 3600 ? Math.round(d / 60) + " min ago" : Math.round(d / 3600) + " h ago"; };
@@ -131,6 +133,12 @@
       f += row("Header", txt("rf-header", v.header, "X-QA"));
       f += row("Value", txt("rf-value", v.value, "") + `<label><input type="checkbox" id="rf-remove"${it && v.value == null ? " checked" : ""}> Remove it instead</label>`);
     }
+    if (EVERY_TYPES[t]) {
+      f += row("Every Nth", `<input type="number" id="rf-every" min="2" value="${esc(v.every == null ? "" : v.every)}" style="width:84px" placeholder="all">`,
+        "empty = every matching call; 3 = the 3rd, 6th, 9th…");
+      f += row("Offset", `<input type="number" id="rf-offset" min="0" value="${esc(v.offset == null ? "" : v.offset)}" style="width:84px" placeholder="0">`,
+        "skip this many matching calls before the every-Nth cycle");
+    }
     ed.hidden = false;
     ed.innerHTML = `<h4>${it ? "Edit " + esc(it.name) + " · " + esc(typeName(t)) : "New rule"}</h4>${f}
       <div class="rv-form"><span class="rv-spacer"></span><button type="button" class="rv-btn" data-r-cancel>Cancel</button><button type="button" class="rv-btn p" data-r-save>${it ? "Save" : "Add"}</button></div>
@@ -174,8 +182,21 @@
       else if (t === "set_header") { rule.side = val("rf-side"); rule.header = val("rf-header").trim(); rule.value = ed.querySelector("#rf-remove").checked ? null : val("rf-value"); if (!rule.header) throw new Error("Enter the header name"); }
       else if (t === "map_remote") { rule.replace = val("rf-replace"); rule.with = val("rf-with"); if (!rule.replace || !rule.with) throw new Error("Enter both Replace and With"); }
       if ((t === "status" || t === "respond") && !(rule.status >= 100 && rule.status <= 999)) throw new Error("The status must be a number from 100 to 999");
+      const keys = ["match", "method", ...KEYS[t]];
+      if (EVERY_TYPES[t]) {
+        keys.push("every", "offset");
+        const e = val("rf-every").trim(), o = val("rf-offset").trim();
+        if (e) {
+          rule.every = Number(e);
+          if (!(rule.every >= 2) || !Number.isInteger(rule.every)) throw new Error("Every Nth must be an integer ≥ 2, or empty for every call");
+          if (o) {
+            rule.offset = Number(o);
+            if (!(rule.offset >= 0) || !Number.isInteger(rule.offset)) throw new Error("Offset must be an integer ≥ 0");
+          }
+        } else if (o) throw new Error("Offset needs Every Nth set (or clear both)");
+      }
       let r;
-      if (it) r = await A.api("update", { name: it.name, rule, keys: ["match", "method", ...KEYS[t]] });
+      if (it) r = await A.api("update", { name: it.name, rule, keys });
       else {
         const name = val("rf-name").trim();
         if (!name) throw new Error("Give the rule a name");

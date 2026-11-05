@@ -238,6 +238,50 @@ class Actions(LiveCase):
         r = self.fetch("/json/small")
         self.assertEqual((r.status, r.json()), (418, {"x": 1}))
 
+    def test_every_nth_status_six_calls_and_resets_on_edit(self):
+        # every=3: the 3rd and 6th matching calls get 503; the others pass through.
+        self.reset_state(rules=[self.rule("flake", "status", "/json/small", status=503, every=3)])
+        self.assertEqual([self.fetch("/json/small").status for _ in range(6)], [200, 200, 503, 200, 200, 503])
+        # Calls 7–8 pass; without a reset, call 9 would fire. Edit must restart the counter so the next
+        # three are 200, 200, 502 — not an immediate 502.
+        self.assertEqual([self.fetch("/json/small").status for _ in range(2)], [200, 200])
+        self.inst.write_cfg({"rules": [self.rule("flake", "status", "/json/small", status=502, every=3)]})
+        self.assertEqual(self.fetch("/json/small").status, 200,
+                         "after an edit the counter must restart — this would be 502 if it kept counting")
+        self.assertEqual(self.fetch("/json/small").status, 200)
+        self.assertEqual(self.fetch("/json/small").status, 502)
+
+    def test_every_nth_with_offset(self):
+        # offset=1, every=3 → apply on matching calls 4, 7, … (skip one, then every 3rd of the shifted count)
+        self.reset_state(rules=[self.rule("flake", "status", "/json/small", status=503, every=3, offset=1)])
+        self.assertEqual([self.fetch("/json/small").status for _ in range(6)], [200, 200, 200, 503, 200, 200])
+
+    def test_every_nth_respond_hits_upstream_when_skipped(self):
+        self.reset_state(rules=[self.rule("mock", "respond", "/echo", status=418, body={"m": 1}, every=2)])
+        r1 = self.fetch("/echo")
+        self.assertEqual((r1.status, len(self.up.hits_for("/echo"))), (200, 1))   # 1st: skipped → real server
+        r2 = self.fetch("/echo")
+        self.assertEqual((r2.status, r2.json(), len(self.up.hits_for("/echo"))), (418, {"m": 1}, 1))  # 2nd: local
+
+    def test_every_nth_block_lets_other_calls_through(self):
+        # every=2: 1st matching call is left alone; 2nd is killed (app sees a network error).
+        self.reset_state(rules=[self.rule("flake", "block", "/echo", every=2)])
+        r1 = self.fetch("/echo")
+        self.assertEqual((r1.rc, r1.status), (0, 200))
+        r2 = self.fetch("/echo")
+        self.assertNotEqual(r2.rc, 0)
+        self.assertEqual(r2.status, 0)
+
+    def test_every_nth_delay_skips_first_call(self):
+        # every=2: 1st matching call is not delayed; 2nd waits ~800 ms.
+        self.reset_state(rules=[self.rule("slow", "delay", "/json/small", ms=800, every=2)])
+        t0 = time.monotonic()
+        self.assertEqual(self.fetch("/json/small").status, 200)
+        self.assertLess(time.monotonic() - t0, 0.5, "first matching call must not take the delay")
+        t1 = time.monotonic()
+        self.assertEqual(self.fetch("/json/small").status, 200)
+        self.assertGreater(time.monotonic() - t1, 0.6, "second matching call must take the delay")
+
     def test_json_patch_dot_paths_and_list_index(self):
         self.reset_state(rules=[self.rule("p", "json_patch", "/json/small",
                                           set={"user.name": "bob", "items[1].id": 99, "flag": True, "user.roles[0]": "z"})])

@@ -188,6 +188,14 @@ def validate(r):
             die("map_remote with=%r turns a URL into something unusable: %s" % (r["with"], remote_url_problem(out)))
     if a == "map_local" and not os.path.exists(os.path.expanduser(r["file"])):
         die("file not found: %s" % r["file"])
+    if "every" in r or "offset" in r:
+        from proxy_rule_validation import EVERY_ACTIONS, apply_every_fields
+        if a not in EVERY_ACTIONS:
+            die("every/offset only apply to status, delay, block and respond rules")
+        try:
+            apply_every_fields(r)
+        except (TypeError, ValueError) as e:
+            die(str(e))
 
 
 def trust_local_files(path, r):

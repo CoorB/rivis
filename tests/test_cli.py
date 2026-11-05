@@ -628,6 +628,20 @@ class Rules(CliBase):
         self.assertEqual(rules["r-patch"]["set"], {"a.b[0]": 1})
         self.assertEqual(rules["r-block"]["method"], "POST")
 
+    def test_rules_add_every_nth_and_offset(self):
+        self.ok("rules", "add", "flake", "match=/pay", "action=status", "status=503", "every=3")
+        self.ok("rules", "add", "slow", "match=/pay", "action=delay", "ms=50", "every=2", "offset=1")
+        rules = {r["name"]: r for r in self.cfg()["rules"]}
+        self.assertEqual(rules["flake"]["every"], 3)
+        self.assertNotIn("offset", rules["flake"])
+        self.assertEqual((rules["slow"]["every"], rules["slow"]["offset"]), (2, 1))
+        self.refused("rules", "add", "bad-every", "match=/x", "action=status", "status=500", "every=1",
+                     msg="every must be an integer")
+        self.refused("rules", "add", "bad-act", "match=/x", "action=json_patch", 'set={"a":1}', "every=3",
+                     msg="every/offset only apply")
+        self.refused("rules", "add", "bad-off", "match=/x", "action=block", "offset=1",
+                     msg="offset needs every")
+
     def test_b3_json_patch_cli_syntax(self):
         # B3: json_patch set accepts path=value, multiple set flags, comma pairs, and JSON objects
         self.ok("rules", "add", "p1", "match=/json$", "action=json_patch", "set=user.name=PATCHED")
