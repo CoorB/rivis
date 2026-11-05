@@ -485,6 +485,8 @@ class ToolWindows(UiBase):
         """Toolbar Rules select reloads the other project's Map Local; the banner names it."""
         import json
         import shutil
+        # the class shares one proxy: leave it on default, or every later test edits a rules file nobody serves
+        self.addCleanup(lambda: self.panel.ok("project_use", {"project": "default"}))
         home = self.inst.home
         for pid, label, body in (("ui-a", "UI A", '{"from":"ui-a"}'), ("ui-b", "UI B", '{"from":"ui-b"}')):
             profile = os.path.join(home, ".rivis", "profiles", pid)
