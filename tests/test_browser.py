@@ -83,6 +83,13 @@ class Browser(unittest.TestCase):
                          desc="the browser to be started")
         return open(self.argv_log).read().splitlines()
 
+    def assert_browser_not_started(self, seconds=1.0):
+        """Refused commands must never create argv_log; poll the window (a fixed sleep missed a late start under load)."""
+        end = time.time() + seconds
+        while time.time() < end:
+            self.assertFalse(os.path.exists(self.argv_log), "a refused command started the browser")
+            time.sleep(0.05)
+
     def spki(self):
         pem = os.path.join(self.inst.env["RIVIS_CONFDIR"], "mitmproxy-ca-cert.pem")
         pub = subprocess.run(["openssl", "x509", "-in", pem, "-pubkey", "-noout"], capture_output=True, check=True).stdout
@@ -160,8 +167,7 @@ class Browser(unittest.TestCase):
             except FileNotFoundError:
                 pass
         self.assertIn("not both", self.cli("--current", "https://a.test/").stderr)
-        time.sleep(0.3)
-        self.assertFalse(os.path.exists(self.argv_log), "a refused command started the browser")
+        self.assert_browser_not_started()
 
     def test_python_and_cli_find_the_same_browsers(self):
         """The panel lists browsers without starting a process (review R1); it must agree with `rivis browser --list`."""
@@ -208,9 +214,14 @@ class Browser(unittest.TestCase):
                 fh.write("secret")
         # a browser still running on a profile: its --user-data-dir is on the command line
         running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "--user-data-dir=" + busy])
-        # the sweep reads `ps`: start only once the "browser" shows there with its profile (2 of 5 runs failed under load)
-        harness.wait_for(lambda: ("--user-data-dir=" + busy) in subprocess.run(["ps", "-axww", "-o", "command="],
-                         capture_output=True, text=True).stdout, 10, 0.1, "the busy browser in ps")
+        # the sweep reads `ps`: wait on THIS pid's argv (not a full-table scan that races under load)
+        def busy_in_ps():
+            if running.poll() is not None:
+                return None
+            out = subprocess.run(["ps", "-p", str(running.pid), "-ww", "-o", "command="],
+                                 capture_output=True, text=True).stdout
+            return ("--user-data-dir=" + busy) in out or None
+        harness.wait_for(busy_in_ps, 10, 0.05, "the busy browser in ps")
         try:
             fresh = self.fresh_profile()
         finally:
@@ -240,8 +251,7 @@ class Browser(unittest.TestCase):
             self.assertIn(msg, r.stderr, args)
         empty = dict(self.env, RIVIS_BROWSER_APPS=os.path.join(self.apps, "none"))
         self.assertIn("no Chrome, Edge", self.cli(env=empty).stderr)
-        time.sleep(0.3)
-        self.assertFalse(os.path.exists(self.argv_log), "a refused command started the browser")
+        self.assert_browser_not_started()
 
     def test_refuses_when_this_rivis_is_not_the_one_listening(self):
         self.logging_app()
@@ -280,8 +290,7 @@ class Browser(unittest.TestCase):
             job = self.browser_job()
             self.assertNotEqual(job["rc"], 0, body)
             self.assertIn(msg, "\n".join(job["lines"]), body)
-        time.sleep(0.3)
-        self.assertFalse(os.path.exists(self.argv_log), "a refused request started the browser")
+        self.assert_browser_not_started()
 
     def test_opening_from_the_panel_never_blocks_the_proxy(self):
         """Review R1: the panel ran the CLI on mitmproxy's event loop, so capture stopped while a browser started."""
@@ -334,8 +343,7 @@ class Browser(unittest.TestCase):
         self.assertIn("--proxy-bypass-list=127.0.0.1:%d;localhost:%d" % (self.plain.web_port, self.plain.web_port), self.logged_argv())
         self.assertIn("opens directly", r.stdout)
         os.remove(self.argv_log)
-        time.sleep(0.3)
-        self.assertFalse(os.path.exists(self.argv_log), "a refused command started the browser")
+        self.assert_browser_not_started()
 
     @unittest.skipUnless(os.path.exists(REAL_CHROME), "Google Chrome is not installed")
     def test_real_chrome_traffic_is_captured_decrypted(self):

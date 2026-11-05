@@ -39,11 +39,18 @@ def fd_headroom(want):
 
 
 def write_rules(inst, cfg):
+    """Replace rules.json and wait until the engine has reloaded it (not a fixed 1.6 s sleep)."""
+    cfg = dict(cfg)
+    rules = list(cfg.get("rules") or [])
+    marker = "wrsync-%s" % os.urandom(4).hex()
+    cfg["rules"] = [{"name": marker, "enabled": True, "match": r"/__wrsync__/%s$" % marker,
+                     "action": "respond", "status": 200, "body": "ok-" + marker}] + rules
     tmp = inst.rules_path + ".tmp"
     with open(tmp, "w") as fh:
         json.dump(cfg, fh)
     os.replace(tmp, inst.rules_path)
-    time.sleep(1.6)          # rules hot-reload stats the file once a second
+    wait_for(lambda: inst.fetch("http://127.0.0.1:1/__wrsync__/" + marker, timeout=5).text == "ok-" + marker,
+             12, 0.2, "rules reload")
 
 
 class RawServer:
@@ -125,8 +132,8 @@ class RuleEdges(Base):
         r = S.rivis("rules", "add", "emptym", "match=/echo\\?emptym", "action=respond", "status=418", "body=x", "method=",
                     home=self.inst.home, env=self.inst.env)
         self.assertEqual(r.returncode, 0, r.stderr)
-        time.sleep(1.6)
-        r = self.inst.fetch(UP.url("/echo?emptym"))
+        r = wait_for(lambda: (lambda x: x if x.status == 418 else None)(self.inst.fetch(UP.url("/echo?emptym"))),
+                     12, 0.2, "empty-method rule to answer")
         self.assertEqual(r.status, 418, "method \"\" never matches and the rule is not reported as skipped: %r" % r)
 
     def test_map_remote_to_another_server_sends_that_servers_host_header(self):
@@ -144,7 +151,6 @@ class RuleEdges(Base):
     def test_respond_with_infinite_delay_rule_is_refused_not_hung(self):
         cli = S.rivis("rules", "add", "inf", "match=/echo\\?infdelay", "action=delay", "ms=inf",
                       home=self.inst.home, env=self.inst.env)
-        time.sleep(1.6)
         self.assertNotEqual(cli.returncode, 0, "CLI accepted ms=inf: " + cli.stdout)
         st = self.p.state()
         skipped = [s["name"] for s in st.get("skipped_rules", [])]
@@ -727,8 +733,7 @@ class CliMock(Base):
         self.assertTrue(any(r["name"] == "r10-05-second" for r in rules), rules)
         with open(os.path.join(self.inst.state_dir, "mocks", "r10-05-second.json"), "w") as fh:
             fh.write('{"from":"second mock"}')
-        time.sleep(1.6)
-        self.assertEqual(self.inst.fetch(url).json(), {"from": "second mock"})
+        wait_for(lambda: self.inst.fetch(url).json() == {"from": "second mock"}, 12, 0.2, "second mock body")
 
     def test_r10_03_mock_keeps_captured_content_type(self):
         samples = (("html", "text/html; charset=utf-8", b"<h1>hello</h1>"),
@@ -745,8 +750,8 @@ class CliMock(Base):
                     r = S.rivis("mock", "r10-03-" + label, "r10-03-" + label,
                                 home=self.inst.home, env=self.inst.env)
                     self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-                    time.sleep(1.6)
-                    mocked = self.inst.fetch(url)
+                    mocked = wait_for(lambda: (lambda x: x if x.status == 200 and x.body == body else None)(self.inst.fetch(url)),
+                                      12, 0.2, "mock %s body" % label)
                     self.assertEqual(mocked.body, body)
                     self.assertEqual(mocked.header("Content-Type"), ctype)
                 finally:
@@ -866,6 +871,6 @@ class PanelAddMethod(Base):
                                        "body": "x", "method": m}})
             rule = next(r for r in json.load(open(self.inst.rules_path))["rules"] if r["name"] == name)
             self.assertNotIn("method", rule)
-            time.sleep(1.6)
-            self.assertEqual(self.inst.fetch(UP.url("/echo?pam%d" % i), method="POST").status, 418)
+            wait_for(lambda: self.inst.fetch(UP.url("/echo?pam%d" % i), method="POST").status == 418,
+                     12, 0.2, "panel-add %s" % name)
 

@@ -312,13 +312,16 @@ class Actions(LiveCase):
 
     def test_delay(self):
         self.reset_state(rules=[self.rule("d", "delay", "/json/small", ms=700)])
+        # Keep a lower bound on the delayed URL (proves sleep ran). The old upper bound on other URLs
+        # (< 0.6 s) flaked under load; comment tags are the durable "not delayed" signal.
         t = time.time()
         self.fetch("/json/small")
         self.assertGreaterEqual(time.time() - t, 0.65)
-        t = time.time()
-        self.fetch("/echo")
-        self.assertLess(time.time() - t, 0.6)                  # other URLs are not delayed
         self.assertIn("+700", self.comment("/json/small"))
+        self.assertIn("rule:d", self.comment("/json/small"))
+        self.fetch("/echo")
+        self.assertNotIn("rule:d", self.comment("/echo") or "")
+        self.assertNotIn("+700", self.comment("/echo") or "")
 
     def test_set_header_request_side_add_replace_remove(self):
         self.reset_state(rules=[self.rule("a", "set_header", "/echo", header="X-Added", value="yes"),

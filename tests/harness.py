@@ -359,8 +359,8 @@ class Panel:
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar),
                                                   urllib.request.ProxyHandler({}))
 
-    def login(self):
-        self.opener.open(self.base + "/?token=" + self.token, timeout=10).read()
+    def login(self, timeout=10):
+        self.opener.open(self.base + "/?token=" + self.token, timeout=timeout).read()
         if not self.xsrf:      # mitmweb 12 does not issue the cookie; tornado only needs a matching cookie/header pair
             self.jar.set_cookie(http.cookiejar.Cookie(
                 0, "_mitmproxy_xsrf", os.urandom(16).hex(), None, False, "127.0.0.1", True, False, "/", True,
@@ -530,12 +530,16 @@ class Instance:
                 suite.instances.append(self)
                 self.panel = Panel(self.web_port, self.password)
                 try:
+                    # Wait for the UI port first: login() used to run every 0.25 s with a 10 s HTTP timeout, so one
+                    # slow accept-before-answer under load burned ~10 s of the startup budget and flaked the 3 s gate.
                     def ready():
                         if self.proc.poll() is not None:
                             raise RuntimeError("rivis start exited rc=%s" % self.proc.returncode)
-                        self.panel.login()
+                        if not port_open(self.web_port):
+                            return None
+                        self.panel.login(timeout=2)
                         return self.panel.state()
-                    wait_for(ready, 45, 0.25, "rivis start (%s)" % self.name)
+                    wait_for(ready, 45, 0.1, "rivis start (%s)" % self.name)
                     if self.setup:
                         self.setup(self)
                     return self

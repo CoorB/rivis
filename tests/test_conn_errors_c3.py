@@ -107,7 +107,8 @@ class ConnectionErrors(LiveCase):
         self.assertIn("before the response was complete", text)
 
     def error_of(self, path):
-        return wait_for(lambda: (self.inst.flow_for(path) or {}).get("error"), 5, 0.2, "the call's error")["msg"]
+        # Under load the Error tab row can land after the 502 page; wait on the flow, not a fixed 5 s guess.
+        return wait_for(lambda: (self.inst.flow_for(path) or {}).get("error"), 15, 0.2, "the call's error")["msg"]
 
     def test_nothing_listening_names_the_address_and_the_cause(self):
         self.reset_state()

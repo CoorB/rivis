@@ -846,7 +846,9 @@ class ProxyScripts:
     async def _run(self, flow, hook):
         if flow.metadata.get("rivis_local_page"):     # the LAN setup page or a refused device (proxy_lan)
             return
-        await self._reload()
+        # Same as rules R7B-02: a 1 s stat throttle let the first call after `scripts add` miss the new
+        # script while the CLI already said ON. One stat per call is cheap next to running the script.
+        await self._reload(force=True)
         response_side = hook == "on_response"
         request = self._request(flow)
         response = self._message(flow.response, True) if response_side and flow.response else None

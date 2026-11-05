@@ -36,10 +36,9 @@ class ScriptCase(LiveCase):
         entry = {"name": os.path.splitext(name)[0], "file": name, "lang": lang, "enabled": enabled, "match": match,
                  "method": method}
         scripts = self.inst.cfg().get("scripts", []) + [entry]
-        self.inst.write_cfg(dict(self.inst.cfg(), scripts=scripts, **cfg), sync=False)
-        time.sleep(1.2)
-        self.inst.fetch("http://127.0.0.1:1/__probe__", timeout=5)       # any call triggers the reload
-        time.sleep(0.3)
+        # sync=True writes rules.json and fetches a probe, which also makes the scripts engine re-read (it
+        # used to sleep 1.2 s for the once-a-second stat).
+        self.inst.write_cfg(dict(self.inst.cfg(), scripts=scripts, **cfg), sync=True)
 
     def errors(self):
         return self.panel.state()["script_status"]["errors"]
@@ -49,6 +48,21 @@ class ScriptCase(LiveCase):
 
 
 class PythonScripts(ScriptCase):
+    def test_a_just_saved_script_applies_to_the_very_next_call(self):
+        # The scripts file was stat-ed at most once a second, so the first call after `scripts add` /
+        # install() reached the server without the new header (same class of bug as rules R7B-02).
+        self.reset_state(scripts=[])
+        sdir = self.inst.path("scripts")
+        os.makedirs(sdir, exist_ok=True)
+        with open(os.path.join(sdir, "immediate.py"), "w") as fh:
+            fh.write('def on_request(context, url, request):\n    request["headers"]["X-Immediate"] = "1"\n    return request\n')
+        entry = {"name": "immediate", "file": "immediate.py", "lang": "py", "enabled": True, "match": "/echo\\?imm",
+                 "method": None}
+        self.inst.write_cfg(dict(self.inst.cfg(), scripts=[entry]), sync=False)
+        hdr = {k.lower(): v for k, v in self.fetch("/echo?imm").json()["headers"]}
+        self.assertEqual(hdr.get("x-immediate"), "1",
+                         "the first call after saving a script must already run it (got %r)" % hdr)
+
     def test_log_helper_works_at_load_and_in_hook(self):
         self.install("logger.py", 'log("loaded")\ndef on_request(context, url, request):\n    log("called")\n    return request\n', match="/echo")
         import subprocess
@@ -450,10 +464,7 @@ class NodeMissing(LiveCase):
             fh.write(code)
         entry = {"name": os.path.splitext(name)[0], "file": name, "lang": name.rsplit(".", 1)[1], "enabled": True, "match": match,
                  "method": None}
-        self.inst.write_cfg(dict(self.inst.cfg(), scripts=self.inst.cfg().get("scripts", []) + [entry]), sync=False)
-        time.sleep(1.2)
-        self.inst.fetch("http://127.0.0.1:1/__probe__", timeout=5)
-        time.sleep(0.3)
+        self.inst.write_cfg(dict(self.inst.cfg(), scripts=self.inst.cfg().get("scripts", []) + [entry]), sync=True)
 
     def test_state_says_why_python_still_works_and_js_fails_visibly(self):
         st = self.panel.state()["script_status"]

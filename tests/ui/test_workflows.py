@@ -84,7 +84,8 @@ class Workflows(UiBase):
         self.tab("call")
         self.P("button[data-ph=%s]" % phase).click()
         wait_for(lambda: any(b.get(phase) for b in self.panel.state()["breakpoints"]), 5, 0.1, "breakpoint saved")
-        self.page.wait_for_timeout(1200)                     # the proxy picks the filter up within a second
+        # mitmweb's intercept option is what actually pauses the next call — wait on that, not 1.2 s
+        wait_for(lambda: bool(self.panel.option("intercept")), 8, 0.2, "intercept armed")
 
     def tearDown(self):
         for p in self.panel.state()["paused"]:                # never leak a held call into the next test
@@ -228,7 +229,7 @@ class Workflows(UiBase):
         self.breakpoint_from_call("wfh=1")
         self.P("button[data-ph=response]").click()
         wait_for(lambda: any(b.get("response") and b.get("request") for b in self.panel.state()["breakpoints"]), 5, 0.1, "both phases on")
-        self.page.wait_for_timeout(1200)
+        wait_for(lambda: bool(self.panel.option("intercept")), 8, 0.2, "intercept armed for both phases")
         t, box = self.in_background("/text?wfh=1")
         self.sheet()
         self.assertIn("Paused at request", self.P("#sheet header").inner_text())
@@ -263,12 +264,10 @@ class Workflows(UiBase):
         self.P("#body").wait_for(timeout=10000)
         self.P("#body").fill('{"v": 1}')
         self.P("#save").click()
-        self.page.wait_for_timeout(1200)
-        self.assertEqual(self.fetch("/json/small?wfg=1").json(), {"v": 1})
+        wait_for(lambda: self.fetch("/json/small?wfg=1").json() == {"v": 1}, 12, 0.2, "Map Local v=1")
         self.P("#body").fill('{"v": 2}')
         self.P("#save").click()
-        self.page.wait_for_timeout(1200)
-        self.assertEqual(self.fetch("/json/small?wfg=1").json(), {"v": 2})
+        wait_for(lambda: self.fetch("/json/small?wfg=1").json() == {"v": 2}, 12, 0.2, "Map Local v=2")
 
     def test_map_local_of_a_non_json_call_saves_without_a_json_warning(self):
         # F-02: Save asked "This is not valid JSON. Save anyway?" for an HTML / text mock; cancelling it (or a browser
@@ -281,8 +280,7 @@ class Workflows(UiBase):
         self.P("#body").wait_for(timeout=10000)
         self.P("#body").fill("<h1>mocked page</h1>")
         self.P("#save").click()
-        self.page.wait_for_timeout(1200)
-        self.assertEqual(self.fetch("/text?f02=1").text, "<h1>mocked page</h1>")
+        wait_for(lambda: self.fetch("/text?f02=1").text == "<h1>mocked page</h1>", 12, 0.2, "Map Local HTML body")
 
     def test_map_local_back_discards_the_draft_and_next_call_is_live(self):
         # B-03: the visible Back path is the cancel path, including removal of the draft file.
@@ -343,7 +341,7 @@ class Workflows(UiBase):
         self.P("#body").wait_for(timeout=10000)
         self.P("#body").fill('{"mocked": 8}')
         self.P("#save").click()
-        self.page.wait_for_timeout(800)
+        wait_for(lambda: self.fetch("/json/small?wfh=1").json() == {"mocked": 8}, 12, 0.2, "Map Local before breakpoint")
         self.P("#back").click()
         self.breakpoint_from_call("wfh=1")
         t, box = self.in_background("/json/small?wfh=1")
@@ -374,9 +372,8 @@ class Workflows(UiBase):
         self.P("#st").fill("299")
         self.P("#body").fill('{"saved": 1}')
         self.P("#save").click()
-        self.page.wait_for_timeout(2500)                       # a poll re-render or two
-        self.assertEqual(self.P("#st").input_value(), "299")
-        self.assertEqual(self.fetch("/json/small?wfk=1").status, 299)
+        wait_for(lambda: self.P("#st").input_value() == "299", 12, 0.2, "saved status shown in editor")
+        wait_for(lambda: self.fetch("/json/small?wfk=1").status == 299, 12, 0.2, "Map Local status 299")
 
     def test_typing_a_status_code_finds_calls_with_that_status(self):
         """Manual QA: '503' only matched URLs containing 503, not a 503 returned by /text."""
@@ -427,9 +424,8 @@ class Workflows(UiBase):
         self.P("button[data-ph=request]").click()              # second click: off
         wait_for(lambda: not any(b.get("request") and b.get("enabled", True) for b in self.panel.state()["breakpoints"]),
                  5, 0.1, "breakpoint off")
-        self.page.wait_for_timeout(1200)
-        self.assertEqual(self.fetch("/text?wfi=1", timeout=8).status, 200)
-        self.assertEqual(self.panel.state()["paused"], [])
+        wait_for(lambda: self.fetch("/text?wfi=1", timeout=8).status == 200 and not self.panel.state()["paused"],
+                 12, 0.2, "call passes with breakpoint off")
 
     def test_a_paused_propfind_continued_untouched_stays_propfind(self):
         # QA-05: the sheet's method list had 7 verbs; with PROPFIND missing the browser selected GET and Continue sent it

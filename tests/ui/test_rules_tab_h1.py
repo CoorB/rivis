@@ -73,8 +73,9 @@ class RulesTabEveryType(UiBase):
 
     def toggle(self, name):
         self.rules_tab()
+        before = self.rule_named(name)["enabled"]
         self.row(name).locator(".sw").click()
-        self.page.wait_for_timeout(300)
+        wait_for(lambda: self.rule_named(name)["enabled"] is (not before), 8, 0.1, "rule toggled")
 
     def delete(self, name):
         self.rules_tab()
@@ -137,15 +138,21 @@ class RulesTabEveryType(UiBase):
                        lambda: name() == "alice")
 
     def test_delay(self):
-        def took(at_least):
+        # Comment tags are load-durable; keep a soft lower bound so a no-op delay that still tags would fail.
+        def delayed(at_least):
             def check():
                 t = time.time()
                 self.fetch("/json/small?d=1")
-                return time.time() - t >= at_least
+                f = self.inst.flow_for("/json/small?d=1")
+                return (f and "rule:h1-delay" in (f.get("comment") or "")
+                        and time.time() - t >= at_least)
             return check
+        def not_delayed():
+            self.fetch("/json/small?d=1")
+            f = self.inst.flow_for("/json/small?d=1")
+            return f and "rule:h1-delay" not in (f.get("comment") or "")
         self.lifecycle("h1-delay", "delay", dict(match="d=1", ms="500"),
-                       took(0.45), dict(ms="1400"), took(1.3),
-                       lambda: not took(1.3)())                  # an unloaded call is far under 1.3 s
+                       delayed(0.4), dict(ms="1400"), delayed(1.2), not_delayed)
 
     def test_set_header_request_then_response(self):
         sent = lambda: [v for k, v in self.fetch("/echo").json()["headers"] if k.lower() == "x-h1"]    # noqa: E731
@@ -192,7 +199,8 @@ class RulesTabEveryType(UiBase):
         self.P("#body").wait_for(timeout=10000)
         self.P("#body").fill('{"local": 1}')
         self.P("#save").click()
-        self.page.wait_for_timeout(600)
+        wait_for(lambda: any(r.get("action") == "map_local" and not r.get("draft")
+                             for r in self.inst.cfg()["rules"]), 10, 0.2, "Map Local saved")
         self.P("#back").click()
         rule = next(r for r in self.inst.cfg()["rules"] if r.get("action") == "map_local")
         wait_for(lambda: self.fetch("/h1/local").json() == {"local": 1}, 10, 0.3, "served")
@@ -201,9 +209,8 @@ class RulesTabEveryType(UiBase):
         self.P("#body").wait_for(timeout=10000)
         self.P("#body").fill('{"local": 2}')
         self.P("#save").click()
-        self.page.wait_for_timeout(600)
-        self.P("#back").click()
         wait_for(lambda: self.fetch("/h1/local").json() == {"local": 2}, 10, 0.3, "edited")
+        self.P("#back").click()
         self.toggle(rule["name"])
         wait_for(lambda: self.fetch("/h1/local").status == 404, 10, 0.3, "disabled")
         self.delete(rule["name"])
