@@ -4,9 +4,11 @@ nothing here needs a real emulator (the live path was verified on an Android 37 
 import hashlib
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -199,9 +201,9 @@ REAL_MAGISK = next((d for d in (os.environ.get("RIVIS_TEST_MAGISK_DIR", ""),
                     if d and os.path.isfile(os.path.join(d, "host_patch.sh"))), None)
 
 
-class MagiskRestarts(MagiskFixture):
-    """How many times the emulator is restarted (2026-10-16: Proxyman takes ~30 s with ONE restart; Rivis took 2–4 min
-    with two). A fake adb/emulator record every restart; the patched ramdisk is pre-cached, so no patching runs."""
+class PlayEmulatorFixture(MagiskFixture):
+    """A Google Play AVD complete enough to reach the consent question: the real pinned Magisk files, an adb that
+    answers the whole flow, and a pre-cached patched ramdisk so no patching runs."""
 
     def setUp(self):
         super().setUp()
@@ -224,6 +226,11 @@ class MagiskRestarts(MagiskFixture):
         open(patched, "wb").write(b"patched ramdisk")
         open(patched + ".sha256", "w").write(sha(b"patched ramdisk") + "\n")
 
+
+class MagiskRestarts(PlayEmulatorFixture):
+    """How many times the emulator is restarted (2026-10-16: Proxyman takes ~30 s with ONE restart; Rivis took 2–4 min
+    with two). A fake adb/emulator record every restart; the patched ramdisk is pre-cached, so no patching runs."""
+
     def run_flow(self, *extra, status=None):
         env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"), ANDROID_AVD_HOME=self.avd_home,
                    FAKE_LOG=self.log, FAKE_AVD=self.avd, FAKE_DIR=self.root, HOME=self.root)
@@ -236,7 +243,6 @@ class MagiskRestarts(MagiskFixture):
     def emulator_starts(self):
         """The emulator is started in the background: wait until its start is logged and no more follow (a fixed
         0.5 s sleep failed when the suite ran four modules at once)."""
-        import time
         read = lambda: [l for l in open(self.log).read().splitlines() if l.startswith("emulator ")]
         end, last, steady = time.time() + 10, None, 0
         while time.time() < end:
@@ -294,6 +300,100 @@ class MagiskRestarts(MagiskFixture):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(len(starts), 1, starts)
         self.assertNotIn("-ramdisk", starts[0])
+
+
+class ConsentThroughATerminal(PlayEmulatorFixture):
+    """The 0.9.10 re-cut: `rivis android on` hung with nothing on screen on a Google Play emulator.
+
+    Three innocent parts composed badly. Every `rivis android` run is piped through addons/android_setup_log.py;
+    that logger read its input a line at a time; and the consent question ends without a newline and is answered
+    from /dev/tty, so the question sat in the logger's buffer while the script waited for an answer to something
+    nobody had been shown. Each part passed its own tests. Only a real terminal shows it: without one the read
+    fails at once and the "cancelled" line flushes the question anyway, which is why this runs under a pty the
+    child owns as its controlling terminal.
+    """
+
+    PROMPT = b"Continue? [y/N]"
+
+    def start_under_a_terminal(self):
+        """The pipeline cmd_android_logged builds, on a pty the child controls. Returns (child, master fd)."""
+        import fcntl
+        import pty
+        import termios
+        env = dict(os.environ, ADB=self.adb, ANDROID_SDK_ROOT=os.path.join(self.root, "sdk"),
+                   ANDROID_AVD_HOME=self.avd_home, FAKE_LOG=self.log, FAKE_AVD=self.avd,
+                   FAKE_DIR=self.root, HOME=self.root)
+        logger = os.path.join(harness.REPO, "addons", "android_setup_log.py")
+        pipeline = '"$1" "$2" "$3" "$4" "$5" "$6" 2>&1 | /usr/bin/python3 -I "$7" "$8"; exit "${PIPESTATUS[0]}"'
+        argv = ["/bin/bash", "-c", pipeline, "rivis-android", SCRIPT, "emulator-5554", self.ca, "c8750f0d.0",
+                self.magisk, self.state, logger, os.path.join(self.root, "setup.log")]
+
+        def own_the_terminal():                  # or /dev/tty is not this process's, and the read fails instead
+            os.setsid()
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+        master, slave = pty.openpty()
+        child = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True,
+                                 preexec_fn=own_the_terminal)
+        os.close(slave)
+        os.set_blocking(master, False)           # select can wake on a condition that has no bytes behind it
+        self.addCleanup(os.close, master)
+        self.addCleanup(self.stop, child)
+        return child, master
+
+    def stop(self, child):
+        try:
+            os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            child.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+
+    def read_until(self, master, needle, seconds):
+        """Collect output until `needle` shows up or the time is gone — a deadline, not a wait, so the old logger
+        fails this test with a readable message instead of hanging the suite."""
+        import select
+        seen, deadline = b"", time.time() + seconds
+        while time.time() < deadline and needle not in seen:
+            select.select([master], [], [], 0.5)
+            try:
+                chunk = os.read(master, 4096)
+            except BlockingIOError:
+                continue
+            except OSError:                      # the child closed the pty
+                break
+            if chunk:
+                seen += chunk
+        return seen
+
+    def test_the_consent_question_is_on_screen_while_the_setup_waits_for_it(self):
+        child, master = self.start_under_a_terminal()
+        seen = self.read_until(master, self.PROMPT, 30)
+        self.assertIn(self.PROMPT, seen,
+                      "the consent question never reached the terminal; last output: %r" % seen[-300:])
+        # still a live question: the script is blocked on /dev/tty, not past the decision already
+        self.assertNotIn(b"cancelled", seen)
+        self.assertIsNone(child.poll())
+        # the warning that decides the answer is on screen with it
+        self.assertIn(b"Use a test AVD only", seen)
+        self.assertNotIn("emu kill", open(self.log).read())       # nothing was touched to ask
+
+    def test_an_answer_typed_at_that_prompt_is_read(self):
+        child, master = self.start_under_a_terminal()
+        self.assertIn(self.PROMPT, self.read_until(master, self.PROMPT, 30))
+        os.write(master, b"n\n")
+        after = self.read_until(master, b"cancelled", 20)
+        self.assertIn(b"nothing changed", after)
+        self.assertEqual(child.wait(timeout=20), 3)               # declined has its own exit code
+        self.assertNotIn("emu kill", open(self.log).read())
+
+    def test_the_cli_still_pipes_the_setup_through_the_logger(self):
+        # the tests above build that pipeline by hand; if the CLI stops composing it this way they stop covering
+        # the real path, and the bug class comes back unwatched
+        source = open(os.path.join(harness.REPO, "rivis")).read()
+        self.assertIn('2>&1 | /usr/bin/python3 -I "$SCRIPT_DIR/addons/android_setup_log.py" "$log"', source)
 
 
 class ShutdownRace(unittest.TestCase):
