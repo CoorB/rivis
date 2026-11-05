@@ -36,7 +36,7 @@ class PowerShellSource(unittest.TestCase):
             cls.src = fh.read()
 
     def test_windows_has_the_cross_platform_command_cases(self):
-        for command in ("stop", "breakpoint", "mock", "setup"):
+        for command in ("stop", "breakpoint", "mock", "setup", "dns"):
             self.assertRegex(self.src, r'(?m)^  "' + command + r'" \{', command)
 
     def test_cycle5_status_reads_defaults_without_initializing_state(self):
@@ -563,6 +563,18 @@ $RulesPath=Join-Path $HOME 'missing.json'; $ProfileDir=$HOME; $ProjectConfig=@{}
         self.bad("nocache", "maybe", msg="on | off | status")
         self.bad("nocache", "on", "extra", msg="on | off | status")
         self.assertIn("nocache on|off|status", self.ok("help"))
+
+    def test_dns_spoof_parity_with_the_bash_cli(self):
+        self.assertIn("dns: (none)", self.ok("dns", "list"))
+        self.assertIn("dns: api.prod.example → 10.0.0.5", self.ok("dns", "add", "API.Prod.Example", "10.0.0.5"))
+        self.assertEqual(self.cfg()["dns_spoof"],
+                         [{"host": "api.prod.example", "address": "10.0.0.5", "enabled": True}])
+        self.assertIn("api.prod.example → 10.0.0.5", self.ok("dns", "list"))
+        self.assertIn("dns: removed api.prod.example", self.ok("dns", "rm", "api.prod.example"))
+        self.assertEqual(self.cfg().get("dns_spoof") or [], [])
+        self.bad("dns", "rm", "missing.example", msg="no DNS spoof")
+        self.bad("dns", "add", "http://bad", "10.0.0.1", msg="host name")
+        self.assertIn("dns list | add HOST ADDRESS | rm HOST", self.ok("help"))
 
     def test_throttle_profiles_options_and_validation(self):
         for profile in ("off", "3g-urban", "lte-congested", "high-latency-vpn", "packet-loss-8", "lte", "3g", "edge", "slow", "150ms", "300ms/500kbps"):

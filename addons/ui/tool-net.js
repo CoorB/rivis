@@ -1,4 +1,4 @@
-/* Network: conditions, caching, TLS decryption, client certificates, and LAN devices. */
+/* Network: conditions, caching, TLS decryption, DNS spoofing, client certificates, and LAN devices. */
 (() => {
   "use strict";
   const A = window.RivisApp, T = window.RivisTools;
@@ -8,7 +8,7 @@
     ["down_kbps", "Download (kbps, 0 = unlimited)"], ["up_kbps", "Upload (kbps, 0 = unlimited)"],
     ["loss_pct", "Packet loss (%)"], ["response_delay_ms", "Extra response delay (ms)"]];
   const sig = (st) => JSON.stringify([st.throttle, st.throttle_match, st.loss, st.manual, st.profiles, st.no_cache,
-    st.tls, st.client_certs, st.lan, st.project_only, st.show_dns, st.view_project, st.project,
+    st.dns_spoof, st.tls, st.client_certs, st.lan, st.project_only, st.show_dns, st.view_project, st.project,
     (A.selected() || {}).id]);
   const b64 = async (file) => {
     const bytes = new Uint8Array(await file.arrayBuffer()); let s = "";
@@ -20,8 +20,9 @@
   const focusKey = (el) => {
     if (!el || !el.dataset) return null;
     const attrs = ["netProfile", "netScope", "netManual", "netApply", "netNocache", "netTlsMode", "netTlsAdd", "netTlsAddbtn",
-      "netTlsRm", "netTlsHost", "netCcHost", "netCcPass", "netCcFile", "netCcKey", "netCcAdd", "netCcRm", "netLanAllow",
-      "netLanDismiss", "netLanName", "netLanRename", "netLanRm", "netProject", "netDns"];
+      "netTlsRm", "netTlsHost", "netDnsHost", "netDnsAddr", "netDnsAdd", "netDnsRm", "netCcHost", "netCcPass", "netCcFile",
+      "netCcKey", "netCcAdd", "netCcRm", "netLanAllow", "netLanDismiss", "netLanName", "netLanRename", "netLanRm",
+      "netProject", "netDns"];
     for (const key of attrs) if (Object.hasOwn(el.dataset, key)) {
       const attr = "data-" + key.replace(/[A-Z]/g, (x) => "-" + x.toLowerCase());
       return `[${attr}="${CSS.escape(el.dataset[key])}"]`;
@@ -32,13 +33,16 @@
     title: "Network", width: 820, height: 650,
     render(w) {
       w.data.sig = null;
-      w.data.draft = w.data.draft || { manual: {}, tls: { allow: "", ignore: "" }, cc: { host: "", pass: "", file: null, key: null } };
+      w.data.draft = w.data.draft || { manual: {}, tls: { allow: "", ignore: "" }, dns: { host: "", address: "" },
+        cc: { host: "", pass: "", file: null, key: null } };
       w.body.innerHTML = `<div data-net-content></div>`;
       w.body.oninput = (e) => {
         const d = w.data.draft;
         if (e.target.matches("[data-net-scope]")) d.scope = e.target.value;
         if (e.target.matches("[data-net-manual]")) d.manual[e.target.dataset.netManual] = e.target.value;
         if (e.target.matches("[data-net-tls-add]")) d.tls[e.target.dataset.netTlsAdd] = e.target.value;
+        if (e.target.matches("[data-net-dns-host]")) d.dns.host = e.target.value;
+        if (e.target.matches("[data-net-dns-addr]")) d.dns.address = e.target.value;
         if (e.target.matches("[data-net-cc-host]")) d.cc.host = e.target.value;
         if (e.target.matches("[data-net-cc-pass]")) d.cc.pass = e.target.value;
         if (e.target.matches("[data-net-lan-name]")) d.lanNames = { ...(d.lanNames || {}), [e.target.dataset.netLanName]: e.target.value };
@@ -66,6 +70,9 @@
       };
       w.body.onkeydown = (e) => {
         if (e.key === "Enter" && e.target.matches("[data-net-tls-add]")) { e.preventDefault(); addTls(w, e.target.dataset.netTlsAdd); }
+        if (e.key === "Enter" && (e.target.matches("[data-net-dns-host]") || e.target.matches("[data-net-dns-addr]"))) {
+          e.preventDefault(); addDns(w);
+        }
         if (e.key === "Enter" && e.target.matches("[data-net-lan-name]")) { e.preventDefault(); renameLan(w, e.target.dataset.netLanName); }
       };
       w.body.onclick = async (e) => {
@@ -81,6 +88,10 @@
           const r = await ui.run("tls_host", { flow_id: f.id, host: A.hostOf(f), decrypt: b.dataset.netTlsHost === "on" });
           if (r && r.message) A.toast(r.message);
           return;
+        }
+        if (b.matches("[data-net-dns-add]")) { await addDns(w); return; }
+        if (b.matches("[data-net-dns-rm]")) {
+          await ui.run("dns_rm", { host: b.dataset.netDnsRm }, "Removed DNS spoof for " + b.dataset.netDnsRm); return;
         }
         if (b.matches("[data-net-cc-add]")) { await addCert(w); return; }
         if (b.matches("[data-net-settings]")) { A.$("tb-settings").click(); return; }
@@ -121,6 +132,7 @@
 
   function draw(w, st) {
     const d = w.data.draft, profiles = st.profiles || [], current = st.throttle || "off";
+    d.dns = d.dns || { host: "", address: "" };
     const chosen = profiles.find((p) => p.id === current);
     w.setSub("Throttle: " + (chosen ? chosen.name : current) + (Number(st.loss || 0) ? " · loss " + st.loss + "%" : ""));
     const manual = st.manual || {}, t = st.tls || { mode: "all", allow: [], ignore: [] }, cc = st.client_certs || [];
@@ -166,6 +178,14 @@
       ${selectedHost ? `<div class="rv-form"><span class="rv-win-hint">Selected call: ${esc(selectedHost)}</span>
         <button type="button" class="rv-btn" data-net-tls-host="on">Decrypt this host</button>
         <button type="button" class="rv-btn" data-net-tls-host="off">Stop decrypting this host</button></div>` : ""}
+      <h4>DNS Spoofing</h4>
+      <p class="rv-win-hint">Send matching calls to another IP or hostname while the listed URL and Host header stay the same — staging behind a production hostname, without Map Remote rewriting the URL. Does not change system DNS. With upstream certificate checks on (--verify-upstream), the server certificate must still match the original host (SNI).</p>
+      ${(st.dns_spoof || []).length ? (st.dns_spoof || []).filter((x) => x.host).map((x) => `<div class="rv-form"><b>${esc(x.host)}</b> → <code>${esc(x.address)}</code>${x.enabled === false ? ' <span class="rv-badge">off</span>' : ""}
+        <span class="rv-spacer"></span><button type="button" class="rv-btn d" data-net-dns-rm="${esc(x.host)}">Remove</button></div>`).join("")
+        : '<p class="rv-win-hint">None. Add a host when the app must reach a different box without changing the URL.</p>'}
+      <div class="rv-editor"><div class="rv-form"><label class="grow">Host <input type="text" data-net-dns-host value="${esc(d.dns.host)}" placeholder="api.prod.example" autocomplete="off" spellcheck="false"></label>
+        <label class="grow">Address <input type="text" data-net-dns-addr value="${esc(d.dns.address)}" placeholder="10.0.0.5 or staging.example" autocomplete="off" spellcheck="false"></label>
+        <button type="button" class="rv-btn p" data-net-dns-add>Add</button></div></div>
       <h4>Client certificates</h4><p class="rv-win-hint">For a server that asks the app for its own certificate (mutual TLS).</p>
       ${cc.length ? cc.map((x) => `<div class="rv-form"><b>${esc(x.host)}</b>${x.expired ? ' <span class="rv-badge warn">Expired</span>' : ""}
         <span class="rv-win-hint">${x.error ? "Unreadable: " + esc(x.error) : esc(x.subject) + " · expires " + esc(when(x.not_after))}</span>
@@ -200,6 +220,16 @@
     if (!value) { input.focus(); return; }
     if (await ui.run("tls_update", { list: which, action: "add", pattern: value }, "Added " + value)) {
       w.data.draft.tls[which] = ""; input.value = "";
+    }
+  }
+  async function addDns(w) {
+    const hostInput = w.body.querySelector("[data-net-dns-host]"), addrInput = w.body.querySelector("[data-net-dns-addr]");
+    const host = (hostInput.value || "").trim(), address = (addrInput.value || "").trim();
+    if (!host) { A.toast("Type the host the app asks for", true); hostInput.focus(); return; }
+    if (!address) { A.toast("Type the IP or hostname to send the call to", true); addrInput.focus(); return; }
+    if (await ui.run("dns_add", { host, address }, "DNS spoof: " + host + " → " + address)) {
+      w.data.draft.dns = { host: "", address: "" };
+      hostInput.value = ""; addrInput.value = "";
     }
   }
   async function addCert(w) {

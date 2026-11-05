@@ -31,6 +31,10 @@ system proxy, one CA per workstation, removed again with `off`.
                          (-Match REGEX / -Loss PCT work too)
   .\<cli>.ps1 nocache on|off|status         No Caching: strip If-None-Match/If-Modified-Since... from requests and
                                             force no-store on responses (Map Local answers untouched)
+  .\<cli>.ps1 dns list | add HOST ADDRESS | rm HOST
+                                            DNS Spoofing: connect to ADDRESS (IP or hostname); listed URL and Host
+                                            stay HOST. Does not change system DNS. With -VerifyUpstream the upstream
+                                            certificate must still match HOST (SNI); default is not to verify.
   .\<cli>.ps1 tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
   .\<cli>.ps1 tls client-cert list | add HOST FILE [-Key KEY_FILE] [-PasswordStdin] | rm HOST
                                             client certificate (mTLS) per host; FILE .p12/.pfx or PEM
@@ -702,6 +706,7 @@ if ($Command -in @("start","stop","setup","ui","net-reset","doctor","bug-report"
   if ($Name) { $unexpected += $Name }; $unexpected += @($Rest)
 } elseif (@($Rest).Count -and $Command -ne "throttle" -and
           -not ($Command -eq "tls" -and $Action -in @("allow","ignore","client-cert")) -and
+          -not ($Command -eq "dns" -and $Action -eq "add") -and
           -not ($Command -eq "lan" -and $Action -eq "allow") -and
           -not ($Command -eq "rules" -and $Action -in @("add","variant")) -and
           -not ($Command -eq "rules" -and $Action -eq "test" -and @($Rest).Count -eq 1)) {
@@ -1126,6 +1131,16 @@ switch ($Command) {
       $cfg
     }
     Show-NoCache $cfg
+  }
+  "dns" {
+    Ensure-Rules
+    Warn-RunningProject
+    $dnsArgs = @($(if ($Action) { $Action } else { "list" }))
+    if ($Name) { $dnsArgs += $Name }
+    if (@($Rest).Count) { $dnsArgs += @($Rest) }
+    $python = Get-PythonCommand
+    & $python.Exe @($python.Prefix) -I (Join-Path $PSScriptRoot "addons\rules_cli.py") $RulesPath dns @dnsArgs
+    exit $LASTEXITCODE
   }
   "tls" {
     Ensure-Rules

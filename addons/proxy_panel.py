@@ -38,7 +38,8 @@ importlib.reload(proxy_common)
 from rules_cli import acquire_lock
 from proxy_common import (ACTION_REQUIREMENTS, ACTIONS, PANEL_PROFILES, PRESETS, PRODUCT, SAFE_NAME, STATE_ROOT, atomic_json,
                           atomic_write_bytes, atomic_write_text, breakpoints, commit_temp_file,
-                          confined_path, migrate_collection, migrate_rules, owned_mock_file, project_profile,
+                          confined_path, dns_spoof_list, migrate_collection, migrate_rules,
+                          normalize_dns_address, normalize_dns_host, owned_mock_file, project_profile,
                           project_profiles, project_state, tls_config, tls_covering, tls_update,
                           throttle_shorthand, user_regex, without_hop_headers, without_leading_bom,
                           wildcard_regex as _wildcard_regex, wildcard_url_regex as _wildcard_url_regex)
@@ -381,6 +382,7 @@ class ProxyPanel:
             if cfg.get("throttle_match"):
                 user_regex(cfg["throttle_match"])
             tls_config(cfg)
+            dns_spoof_list(cfg)
         except (PanelError, TypeError, ValueError, re.error) as exc:
             self._rules_error = str(exc)
             self._bad_cfg = cfg
@@ -591,6 +593,7 @@ class ProxyPanel:
             "throttle_match": cfg.get("throttle_match", ""),
             "loss": cfg.get("loss", 0),
             "no_cache": bool(cfg.get("no_cache")),
+            "dns_spoof": self.dns_spoof_state(cfg),
             "manual": {k: (cfg.get("manual") or {}).get(k, 0) for k in MANUAL_KEYS},
             "profiles": PROFILES,
             "breakpoints": bps,
@@ -1459,6 +1462,14 @@ class ProxyPanel:
         return out
 
     @staticmethod
+    def dns_spoof_state(cfg):
+        """DNS Spoofing rows for the Network tool (host → address; Host/URL stay the app's host)."""
+        try:
+            return dns_spoof_list(cfg)
+        except ValueError:
+            return []
+
+    @staticmethod
     def _flow_host(f):
         if isinstance(f, http.HTTPFlow):
             return f.request.pretty_host
@@ -2174,6 +2185,29 @@ class ProxyPanel:
             ctx.master.view.update([f])
         elif op == "nocache":            # Proxyman "No Caching": a project switch, hot-reloaded by proxy_rules
             cfg["no_cache"] = bool(a.get("on"))
+            self.save_cfg(cfg)
+        elif op == "dns_add":            # Proxyman DNS Spoofing: Host/URL stay; bytes go to address
+            try:
+                host = normalize_dns_host(a.get("host"))
+                address = normalize_dns_address(a.get("address"))
+                entries = [e for e in dns_spoof_list(cfg) if e["host"] != host]
+            except ValueError as e:
+                raise PanelError(str(e))
+            entry = {"host": host, "address": address, "enabled": True}
+            entries.append(entry)
+            cfg["dns_spoof"] = entries
+            self.save_cfg(cfg)
+            return {"entry": entry}
+        elif op == "dns_rm":
+            try:
+                host = normalize_dns_host(a.get("host"))
+                before = dns_spoof_list(cfg)
+            except ValueError as e:
+                raise PanelError(str(e))
+            kept = [e for e in before if e["host"] != host]
+            if len(kept) == len(before):
+                raise PanelError("no DNS spoof for that host")
+            cfg["dns_spoof"] = kept
             self.save_cfg(cfg)
         elif op == "profile":
             current = cfg.get("throttle", "off")

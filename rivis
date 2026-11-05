@@ -56,6 +56,10 @@
 #                 [match=REGEX] [loss=PCT] [latency_ms=N jitter_ms=N down_kbps=N up_kbps=N loss_pct=N response_delay_ms=N]
 #   <cli> nocache on|off|status            No Caching: strip If-None-Match/If-Modified-Since… from requests and
 #                                 force no-store on responses, so the app never gets a 304 (Map Local untouched)
+#   <cli> dns list | add HOST ADDRESS | rm HOST
+#                                 DNS Spoofing: connect to ADDRESS (IP or hostname); listed URL and Host stay HOST.
+#                                 Does not change system DNS. With --verify-upstream the upstream certificate must
+#                                 still match HOST (SNI); default is not to verify.
 #   <cli> tls list | mode all|allow|ignore | allow add|rm PATTERN | ignore add|rm PATTERN
 #                                 which hosts are decrypted (Proxyman "SSL Proxying list"); wildcards like
 #                                 *.example.test. Hot-reloaded for NEW connections — no restart.
@@ -1174,6 +1178,16 @@ cmd_scripts()  {
 }
 cmd_throttle() { ensure_rules; warn_running_project; RIVIS_ACTIVE_PROJECT="$PROJECT" /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" throttle "$@"; }
 cmd_nocache() { ensure_rules; warn_running_project; /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" nocache "$@"; }
+cmd_dns() {
+  ensure_rules; warn_running_project
+  case "${1:-list}" in
+    list) [ $# -le 1 ] || die "usage: $CLI dns list | add HOST ADDRESS | rm HOST" ;;
+    add)  [ $# -eq 3 ] || die "usage: $CLI dns add HOST ADDRESS" ;;
+    rm)   [ $# -eq 2 ] || die "usage: $CLI dns rm HOST" ;;
+    *) die "usage: $CLI dns list | add HOST ADDRESS | rm HOST" ;;
+  esac
+  /usr/bin/python3 -I "$SCRIPT_DIR/addons/rules_cli.py" "$RULES" dns "$@"
+}
 cmd_tls() {
   ensure_rules
   warn_running_project
@@ -1991,6 +2005,7 @@ case "${1:-}" in
   scripts)   shift; cmd_scripts "$@" ;;
   throttle)  shift; cmd_throttle "$@" ;;
   nocache)   shift; cmd_nocache "$@" ;;
+  dns)       shift; cmd_dns "$@" ;;
   tls)       shift; cmd_tls "$@" ;;
   lan)       shift; /usr/bin/python3 -I "$SCRIPT_DIR/addons/proxy_lan.py" "$STATE_ROOT/lan-devices.json" "${@:-list}" ;;
   compose)   shift; cmd_compose "$@" ;;

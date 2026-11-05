@@ -938,6 +938,63 @@ def tls_update(cfg, mode=None, add=(), remove=()):
     return tls
 
 
+_DNS_LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)")
+
+
+def normalize_dns_host(host):
+    """Host the app asks for. Exact name only — no wildcards, scheme, port or path."""
+    h = str(host or "").strip().lower().rstrip(".")
+    if not h or "/" in h or ":" in h or any(c.isspace() for c in h) or "://" in h:
+        raise ValueError("DNS spoof host must be a host name such as api.prod.example (no scheme, port or path)")
+    labels = h.split(".")
+    if len(h) > 253 or not all(_DNS_LABEL.fullmatch(x) for x in labels):
+        raise ValueError("DNS spoof host must be a host name such as api.prod.example (no scheme, port or path)")
+    return h
+
+
+def normalize_dns_address(address):
+    """Where bytes go: IPv4, IPv6 or a hostname. The call keeps its own port; no scheme or path."""
+    a = str(address or "").strip()
+    if not a or "/" in a or any(c.isspace() for c in a) or "://" in a:
+        raise ValueError("DNS spoof address must be an IP or hostname (no scheme, port or path)")
+    if a.startswith("[") and a.endswith("]"):
+        a = a[1:-1]
+    try:
+        ip = ipaddress.ip_address(a)
+        return str(ip)
+    except ValueError:
+        pass
+    if ":" in a:
+        raise ValueError("DNS spoof address must be an IP or hostname without a port (the call keeps its own port)")
+    return normalize_dns_host(a)
+
+
+def dns_spoof_list(cfg):
+    """Normalized [{host, address, enabled}, ...] from a rules document. Raises ValueError on a bad entry."""
+    raw = cfg.get("dns_spoof")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("dns_spoof must be a list")
+    out, seen = [], set()
+    for index, row in enumerate(raw):
+        if not isinstance(row, dict):
+            raise ValueError("dns_spoof[%d] must be an object" % index)
+        host = normalize_dns_host(row.get("host"))
+        address = normalize_dns_address(row.get("address"))
+        enabled = row.get("enabled", True) is not False
+        if host in seen:
+            out = [e for e in out if e["host"] != host]
+        seen.add(host)
+        out.append({"host": host, "address": address, "enabled": enabled})
+    return out
+
+
+def dns_spoof_map(cfg):
+    """host → address for enabled entries only."""
+    return {e["host"]: e["address"] for e in dns_spoof_list(cfg) if e["enabled"]}
+
+
 ACTION_REQUIREMENTS = {
     "respond": (),
     "map_local": ("file",),

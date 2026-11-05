@@ -10,6 +10,8 @@
   rules_cli.py FILE mocks import-proxyman [PATH] [--dry-run]
   rules_cli.py FILE throttle off|lte|3g|edge|slow|<ms>ms[/<kbps>kbps] [match=REGEX] [loss=PCT]
   rules_cli.py FILE nocache on|off|status       strip conditional request headers, force fresh responses
+  rules_cli.py FILE dns list|add HOST ADDRESS|rm HOST
+                                                DNS Spoofing: connect to ADDRESS; listed URL and Host stay HOST
 
 Values are parsed as JSON when they can be (status=500 → 500, set={"a":1} → object),
 otherwise kept as text. The running proxy picks every change up within a second.
@@ -26,7 +28,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:       # /usr/bin/python3 -I removes the script directory
     sys.path.insert(0, HERE)
 from proxy_common import (ACTION_REQUIREMENTS, PRESETS, PROFILE_VALUES, PRODUCT, SAFE_NAME, acquire_state_lock, atomic_json,
-                           breakpoints, confined_path, forbidden_file, migrate_rules, owned_mock_file, project_profile,
+                           breakpoints, confined_path, dns_spoof_list, forbidden_file, migrate_rules,
+                           normalize_dns_address, normalize_dns_host, owned_mock_file, project_profile,
                            project_state, remote_url_problem, set_trusted_file, throttle_shorthand, trusted_files, user_regex,
                            wildcard_url_regex)
 from proxy_rule_validation import compile_rule, explain_rules, map_remote_warning, rule_fingerprint
@@ -629,6 +632,53 @@ def nocache_cmd(path, args):
     print(nocache_description(cfg))
 
 
+def dns_cmd(path, args):
+    """dns list | add HOST ADDRESS | rm HOST — Host/URL stay HOST; bytes go to ADDRESS."""
+    cfg = load(path)
+    try:
+        entries = dns_spoof_list(cfg)
+    except ValueError as e:
+        die("dns: %s" % e)
+    cmd = (args[0].lower() if args else "list")
+    if cmd == "list":
+        if len(args) > 1:
+            die("dns: list | add HOST ADDRESS | rm HOST")
+        if not entries:
+            print("dns: (none)")
+            return
+        for e in entries:
+            print("  %s → %s%s" % (e["host"], e["address"], "" if e["enabled"] else " (off)"))
+        return
+    if cmd == "add":
+        if len(args) != 3:
+            die("dns: add HOST ADDRESS")
+        try:
+            host, address = normalize_dns_host(args[1]), normalize_dns_address(args[2])
+        except ValueError as e:
+            die("dns: %s" % e)
+        entries = [e for e in entries if e["host"] != host]
+        entries.append({"host": host, "address": address, "enabled": True})
+        cfg["dns_spoof"] = entries
+        save(path, cfg)
+        print("dns: %s → %s" % (host, address))
+        return
+    if cmd == "rm":
+        if len(args) != 2:
+            die("dns: rm HOST")
+        try:
+            host = normalize_dns_host(args[1])
+        except ValueError as e:
+            die("dns: %s" % e)
+        kept = [e for e in entries if e["host"] != host]
+        if len(kept) == len(entries):
+            die("no DNS spoof for '%s'" % host)
+        cfg["dns_spoof"] = kept
+        save(path, cfg)
+        print("dns: removed %s" % host)
+        return
+    die("dns: list | add HOST ADDRESS | rm HOST")
+
+
 def throttle_description(cfg):
     # R5A-04: include the manual fields that actually shape traffic, including profile loss.
     spec = cfg.get("throttle", "off")
@@ -748,6 +798,8 @@ if __name__ == "__main__":
         throttle_cmd(path, rest)
     elif what == "nocache":
         nocache_cmd(path, rest)
+    elif what == "dns":
+        dns_cmd(path, rest)
     elif what == "breakpoint":
         breakpoint_cmd(path, rest)
     elif what == "mock-pick":

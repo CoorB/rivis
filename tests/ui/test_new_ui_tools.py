@@ -313,6 +313,29 @@ class ToolWindows(UiBase):
         w.locator("[data-net-profile]").select_option("off")
         wait_for(lambda: self.panel.state()["throttle"] == "off", 5, 0.1, "throttle off")
 
+    def test_network_dns_spoofing_add_reaches_the_server_and_keeps_host(self):
+        host = "ui-spoof.example.test"
+        self.open_new()
+        self.page.locator('[data-tool="net"]').click()
+        w = self.win_open("net")
+        w.locator("[data-net-dns-host]").fill(host)
+        w.locator("[data-net-dns-addr]").fill("127.0.0.1")
+        w.locator("[data-net-dns-add]").click()
+        wait_for(lambda: any(e.get("host") == host for e in self.panel.state().get("dns_spoof") or []),
+                 8, 0.1, "spoof listed")
+        wait_for(lambda: host in w.inner_text() and "127.0.0.1" in w.inner_text(), 5, 0.1, "row drawn")
+        self.page.wait_for_timeout(1200)
+        url = "http://%s:%d/echo?uidns=1" % (host, self.up.http_port)
+        r = wait_for(lambda: (lambda x: x if x.status == 200 else None)(self.inst.fetch(url)),
+                     12, 0.2, "spoofed call")
+        self.assertEqual(r.status, 200, r)
+        got = [v for k, v in r.json()["headers"] if k.lower() == "host"]
+        self.assertEqual(got, ["%s:%d" % (host, self.up.http_port)], "Host rewritten: %r" % got)
+        self.assertTrue(self.up.hits_for("/echo?uidns=1"))
+        w.locator('[data-net-dns-rm="%s"]' % host).click()
+        wait_for(lambda: not any(e.get("host") == host for e in self.panel.state().get("dns_spoof") or []),
+                 8, 0.1, "spoof removed")
+
     def test_script_runtime_updates_editor_feedback_and_missing_file_badge(self):
         self.inst.clear_dir("scripts")
         file = self.panel.ok("script_new", {"name": "err-live", "lang": "py", "match": "errlive"})["file"]

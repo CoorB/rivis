@@ -538,6 +538,25 @@ and hot-reloaded like the throttle. Off by default. While it is on, every decryp
 Affected calls carry `no-cache` in their comment. Calls answered locally (Map Local, `respond` rules) are left
 exactly as the mock defines them. `rivis status` prints `No caching: on` while it is on.
 
+### Network: DNS Spoofing
+
+Tools → **Network → DNS Spoofing** (or `rivis dns list|add|rm`, `.\rivis.ps1 dns …`) sends matching calls to
+another IP or hostname while the **listed URL and Host header stay the host the app asked for**. Use it to put
+staging behind a production hostname without Map Remote rewriting the URL. Stored per project in `rules.json`:
+
+```json
+"dns_spoof": [{"host": "api.prod.example", "address": "10.0.0.5", "enabled": true}]
+```
+
+- `host` is the exact name the app uses (no wildcards). `address` is an IPv4/IPv6 address or another hostname;
+  the call keeps its own port.
+- Hot-reloaded within a second. Does **not** change system DNS, `/etc/hosts`, or Rivis's loopback/LAN bind rules.
+- Affected calls carry `dns-spoof → <address>` in their comment. The call list still shows the original URL.
+- **TLS / `--verify-upstream`:** Rivis keeps the original hostname as SNI. With the default (upstream certificates
+  not verified), a staging box that presents any certificate still works. With `--verify-upstream` / `-VerifyUpstream`,
+  the upstream certificate must still name the original host — otherwise the handshake fails the same way a real
+  DNS answer to that box would. Map Remote is the wrong tool for this case: it rewrites the URL and Host.
+
 ### HTTPS decryption (TLS list)
 
 Network → **HTTPS decryption** (or `rivis tls ...`) chooses which hosts are decrypted, like Proxyman's

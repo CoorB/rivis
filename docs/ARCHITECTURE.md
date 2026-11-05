@@ -198,7 +198,7 @@ macOS has no `flock(1)` binary; the CLIs never shell out for the lock. They call
 | `ui/tool-map.js` | Map Local tool |
 | `ui/tool-rules.js` | Map Remote / rewrite / block rules |
 | `ui/tool-scripts.js` | Scripting tool |
-| `ui/tool-net.js` | Network, TLS, client certs, LAN |
+| `ui/tool-net.js` | Network, TLS, DNS spoofing, client certs, LAN |
 | `ui/tool-compose.js` | Edit & Repeat / compose |
 | `ui/tool-more.js` | Devices, collections, sessions, compare |
 | `macapp/RivisApp.swift`, `build.sh`, `Info.plist` | Native Mac window that opens the same UI |

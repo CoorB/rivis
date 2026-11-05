@@ -710,6 +710,32 @@ class UiSmoke(UiBase):
         wait_for(lambda: page.locator("#proxy-panel-host").locator("#nocache").is_checked(), 8, 0.3, "CLI change shown")
         self.assertEqual(self.errors, [])
 
+    def test_network_tab_dns_spoofing_add_reaches_the_server_and_keeps_host(self):
+        host = "classic-spoof.example.test"
+        page = self.open()
+        page.locator("#fab").click()
+        page.locator("button[data-t=net]").click()
+        panel = page.locator("#proxy-panel-host")
+        wait_for(lambda: panel.locator("#dnsaddbtn").count() == 1, 8, 0.2, "DNS Spoofing form")
+        panel.locator("#dnshost").fill(host)
+        panel.locator("#dnsaddr").fill("127.0.0.1")
+        panel.locator("#dnsaddbtn").click()
+        wait_for(lambda: any(e.get("host") == host for e in self.panel.state().get("dns_spoof") or []),
+                 8, 0.1, "spoof listed")
+        wait_for(lambda: host in self.panel_text() and "127.0.0.1" in self.panel_text(), 5, 0.1, "row drawn")
+        self.page.wait_for_timeout(1200)
+        url = "http://%s:%d/echo?classicdns=1" % (host, self.up.http_port)
+        r = wait_for(lambda: (lambda x: x if x.status == 200 else None)(self.inst.fetch(url)),
+                     12, 0.2, "spoofed call")
+        self.assertEqual(r.status, 200, r)
+        got = [v for k, v in r.json()["headers"] if k.lower() == "host"]
+        self.assertEqual(got, ["%s:%d" % (host, self.up.http_port)], "Host rewritten: %r" % got)
+        self.assertTrue(self.up.hits_for("/echo?classicdns=1"))
+        panel.locator('[data-dnsrm="%s"]' % host).click()
+        wait_for(lambda: not any(e.get("host") == host for e in self.panel.state().get("dns_spoof") or []),
+                 8, 0.1, "spoof removed")
+        self.assertEqual(self.errors, [])
+
     def test_a_switch_keeps_the_keyboard_after_its_change_redraws_the_tab(self):
         """Full suite 2026-10-23 (the No caching keyboard test flaked): every panel change redraws its tab, which replaced
         the switch under the keyboard, so a second Space did nothing until the user tabbed back to it."""

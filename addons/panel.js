@@ -45,7 +45,8 @@
   const OP_NAMES = { mock: "Map Local", maplocal_add: "Map Local", bp_add: "Breakpoint", bp_update: "Breakpoint", bp_delete: "Breakpoint",
     retry: "Repeat", retry_get: "Edit & Repeat", focus_host: "Show only this host", tls_host: "TLS decryption", tls_set: "TLS decryption",
     tls_update: "TLS decryption", view: "view filter", source: "source filter", delete: "delete", sess_save: "session save", sess_load: "session load",
-    sess_har: "HAR export", client_cert_add: "client certificate", client_cert_rm: "client certificate", lan_allow: "allow device", lan_rm: "remove device", lan_dismiss: "ignore device", compose_send: "Compose send", codegen: "Copy as code", export: "Copy", update_install: "update" };
+    sess_har: "HAR export", client_cert_add: "client certificate", client_cert_rm: "client certificate",
+    dns_add: "DNS spoofing", dns_rm: "DNS spoofing", lan_allow: "allow device", lan_rm: "remove device", lan_dismiss: "ignore device", compose_send: "Compose send", codegen: "Copy as code", export: "Copy", update_install: "update" };
   const selectedFlow = () => {   // mitmweb keeps the selection in the hash: #/flows/<id>/<tab>
     const p = location.hash.replace(/^#\/?/, "").split("?")[0].split("/");
     return p[0] === "flows" && p[1] ? p[1] : null;
@@ -1096,12 +1097,14 @@
       <h4>Caching</h4>
       <div class="row">${sw('id="nocache" aria-describedby="nocache-d"', state.no_cache)}<div class="n"><label for="nocache">No caching</label> <div class="sub" id="nocache-d">Strips If-None-Match / If-Modified-Since from requests and marks responses no-store, so the app always gets fresh content (never an empty 304). Map Local answers are left as they are</div></div></div>
       ${tlsSectionHTML()}
+      ${dnsSpoofHTML()}
       ${clientCertsHTML()}
       <h4>What the list shows</h4>
       <div class="row">${sw('id="project-filter"', state.project_only)}<div class="n">Only ${esc(state.project.label)} calls <div class="sub">Hides other apps' traffic. Also in the “Show” menu above</div></div></div>
       <div class="row">${sw('id="dns"', state.show_dns)}<div class="n">Show background lookups (DNS) <div class="sub">Off = only web calls are listed</div></div></div>
       <div class="row"><div class="n">Appearance <div class="sub">Theme and compact rows live in Settings (this browser only)</div></div><button class="b" id="openset">${ico("gear", "sm")}Settings</button></div>`;
     wireTlsSection();
+    wireDnsSpoof();
     wireClientCerts();
     root.querySelectorAll("[data-prof]").forEach((c) => (c.onclick = () => {
       if (c.dataset.prof === "manual") { $("manual").style.display = ""; root.querySelectorAll("[data-prof]").forEach((x) => x.classList.toggle("on", x === c)); return; }
@@ -2485,6 +2488,39 @@
   // The Network tab redraws on every poll, so a half-filled form lives here, not only in the inputs (files and the
   // password stay in this page's memory; nothing is saved until Add).
   const ccDraft = { host: "", pass: "", file: null, key: null };
+  let dnsDraft = { host: "", address: "" };
+  function dnsSpoofHTML() {
+    const rows = (state.dns_spoof || []).filter((r) => r.host);
+    return `<h4 id="dnssec">DNS Spoofing ${info("Send matching calls to another IP or hostname while the listed URL and Host header stay the same — staging behind a production hostname, without Map Remote. Does not change system DNS. With --verify-upstream the upstream certificate must still match the original host (SNI).")}</h4>
+      ${rows.length ? rows.map((r) => `<div class="row"><div class="n"><b>${esc(r.host)}</b> → <code>${esc(r.address)}</code>${r.enabled === false ? ' <span class="tag">off</span>' : ""}</div>
+          <button class="b d" data-dnsrm="${esc(r.host)}" aria-label="Remove DNS spoof for ${esc(r.host)}">${ico("x", "sm")}</button></div>`).join("")
+        : '<div class="sub">None. Add a host when the app must reach a different box without changing the URL.</div>'}
+      <div class="grid" id="dnsadd">
+        <label>Host<input type="text" id="dnshost" placeholder="api.prod.example" autocomplete="off" spellcheck="false" value="${esc(dnsDraft.host)}"></label>
+        <label>Address (IP or hostname)<input type="text" id="dnsaddr" placeholder="10.0.0.5 or staging.example" autocomplete="off" spellcheck="false" value="${esc(dnsDraft.address)}"></label>
+      </div>
+      <div class="btns"><button class="b p" id="dnsaddbtn">Add</button>
+        <span class="sub">Hot-reloaded within a second. The call list keeps the original URL.</span></div>`;
+  }
+  function wireDnsSpoof() {
+    if (!$("dnsaddbtn")) return;
+    $("dnshost").oninput = () => (dnsDraft.host = $("dnshost").value);
+    $("dnsaddr").oninput = () => (dnsDraft.address = $("dnsaddr").value);
+    const save = () => {
+      const host = dnsDraft.host.trim(), address = dnsDraft.address.trim();
+      if (!host) return toast("Type the host the app asks for", true);
+      if (!address) return toast("Type the IP or hostname to send the call to", true);
+      run("dns_add", { host, address }, () => {
+        dnsDraft = { host: "", address: "" };
+        return "DNS spoof: " + host + " → " + address;
+      });
+    };
+    $("dnsaddbtn").onclick = save;
+    ["dnshost", "dnsaddr"].forEach((id) => { $(id).onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); save(); } }; });
+    root.querySelectorAll("[data-dnsrm]").forEach((x) => (x.onclick = () =>
+      run("dns_rm", { host: x.dataset.dnsrm }, "Removed DNS spoof for " + x.dataset.dnsrm)));
+  }
+
   function clientCertsHTML() {
     const rows = state.client_certs || [];
     const when = (t) => (t ? new Date(t * 1000).toLocaleDateString() : "?");
@@ -3592,6 +3628,7 @@
     ["Clear the session", "The trash button next to the filter box (asks first)", "filter"],
     ["Right-click a call", "Map Local, Breakpoint, Repeat, Copy as cURL, Show only this host…", "call"],
     ["SSL Proxying list", "<b>Network → HTTPS decryption</b> (every host, only the hosts you list, or all except the ones you list)", "net"],
+    ["DNS Spoofing", "<b>Network → DNS Spoofing</b> (host → IP; URL and Host stay the same)", "net"],
     ["Client Certificates", "<b>Network → Client certificates</b> (a .p12 or PEM per host, for mutual TLS)", "net"],
     ["Scripting", "<b>Scripts</b> tab (JavaScript or Python, per project)", "scripts"],
     ["Save a session", "<b>Sessions</b> tab → save, add a note, reopen later", "sess"],

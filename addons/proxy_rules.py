@@ -12,6 +12,7 @@ File: the active project's rules.json (option `proxy_rules_file`):
   "throttle_match": ".",  # regex on URL; only matching calls are throttled ("" = all)
   "loss": 0,                     # % of matching calls dropped (connection killed)
   "no_cache": false,             # No Caching: strip conditional request headers, force no-store responses
+  "dns_spoof": [],               # [{host, address, enabled}]: connect to address; URL and Host stay the app's host
   "rules": [
     {"name": "...", "enabled": true, "match": "<regex on full URL>", "method": "GET",
      "operation": "GetUser",   # optional: only that GraphQL operation (same URL may carry many)
@@ -68,9 +69,9 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import proxy_common
 importlib.reload(proxy_common)
-from proxy_common import (PRODUCT, PROFILE_VALUES, atomic_json, STATE_ROOT, breakpoints, project_profile,
-                          migrate_rules, remote_url_problem, throttle_shorthand, tls_config, tls_options, user_regex,
-                          without_hop_headers)
+from proxy_common import (PRODUCT, PROFILE_VALUES, atomic_json, STATE_ROOT, breakpoints, dns_spoof_map,
+                          project_profile, migrate_rules, remote_url_problem, throttle_shorthand, tls_config,
+                          tls_options, user_regex, without_hop_headers)
 import proxy_rule_validation
 importlib.reload(proxy_rule_validation)      # mitmproxy reloads this add-on in place: the validator must see the new proxy_common too
 from proxy_rule_validation import (BLOCK_MODES, DEFAULT_BLOCK_MODE, compile_rule, every_applies,
@@ -437,6 +438,7 @@ class ProxyRules:
         self.throttle_re = None
         self.loss = 0
         self.no_cache = False       # No Caching (Proxyman tool): every decrypted call fetches fresh content
+        self.dns_spoof = {}         # host → address (enabled entries only); Host/URL/SNI keep the app's host
         self.skipped_rules = []
         self.failed_rules = {}      # R2A-02: rules whose file could not be read at request time {name: error}
         self.last_good_cfg = {"rules": []}
@@ -510,6 +512,7 @@ class ProxyRules:
             self._set_tls({})
             self.rules, self.throttle, self.loss, self.mtime = [], None, 0, None
             self.no_cache = False
+            self.dns_spoof = {}
             self.skipped_rules = []
             self.failed_rules.clear()      # R3A-01: no removed rule may remain in doctor/panel state
             self._every_counts.clear()
@@ -555,6 +558,7 @@ class ProxyRules:
             self.failed_rules = {n: e for n, e in self.failed_rules.items() if n in {r["name"] for r in rules}}  # R3A-01
             self.throttle_re, self.loss = throttle_re, loss
             self.no_cache = bool(cfg.get("no_cache"))
+            self.dns_spoof = dns_spoof_map(cfg)
             self.tls = tls
             self.skipped_rules = skipped
             self._sync_hits(cfg.get("rules", []))
@@ -563,7 +567,8 @@ class ProxyRules:
             names = ", ".join(r.get("name", "?") for r in rules) or "none"
             ctx.log.info(f"proxy_rules: loaded {self.path} — active rules: {names}; "
                          f"throttle: {cfg.get('throttle', 'off')}; loss: {self.loss}%; TLS: {tls['mode']}"
-                         + ("; no caching: on" if self.no_cache else ""))
+                         + ("; no caching: on" if self.no_cache else "")
+                         + ("; dns spoof: %d" % len(self.dns_spoof) if self.dns_spoof else ""))
         except Exception as e:   # keep the previous good rules on a bad edit
             ctx.log.warn(f"proxy_rules: cannot load {self.path}: {e} — keeping previous rules")
             self.mtime = mtime
@@ -895,6 +900,8 @@ class ProxyRules:
         # step: a 1 s stat throttle let the first calls after `rules add` / `breakpoint` slip through unblocked or
         # unpaused while the CLI already said ON. One stat per call costs microseconds.
         self._reload(force=True)
+        if await self._apply_dns_spoof(flow):
+            return
         host = flow.request.host
         plain = self._page_reachable(flow)
         insecure_page = getattr(ctx.options, "ssl_insecure", False) and self._insecure_page(flow)
@@ -961,6 +968,51 @@ class ProxyRules:
     def client_disconnected(self, client):
         self._abandon_paused(client)
         self._https_pins = {key: value for key, value in self._https_pins.items() if key[0] != client.id}
+
+    async def _apply_dns_spoof(self, flow):
+        """Send bytes to a configured address while the listed URL, Host header and TLS SNI stay the app's host.
+
+        Unlike Map Remote, the URL is not rewritten — staging can sit behind a production hostname. Does not touch
+        the system resolver or Rivis's bind addresses. With --verify-upstream the upstream certificate must still
+        match the original hostname (SNI); the default --insecure path does not check it."""
+        if not self.dns_spoof or flow.metadata.get("proxy_local"):
+            return False
+        # Map lookup strips a trailing dot (FQDN form); the HTTPS pin key must keep the same
+        # string server_connect sees on data.server.address or the pin misses.
+        raw_host = (flow.request.host or "").strip().lower()
+        host = raw_host.rstrip(".")
+        if not host:
+            return False
+        try:
+            ipaddress.ip_address(host.strip("[]"))
+            return False                                      # already an address — nothing to spoof
+        except ValueError:
+            pass
+        target = self.dns_spoof.get(host)
+        if not target:
+            return False
+        try:
+            ipaddress.ip_address(target.strip("[]"))
+            addresses = {target.strip("[]")}
+        except ValueError:
+            addresses = await self._resolve(target, flow.request.port)
+            if addresses is None:
+                text = proxy_common.upstream_conn_text("Name or service not known", target, flow.request.port)
+                flow.response = http.Response.make(502, _error_page(502, text),
+                                                   {"Content-Type": "text/html; charset=utf-8"})
+                _tag(flow, "dns-spoof %s → %s (unresolved)" % (host, target))
+                return True
+        chosen = sorted(addresses, key=lambda a: (":" in a, a))[0]
+        if flow.request.scheme == "https":
+            # Keep request.host as the hostname so upstream SNI stays the name the app asked for.
+            now = time.monotonic()
+            self._https_pins = {key: value for key, value in self._https_pins.items() if now - value[0] < 60}
+            key = (flow.client_conn.id, raw_host, flow.request.port)
+            self._https_pins[key] = (now, addresses)
+        else:
+            self._pin(flow, addresses)
+        _tag(flow, "dns-spoof → %s" % chosen)
+        return True
 
     @staticmethod
     def _pin(flow, addresses):
