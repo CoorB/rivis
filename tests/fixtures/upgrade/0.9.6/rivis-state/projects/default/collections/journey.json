@@ -1,0 +1,23 @@
+{
+  "name": "journey",
+  "created": 1.0,
+  "entries": [
+    {
+      "method": "GET",
+      "scheme": "https",
+      "host": "api.test",
+      "path": "/x",
+      "query": "",
+      "req_body": "",
+      "status": 200,
+      "headers": [
+        [
+          "Content-Type",
+          "application/json"
+        ]
+      ],
+      "text": "{}",
+      "recorded_at": 1.0
+    }
+  ]
+}

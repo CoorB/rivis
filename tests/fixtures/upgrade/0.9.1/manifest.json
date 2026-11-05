@@ -1,0 +1,17 @@
+{
+  "version": "0.9.1",
+  "files": [
+    "outside.json",
+    "rivis-state/current-project",
+    "rivis-state/lan-devices.json",
+    "rivis-state/profiles/sit/project.json",
+    "rivis-state/profiles/sit/rules.example.json",
+    "rivis-state/projects/default/collections/journey.json",
+    "rivis-state/projects/default/filters.json",
+    "rivis-state/projects/default/mocks/card.json",
+    "rivis-state/projects/default/rules.json",
+    "rivis-state/projects/default/scripts/hdr.py",
+    "rivis-state/projects/default/trusted-files.json",
+    "rivis-state/projects/sit/rules.json"
+  ]
+}

@@ -361,7 +361,13 @@ migrate_legacy() {
   tmp=$(mktemp -d "$parent/.neo.tmp.XXXXXX") || return 1
   if ! (umask 077
     [ ! -f "$old/rules.json" ] || cp "$old/rules.json" "$tmp/rules.json"
-    for d in mocks collections sessions; do [ ! -d "$old/$d" ] || cp -R "$old/$d" "$tmp/$d"; done
+    # Project files that sat next to rules.json under ~/.neo-mitm (filters, trusted Map Local paths,
+    # column/view choices) and scripts/ must move with the rules, or the panel and scripts list look
+    # fine while the files they name are gone.
+    for f in filters.json trusted-files.json columns.json view.json; do
+      [ ! -f "$old/$f" ] || cp "$old/$f" "$tmp/$f"
+    done
+    for d in mocks collections sessions scripts; do [ ! -d "$old/$d" ] || cp -R "$old/$d" "$tmp/$d"; done
   ); then
     rm -rf "$tmp"
     echo "$CLI: legacy state copy failed; migration will be retried next time" >&2

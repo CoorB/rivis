@@ -1,0 +1,3 @@
+START_PORT=39101
+START_WEB_PORT=39102
+START_ARGS=(--project default start --background --no-open)

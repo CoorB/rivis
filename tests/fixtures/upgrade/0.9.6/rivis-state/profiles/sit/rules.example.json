@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "throttle": "off",
+  "throttle_match": "sit\\.neo\\.sa",
+  "loss": 0,
+  "tls": {
+    "mode": "all",
+    "allow": [],
+    "ignore": []
+  },
+  "manual": {
+    "latency_ms": 0,
+    "jitter_ms": 0,
+    "down_kbps": 0,
+    "up_kbps": 0,
+    "loss_pct": 0,
+    "response_delay_ms": 0
+  },
+  "rules": [],
+  "scripts": [],
+  "breakpoints": [],
+  "collections": {
+    "recording": null,
+    "record_match": "sit\\.neo\\.sa",
+    "replay": [],
+    "strict": false
+  }
+}

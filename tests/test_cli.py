@@ -1845,6 +1845,46 @@ class Migration(CliBase):
         r = self.ok("projects", "list")
         self.assertTrue(os.path.isdir(os.path.join(self.state, "projects", "neo")))
 
+    def test_scripts_filters_and_trusted_files_are_copied_with_legacy_state(self):
+        # A neo-mitm user who saved scripts, filters and trusted Map Local files under ~/.neo-mitm must still
+        # have them after the first Rivis command copies that tree into projects/neo.
+        old = self.make_legacy()
+        os.makedirs(os.path.join(old, "scripts"))
+        open(os.path.join(old, "scripts", "hdr.py"), "w").write(
+            'def on_request(context, url, request):\n    return request\n')
+        with open(os.path.join(old, "rules.json")) as fh:
+            doc = json.load(fh)
+        doc["scripts"] = [{"name": "hdr", "file": "hdr.py", "lang": "py", "enabled": True,
+                           "match": ".", "method": None}]
+        json.dump(doc, open(os.path.join(old, "rules.json"), "w"))
+        json.dump([{"name": "errors", "filter": "~c 4xx|~c 5xx"}],
+                  open(os.path.join(old, "filters.json"), "w"))
+        outside = os.path.join(self.home, "outside-mock.json")
+        open(outside, "w").write("{}")
+        json.dump({"files": [outside]}, open(os.path.join(old, "trusted-files.json"), "w"))
+        json.dump({"columns": ["status", "method", "url"]}, open(os.path.join(old, "columns.json"), "w"))
+        json.dump({"project_only": True}, open(os.path.join(old, "view.json"), "w"))
+
+        self.ok("projects", "list")
+        target = os.path.join(self.state, "projects", "neo")
+        self.assertTrue(os.path.isfile(os.path.join(target, "scripts", "hdr.py")),
+                        "legacy scripts/ must be copied so rules.json script entries still open")
+        self.assertEqual(open(os.path.join(target, "scripts", "hdr.py")).read().splitlines()[0],
+                         "def on_request(context, url, request):")
+        self.assertEqual(json.load(open(os.path.join(target, "filters.json"))),
+                         [{"name": "errors", "filter": "~c 4xx|~c 5xx"}])
+        self.assertEqual(json.load(open(os.path.join(target, "trusted-files.json"))),
+                         {"files": [outside]})
+        self.assertEqual(json.load(open(os.path.join(target, "columns.json"))),
+                         {"columns": ["status", "method", "url"]})
+        self.assertEqual(json.load(open(os.path.join(target, "view.json"))),
+                         {"project_only": True})
+        listed = self.ok("--project", "neo", "scripts", "list").stdout
+        self.assertIn("hdr", listed)
+        self.assertIn("hdr.py", listed)
+        self.assertNotIn("(none)", listed)
+        trust = self.ok("--project", "neo", "rules", "trusted-files").stdout
+        self.assertIn(outside, trust)
 
 
 class TrustedFiles(CliBase):

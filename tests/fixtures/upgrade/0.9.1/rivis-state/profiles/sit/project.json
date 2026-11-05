@@ -1,0 +1,11 @@
+{
+  "id": "sit",
+  "label": "SIT",
+  "description": "User project profile",
+  "hosts": "sit\\.neo\\.sa",
+  "record_match": "sit\\.neo\\.sa",
+  "throttle_match": "sit\\.neo\\.sa",
+  "dev_ssl_insecure_hint": "use --insecure only when the upstream certificate cannot be validated",
+  "android_packages": [],
+  "ios_bundle_ids": []
+}

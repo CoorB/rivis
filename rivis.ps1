@@ -408,7 +408,8 @@ function Migrate-Legacy {
   $temp = Join-Path $parent (".neo.tmp." + [Guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Path $temp | Out-Null
   try {
-    foreach ($item in @("rules.json","mocks","collections","sessions")) {
+    # Project files next to rules.json under ~/.neo-mitm and scripts/ must move with the rules.
+    foreach ($item in @("rules.json","filters.json","trusted-files.json","columns.json","view.json","mocks","collections","sessions","scripts")) {
       $source = Join-Path $old $item
       if (Test-Path $source) { Copy-Item -Recurse $source (Join-Path $temp $item) }
     }
