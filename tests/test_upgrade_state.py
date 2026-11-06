@@ -20,6 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness
 from harness import Suite, wait_for
 
+# the version this checkout ships: the upgrade target of these tests (never a hard-coded number that goes stale)
+CURRENT = open(os.path.join(harness.REPO, "install", "VERSION")).read().strip()
+
 FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "upgrade")
 INSTALL = os.path.join(harness.REPO, "install", "install.sh")
 DIST_ROOT = os.path.abspath(os.path.join(harness.REPO, ".."))
@@ -240,7 +243,7 @@ class InstallerUpgrade(unittest.TestCase):
         try:
             up = self.install_from_checkout(env=env)
             self.assertEqual(up.returncode, 0, up.stdout + up.stderr)
-            self.assertIn("0.9.10", self.suite.run([self.launcher(), "--version"], home=self.home, env=env).stdout)
+            self.assertIn(CURRENT, self.suite.run([self.launcher(), "--version"], home=self.home, env=env).stdout)
             self.assertIn("health check :%d/:%d ok" % (port, web), up.stdout)
             after = state_snapshot(self.home)
             lost = sorted(set(before) - set(after))
@@ -314,7 +317,7 @@ class InstallerUpgrade(unittest.TestCase):
         self.assertEqual(sorted(set(before) - set(after)), [])
         self.assertEqual(before, after)
         self.assertTrue(json.load(open(rules_path)).get("no_cache") is True)
-        self.assertTrue(os.path.isdir(os.path.join(self.home, ".local", "rivis", "tool-0.9.10")))
+        self.assertTrue(os.path.isdir(os.path.join(self.home, ".local", "rivis", "tool-" + CURRENT)))
 
 
 class LegacyMigrationParity(unittest.TestCase):
