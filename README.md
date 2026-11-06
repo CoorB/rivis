@@ -120,7 +120,8 @@ instance using this installation before removing its add-ons, and leaves saved p
 
 ## Ground rules
 
-- On first use Rivis asks you to agree to its Terms of Use (`rivis terms`); it passes no traffic until you do.
+- On first use Rivis asks you to agree to its Terms of Use (`rivis terms`) and to sign in with your organisation
+  account so it can confirm that IT approved you (`rivis access`); it passes no traffic until both are done.
 - Simulators and emulators by default. A real phone or tablet on your Wi-Fi works only when you start with
   `rivis start --lan` and allow that device in Tools → Devices; every other device on the network is refused.
 - Keep the Rivis certificate (`~/.mitmproxy`), saved sessions and HAR files on your own Mac. Don't share them.

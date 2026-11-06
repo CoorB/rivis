@@ -57,6 +57,8 @@ import client_certs
 importlib.reload(client_certs)
 import terms
 importlib.reload(terms)
+import access
+importlib.reload(access)
 import update_policy
 importlib.reload(update_policy)
 import mitm_watch
@@ -199,6 +201,8 @@ class ProxyPanel:
         self._devices = devices.Snapshot(self._devices_check, 2)
         self._update = devices.Snapshot(self._update_check, 6 * 3600)        # signed in-app updates (addons/updater.py)
         self._mitm = devices.Snapshot(self._mitm_check, 3600)                # mitmproxy releases (asks PyPI once a day)
+        self._access_check = devices.Snapshot(self._access_run, 600)         # IT approval (access.py decides when to ask)
+        self._access_error = None
         self._update_login = None                                            # the device-flow sign-in in progress
         self._update_installing = None
         self._browser_jobs = devices.Jobs("a browser is still starting — wait a moment")
@@ -722,6 +726,7 @@ class ProxyPanel:
             "product": PRODUCT,
             # the window covers everything with the terms until they are accepted (the proxy is locked meanwhile)
             "terms": {k: terms_state[k] for k in ("state", "title", "sha256")},
+            "access": self.access_state(),     # IT approval: the window covers everything until it is confirmed
             "update_policy": self.update_policy_state(),
             "mitm_watch": self.mitm_watch_state(),
             "active_project": self.active_project,
@@ -977,12 +982,40 @@ class ProxyPanel:
                 self._update_login = {"status": "error", "error": r.get("error")}
                 return
             if r.get("result") == "ok":
+                self._access_run(force=True)          # the same sign-in confirms IT's approval: lift the cover now
                 self._update_login = {"status": "ok"}
                 self._update.invalidate()
                 return
             if r.get("result") == "slow_down":
                 interval += 5
         self._update_login = {"status": "error", "error": "the code expired — sign in again"}
+
+    def _access_run(self, force=False):
+        """access.py check in its own process (the sign-in token lives in the Keychain, read by `security`)."""
+        try:
+            py = sys.executable if os.name == "nt" else "/usr/bin/python3"     # Windows: mitmproxy's own Python
+            r = subprocess.run([py, "-I", os.path.join(HERE, "access.py"), "check", "--json"]
+                               + (["--force"] if force else []), capture_output=True, text=True, timeout=60)
+            doc = json.loads(r.stdout or "{}")
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            doc = {"error": "could not check IT approval: %s" % e}
+        self._access_error = doc.get("error")
+        return doc
+
+    def access_state(self):
+        """IT approval for the window's cover: the local record (cheap) plus a background re-check when due."""
+        try:
+            st = access.status()
+        except Exception as e:  # noqa: BLE001 - fail closed, never crash the poll
+            st = {"state": access.UNCONFIGURED, "allowed": False, "account": None,
+                  "reason": "the IT approval record could not be read (%s)" % e}
+        if st["state"] == access.OFF:
+            return {"state": access.OFF, "allowed": True}
+        self._access_check.get()
+        login = self._update_login
+        return {"state": st["state"], "allowed": st["allowed"], "account": st.get("account"), "reason": st.get("reason"),
+                "login": {k: v for k, v in login.items() if k != "device_code"} if login else None,
+                "error": self._access_error}
 
     @staticmethod
     def _mitm_check():
@@ -2542,6 +2575,16 @@ class ProxyPanel:
             return self.project_use(a)
         elif op == "project_unpin":
             return self.project_unpin(a)
+        elif op in ("access_signin", "access_check"):
+            import threading
+            if op == "access_check":
+                def _check():
+                    self._access_run(force=True)
+                threading.Thread(target=_check, daemon=True).start()
+            elif not (self._update_login and self._update_login.get("status") == "waiting"):
+                self._update_login = {"status": "starting"}       # the updates sign-in: one token for both
+                threading.Thread(target=self._update_login_flow, daemon=True).start()
+            return {"access": self.access_state()}
         elif op == "terms_status":       # the cover asks this, not "state": it must never add a second state poll
             st = terms.status()
             return {"terms": {k: st[k] for k in ("state", "title", "sha256")}}   # every reply already has "state"

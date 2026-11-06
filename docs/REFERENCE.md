@@ -63,6 +63,26 @@ rivis terms status     # accepted / not accepted / changed since you agreed
 rivis terms show       # print the text
 ```
 
+## IT approval
+
+A release build can require that IT approved you before Rivis runs (product.json `access_required`). Approval works
+like this: you read the organisation's policy for proxy and debugging tools and submit its confirmation form; IT then
+adds you to the Rivis readers group in Azure DevOps (the same group that lets you download Rivis and its updates).
+
+On first use, after the Terms of Use, Rivis asks you to sign in once with your organisation account (a code you enter
+in the browser; the same sign-in is used for updates). It then asks Azure DevOps whether your account may read the
+Rivis feed. If it may, Rivis runs; if not, it says so and passes no traffic until IT has added you (`rivis access`
+checks again). While Rivis runs it confirms this once a day, so removing someone from the group locks their copy. A
+Mac that cannot reach Azure DevOps keeps working for 7 days after the last confirmation (`access_offline_days`), then
+locks until it can confirm again. The answer is kept in `~/.rivis-access.json` (which account, when it was last
+confirmed, earlier answers). The same commands as for the Terms of Use always work.
+
+```
+rivis access           # confirm now (asks you to sign in when needed)
+rivis access status    # approved as … / not approved / sign-in needed
+rivis access login     # sign in again, for example with another account
+```
+
 ## Required updates and the mitmproxy watch
 
 A release can require a minimum version: its signed update manifest names `min_version` and, optionally, the date

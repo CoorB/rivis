@@ -70,6 +70,7 @@ SYSTEM_PYTHON = (
     "addons/terms.py",          # the Terms of Use gate: both CLIs run it with /usr/bin/python3 -I (and mitmweb imports it)
     "addons/update_policy.py",  # force update: both CLIs and updater.py run it; mitmweb (proxy_terms, panel) imports it
     "addons/mitm_watch.py",     # mitmproxy release watch: rivis update / doctor run it; the panel imports it
+    "addons/access.py",         # IT approval: both CLIs run it with /usr/bin/python3 -I; mitmweb (proxy_terms, panel) imports it
     "addons/tls_cli.py",
     "addons/updater.py",
 )

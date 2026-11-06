@@ -20,6 +20,8 @@ system proxy, one CA per workstation, removed again with `off`.
                                             system proxy and the certificate store are not touched
   .\<cli>.ps1 terms [status|show]          read and agree to the Terms of Use (asked before first use; nothing that
                                             captures traffic runs until you agree; stop/status/off always work)
+  .\<cli>.ps1 access [status|login]        confirm that IT approved you: sign in once with your organisation
+                                            account (asked before first use when this build requires it)
   .\<cli>.ps1 projects list|use ID|unpin|show|new
   .\<cli>.ps1 ui | rules list|on NAME|off NAME|show NAME|rm NAME|test URL [METHOD]|edit|allow-file PATH|disallow-file PATH|trusted-files
   .\<cli>.ps1 rules add NAME match=REGEX|match_wildcard=HOST/PATH action=ACTION [key=value ...]
@@ -766,7 +768,7 @@ function Show-TermsPrompt {
     Write-Host "  $($r.Out)"
   }
 }
-$TermsOpen = @("help","version","terms","stop","status","doctor","bug-report","net-reset","update","health")
+$TermsOpen = @("help","version","terms","access","stop","status","doctor","bug-report","net-reset","update","health")
 if ($Command -notin $TermsOpen -and -not ($Command -in @("android","ios") -and $Action -in @("off",""))) {
   $terms = Invoke-TermsPy status
   if ($terms.Code -eq 4) { Die "this copy of $ProductName has no Terms of Use text - reinstall it from the official release" }
@@ -778,6 +780,20 @@ if ($Command -notin $TermsOpen -and -not ($Command -in @("android","ios") -and $
       # nobody at a terminal: start / ui run LOCKED (no traffic) and the window shows the terms
       Write-Host "${Cli}: the Terms of Use have not been accepted on this computer - run '${Cli}.ps1 terms' in a terminal, or agree in the $ProductName window" -ForegroundColor Red
       exit 10
+    }
+  }
+  # IT approval (addons\access.py): confirmed by signing in with the organisation account; same rules as the bash CLI
+  $py = Get-PythonCommand
+  $gate = (@(& $py.Exe @($py.Prefix) -I (Join-Path $PSScriptRoot "addons\access.py") gate 2>$null) -join " ").Trim()
+  if ($LASTEXITCODE -eq 13) {
+    $state, $why = $gate -split "`t", 2
+    $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+    if ($interactive -and $state -in @("sign_in","expired")) {
+      Write-Host "${ProductName}: $why"
+      & $py.Exe @($py.Prefix) -I (Join-Path $PSScriptRoot "addons\access.py") login
+      if ($LASTEXITCODE -ne 0) { exit 13 }
+    } elseif ($interactive -or $Command -notin @("start","ui")) {
+      Write-Host "${Cli}: $why" -ForegroundColor Red; exit 13
     }
   }
   # force update (addons\update_policy.py): a signed release can require a minimum version from a date on
@@ -804,6 +820,20 @@ switch ($Command) {
     if ($r.Code -eq 4) { Die "this copy of $ProductName has no Terms of Use text - reinstall it from the official release" }
     if ([Console]::IsInputRedirected) { Die "run '${Cli}.ps1 terms' in a terminal (it asks you to type your name), or agree in the $ProductName window" }
     if (-not (Show-TermsPrompt)) { exit 10 }
+  }
+  "access" {
+    $py = Get-PythonCommand
+    $accessPy = Join-Path $PSScriptRoot "addons\access.py"
+    if ($Action -eq "status") { & $py.Exe @($py.Prefix) -I $accessPy status; exit $LASTEXITCODE }
+    if ($Action -and $Action -ne "login") { Die "usage: access [status|login]" }
+    if ($Action -ne "login") {
+      & $py.Exe @($py.Prefix) -I $accessPy check --force
+      if ($LASTEXITCODE -ne 13) { exit $LASTEXITCODE }
+      $st = (& $py.Exe @($py.Prefix) -I $accessPy status --json | ConvertFrom-Json).state
+      if ($st -notin @("sign_in","expired")) { exit 13 }
+    }
+    if ([Console]::IsInputRedirected) { Die "run '${Cli}.ps1 access login' in a terminal, or sign in in the $ProductName window" }
+    & $py.Exe @($py.Prefix) -I $accessPy login; exit $LASTEXITCODE
   }
   "app" { Die "the native window is macOS only — use rivis ui" }
   "projects" {

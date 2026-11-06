@@ -14,5 +14,6 @@
     "package": "rivis",
     "tenant": "",
     "client_id": ""
-  }
+  },
+  "access_required": false
 }

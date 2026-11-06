@@ -403,6 +403,22 @@ def check_mitm_watch(rep):
         rep.add("Tooling", OK, "mitmproxy updates", "no newer release (checked %s)" % doc.get("checked_at"))
 
 
+def check_access(rep):
+    """IT approval (access.py): the local record only; doctor never asks Azure DevOps."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import access
+        st = access.status()
+    except Exception:  # noqa: BLE001 - doctor reports, it never fails on this
+        return
+    if st["state"] == access.OFF:
+        return
+    if st["allowed"]:
+        rep.add("Tooling", OK, "IT approval", access.describe(st))
+    else:
+        rep.add("Tooling", ERR, "IT approval", st["reason"], "run '%s access'" % access.CLI)
+
+
 def check_ca(rep, confdir):
     sec = "Certificate"
     ca = os.path.join(confdir, "mitmproxy-ca-cert.pem")
@@ -1268,6 +1284,7 @@ def main(argv):
     rep.add("Proxy", INFO, "upstream proxy: %s" % args.upstream)
     check_mitmproxy_node(rep)
     check_mitm_watch(rep)
+    check_access(rep)
     check_python(rep)
     check_ca(rep, args.confdir)
     check_sysext(rep)

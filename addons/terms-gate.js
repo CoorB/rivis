@@ -160,10 +160,62 @@
     note.append(el("span", null, m.summary), x);
     document.body.appendChild(note);
   }
-  window.RivisTermsGate = { seen: (t, p, m) => { mitm(m); if (!policy(p)) seen(t); } };
+  // IT approval (access.py): once the terms are accepted, the cover asks the user to sign in with their organisation
+  // account; the server then asks Azure DevOps whether IT approved them (the Rivis readers group).
+  let accessKey = null;
+  function approval(a) {
+    if (!a || a.allowed !== false) { accessKey = null; return false; }
+    const login = a.login || {};
+    const key = [a.state, a.reason, a.account, login.status, login.user_code, login.error, a.error].join("|");
+    if (box && shownSha === "access" && accessKey === key) return true;
+    const card = frame();
+    shownSha = "access"; accessKey = key;
+    const head = el("h2", "margin:0;padding:18px 20px 4px;font-size:18px", "Confirm IT approval"); head.id = "rivis-terms-title";
+    const body = el("div", "padding:0 20px 18px;display:flex;flex-direction:column;gap:10px");
+    body.append(el("p", "margin:0", a.reason || "Rivis needs to confirm that IT approved you."));
+    if (a.state === "refused") body.append(el("p", "margin:0;color:#4a5866",
+      "IT approves people who have read the organisation's policy for proxy and debugging tools and submitted its confirmation form. Rivis passes no traffic until then."));
+    if (login.status === "waiting" && login.user_code) {
+      const box2 = el("div", "padding:10px 12px;border:1px solid #d5dde4;border-radius:6px;background:#f7f9fb");
+      const link = el("a", "color:#0f6cbd", login.uri || "");
+      if (/^https:\/\//.test(login.uri || "")) { link.href = login.uri; link.target = "_blank"; link.rel = "noopener"; }
+      const code = el("strong", "font:600 18px ui-monospace,Menlo,monospace;letter-spacing:2px", login.user_code);
+      code.id = "rivis-access-code";
+      box2.append(el("span", null, "Open "), link, el("span", null, " and enter the code "), code);
+      body.append(box2, el("p", "margin:0;color:#4a5866", "Waiting for the sign-in to finish…"));
+    } else if (login.status === "starting") body.append(el("p", "margin:0;color:#4a5866", "Starting the sign-in…"));
+    const err = el("div", "color:#b3261e;min-height:1.2em", login.status === "error" ? login.error : (a.error || ""));
+    err.setAttribute("role", "alert"); err.id = "rivis-access-error";
+    const row = el("div", "display:flex;gap:8px;justify-content:flex-end");
+    const act = async (op) => { try { await api(op, {}); } catch (e) { err.textContent = e.message; } };
+    if (a.state === "refused") {
+      const again = el("button", BTN, "Check again"); again.type = "button"; again.id = "rivis-access-check";
+      again.onclick = () => act("access_check");
+      row.append(again);
+    }
+    if (a.state !== "unconfigured" && login.status !== "waiting" && login.status !== "starting") {
+      const sign = el("button", BTN + ";background:#0f6cbd;border-color:#0f6cbd;color:#fff",
+        a.state === "refused" ? "Sign in with another account" : "Sign in with your organisation account");
+      sign.type = "button"; sign.id = "rivis-access-signin";
+      sign.onclick = () => act("access_signin");
+      row.append(sign);
+    }
+    if (a.account && a.state === "refused") body.append(el("p", "margin:0;color:#4a5866", "Signed in as " + a.account + "."));
+    body.append(err, row);
+    card.append(head, body);
+    (row.querySelector("button") || card).focus?.();
+    return true;
+  }
+  window.RivisTermsGate = { seen: (t, p, m, a) => {
+    mitm(m);
+    if (policy(p)) return;
+    if ((t || {}).state === "accepted" && approval(a)) return;
+    if (shownSha === "access") { close(); accessKey = null; }
+    seen(t);
+  } };
   async function ask() {
     if (heard || stopped) return;
-    try { const r = await api("terms_status", {}); window.RivisTermsGate.seen(r.terms, (r.state || {}).update_policy, (r.state || {}).mitm_watch); }
+    try { const r = await api("terms_status", {}); window.RivisTermsGate.seen(r.terms, (r.state || {}).update_policy, (r.state || {}).mitm_watch, (r.state || {}).access); }
     catch (e) { setTimeout(ask, 3000); }
   }
   const start = () => { setTimeout(ask, 4000); };
