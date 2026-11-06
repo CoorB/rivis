@@ -93,6 +93,8 @@ def parse_deadline(text):
     try:
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
             return datetime.datetime.strptime(text, "%Y-%m-%d").astimezone()
+        if text[-1:] in "Zz":                 # "…Z" is the usual UTC form of release tooling; Python 3.9 rejects it
+            text = text[:-1] + "+00:00"
         dt = datetime.datetime.fromisoformat(text)
         return dt if dt.tzinfo else dt.astimezone()
     except ValueError:

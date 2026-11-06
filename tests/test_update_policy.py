@@ -122,6 +122,17 @@ class Policy(unittest.TestCase):
         self.policy(min_version="0.9.12")                      # no date: required at once
         self.assertEqual(self.status()[0], 11)
 
+    def test_a_utc_z_deadline_is_honoured_not_ignored(self):
+        # Release tooling usually writes UTC as "...Z"; Python 3.9 cannot parse that, and an ignored deadline in a
+        # signed manifest would silently mean "no update required"
+        self.policy(min_version="0.9.12", required_after="2020-01-01T00:00:00Z")
+        rc, st = self.status()
+        self.assertEqual((rc, st["state"]), (11, "required"))
+        later = (datetime.date.today() + datetime.timedelta(days=5)).isoformat() + "T00:00:00Z"
+        self.policy(min_version="0.9.12", required_after=later)
+        rc, st = self.status()
+        self.assertEqual((rc, st["state"]), (12, "due"))
+
     def test_an_edited_or_foreign_manifest_is_ignored(self):
         m = manifest(min_version="0.9.12")
         sig = sign(self.key, m, self.signdir)

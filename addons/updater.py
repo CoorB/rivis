@@ -121,14 +121,41 @@ def _keychain_args():
     return [kc] if kc else []
 
 
+CHUNK = 3000     # `security -i` reads one command per line and truncates a line at about 4 KB: a real Entra access + refresh
+#                  token pair is larger than that, so the sign-in is kept in chunks ("i/n:data" in service, service.1, ...)
+
+
+def _kc_service(i):
+    return KEYCHAIN_SERVICE if i == 0 else "%s.%d" % (KEYCHAIN_SERVICE, i)
+
+
+def _kc_read(i):
+    return subprocess.run(["security", "find-generic-password", "-a", _account(), "-s", _kc_service(i), "-w"]
+                          + _keychain_args(), capture_output=True, text=True, timeout=15).stdout.strip()
+
+
+def _kc_raw():
+    first = _kc_read(0)
+    m = re.match(r"^(\d+)/(\d+):(.*)$", first)
+    if not m:
+        return first                                   # a sign-in saved whole by an earlier version
+    n = int(m.group(2))
+    if int(m.group(1)) != 0 or not 0 < n <= 16:
+        return ""
+    parts = [m.group(3)]
+    for i in range(1, n):
+        part = _kc_read(i)
+        mm = re.match(r"^(\d+)/(\d+):(.*)$", part)
+        if not mm or int(mm.group(1)) != i or int(mm.group(2)) != n:
+            return ""                                  # a chunk is missing or stale: not signed in, never half a token
+        parts.append(mm.group(3))
+    return "".join(parts)
+
+
 def token_load():
     f = os.environ.get("RIVIS_TOKEN_FILE")
     try:
-        if f:
-            raw = open(f).read()
-        else:
-            raw = subprocess.run(["security", "find-generic-password", "-a", _account(), "-s", KEYCHAIN_SERVICE, "-w"]
-                                 + _keychain_args(), capture_output=True, text=True, timeout=15).stdout.strip()
+        raw = open(f).read() if f else _kc_raw()
         return json.loads(base64.b64decode(raw).decode()) if raw else None
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
@@ -156,11 +183,20 @@ def token_save(tok):
                     pass
         return
     # through `security -i` on stdin, so the token never appears in a process list
-    cmd = "add-generic-password -U -a %s -s %s -l %s -w %s %s\n" % (
-        _account(), KEYCHAIN_SERVICE, KEYCHAIN_SERVICE, blob, " ".join(_keychain_args()))
-    r = subprocess.run(["security", "-i"], input=cmd, capture_output=True, text=True, timeout=15)
-    if r.returncode != 0 or "error" in (r.stdout + r.stderr).lower():
-        raise UpdateError("could not save the sign-in in the Keychain: %s" % (r.stderr or r.stdout).strip()[:200])
+    chunks = [blob[i:i + CHUNK] for i in range(0, len(blob), CHUNK)] or [""]
+    token_delete()                                     # no stale chunk from a longer earlier token survives
+    for i, part in enumerate(chunks):
+        svc = _kc_service(i)
+        cmd = "add-generic-password -U -a %s -s %s -l %s -w %s %s\n" % (
+            _account(), svc, svc, "%d/%d:%s" % (i, len(chunks), part), " ".join(_keychain_args()))
+        r = subprocess.run(["security", "-i"], input=cmd, capture_output=True, text=True, timeout=15)
+        if r.returncode != 0 or "error" in (r.stdout + r.stderr).lower():
+            token_delete()
+            raise UpdateError("could not save the sign-in in the Keychain: %s" % (r.stderr or r.stdout).strip()[:200])
+    if token_load() != tok:                            # never claim a sign-in that cannot be read back
+        token_delete()
+        raise UpdateError("the sign-in was saved but could not be read back from the Keychain — try '%s update login' "
+                          "again, and tell the maintainer if it keeps happening" % CLI)
 
 
 def token_delete():
@@ -171,8 +207,11 @@ def token_delete():
         except FileNotFoundError:
             pass
         return
-    subprocess.run(["security", "delete-generic-password", "-a", _account(), "-s", KEYCHAIN_SERVICE] + _keychain_args(),
-                   capture_output=True, timeout=15)
+    for i in range(0, 17):                              # the sign-in and every chunk of it (a missing item is fine)
+        r = subprocess.run(["security", "delete-generic-password", "-a", _account(), "-s", _kc_service(i)]
+                           + _keychain_args(), capture_output=True, timeout=15)
+        if r.returncode != 0 and i > 0:
+            break
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────────────────────────────────────────

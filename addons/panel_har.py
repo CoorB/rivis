@@ -59,7 +59,10 @@ def from_har(har, skipped=None):
     from urllib.parse import parse_qsl, urlencode, urlsplit
     from proxy_collections import body_hash
     out = []
-    for e in ((har or {}).get("log") or {}).get("entries", [])[:10000]:
+    entries = ((har or {}).get("log") or {}).get("entries", [])
+    if len(entries) > 10000 and skipped is not None:       # say so: a HAR bigger than the cap lost its tail silently
+        skipped.append("%d entries beyond the 10000 limit were not imported" % (len(entries) - 10000))
+    for e in entries[:10000]:
         try:
             req, resp = e["request"], e["response"]
             u = urlsplit(req["url"])

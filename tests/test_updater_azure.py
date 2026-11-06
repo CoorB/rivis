@@ -272,5 +272,33 @@ class AzureDownload(AzureBase):
         self.assertIn("not a plain file", j["error"])
 
 
+@unittest.skipUnless(os.path.exists("/usr/bin/security"), "needs the macOS Keychain")
+class AzureTokenInKeychain(unittest.TestCase):
+    """A real Entra access + refresh token pair is bigger than the ~4 KB line `security -i` accepts: it is kept in
+    chunks and read back to prove it. Uses a throwaway keychain file, never the user's."""
+
+    def test_large_tokens_round_trip_shrink_cleanly_and_delete(self):
+        import tempfile
+        d = tempfile.mkdtemp(prefix="kc-")
+        kc = os.path.join(d, "t.keychain-db")
+        subprocess.run(["security", "create-keychain", "-p", "pw", kc], check=True, capture_output=True)
+        self.addCleanup(lambda: subprocess.run(["security", "delete-keychain", kc], capture_output=True))
+        subprocess.run(["security", "unlock-keychain", "-p", "pw", kc], check=True, capture_output=True)
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); sys.dont_write_bytecode = True\n"
+            "import updater\n"
+            "tok = lambda a, r: {'access_token': 'a' * a, 'refresh_token': 'r' * r, 'expires_at': 1.0e9, 'refresh_expires_at': None}\n"
+            "out = []\n"
+            "for a, r in ((100, 100), (2400, 1800), (6000, 4000), (9000, 9000)):\n"
+            "    updater.token_save(tok(a, r)); out.append(updater.token_load() == tok(a, r))\n"
+            "updater.token_save(tok(50, 50)); out.append(updater.token_load() == tok(50, 50))   # no stale chunk is read\n"
+            "updater.token_delete(); out.append(updater.token_load() is None)\n"
+            "print(out)\n")
+        r = subprocess.run(["/usr/bin/python3", "-I", "-c", code, os.path.join(harness.REPO, "addons")],
+                           capture_output=True, text=True, timeout=120,
+                           env={"HOME": d, "PATH": "/usr/bin:/bin", "RIVIS_KEYCHAIN": kc})
+        self.assertEqual(r.stdout.strip(), str([True] * 6), r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
