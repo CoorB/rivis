@@ -53,11 +53,11 @@ team mirror next to `install.sh`.) Apple's Command Line Tools must be installed
 1. Quit Proxyman, Charles or any other proxy app (while it runs it takes the simulator's traffic). If it leaves your
    Mac's proxy setting behind, Rivis clears it for you.
 2. Sign in to [Azure DevOps](https://dev.azure.com/coorb/Rivis/_artifacts) with your organisation account, open
-   **Artifacts › rivis**, choose the **rivis** package and **Download** its newest version (`rivis-0.9.10.tgz`) into
+   **Artifacts › rivis**, choose the **rivis** package and **Download** its newest version (`rivis-0.9.11.tgz`) into
    **Downloads**. (No access? Ask IT to add you to the Rivis readers group.)
 3. Paste this into Terminal (change the version if yours is newer):
    ```bash
-   cd ~/Downloads && tar -xzf rivis-0.9.10.tgz && { [ -d rivis-installer-0.9.10 ] || unzip -q package/rivis-installer-0.9.10.zip; } && ./rivis-installer-0.9.10/install.sh
+   cd ~/Downloads && tar -xzf rivis-0.9.11.tgz && { [ -d rivis-installer-0.9.11 ] || unzip -q package/rivis-installer-0.9.11.zip; } && ./rivis-installer-0.9.11/install.sh
    ```
    For scripted installs, pass `--yes --skip-local-capture` to `install.sh`.
    It works whether or not Safari already unzipped the file. For iOS, approve *Mitmproxy Redirector* when
