@@ -48,7 +48,7 @@ cleanup() {
 FAILED=0
 trap cleanup EXIT
 
-# A PTY makes the real installer offer its documented Start now? prompt. Send Enter to its prompts.
+# A PTY makes the real installer offer its documented Start now? prompt. Send Enter to its prompts, "yes" to the Terms.
 run /usr/bin/python3 - "$CMD" "$WORK/install.log" <<'PY'
 import os, pty, select, sys, time
 command, log_path = sys.argv[1:]
@@ -67,9 +67,11 @@ with open(log_path, 'wb') as log:
             except OSError: break
             if not data: break
             log.write(data); log.flush(); buffer = (buffer + data)[-4096:]
-            for marker in (b'Press Enter to continue', b'Start Rivis now and open its UI? [Y/n]'):
+            # the Terms of Use prompt wants a typed "yes" (Enter would decline them and stop the install)
+            for marker, reply in ((b'Type yes to agree', b'yes\n'), (b'Press Enter to continue', b'\n'),
+                                  (b'Start Rivis now and open its UI? [Y/n]', b'\n')):
                 if marker in buffer and marker not in answered:
-                    os.write(fd, b'\n'); answered.add(marker)
+                    os.write(fd, reply); answered.add(marker)
         done, status = os.waitpid(pid, os.WNOHANG)
         if done: sys.exit(os.waitstatus_to_exitcode(status))
     try: os.kill(pid, 15)
