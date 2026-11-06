@@ -322,6 +322,9 @@ class Projects(CliBase):
     def test_flag_without_value(self):
         self.refused("status", "--project", msg="needs an ID")
         self.refused("status", "--project=", msg="needs an ID")
+        # an empty value is no value: it must not fall through to the help text and exit 0
+        self.refused("--project", "", msg="needs an ID")
+        self.refused("--project", "", "status", msg="needs an ID")
 
     def test_bad_or_stale_current_project_falls_back_with_a_warning(self):
         os.makedirs(self.state)
