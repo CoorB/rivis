@@ -276,8 +276,8 @@ class ToolWindows(UiBase):
         r = self.fetch("/json/small?nmr=2")
         self.assertNotIn("json", dict((k.lower(), v) for k, v in r.headers).get("content-type", ""), "answered by /text")
         self.wait_row("nmr=2")
-        rb = self.row("nmr=2").bounding_box()                # the window floats over the table: click the row's visible end
-        self.row("nmr=2").click(position={"x": rb["width"] - 16, "y": rb["height"] / 2})
+        rb = self.row("nmr=2").bounding_box()                # the tool window docks on the right: click the row's start
+        self.row("nmr=2").click(position={"x": 16, "y": rb["height"] / 2})
         w.locator("[data-r-test]").click()
         wait_for(lambda: "to-text" in w.locator("[data-r-testout]").inner_text() and "fires" in w.locator("[data-r-testout]").inner_text(), 5, 0.1, "explained")
 
@@ -509,15 +509,15 @@ class ToolWindows(UiBase):
         self.inst.write_cfg({"rules": []})
         page = self.open_new()
         wait_for(lambda: page.locator("#tb-project option[value='ui-a']").count() == 1, 10, 0.2, "ui-a listed")
-        wait_for(lambda: "Rules project:" in page.locator("#banners").inner_text(), 10, 0.2, "rules banner")
+        self.assertNotIn("Rules project:", page.locator("#banners").inner_text())   # not pinned: the toolbar says it
         page.locator("#tb-project").select_option("ui-a")
         wait_for(lambda: self.panel.state()["active_project"] == "ui-a", 10, 0.2, "api on ui-a")
-        wait_for(lambda: "UI A" in page.locator("#banners").inner_text(), 10, 0.2, "banner says UI A")
+        wait_for(lambda: page.locator("#tb-project").input_value() == "ui-a", 10, 0.2, "toolbar says ui-a")
         r = self.fetch("/ui-hot")
         self.assertEqual(r.json(), {"from": "ui-a"})
         page.locator("#tb-project").select_option("ui-b")
         wait_for(lambda: self.panel.state()["active_project"] == "ui-b", 10, 0.2, "api on ui-b")
-        wait_for(lambda: "UI B" in page.locator("#banners").inner_text(), 10, 0.2, "banner says UI B")
+        wait_for(lambda: page.locator("#tb-project").input_value() == "ui-b", 10, 0.2, "toolbar says ui-b")
         r = self.fetch("/ui-hot")
         self.assertEqual(r.json(), {"from": "ui-b"})
         self.assertEqual(self.errors, [])

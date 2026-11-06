@@ -53,6 +53,9 @@ class MoreWindows(UiBase):
         self.page.locator('#menu [data-act="%s"]' % act).click()
 
     def more(self, wid):
+        if wid in ("compose", "devices"):           # on the toolbar since 0.9.11 (design review F12), not under More
+            self.page.locator('[data-tool="%s"]' % wid).click()
+            return self.win_open(wid)
         self.page.locator("#tb-more").click()
         self.page.locator('#menu [data-more="%s"]' % wid).click()
         return self.win_open(wid)
@@ -61,11 +64,12 @@ class MoreWindows(UiBase):
         self.open_new("/echo?more=1")
         button = self.page.locator("#tb-more")
         button.click()
-        self.assertEqual(self.page.evaluate("document.activeElement.dataset.more"), "compose")
+        self.assertEqual(self.page.evaluate("document.activeElement.dataset.more"), "collections")
         self.page.keyboard.press("ArrowDown")
-        self.assertEqual(self.page.evaluate("document.activeElement.dataset.more"), "devices")
+        self.assertEqual(self.page.evaluate("document.activeElement.dataset.more"), "sessions")
         self.page.keyboard.press("ArrowUp")
-        self.assertEqual(self.page.evaluate("document.activeElement.dataset.more"), "compose")
+        self.assertEqual(self.page.evaluate("document.activeElement.dataset.more"), "collections")
+        self.assertEqual(self.page.locator("#menu [data-more]").count(), 3)    # no duplicate Classic view
         self.page.keyboard.press("Escape")
         self.assertEqual(self.page.evaluate("document.activeElement.id"), "tb-more")
         self.assertEqual(button.get_attribute("aria-expanded"), "false")

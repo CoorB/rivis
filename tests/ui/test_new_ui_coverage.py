@@ -366,7 +366,7 @@ class NewWindowCoverage(UiBase):
     def test_dirty_compose_window_keeps_its_draft_on_escape(self):
         self.open_new()
         self.page.locator('#tb-more').click()
-        self.page.locator('[data-more="compose"]').click()
+        self.page.locator('[data-tool="compose"]').click()
         w = self.win('compose')
         field = w.locator('[data-compose-url]')
         field.fill(self.up.url('/echo?draft=1'))

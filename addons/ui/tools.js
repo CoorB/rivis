@@ -23,8 +23,31 @@
 
   function front(w) { w.el.style.zIndex = String(++z); wins.forEach((x) => x.el.classList.toggle("front", x === w)); }
 
+  // A tool window opens DOCKED on the right, beside the list, and the list shrinks to make room (like the classic
+  // Tools drawer), so the call being worked on stays visible. Dragging it by its title bar makes it a free window,
+  // remembered as such; docked or free is remembered per window.
+  function mainBox() {
+    const m = document.querySelector(".rv-main"), r = m && m.getBoundingClientRect();
+    return r && r.height > 50 ? { top: r.top, bottom: r.bottom } : { top: 70, bottom: innerHeight - 28 };
+  }
+  function dock(w, def, saved) {
+    const width = Math.round(Math.min((saved && saved.w) || Math.min(def.width || 720, 480), innerWidth * 0.55));
+    const b = mainBox();
+    w.docked = true;
+    Object.assign(w.el.style, { left: (innerWidth - width - 6) + "px", top: Math.round(b.top) + "px", width: width + "px",
+                                height: Math.max(200, Math.round(b.bottom - b.top)) + "px" });
+  }
+  function relayout() {
+    let px = 0;
+    wins.forEach((w) => { if (w.shown && w.docked && !w.el.hidden) px = Math.max(px, w.el.offsetWidth + 12); });
+    document.documentElement.style.setProperty("--rv-dock", px + "px");
+    wins.forEach((w) => { if (w.shown && w.docked && !w.el.hidden) dock(w, w.def, { w: w.el.offsetWidth }); });
+  }
+  addEventListener("resize", () => relayout());
   function place(w, def) {
     const saved = store.get("rivis-win-" + w.id);
+    if (!saved || saved.docked) { dock(w, def, saved); return; }
+    w.docked = false;
     const vw = innerWidth, vh = innerHeight;
     const width = Math.min((saved && saved.w) || def.width || 720, vw - 24), height = Math.min((saved && saved.h) || def.height || 520, vh - 24);
     let left = saved ? saved.x : Math.round((vw - width) / 2) + (cascade % 5) * 24, top = saved ? saved.y : 70 + (cascade % 5) * 24;
@@ -32,7 +55,7 @@
     left = Math.max(4, Math.min(left, vw - 120)); top = Math.max(4, Math.min(top, vh - 60));
     Object.assign(w.el.style, { left: left + "px", top: top + "px", width: width + "px", height: height + "px" });
   }
-  const remember = (w) => { const r = w.el.getBoundingClientRect(); store.set("rivis-win-" + w.id, { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }); };
+  const remember = (w) => { const r = w.el.getBoundingClientRect(); store.set("rivis-win-" + w.id, { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), docked: !!w.docked }); };
 
   function build(id, def) {
     const el = document.createElement("section");
@@ -54,8 +77,10 @@
     head.addEventListener("pointerdown", (e) => {
       if (e.button !== 0 || e.target.closest("button, input, select, a")) return;
       e.preventDefault();
-      const r = el.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
+      const r = el.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top, x0 = e.clientX, y0 = e.clientY;
       const move = (m) => {
+        if (w.docked && Math.abs(m.clientX - x0) + Math.abs(m.clientY - y0) < 6) return;   // a click, not a drag
+        if (w.docked) { w.docked = false; relayout(); }
         el.style.left = Math.max(-r.width + 120, Math.min(innerWidth - 120, m.clientX - dx)) + "px";
         el.style.top = Math.max(0, Math.min(innerHeight - 40, m.clientY - dy)) + "px";
       };
@@ -64,7 +89,7 @@
     });
     if (window.ResizeObserver) {
       let t = 0;
-      new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { if (!el.hidden) remember(w); }, 300); }).observe(el);
+      new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { if (!el.hidden) { remember(w); if (w.docked) relayout(); } }, 300); }).observe(el);
     }
     place(w, def);
     return w;
@@ -80,6 +105,7 @@
     if (!wasOpen) w.opener = document.activeElement;
     w.el.hidden = false; w.shown = true;
     front(w);
+    relayout();
     try { def.render(w, w.opts); } catch (e) { w.body.innerHTML = `<p class="rv-win-err">${esc(e.message)}</p>`; }
     const st = A.state();
     if (st && def.onState) { try { def.onState(st, w); } catch (e) { /* drawn on the next poll */ } }
@@ -95,6 +121,7 @@
     if (!w || w.el.hidden) return true;
     if (!force && w.def.dirty && w.def.dirty(w) && !await A.ask("Close " + w.def.title + "?", "Your changes in this window are not saved.", "Close without saving", true)) return false;
     w.el.hidden = true; w.shown = false;
+    relayout();
     if (w.def.closed) { try { w.def.closed(w); } catch (e) { /* nothing to clean */ } }
     const back = w.opener;
     w.opener = null;

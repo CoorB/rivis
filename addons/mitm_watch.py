@@ -125,7 +125,7 @@ def summary(doc):
         return "mitmproxy watch: %s" % doc["error"]
     parts = []
     if doc.get("newer"):
-        parts.append("mitmproxy %s is out (this Rivis uses %s); it reaches you in a Rivis update once IT approves it"
+        parts.append("A newer mitmproxy (%s) is out; this Rivis uses %s. It arrives with a Rivis update"
                      % (doc["latest"], doc["pinned"]))
     if doc.get("advisories"):
         ids = ", ".join((a.get("aliases") or [a.get("id")])[0] for a in doc["advisories"][:3])

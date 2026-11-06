@@ -14,10 +14,9 @@
     title: "Breakpoint", width: 760, height: 460,
     render(w) {
       w.data.sig = null; w.data.edit = w.data.edit || null;
-      w.body.innerHTML = `<div class="rv-win-bar">
-          <button type="button" class="rv-btn p" data-bp-new>+ Add Rule</button>
-          <span class="rv-win-hint">A matching call stops before it is sent (request) or before the app gets it (response).
-            Right-click a call → Breakpoint adds one for that endpoint.</span></div>
+      w.body.innerHTML = `<div class="rv-win-bar"><button type="button" class="rv-btn p" data-bp-new>+ Add Rule</button></div>
+        <p class="rv-win-hint rv-win-intro">A matching call stops before it is sent (request) or before the app gets it (response).
+          Right-click a call → Breakpoint adds one for that endpoint.</p>
         <div class="rv-paused-banner" hidden></div>
         <div class="rv-rules" data-bp-list></div><div class="rv-editor" data-bp-ed hidden></div>`;
       w.body.querySelector("[data-bp-new]").onclick = () => editRule(w, null);

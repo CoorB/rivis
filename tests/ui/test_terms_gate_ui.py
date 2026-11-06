@@ -53,7 +53,7 @@ class TermsGateUi(UiBase):
         self.assertEqual(self.fetch("/json/small").status, 200)
         # polls still in flight when the cover closes or the page navigates are cut off by the browser
         self.errors[:] = [e for e in self.errors if not (e[0] == "requestfailed"
-                                                         and e[1].endswith(("/proxy/api/state", "/proxy/api/terms_status", "/proxy/api/terms_accept")))
+                                                         and e[1].endswith(("/proxy/api/state", "/proxy/api/terms_status", "/proxy/api/terms_accept", "/proxy/api/terms_text")))
                           and e != ("console.error", "Failed to load resource: net::ERR_FAILED")]   # the call cut on purpose
         self.assertEqual(self.errors, [])
 

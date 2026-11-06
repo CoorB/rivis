@@ -172,7 +172,7 @@
     .sbox.bad:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--rv-danger) 22%, transparent); }
     .sbox input#sq { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; box-shadow: none; padding: 0; min-height: 0; height: 26px; font: 12.5px var(--rv-mono); color: var(--rv-text); border-radius: 0; }
     .sbox input#sq::placeholder { font-family: var(--rv-font); }
-    .sbox kbd { font-size: 10.5px; padding: 0 5px; border-bottom-width: 1px; color: var(--rv-text-3); }
+    .sbox kbd { font-size: 12px; padding: 0 5px; border-bottom-width: 1px; color: var(--rv-text-3); }
     .sbox:focus-within kbd, .sbox.has kbd, :host([data-tight]) .sbox kbd { display: none; }
     .sbox .ib { width: 22px; height: 22px; flex: none; }
     .sbox .ib[hidden], .sbox kbd[hidden] { display: none; }
@@ -180,7 +180,7 @@
             padding: 10px 12px; display: none; font-size: 12px; color: var(--rv-text-2); }
     .spop.open { display: block; animation: pop var(--rv-dur) var(--rv-ease); }
     .spop.err { border-color: var(--rv-danger); color: var(--rv-danger); background: var(--rv-surface); }
-    .spop h5 { margin: 0 0 6px; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--rv-text-3); }
+    .spop h5 { margin: 0 0 6px; font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: var(--rv-text-3); }
     .spop button.ex { display: flex; width: 100%; align-items: baseline; gap: 10px; border: 0; background: none; padding: 3px 4px; border-radius: var(--rv-r-sm); cursor: pointer; text-align: left; color: var(--rv-text-2); font-size: 12px; }
     .spop button.ex:hover { background: var(--rv-accent-soft); color: var(--rv-accent-text); }
     .spop button.ex code { background: transparent; padding: 0; min-width: 112px; color: var(--rv-text); font-size: 12px; }
@@ -194,7 +194,7 @@
     .fstrip .saved { border: 1px solid var(--rv-border-strong); border-radius: var(--rv-r-pill); background: var(--rv-surface); color: var(--rv-text); white-space: nowrap; cursor: pointer; padding: 2px 7px; }
     .fstrip .saved.on { background: var(--rv-accent-soft); color: var(--rv-accent-text); }
     .fstrip .savedmenu { display: inline-flex; gap: 3px; }
-    .fstrip .savedmenu button { border: 0; background: transparent; color: var(--rv-accent-text); cursor: pointer; font-size: 11px; }
+    .fstrip .savedmenu button { border: 0; background: transparent; color: var(--rv-accent-text); cursor: pointer; font-size: 12px; }
     :host([data-sbrow]) .fstrip { padding-left: calc(var(--sb-w, 200px) + 16px); }
     :host([data-sbrow]) .sbar, :host([data-sbrow]) .sbox { height: 26px; }
     :host([data-sbrow]) .sbox input#sq { height: 22px; }
@@ -207,16 +207,16 @@
     .cmenu button:hover, .cmenu button:focus-visible { background: var(--rv-accent-soft); color: var(--rv-accent-text); outline: none; }
     .cmenu button:disabled { opacity: .4; pointer-events: none; }
     .cmenu button.d:hover, .cmenu button.d:focus-visible { background: var(--rv-danger-soft); color: var(--rv-danger); }
-    .cmenu button kbd { margin-left: auto; font-size: 10.5px; }
+    .cmenu button kbd { margin-left: auto; font-size: 12px; }
     .cmenu hr { border: 0; border-top: 1px solid var(--rv-border); margin: 4px 2px; }
-    .cmenu .hd { padding: 4px 10px 6px; color: var(--rv-text-3); font-size: 11px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cmenu .hd { padding: 4px 10px 6px; color: var(--rv-text-3); font-size: 12px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     /* drawer */
     .drawer { container: rvdrawer / inline-size; position: fixed; top: 0; right: 0; height: 100vh; width: var(--drawer-w, 460px); max-width: 100vw; z-index: 2147483001; background: var(--rv-surface); color: var(--rv-text);
               border-left: 1px solid var(--rv-border); box-shadow: var(--rv-shadow-2); display: none; flex-direction: column; font-size: 13px; }
     .drawer.open { display: flex; animation: slide var(--rv-dur) var(--rv-ease); }
     @keyframes slide { from { transform: translateX(18px); opacity: .4; } }
-    header { display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; border-bottom: 1px solid var(--rv-border); }
+    header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; border-bottom: 1px solid var(--rv-border); }
     header .mark { width: 22px; height: 22px; border-radius: 7px; background: var(--rv-accent); color: var(--rv-accent-fg); display: grid; place-items: center; flex: none; }
     header .mark svg { width: 14px; height: 14px; stroke-width: 2.2; }
     header b { font-size: 14px; flex: 1; font-weight: 650; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -226,27 +226,27 @@
     nav { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--rv-border); background: var(--rv-surface); }   /* 6 + 5: every tab visible, even widths */
     nav::-webkit-scrollbar { display: none; }
     @container rvdrawer (max-width: 430px) { nav { grid-template-columns: repeat(4, 1fr); } }
-    nav button { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; border: 0; background: none; padding: 7px 2px 7px; cursor: pointer; font-size: 11.5px; font-weight: 500; color: var(--rv-text-2);
+    nav button { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; border: 0; background: none; padding: 7px 2px 7px; cursor: pointer; font-size: 12px; font-weight: 500; color: var(--rv-text-2);
                  border-bottom: 2px solid transparent; border-radius: var(--rv-r-md) var(--rv-r-md) 0 0; white-space: nowrap; min-width: 0; transition: color var(--rv-dur) var(--rv-ease), background var(--rv-dur) var(--rv-ease); }
     nav button svg.i { width: 17px; height: 17px; }
     nav button:hover { color: var(--rv-text); background: var(--rv-surface-2); }
     nav button.on { color: var(--rv-accent-text); border-bottom-color: var(--rv-accent); font-weight: 600; }
-    label.pj { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rv-text-3); min-width: 0; flex: 0 1 auto; }
-    label.pj select { min-width: 58px; width: 100%; }
-    /* two menus (Show, Source) share a ~380 px header with the close button: drop their words before anything overflows */
-    @container rvdrawer (max-width: 430px) { label.pj .pjt { display: none; } }
-    .info { color: var(--rv-text-3); cursor: help; font-size: 11px; }
+    /* Rules / Show / Source get their own full-width row under the title, so their values are never cut ("All tra") */
+    .pjrow { flex: 1 1 100%; display: flex; gap: 8px; min-width: 0; margin-top: 6px; }
+    label.pj { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rv-text-3); min-width: 0; flex: 1 1 0; }
+    label.pj select { min-width: 0; width: 100%; }
+    .info { color: var(--rv-text-3); cursor: help; font-size: 12px; }
     nav .cnt:empty { display: none; }
-    nav .cnt { position: absolute; top: 3px; right: calc(50% - 24px); background: var(--rv-accent-soft); color: var(--rv-accent-text); border-radius: var(--rv-r-pill); padding: 0 6px; font-size: 10.5px; font-weight: 700; line-height: 16px; font-variant-numeric: tabular-nums; }
+    nav .cnt { position: absolute; top: 3px; right: calc(50% - 24px); background: var(--rv-accent-soft); color: var(--rv-accent-text); border-radius: var(--rv-r-pill); padding: 0 6px; font-size: 12px; font-weight: 700; line-height: 16px; font-variant-numeric: tabular-nums; }
     nav .cnt.err { background: var(--rv-danger-soft); color: var(--rv-danger); }
     main { flex: 1; overflow: auto; padding: 14px; }
-    h4 { margin: 18px 0 7px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--rv-text-3); font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    h4 { margin: 18px 0 7px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--rv-text-3); font-weight: 700; display: flex; align-items: center; gap: 8px; }
     h4::after { content: ""; flex: 1; height: 1px; background: var(--rv-border); }
     h4:first-child { margin-top: 2px; }
     .call .u { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }   /* a 3,000-char URL must not push the actions off screen */
     .call { background: var(--rv-surface-2); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 9px 11px; word-break: break-all; font-family: var(--rv-mono); font-size: 12px; line-height: 1.5; }
     .call .sub { font-family: var(--rv-font); }
-    .m { font-weight: 700; margin-right: 8px; color: var(--rv-accent-text); font-size: 11px; letter-spacing: .03em; }
+    .m { font-weight: 700; margin-right: 8px; color: var(--rv-accent-text); font-size: 12px; letter-spacing: .03em; }
     .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
 
     /* controls */
@@ -265,13 +265,13 @@
     .row { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--rv-border); }
     .row .n { flex: 1; min-width: 0; }
     .row .n div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .tag { font-size: 10px; font-weight: 700; letter-spacing: .03em; padding: 1px 7px; border-radius: var(--rv-r-pill); background: var(--rv-accent-soft); color: var(--rv-accent-text); margin-left: 4px; }
+    .tag { font-size: 12px; font-weight: 700; letter-spacing: .03em; padding: 1px 7px; border-radius: var(--rv-r-pill); background: var(--rv-accent-soft); color: var(--rv-accent-text); margin-left: 4px; }
     .tag.err { background: var(--rv-danger-soft); color: var(--rv-danger); }
     .chip { font-size: 12px; padding: 3px 10px; border-radius: var(--rv-r-pill); border: 1px solid var(--rv-border-strong); background: var(--rv-surface); cursor: pointer; color: var(--rv-text-2); user-select: none;
             transition: background var(--rv-dur) var(--rv-ease), color var(--rv-dur) var(--rv-ease); }
     .chip:hover { border-color: var(--rv-accent); color: var(--rv-accent-text); }
     .chip.on { background: var(--rv-accent); color: var(--rv-accent-fg); border-color: var(--rv-accent); }
-    .sub { color: var(--rv-text-3); font-size: 11.5px; line-height: 1.45; }
+    .sub { color: var(--rv-text-3); font-size: 12px; line-height: 1.45; }
     .muted { color: var(--rv-text-3); }
     .sw { position: relative; width: 34px; height: 20px; flex: none; }
     .sw input { opacity: 0; width: 100%; height: 100%; position: absolute; margin: 0; cursor: pointer; z-index: 1; }
@@ -287,8 +287,8 @@
     input::placeholder, textarea::placeholder { color: var(--rv-text-3); opacity: 1; }
     input[type=checkbox] { accent-color: var(--rv-accent); }
     input.grow { flex: 1; min-width: 0; }
-    #project { max-width: 120px; min-height: 26px; font-size: 12px; }
-    #source { max-width: 112px; min-height: 26px; font-size: 12px; }
+    #project { min-height: 26px; font-size: 12px; }
+    #source { min-height: 26px; font-size: 12px; }
     #source option.unset { color: var(--rv-text-3); font-style: italic; }
     textarea { width: 100%; min-height: 260px; height: calc(100vh - 420px); font-family: var(--rv-mono); font-size: 12px; line-height: 1.55; border: 1px solid var(--rv-control); border-radius: var(--rv-r-md);
                padding: 10px; resize: vertical; background: var(--rv-surface-2); color: var(--rv-text); tab-size: 2; }
@@ -316,17 +316,17 @@
     .card .t { font-weight: 600; }
     .card .ok { margin-left: auto; color: var(--rv-accent-text); display: grid; place-items: center; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
-    .grid label { font-size: 11.5px; color: var(--rv-text-2); display: flex; flex-direction: column; gap: 4px; }
+    .grid label { font-size: 12px; color: var(--rv-text-2); display: flex; flex-direction: column; gap: 4px; }
     .seg { display: inline-flex; gap: 2px; margin: 8px 0 8px; padding: 3px; background: var(--rv-surface-2); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); }
     .seg button { border: 0; background: transparent; padding: 4px 12px; cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--rv-text-2); border-radius: calc(var(--rv-r-md) - 2px);
                   transition: background var(--rv-dur) var(--rv-ease), color var(--rv-dur) var(--rv-ease); }
     .seg button:hover { color: var(--rv-text); background: var(--rv-surface-3); }
     .seg button.on { background: var(--rv-surface); color: var(--rv-accent-text); font-weight: 600; box-shadow: var(--rv-shadow-1), inset 0 0 0 1px var(--rv-border); }
     .hrow { display: flex; gap: 4px; margin-bottom: 4px; }
-    .hrow input { flex: 1; min-width: 0; font-size: 11.5px; }
+    .hrow input { flex: 1; min-width: 0; font-size: 12px; }
     .hrow input:first-child { flex: 0 0 38%; }
     .krow { display: flex; gap: 4px; margin-bottom: 4px; align-items: center; }
-    .krow input[type=text] { flex: 1; min-width: 0; font-size: 11.5px; }
+    .krow input[type=text] { flex: 1; min-width: 0; font-size: 12px; }
     .krow input[type=checkbox] { flex: none; }
     .chip span[data-tlsrm] { margin-left: 4px; cursor: pointer; opacity: .7; }
     .empty { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 28px 18px; color: var(--rv-text-3); border: 1px dashed var(--rv-border-strong); border-radius: var(--rv-r-lg); background: var(--rv-surface-2); }
@@ -338,8 +338,8 @@
     button.b.sm { min-height: 24px; padding: 2px 9px; font-size: 12px; box-shadow: none; background: transparent; }
     button.b.sm.d { background: transparent; }
     .call .dim { color: var(--rv-text-3); }
-    .call .m { display: inline-block; font-size: 10.5px; padding: 0 7px; line-height: 18px; border-radius: var(--rv-r-pill); background: var(--rv-accent-soft); color: var(--rv-accent-text); margin-right: 8px; vertical-align: 1px; }
-    .call .lnk { font-size: 11.5px; padding: 0 2px; }
+    .call .m { display: inline-block; font-size: 12px; padding: 0 7px; line-height: 18px; border-radius: var(--rv-r-pill); background: var(--rv-accent-soft); color: var(--rv-accent-text); margin-right: 8px; vertical-align: 1px; }
+    .call .lnk { font-size: 12px; padding: 0 2px; }
     .lnk:hover { text-decoration: underline; }
     .info { display: inline-block; padding: 0 2px; border-radius: var(--rv-r-sm); }
     .info:hover, .info:focus-visible { color: var(--rv-accent-text); }
@@ -370,19 +370,19 @@
     .rule-hits.warn, .ruletest .warn { color: var(--rv-warn); }
     .ruletest { border: 1px solid var(--rv-border, #8884); border-radius: var(--rv-r-md); padding: 6px 9px; margin: 6px 0 10px; }
     .ruletest .fires { color: var(--rv-accent-text); }
-    table.diff { width: 100%; border-collapse: collapse; font-size: 11.5px; table-layout: fixed; }
+    table.diff { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
     table.diff td, table.diff th { border-bottom: 1px solid var(--rv-border); padding: 5px 6px; vertical-align: top; word-break: break-all; text-align: left; }
     table.diff th { color: var(--rv-text-3); font-weight: 600; }
     table.diff td.k { font-family: var(--rv-mono); color: var(--rv-text-2); }
     td.a { background: var(--rv-danger-soft); } td.b { background: var(--rv-ok-soft); }
     .rec { color: var(--rv-danger); font-weight: 700; }
-    pre.code { white-space: pre-wrap; word-break: break-word; background: var(--rv-surface-2); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 9px 11px; font: 11.5px/1.55 var(--rv-mono); max-height: 280px; overflow: auto; margin: 6px 0; }
+    pre.code { white-space: pre-wrap; word-break: break-word; background: var(--rv-surface-2); border: 1px solid var(--rv-border); border-radius: var(--rv-r-md); padding: 9px 11px; font: 12px/1.55 var(--rv-mono); max-height: 280px; overflow: auto; margin: 6px 0; }
     .jk { color: var(--rv-accent-text); } .js { color: var(--rv-ok); } .jn { color: var(--rv-info); } .jb { color: var(--rv-t-composed); }
     .errbox { background: var(--rv-danger-soft); color: var(--rv-danger); border: 1px solid color-mix(in srgb, var(--rv-danger) 35%, transparent); border-radius: var(--rv-r-md); padding: 8px 10px; margin-top: 8px; }
     .errbox pre.code { color: var(--rv-danger); }
-    kbd { font: 600 11px var(--rv-mono); background: var(--rv-surface); border: 1px solid var(--rv-border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; color: var(--rv-text-2); white-space: nowrap; }
+    kbd { font: 600 12px var(--rv-mono); background: var(--rv-surface); border: 1px solid var(--rv-border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; color: var(--rv-text-2); white-space: nowrap; }
     .map { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-    .map th { text-align: left; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--rv-text-3); padding: 4px 8px; }
+    .map th { text-align: left; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--rv-text-3); padding: 4px 8px; }
     .map td { padding: 7px 8px; border-top: 1px solid var(--rv-border); vertical-align: top; }
     .map td:first-child { color: var(--rv-text-2); width: 36%; }
     .map td.go { width: 64px; white-space: nowrap; text-align: right; }
@@ -419,13 +419,13 @@
     .emptylist code.cmd { cursor: copy; font-size: 12px; padding: 7px 9px; margin: 0 0 6px; white-space: nowrap; overflow-x: auto; }
     .emptylist code.cmd:hover { border-color: var(--rv-accent); }
     .emptylist .btns { justify-content: center; margin-top: 14px; }
-    .emptylist .foot { margin-top: 16px; color: var(--rv-text-3); font-size: 11.5px; }
+    .emptylist .foot { margin-top: 16px; color: var(--rv-text-3); font-size: 12px; }
     @media (max-width: 760px) { .emptylist .cols { grid-template-columns: 1fr; } }
     .reddot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rv-danger); margin-right: 6px; animation: pulse 1.4s ease-in-out infinite; }
     .errtext { color: var(--rv-danger); }
     .sub svg.i, .banner svg.i, p svg.i, b svg.i, h3 svg.i, h5 svg.i { vertical-align: -3px; margin-right: 3px; }
     .banner button { margin-left: auto; }
-    code { font-family: var(--rv-mono); font-size: 11.5px; background: var(--rv-surface-2); border-radius: 4px; padding: 1px 5px; }
+    code { font-family: var(--rv-mono); font-size: 12px; background: var(--rv-surface-2); border-radius: 4px; padding: 1px 5px; }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0ms !important; transition-duration: 0ms !important; } }
   </style>
   <button class="fab" id="fab" aria-label="Tools: Map Local, breakpoints, network conditions, scripts" title="Tools — Map Local, breakpoints, network conditions, scripts (Alt+Shift+P)"><span class="mark">${ico("sliders")}</span><span id="fablabel">Tools</span><span class="dot" id="fabdot" style="display:none"></span></button>
@@ -438,7 +438,7 @@
   <div class="fstrip" id="fstrip"></div>
   <div class="cmenu" id="cmenu" role="menu" aria-label="Call actions"></div>
   <div class="drawer" id="drawer">
-    <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><label class="pj" title="Which project's rules, mocks and scripts are live"><span class="pjt">Rules</span><select id="rules-project" aria-label="Active rules project"></select></label><label class="pj" title="Choose which project's calls the list shows"><span class="pjt">Show</span><select id="project" aria-label="Project shown in the call list"></select></label><label class="pj" title="Show the calls of one device, or of one app on it"><span class="pjt">Source</span><select id="source" aria-label="Device or app shown in the call list"></select></label><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button></header>
+    <header><span class="mark">${ico("mark")}</span><b id="ptitle">Tools</b><button class="ib" id="gear" title="Settings and help">${ico("gear")}</button><button class="x" id="close" title="Close" aria-label="Close">×</button><div class="pjrow"><label class="pj" title="Which project's rules, mocks and scripts are live"><span class="pjt">Rules</span><select id="rules-project" aria-label="Active rules project"></select></label><label class="pj" title="Choose which project's calls the list shows"><span class="pjt">Show</span><select id="project" aria-label="Project shown in the call list"></select></label><label class="pj" title="Show the calls of one device, or of one app on it"><span class="pjt">Source</span><select id="source" aria-label="Device or app shown in the call list"></select></label></div></header>
     <nav>
       <button data-t="call" class="on">${ico("call", "sm")}This call</button>
       <button data-t="compose">${ico("compose", "sm")}Compose</button>
@@ -1000,8 +1000,8 @@
       <div class="btns" style="margin-top:0"><input type="text" id="mh" class="grow" placeholder="Host (or paste a full URL)">
         <input type="text" id="mp" class="grow" placeholder="Path" value="/"></div>
       <div class="btns"><select id="mm"><option value="">ANY</option>${["GET", "POST", "PUT", "PATCH", "DELETE"].map((x) => `<option>${x}</option>`).join("")}</select>
-        status <input type="number" id="ms2" value="200" style="width:70px">
-        <input type="text" id="mop" class="grow" placeholder="GraphQL operation (optional)" aria-label="GraphQL operation">
+        status <input type="number" id="ms2" value="200" style="width:70px"></div>
+      <div class="btns"><input type="text" id="mop" class="grow" placeholder="GraphQL operation (optional)" aria-label="GraphQL operation">
         <button class="b p" id="madd">Add rule</button></div>
       <div class="sub">Wildcards: * and ? in host or path. Optional GraphQL operation: only that op on the same URL. Faster: select a call and use “Map Local this call”.</div>
       <h4>Rules (${maps.length})</h4>
@@ -1143,7 +1143,13 @@
     tab === "dev" ? ((dev && dev.pending) ? 600 : (dev && dev.job && dev.job.running) ? 1500 : 4000) : 30000); };
   function renderDev(m) {
     if (!devLoop.fast) { devLoop.fast = true; devLoop(); }          // entering the tab: poll every few seconds
-    if (!dev || dev.pending) { m.innerHTML = '<p class="muted">Looking for simulators and emulators…</p>'; if (!dev) devRefresh(); return; }
+    if (!dev || dev.pending) {
+      renderDev.since = renderDev.since || Date.now();
+      const slow = Date.now() - renderDev.since > 10000;
+      m.innerHTML = `<p class="muted">Looking for simulators and emulators…</p>${slow ? '<p class="muted">Still looking: Xcode (xcrun) or adb can take a few seconds to answer, especially just after a simulator or emulator starts.</p>' : ""}`;
+      if (!dev) devRefresh(); return;
+    }
+    renderDev.since = 0;
     if (dev.error) { m.innerHTML = `<p class="muted">${esc(dev.error)}</p>`; return; }
     const job = dev.job, running = !!(job && job.running);
     const bj = dev.browser_job;                                     // the last "Open a browser": its CLI output (or error)
@@ -1194,7 +1200,7 @@
         <div class="btns"><button class="b p" id="dyes">Continue</button><button class="b" id="dno">Cancel</button></div>
       </div>` : "";
     const log = job && !devStarting ? `<h4>${running ? "Setting up" : job.rc === 0 ? "Done" : "Failed"} — ${esc(job.label)}</h4>
-      <pre class="devlog" style="max-height:220px;overflow:auto;font-size:11.5px;white-space:pre-wrap;margin:0">${esc(job.lines.join("\n")) || "starting…"}</pre>` : "";
+      <pre class="devlog" style="max-height:220px;overflow:auto;font-size: 12px;white-space:pre-wrap;margin:0">${esc(job.lines.join("\n")) || "starting…"}</pre>` : "";
     m.innerHTML = `
       <div class="sub" style="margin-bottom:8px">Rivis sets up each simulator or emulator once: its certificate, and for Android the proxy. Like Proxyman's Certificate menu — one click per device.</div>
       ${consent}${log}
@@ -1206,7 +1212,7 @@
       <div class="sub">For web apps: a separate browser window with its own profile, pointed at Rivis. Your normal browser, the Mac's proxy settings and the keychain are not touched.</div>
       ${(dev.browsers || []).length ? `<div class="btns"><input type="text" id="dburl" class="grow" value="${esc(devUrl)}" placeholder="Web app URL (optional), e.g. https://app.example.com" aria-label="Web app URL" spellcheck="false" autocomplete="off">
         ${dev.browsers.map((b) => `<button class="b p" data-dbrowser="${esc(b.id)}">Open ${esc(b.name)}</button>`).join("")}</div>
-        ${bj ? `<pre class="devlog" style="font-size:11.5px;white-space:pre-wrap;margin:6px 0 0"${bj.rc ? ' role="alert"' : ""}>${esc(bj.running ? "Opening…" : (bj.rc ? "Could not open: " : "") + bj.lines.join("\n"))}</pre>` : ""}
+        ${bj ? `<pre class="devlog" style="font-size: 12px;white-space:pre-wrap;margin:6px 0 0"${bj.rc ? ' role="alert"' : ""}>${esc(bj.running ? "Opening…" : (bj.rc ? "Could not open: " : "") + bj.lines.join("\n"))}</pre>` : ""}
         <div class="sub">Same from a terminal: <code>rivis browser [URL]</code>.</div>`
         : `<div class="sub">No Chrome, Edge, Chromium or Brave found in Applications (Firefox is not supported yet).</div>`}`;
     wireLanSection(m);
@@ -1507,7 +1513,7 @@
       if (!min) {   // stock mitmweb, plus the one functional marker: host-only TLS tunnel rows
         const st = document.createElement("style"); st.id = "rivis-min";
         st.textContent = `.flow-table tbody tr[data-tunnel="1"] td { opacity:.7; font-style:italic; }
-          .flow-table tbody tr[data-tunnel="1"] td.col-path::after { content:" not decrypted"; font-style:normal; font-size:10px; }`;
+          .flow-table tbody tr[data-tunnel="1"] td.col-path::after { content:" not decrypted"; font-style:normal; font-size: 12px; }`;
         document.head.appendChild(st);
       }
     }
@@ -1548,11 +1554,22 @@
     return out;
   }
   const setAttr = (el, k, v) => { if (v === null) { if (el.hasAttribute(k)) el.removeAttribute(k); } else if (el.getAttribute(k) !== v) el.setAttribute(k, v); };
+  // Keyboard: mitmweb turns Tab into "next detail tab" (like →) whenever a call is selected, so Tab never moved focus
+  // in the classic window. Outside text fields Tab moves focus again; → still switches the detail tabs. In text fields
+  // mitmweb keeps its own Tab (filter completion, next header field).
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey || DOC.dataset.skin === "off") return;
+    const path = e.composedPath ? e.composedPath() : [e.target], t = path[0];
+    if (path.some((n) => n instanceof ShadowRoot)) return;        // the Tools drawer and covers: their own keys
+    if (t && t.closest && t.closest("input, textarea, select, [contenteditable]")) return;
+    e.stopImmediatePropagation();               // only mitmweb's shortcut is skipped; the browser still moves focus
+  }, true);
   function tagCells() {
     tagRows();
     const line = document.querySelector(".flow-detail section.response .first-line");   // status line colour in the details pane
     if (line) { const m = line.textContent.match(/\b([1-5])\d\d\b/); setAttr(line, "data-s", m ? m[1] : null); }
     paintURLs();
+    timeLabels();
     paintJSONBody();
     syncBodyFind();
     footerLabels();
@@ -1620,7 +1637,8 @@
       if (/^stream:/i.test(t)) {
         const size = String(state && state.stream_large_bodies || "").trim().match(/^(\d+(?:\.\d+)?)\s*([kmgt]?)(?:b)?$/i);
         const readable = size ? `${size[1]} ${size[2] ? size[2].toUpperCase() + "B" : "bytes"}` : "configured size";
-        setAttr(el, "data-rv", `Stream bodies above ${readable}`);
+        setAttr(el, "data-rv", `Bodies over ${readable} not kept`);
+        setAttr(el, "title", `Response and request bodies larger than ${readable} pass straight through and are not stored (stream_large_bodies).`);
         return;
       }
       if ((m = t.match(/^(\d+) of (\d+) flows? selected$/))) {
@@ -1632,11 +1650,29 @@
       if ((m = t.match(/^(?:regular|local|transparent|socks5|upstream|reverse)[^@]*@(?:.*:)?(\d+)$/))) {
         setAttr(el, "data-rv", `Proxy 127.0.0.1:${m[1]}` + (state && state.project.label ? ` · ${state.project.label}` : ""));
         setAttr(el, "title", "Point the device or simulator at this address (the tool prints the exact setup commands)");
+      } else if (t === "anticache") {
+        setAttr(el, "data-rv", "No Caching on");
+        setAttr(el, "title", "Every call is fetched fresh (conditional request headers removed). Turn it off in Network.");
+      } else if (t === "no-http2" || t === "http2: off") {
+        setAttr(el, "data-rv", "HTTP/1.1 to servers");
+        setAttr(el, "title", "HTTP/2 is off between Rivis and servers (faster over VPN for HTTP/1.1-only gateways). RIVIS_HTTP2=1 turns it on.");
+      } else if (/^mitmproxy \d/.test(t) || /^v?\d+\.\d+\.\d+$/.test(t)) {
+        setAttr(el, "data-rv-hide", "1");             // the engine version: in Settings and `rivis doctor`, not on the status bar
       } else if (t === "ssl_insecure") {
         setAttr(el, "data-rv", "Server certificates not checked");
         setAttr(el, "title", "ssl_insecure is on: upstream (server) certificates are not checked. Fine for internal test environments.");
         setAttr(el, "data-rv-tone", "warn");
       }
+    });
+  }
+  // Time column: mitmweb writes "883ms", "1.05s" and "3s" side by side. Show one rule the eye can learn, the same as the
+  // new window: under a second in ms, from a second on in s with two decimals (one above 10 s). React's text stays.
+  function timeLabels() {
+    document.querySelectorAll(".flow-table td.col-time").forEach((td) => {
+      const t = td.textContent.trim(), m = t.match(/^(\d+(?:\.\d+)?)\s*(ms|s|min)$/);
+      if (!m) { setAttr(td, "data-rv", null); return; }
+      const ms = parseFloat(m[1]) * (m[2] === "s" ? 1000 : m[2] === "min" ? 60000 : 1);
+      setAttr(td, "data-rv", ms < 1000 ? Math.round(ms) + " ms" : (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + " s");
     });
   }
   // Flow-list URLs: scheme + host muted, path in full colour, query muted. Ranges over React's text node (never replaced).
@@ -3729,7 +3765,7 @@
         <div class="set"><div><b>Theme</b><span class="sub">System follows your OS setting</span></div>
           <div class="seg" style="margin:0">${["system", "light", "dark"].map((m) => `<button data-theme-set="${m}" class="${themeMode() === m ? "on" : ""}">${m[0].toUpperCase() + m.slice(1)}</button>`).join("")}</div></div>
         <div class="set"><div><b>Compact rows</b><span class="sub">Tighter type and padding in the call list</span></div>${sw('id="set-compact"', compactOn())}</div>
-        <div class="set"><div><b>Rivis look</b><span class="sub">Off = the plain built-in look. Also: add <code>?theme=off</code> to the page address</span></div>${sw('id="set-skin"', skinOn())}</div>
+        <div class="set"><div><b>Rivis look</b><span class="sub">Off = the plain built-in look.</span></div>${sw('id="set-skin"', skinOn())}</div>
         <div class="set"><div><b>Welcome card</b><span class="sub">The first-open “Coming from Proxyman?” card</span></div><button class="b" id="set-welcome">Show again</button></div>
         <div id="set-updates">${updatesRowHTML()}</div>`,
     };

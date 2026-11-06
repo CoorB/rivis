@@ -27,7 +27,7 @@ class ViewLabelsUi(UiBase):
         page = self.open()
         label = page.locator("footer .label").filter(has_text="stream:").first
         label.wait_for(timeout=10000)
-        wait_for(lambda: label.get_attribute("data-rv") == "Stream bodies above 64 MB", 8, 0.2,
+        wait_for(lambda: label.get_attribute("data-rv") == "Bodies over 64 MB not kept", 8, 0.2,
                  "readable stream threshold in status bar")
         self.assertEqual(self.errors, [])
 

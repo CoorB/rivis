@@ -63,7 +63,7 @@
 
   let box = null, shownSha = null, stopped = false;
   const el = (tag, css, text) => { const e = document.createElement(tag); if (css) e.style.cssText = css; if (text != null) e.textContent = text; return e; };
-  const BTN = "font:inherit;padding:7px 14px;border-radius:6px;border:1px solid #8a96a3;background:#fff;color:#14202b;cursor:pointer";
+  const BTN = "font:inherit;padding:7px 14px;border-radius:6px;border:1px solid var(--rv-border-strong,#8a96a3);background:var(--rv-surface,#fff);color:var(--rv-text,var(--rv-text,#14202b));cursor:pointer";
 
   function keepKeysInside(ev) {    // mitmweb's and the window's own shortcuts must not act behind the terms
     if (box && !box.contains(ev.target)) { ev.stopPropagation(); ev.preventDefault(); box.querySelector("input, button")?.focus(); }
@@ -80,7 +80,7 @@
     box = el("div", "position:fixed;inset:0;z-index:2147483647;background:rgba(12,18,23,.72);display:flex;align-items:center;justify-content:center;font:14px/1.45 -apple-system,system-ui,sans-serif");
     box.id = "rivis-terms";
     box.setAttribute("role", "dialog"); box.setAttribute("aria-modal", "true"); box.setAttribute("aria-labelledby", "rivis-terms-title");
-    const card = el("div", "background:#fff;color:#14202b;width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 32px);display:flex;flex-direction:column;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.35);overflow:hidden");
+    const card = el("div", "background:var(--rv-surface,#fff);color:var(--rv-text,var(--rv-text,#14202b));width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 32px);display:flex;flex-direction:column;border-radius:10px;box-shadow:var(--rv-shadow-2,0 12px 40px rgba(0,0,0,.35));overflow:hidden");
     box.appendChild(card);
     document.addEventListener("keydown", keepKeysInside, true);
     document.body.appendChild(box);
@@ -100,20 +100,20 @@
     const card = frame();
     shownSha = doc.sha256;
     const head = el("h2", "margin:0;padding:18px 20px 4px;font-size:18px", doc.title || "Terms of Use"); head.id = "rivis-terms-title";
-    const sub = el("p", "margin:0;padding:0 20px 10px;color:#4a5866",
+    const sub = el("p", "margin:0;padding:0 20px 10px;color:var(--rv-text-2,#4a5866)",
       st.state === "changed" ? "The Terms of Use changed since you agreed. Read them again; Rivis passes no traffic until you agree."
         : "Before you use Rivis, read the Terms of Use. Rivis passes no traffic until you agree.");
-    const text = el("div", "margin:0 20px;padding:4px 16px;border:1px solid #d5dde4;border-radius:6px;background:#f7f9fb;overflow:auto;flex:1;min-height:160px");
+    const text = el("div", "margin:0 20px;padding:4px 16px;border:1px solid var(--rv-border,#d5dde4);border-radius:6px;background:var(--rv-surface-2,#f7f9fb);overflow:auto;flex:1;min-height:160px");
     text.appendChild(renderTerms(doc.text, doc.title || ""));
     text.tabIndex = 0; text.setAttribute("aria-label", "Terms of Use text");
     const form = el("form", "padding:14px 20px 18px;display:flex;flex-direction:column;gap:10px");
     const read = el("label", "display:flex;gap:8px;align-items:center");
     const check = el("input"); check.type = "checkbox"; check.id = "rivis-terms-read";
     read.append(check, el("span", null, "I have read the Terms of Use and I agree to follow them."));
-    const err = el("div", "color:#b3261e;min-height:1.2em"); err.setAttribute("role", "alert"); err.id = "rivis-terms-error";
+    const err = el("div", "color:var(--rv-danger,#b3261e);min-height:1.2em"); err.setAttribute("role", "alert"); err.id = "rivis-terms-error";
     const row = el("div", "display:flex;gap:8px;justify-content:flex-end");
     const no = el("button", BTN, "I do not agree"); no.type = "button"; no.id = "rivis-terms-decline";
-    const yes = el("button", BTN + ";background:#0f6cbd;border-color:#0f6cbd;color:#fff", "Agree"); yes.type = "submit"; yes.id = "rivis-terms-accept";
+    const yes = el("button", BTN + ";background:var(--rv-accent,#0f6cbd);border-color:var(--rv-accent,#0f6cbd);color:var(--rv-accent-fg,#fff)", "Agree"); yes.type = "submit"; yes.id = "rivis-terms-accept";
     row.append(no, yes);
     form.append(read, err, row);
     card.append(head, sub, text, form);
@@ -183,9 +183,9 @@
     if (!key || dismissed) { if (note) { note.remove(); note = null; } return; }
     if (note && note.dataset.key === key) return;
     if (note) note.remove();
-    note = el("div", "position:fixed;left:12px;bottom:12px;z-index:2147483645;max-width:520px;background:#fff;color:#14202b;border:1px solid #c5cfd8;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:8px 10px;font:12px/1.4 -apple-system,system-ui,sans-serif;display:flex;gap:8px;align-items:flex-start");
+    note = el("div", "position:fixed;left:12px;bottom:40px;z-index:2147483645;max-width:520px;background:var(--rv-surface,#fff);color:var(--rv-text,var(--rv-text,#14202b));border:1px solid var(--rv-border-strong,#c5cfd8);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:8px 10px;font:12px/1.4 -apple-system,system-ui,sans-serif;display:flex;gap:8px;align-items:flex-start");
     note.id = "rivis-mitm-note"; note.dataset.key = key; note.setAttribute("role", "status");
-    const x = el("button", "border:0;background:none;cursor:pointer;font-size:14px;line-height:1;color:#4a5866", "×");
+    const x = el("button", "border:0;background:none;cursor:pointer;font-size:14px;line-height:1;color:var(--rv-text-2,#4a5866)", "×");
     x.setAttribute("aria-label", "Dismiss");
     x.onclick = () => { try { localStorage.setItem("rivis-mitm-note", key); } catch (e) { /* kept for this page only */ } note.remove(); note = null; };
     note.append(el("span", null, m.summary), x);
@@ -203,19 +203,24 @@
     shownSha = "access"; accessKey = key;
     const head = el("h2", "margin:0;padding:18px 20px 4px;font-size:18px", "Confirm IT approval"); head.id = "rivis-terms-title";
     const body = el("div", "padding:0 20px 18px;display:flex;flex-direction:column;gap:10px");
-    body.append(el("p", "margin:0", a.reason || "Rivis needs to confirm that IT approved you."));
-    if (a.state === "refused") body.append(el("p", "margin:0;color:#4a5866",
+    const lead = a.state === "sign_in" ? "Sign in with your organisation account so Rivis can confirm that IT approved you."
+      : a.state === "expired" ? "Rivis could not confirm your approval for a while. Sign in again to keep using it."
+      : (a.reason || "Rivis needs to confirm that IT approved you.");
+    body.append(el("p", "margin:0", lead));
+    if (a.state === "sign_in" || a.state === "expired")
+      body.append(el("p", "margin:0;color:var(--rv-text-2,#4a5866);font-size:12px", "In a terminal instead: rivis access"));
+    if (a.state === "refused") body.append(el("p", "margin:0;color:var(--rv-text-2,#4a5866)",
       "IT approves people who have read the organisation's policy for proxy and debugging tools and submitted its confirmation form. Rivis passes no traffic until then."));
     if (login.status === "waiting" && login.user_code) {
-      const box2 = el("div", "padding:10px 12px;border:1px solid #d5dde4;border-radius:6px;background:#f7f9fb");
-      const link = el("a", "color:#0f6cbd", login.uri || "");
+      const box2 = el("div", "padding:10px 12px;border:1px solid var(--rv-border,#d5dde4);border-radius:6px;background:var(--rv-surface-2,#f7f9fb)");
+      const link = el("a", "color:var(--rv-accent-text,#0f6cbd)", login.uri || "");
       if (/^https:\/\//.test(login.uri || "")) { link.href = login.uri; link.target = "_blank"; link.rel = "noopener"; }
       const code = el("strong", "font:600 18px ui-monospace,Menlo,monospace;letter-spacing:2px", login.user_code);
       code.id = "rivis-access-code";
       box2.append(el("span", null, "Open "), link, el("span", null, " and enter the code "), code);
-      body.append(box2, el("p", "margin:0;color:#4a5866", "Waiting for the sign-in to finish…"));
-    } else if (login.status === "starting") body.append(el("p", "margin:0;color:#4a5866", "Starting the sign-in…"));
-    const err = el("div", "color:#b3261e;min-height:1.2em", login.status === "error" ? login.error : (a.error || ""));
+      body.append(box2, el("p", "margin:0;color:var(--rv-text-2,#4a5866)", "Waiting for the sign-in to finish…"));
+    } else if (login.status === "starting") body.append(el("p", "margin:0;color:var(--rv-text-2,#4a5866)", "Starting the sign-in…"));
+    const err = el("div", "color:var(--rv-danger,#b3261e);min-height:1.2em", login.status === "error" ? login.error : (a.error || ""));
     err.setAttribute("role", "alert"); err.id = "rivis-access-error";
     const row = el("div", "display:flex;gap:8px;justify-content:flex-end");
     const act = async (op) => { try { await api(op, {}); } catch (e) { err.textContent = e.message; } };
@@ -225,13 +230,13 @@
       row.append(again);
     }
     if (a.state !== "unconfigured" && login.status !== "waiting" && login.status !== "starting") {
-      const sign = el("button", BTN + ";background:#0f6cbd;border-color:#0f6cbd;color:#fff",
+      const sign = el("button", BTN + ";background:var(--rv-accent,#0f6cbd);border-color:var(--rv-accent,#0f6cbd);color:var(--rv-accent-fg,#fff)",
         a.state === "refused" ? "Sign in with another account" : "Sign in with your organisation account");
       sign.type = "button"; sign.id = "rivis-access-signin";
       sign.onclick = () => act("access_signin");
       row.append(sign);
     }
-    if (a.account && a.state === "refused") body.append(el("p", "margin:0;color:#4a5866", "Signed in as " + a.account + "."));
+    if (a.account && a.state === "refused") body.append(el("p", "margin:0;color:var(--rv-text-2,#4a5866)", "Signed in as " + a.account + "."));
     body.append(err, row);
     card.append(head, body);
     (row.querySelector("button") || card).focus?.();

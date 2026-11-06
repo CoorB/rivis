@@ -228,11 +228,23 @@
     if (!n) {
       const selected = S.source && (S.source.host || (S.state && S.state.sources && (S.state.sources.list || [])
         .find((r) => r.key === S.source.key) || {}).app || (S.source.key || "").split("|")[1]);
-      empty.innerHTML = S.order.length ? "No call matches the filter" + (selected ? " for <b>" + esc(selected) + "</b>" : "") + "."
-        : "No calls yet. Start the app on a simulator, emulator or device that is set up for Rivis. <button type=\"button\" class=\"rv-btn\" data-empty-dev>Set up a device</button>";
+      const name = (S.state && S.state.product && S.state.product.name) || "Rivis", cli = (S.state && S.state.product && S.state.product.cli) || "rivis";
+      empty.innerHTML = S.order.length ? `<div class="rv-ebox"><h3>No call matches the filter${selected ? " for <b>" + esc(selected) + "</b>" : ""}</h3>`
+          + `<p>The other calls are still captured. Clear the filter, or pick All calls on the left.</p></div>`
+        : `<div class="rv-ebox"><h3>Nothing captured yet</h3>`
+          + `<p>${esc(name)} is listening. Set up the simulator or emulator you test on (once), then use the app: its calls show up here within a second.</p>`
+          + `<p><button type="button" class="rv-btn p" data-empty-dev>Set up a device</button></p>`
+          + `<div class="rv-ecols"><div class="rv-ecard"><h4>iOS Simulator</h4><code data-copy="${esc(cli + " ios on")}" title="Click to copy">${esc(cli + " ios on")}</code><p>Trusts the certificate on the booted simulator. Then open the app.</p></div>`
+          + `<div class="rv-ecard"><h4>Android emulator</h4><code data-copy="${esc(cli + " android on")}" title="Click to copy">${esc(cli + " android on")}</code><p>Points the emulator at ${esc(name)} and installs the certificate. Then open the app.</p></div></div></div>`;
     }
+    // no call at all: the request / response panes have nothing to show, so the list gets the whole height
+    document.querySelector(".rv-main").classList.toggle("rv-nodata", !S.order.length);
   }
-  $("empty").addEventListener("click", (e) => { if (e.target.closest("[data-empty-dev]")) window.RivisTools.open("devices"); });
+  $("empty").addEventListener("click", (e) => {
+    if (e.target.closest("[data-empty-dev]")) { window.RivisTools.open("devices"); return; }
+    const c = e.target.closest("[data-copy]");
+    if (c) navigator.clipboard.writeText(c.dataset.copy).then(() => toast("Copied — paste it in a terminal"), () => toast("Select the command and copy it", true));
+  });
   tscroll.addEventListener("scroll", () => drawList(false));
   addEventListener("resize", () => drawList(true));
 
@@ -410,9 +422,11 @@
   const TOOLS = [
     ["map", "Map Local", `${ALT}${MOD}L`], ["remote", "Map Remote", `${ALT}${MOD}R`], ["bp", "Breakpoint", `${ALT}${MOD}B`],
     ["scripts", "Scripting", ""], ["net", "Network", ""], ["block", "Block List", `${ALT}${MOD}X`], ["nocache", "No Caching", `${ALT}${MOD}N`],
+    ["compose", "Compose", `${ALT}${MOD}C`], ["devices", "Devices", `${ALT}${MOD}D`],
   ];
   // toolbar id → its window (tools.js) and how it opens
-  const TOOL_WIN = { map: ["map"], remote: ["rules", { type: "map_remote" }], block: ["rules", { type: "block" }], bp: ["bp"], scripts: ["scripts"], net: ["net"] };
+  const TOOL_WIN = { map: ["map"], remote: ["rules", { type: "map_remote" }], block: ["rules", { type: "block" }], bp: ["bp"], scripts: ["scripts"], net: ["net"],
+    compose: ["compose"], devices: ["devices"] };
   function toolState(id) {
     const st = S.state; if (!st) return { on: false, n: 0 };
     const rules = st.rules || [];
@@ -451,8 +465,7 @@
   $("tb-tools").addEventListener("click", (e) => {
     const b = e.target.closest("#tb-more"); if (!b) return;
     if (!$("menu").hidden && $("menu")._rvMore) { closeMenu(); return; }
-    const items = [["compose", "Compose", `${ALT}${MOD}C`], ["devices", "Devices", `${ALT}${MOD}D`],
-      ["collections", "Collections", ""], ["sessions", "Sessions", ""], ["compare", "Compare", ""], ["classic", "Classic view", ""]];
+    const items = [["collections", "Collections", ""], ["sessions", "Sessions", ""], ["compare", "Compare", ""]];
     const m = $("menu"); m._rvMore = true;
     m.innerHTML = items.map(([id, label, key]) => `<button role="menuitem" data-more="${id}"><span>${label}</span><kbd>${esc(key)}</kbd></button>`).join("");
     m.hidden = false; b.setAttribute("aria-expanded", "true");
@@ -469,7 +482,8 @@
     // the window could rename, delete and reorder saved filters but not make one, so a new filter still had to be
     // saved from Classic view's star. The star appears next to the row once there is something to save.
     const current = $("q").value.trim();
-    const isNew = current && !saved.some((x) => x.filter === current) && saved.length < 30;
+    const invalid = document.querySelector(".rv-search") && document.querySelector(".rv-search").classList.contains("bad");
+    const isNew = current && !invalid && !saved.some((x) => x.filter === current) && saved.length < 30;
     $("saved").innerHTML = saved.map((x, i) => `<button class="rv-chip" data-saved="${i}" aria-pressed="${$("q").value === x.filter}" title="${esc(x.filter)}${i < 9 ? " (" + ALT + (i + 1) + ")" : ""}">★ ${esc(x.name)}</button>`).join("")
       + (isNew ? `<button class="rv-chip" data-save-filter title="Save this filter">☆ Save filter</button>` : "");
   }
@@ -898,7 +912,9 @@
       return find(side, false);
     }
     let text = b.text;
-    if (/json/.test((hdr(msg, "content-type") || "").toLowerCase()) && b.bytes <= TEXT_MAX) { try { text = JSON.stringify(JSON.parse(b.full), null, 2); } catch (e) { /* not valid JSON: as it came */ } }
+    const ctype = (hdr(msg, "content-type") || "").toLowerCase();
+    if (/json/.test(ctype) && b.bytes <= TEXT_MAX) { try { text = JSON.stringify(JSON.parse(b.full), null, 2); } catch (e) { /* not valid JSON: as it came */ } }
+    else if (/html|xml/.test(ctype) && b.bytes <= TEXT_MAX && !/\n\s*</.test(text.slice(0, 2000))) text = text.replace(/>\s*</g, ">\n<");   // one tag per line, not one long line
     const clipped = text.length > TEXT_MAX;           // also after pretty-printing, which makes a body longer
     el.innerHTML = `<pre>${esc(clipped ? text.slice(0, TEXT_MAX) : text)}</pre>` + (clipped || b.bytes > TEXT_MAX ? `<div class="rv-note">Showing the first 512 KB of ${esc(fmtBytes(b.bytes))}. Search covers what is shown; the Tree covers the whole body up to 24 MB.</div>` : "");
     find(side, false);
@@ -1100,7 +1116,12 @@
     const mk = e.target.closest("[data-mark]");
     if (mk) { const id = $("menu")._rvId, m = MARKS.find((x) => x[0] === mk.dataset.mark); closeMenu(); return setFlow(id, { marked: m ? m[3] : "" }); }
     const b = e.target.closest("[data-act]"); if (!b) return;
-    if (b.dataset.act === "mark") { const g = $("menu").querySelector(".rv-marks"); g.hidden = false; g.querySelector("button").focus(); return; }
+    if (b.dataset.act === "mark") {
+      const m = $("menu"), g = m.querySelector(".rv-marks"); g.hidden = false;
+      const r = m.getBoundingClientRect();                     // the swatches make the menu taller: keep it on screen
+      if (r.bottom > innerHeight - 6) m.style.top = Math.max(6, innerHeight - r.height - 6) + "px";
+      g.querySelector("button").focus(); return;
+    }
     const id = $("menu")._rvId, f = S.byId.get(id); closeMenu();
     if (!f) return;
     try {
@@ -1171,7 +1192,7 @@
     const extra = cur.filter((c) => !BUILTINS.includes(c));
     d.innerHTML = `<h3>Columns</h3><p>Saved for this project; the classic view uses the same choice.</p><div class="rv-cols">`
       + BUILTINS.concat(extra).map((c) => `<label><input type="checkbox" data-c="${esc(c)}" ${cur.includes(c) ? "checked" : ""}> ${esc(labels[c] || colDef(c).label)}</label>`).join("")
-      + `</div><label>Header column <input type="text" id="hcol" placeholder="response:Content-Type" style="flex:1"></label>`
+      + `</div><label class="rv-hcol"><span>Add a header as a column</span><input type="text" id="hcol" placeholder="e.g. response:Content-Type"></label>`
       + `<div class="rv-btns" style="margin-top:12px"><button class="rv-btn" id="dno">Cancel</button><button class="rv-btn p" id="dyes">Save</button></div>`;
     d.hidden = sc.hidden = false;
     const close = () => { d.hidden = sc.hidden = true; d.onkeydown = null; if (back && back.focus) back.focus(); };
@@ -1374,7 +1395,7 @@
       out.push(`<div class="rv-banner warn" role="alert" data-banner="untrusted"><span>A simulator or emulator does not trust the ${esc(name)} certificate, so <b>${esc(un[0].host)}</b>${un.length > 1 ? ` and ${un.length - 1} more` : ""} ${un.length > 1 ? "pass" : "passes"} through without being recorded.</span>`
         + `<button class="rv-btn" data-bn="setup">Set up devices</button><button class="rv-btn" data-bn="retry">Decrypt again</button></div>`);
     const rulesLabel = st.active_project_label || st.active_project || "";
-    if (rulesLabel)
+    if (rulesLabel && st.project_pinned)
       out.push(`<div class="rv-banner info" role="status" data-banner="rules"><span>Rules project: <b>${esc(rulesLabel)}</b>${st.project_pinned ? " — pinned (started with --project)" : ""}</span>`
         + (st.project_pinned ? `<button class="rv-btn" data-bn="unpin">Unpin</button>` : "") + `</div>`);
     const u = st.update || {};
@@ -1420,19 +1441,32 @@
     showDialog(`<h3>${esc(name)} — shortcuts</h3><p>Laid out like Proxyman: sources on the left, tools in the toolbar, request and response side by side. Right-click a call for its actions.</p>
       <table class="rv-keys">${KEYS.map(([k, t]) => `<tr><td>${esc(k)}</td><td>${esc(t)}</td></tr>`).join("")}</table>
       <p class="rv-note">${esc(ALT + MOD + "A")} opens TLS decryption hosts. Proxyman users may remember that chord for a traffic allow list; Rivis has no separate allow list.</p>
-      <h4>Coming from Proxyman</h4><p>Map Local, Map Remote, Breakpoint, Block List, No Caching, Scripting and Network are in the toolbar; Compose, Devices, Collections and Sessions are under More. Select a call to decode JWTs, GraphQL and gRPC the same way as classic This call. The classic view is still one click away (top right).</p>
+      <h4>Coming from Proxyman</h4><p>Map Local, Map Remote, Breakpoint, Block List, No Caching, Scripting, Network, Compose and Devices are in the toolbar; Collections, Sessions and Compare are under More. Select a call to decode JWTs, GraphQL and gRPC the same way as classic This call. The classic view is still one click away (top right).</p>
       <div class="rv-btns"><button class="rv-btn p" data-close>Close</button></div>`);
   }
   function showSettings() {
     const t = store.get("rivis-theme", "") || "system";
     const { d } = showDialog(`<h3>Settings</h3><h4>Appearance</h4>
       ${[["system", "Follow the Mac"], ["light", "Light"], ["dark", "Dark"]].map(([v, l]) => `<label><input type="radio" name="theme" value="${v}"${t === v ? " checked" : ""}> ${l}</label>`).join("")}
+      <h4>Rows</h4>
+      ${[["", "Comfortable"], ["compact", "Compact"]].map(([v, l]) => `<label><input type="radio" name="density" value="${v}"${store.get("rivis-density", "") === v ? " checked" : ""}> ${l}</label>`).join("")}
+      <h4>Updates</h4><p>${esc((S.state && S.state.version) || "")} <button class="rv-btn" id="set-update">Check for updates</button> <span id="set-update-r" class="rv-win-hint"></span></p>
       <h4>Welcome</h4><p><button class="rv-btn" id="set-welcome">Show the welcome again</button></p>
-      <h4>Version</h4><p>${esc((S.state && S.state.version) || "")}</p>
       <div class="rv-btns"><button class="rv-btn p" data-close>Done</button></div>`, "input[name=theme]:checked");
     d.querySelectorAll("input[name=theme]").forEach((r) => (r.onchange = () => { store.set("rivis-theme", r.value === "system" ? "" : r.value); applyTheme(); }));
     d.querySelector("#set-welcome").onclick = () => { store.set("rivis-ui-welcome", ""); showWelcome(); };
+    d.querySelectorAll("input[name=density]").forEach((r) => (r.onchange = () => { store.set("rivis-density", r.value); applyDensity(); }));
+    d.querySelector("#set-update").onclick = async () => {
+      const out = d.querySelector("#set-update-r"); out.textContent = "Checking…";
+      try {
+        await api("update_check", {});
+        const u = await new Promise((res) => setTimeout(async () => res(((await api("state")).update) || {}), 2500));
+        out.textContent = u.available ? u.available.version + " is available (see the banner)" : u.error ? u.error : u.pending ? "Still checking; the result shows as a banner" : "Up to date";
+      } catch (e) { out.textContent = e.message; }
+    };
   }
+  function applyDensity() { document.documentElement.style.setProperty("--rv-row-h", store.get("rivis-density", "") === "compact" ? "24px" : "30px"); }
+  applyDensity();
   function showWelcome() {
     const name = (S.state && S.state.product && S.state.product.name) || "Rivis";
     const { d, done } = showDialog(`<h3>Welcome to the new ${esc(name)} window</h3>
@@ -1446,7 +1480,13 @@
   }
   $("tb-help").addEventListener("click", showHelp);
   $("tb-settings").addEventListener("click", showSettings);
-  setTimeout(() => { if (store.get("rivis-ui-welcome", "") !== "done" && $("dialog").hidden) showWelcome(); }, 700);
+  function maybeWelcome() {
+    if (store.get("rivis-ui-welcome", "") === "done") return;
+    const st = S.state, gated = !st || (st.terms && st.terms.state !== "accepted") || (st.access && st.access.allowed === false);
+    if (gated || document.getElementById("rivis-terms") || !$("dialog").hidden) { setTimeout(maybeWelcome, 1000); return; }
+    showWelcome();
+  }
+  setTimeout(maybeWelcome, 700);
 
   window.__rivisUI = S;          // tests and support read the model (never written from outside)
   // what the tool windows may use: the server, the selection, the page's own dialogs. The state arrives every 2 s

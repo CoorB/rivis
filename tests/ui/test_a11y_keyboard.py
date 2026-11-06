@@ -59,11 +59,13 @@ class A11yKeyboard(UiBase):
         self.assertEqual(self.errors, [])
 
     def test_toolbar_tools_keep_an_accessible_name_when_labels_collapse(self):
-        """At ≤1100px the visible label is hidden; without aria-label, a screen reader announces only 'button' (or a glyph)."""
+        """Every toolbar button has an accessible name, and at a laptop width (1000px) the tool labels stay visible: the
+        toolbar wraps instead of turning the tools into blank squares (design review 0.9.11, F1)."""
         self.open_new()
         self.page.set_viewport_size({"width": 1000, "height": 700})
         wait_for(lambda: self.page.evaluate(
-            "() => getComputedStyle(document.querySelector('#tb-tools .rv-tb-l')).display === 'none'"), 5, 0.1, "labels collapsed")
+            "() => [...document.querySelectorAll('#tb-tools .rv-tb-l')].every((l) => getComputedStyle(l).display !== 'none' && l.offsetWidth > 20)"),
+            5, 0.1, "labels visible at 1000px")
         fixed = self.page.evaluate("""() => {
           const ids = ['tb-record', 'tb-clear', 'tb-follow', 'tb-more'];
           return Object.fromEntries(ids.map((id) => [id, (document.getElementById(id).getAttribute('aria-label') || '').trim()]));
@@ -82,8 +84,8 @@ class A11yKeyboard(UiBase):
         }""")
         self.assertTrue(named, "tool buttons present")
         for row in named:
-            self.assertTrue(row["labelHidden"], row)
-            self.assertTrue(row["name"], "tool %s has no accessible name when collapsed" % row["id"])
+            self.assertFalse(row["labelHidden"], row)                  # the word stays visible
+            self.assertTrue(row["name"], "tool %s has no accessible name" % row["id"])
         self.page.locator("#tb-record").click()
         wait_for(lambda: self.page.locator("#tb-record").get_attribute("aria-pressed") == "false", 5, 0.1, "paused")
         self.assertEqual(self.page.locator("#tb-record").get_attribute("aria-label"), "Paused")

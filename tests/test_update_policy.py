@@ -237,11 +237,11 @@ class MitmWatch(unittest.TestCase):
     def test_a_newer_release_and_advisories_are_reported_and_cached(self):
         r = self.run_watch("check", "12.2.3")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("mitmproxy 12.3.1 is out", r.stdout)
+        self.assertIn("A newer mitmproxy (12.3.1) is out", r.stdout)
         self.assertIn("CVE-2026-0001", r.stdout)
         cache = json.load(open(os.path.join(self.home, ".rivis", "mitm-watch.json")))
         self.assertEqual((cache["latest"], cache["newer"], len(cache["advisories"])), ("12.3.1", True, 1))
-        self.assertIn("12.3.1 is out", self.run_watch("status", url="off").stdout)    # status reads the cache only
+        self.assertIn("(12.3.1) is out", self.run_watch("status", url="off").stdout)    # status reads the cache only
 
     def test_up_to_date_off_and_unreachable(self):
         r = self.run_watch("check", "12.3.1")

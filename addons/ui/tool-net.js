@@ -77,6 +77,10 @@
       };
       w.body.onclick = async (e) => {
         const b = e.target.closest("button"); if (!b) return;
+        if (b.matches("[data-net-card]")) {             // a profile card: the same as choosing it in the menu below
+          const sel = w.body.querySelector("[data-net-profile]");
+          sel.value = b.dataset.netCard; sel.dispatchEvent(new Event("change", { bubbles: true })); return;
+        }
         if (b.matches("[data-net-apply]")) { await applyManual(w); return; }
         if (b.matches("[data-net-tls-mode]")) { await ui.run("tls_set", { mode: b.dataset.netTlsMode }, "TLS decryption updated"); return; }
         if (b.matches("[data-net-tls-addbtn]")) { await addTls(w, b.dataset.netTlsAddbtn); return; }
@@ -162,15 +166,18 @@
         <span class="rv-win-hint">Its calls appear under Source → Phone or tablet.</span></div>`).join("")
         : '<p class="rv-win-hint">No allowed devices.</p>'}` : "";
     w.body.querySelector("[data-net-content]").innerHTML = `
-      <h4>Network conditions</h4><p class="rv-win-hint">Slow selected calls using a profile. A URL pattern limits which calls are affected.</p>
+      <h4>Network conditions</h4>
+      <div class="rv-pcards" role="group" aria-label="Network profile">${profiles.map((p) => `<button type="button" class="rv-pcard" data-net-card="${esc(p.id)}" aria-pressed="${p.id === current}">
+        <b>${esc(p.name)}</b><span>${esc(p.desc || (p.id === "off" ? "No slowdown" : p.id === "manual" ? "Your own latency, bandwidth and loss" : `${p.latency_ms} ms · ↓${p.down_kbps} kbps · ${p.loss_pct}% loss`))}</span></button>`).join("")}</div>
       <div class="rv-form"><label>Profile <select data-net-profile>${profileOptions}${chosen ? "" : `<option value="${esc(current)}" selected>${esc(current)} (from command line)</option>`}</select></label>
         <label class="grow">URL pattern <input type="text" data-net-scope spellcheck="false" value="${esc(d.scope === undefined ? st.throttle_match || "" : d.scope)}" placeholder="Empty = every call"></label></div>
-      <p class="rv-win-hint">The URL pattern is a regular expression. ${Number(st.loss || 0) ? `Extra packet loss is active: ${esc(st.loss)}%. Choosing a profile clears it.` : ""}</p>
+      <p class="rv-win-hint">Only calls whose URL matches the pattern (a regular expression) are slowed. ${Number(st.loss || 0) ? `Extra packet loss is active: ${esc(st.loss)}%. Choosing a profile clears it.` : ""}</p>
       <div class="rv-editor" data-net-manual-box${current === "manual" || d.manualOpen ? "" : " hidden"}><h4>Manual profile</h4>
         <div class="rv-form">${manualHTML}</div><button type="button" class="rv-btn p" data-net-apply>Apply manual profile</button></div>
       <h4>No Caching</h4><div class="rv-form"><label><input type="checkbox" data-net-nocache${st.no_cache ? " checked" : ""}> No Caching</label></div>
       <p class="rv-win-hint">Always fetch fresh content: removes conditional request headers and marks responses no-store. Map Local answers stay as they are.</p>
-      <h4>TLS decryption</h4><p class="rv-win-hint">SSL Proxying: choose which hosts Rivis decrypts. Changes apply to new connections. ${esc(t.note || "")}</p>
+      <h4>TLS decryption</h4><p class="rv-win-hint">Decrypt every host, or only the hosts you list.</p>
+      <details class="rv-more-info"><summary>More about TLS decryption</summary><p class="rv-win-hint">Like SSL Proxying in Proxyman. Changes apply to new connections. ${esc(t.note || "")}</p></details>
       <div class="rv-seg" role="group" aria-label="TLS decryption mode">${[["all", "Every host"], ["allow", "Only listed hosts"], ["ignore", "All except listed"]]
         .map(([id, label]) => `<button type="button" data-net-tls-mode="${id}" aria-pressed="${t.mode === id}">${label}</button>`).join("")}</div>
       ${t.error ? `<p class="rv-win-err" role="alert">${esc(t.error)}</p>` : ""}
@@ -179,7 +186,8 @@
         <button type="button" class="rv-btn" data-net-tls-host="on">Decrypt this host</button>
         <button type="button" class="rv-btn" data-net-tls-host="off">Stop decrypting this host</button></div>` : ""}
       <h4>DNS Spoofing</h4>
-      <p class="rv-win-hint">Send matching calls to another IP or hostname while the listed URL and Host header stay the same — staging behind a production hostname, without Map Remote rewriting the URL. Does not change system DNS. With upstream certificate checks on (--verify-upstream), the server certificate must still match the original host (SNI).</p>
+      <p class="rv-win-hint">Send matching calls to another IP or host; the URL and Host header stay the same.</p>
+      <details class="rv-more-info"><summary>More about DNS Spoofing</summary><p class="rv-win-hint">Useful for staging behind a production hostname, without Map Remote rewriting the URL. Does not change system DNS. With upstream certificate checks on (--verify-upstream), the server certificate must still match the original host (SNI).</p></details>
       ${(st.dns_spoof || []).length ? (st.dns_spoof || []).filter((x) => x.host).map((x) => `<div class="rv-form"><b>${esc(x.host)}</b> → <code>${esc(x.address)}</code>${x.enabled === false ? ' <span class="rv-badge">off</span>' : ""}
         <span class="rv-spacer"></span><button type="button" class="rv-btn d" data-net-dns-rm="${esc(x.host)}">Remove</button></div>`).join("")
         : '<p class="rv-win-hint">None. Add a host when the app must reach a different box without changing the URL.</p>'}
