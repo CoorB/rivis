@@ -49,7 +49,7 @@ files, sessions and collections are shared by all versions and are not changed.
 
 ## Terms of Use
 
-Before first use Rivis shows its Terms of Use and asks you to agree by typing your full name: in the terminal
+Before first use Rivis shows its Terms of Use and asks you to agree (tick the box and press Agree, or type yes): in the terminal
 (`rivis terms`, or the first command that needs it) or in the Rivis window. Until you agree, nothing that captures,
 decrypts or changes traffic runs; the proxy itself passes no traffic (every call gets a short "Rivis is locked"
 answer), so a start from the Mac app or after an update cannot bypass it. If you do not agree, Rivis stops.

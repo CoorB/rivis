@@ -1,6 +1,6 @@
 // Terms of Use gate for both windows (the classic panel and the new main window load this same file).
 // While the current terms are not accepted the proxy passes no traffic (proxy_terms.py); this covers the window
-// with the terms until the user types their name and agrees, or declines (Rivis then stops). Nothing from the
+// with the terms until the user ticks the box and agrees, or declines (Rivis then stops). Nothing from the
 // server is ever inserted as HTML: the text is shown with textContent.
 (() => {
   if (window.__rivisTermsGate) return;
@@ -31,7 +31,7 @@
   const BTN = "font:inherit;padding:7px 14px;border-radius:6px;border:1px solid #8a96a3;background:#fff;color:#14202b;cursor:pointer";
 
   function keepKeysInside(ev) {    // mitmweb's and the window's own shortcuts must not act behind the terms
-    if (box && !box.contains(ev.target)) { ev.stopPropagation(); ev.preventDefault(); box.querySelector("input")?.focus(); }
+    if (box && !box.contains(ev.target)) { ev.stopPropagation(); ev.preventDefault(); box.querySelector("input, button")?.focus(); }
   }
 
   function close() {
@@ -75,24 +75,20 @@
     const read = el("label", "display:flex;gap:8px;align-items:center");
     const check = el("input"); check.type = "checkbox"; check.id = "rivis-terms-read";
     read.append(check, el("span", null, "I have read the Terms of Use and I agree to follow them."));
-    const nameRow = el("label", "display:flex;flex-direction:column;gap:4px");
-    const name = el("input", "font:inherit;padding:7px 9px;border:1px solid #8a96a3;border-radius:6px");
-    name.id = "rivis-terms-name"; name.autocomplete = "name"; name.maxLength = 100; name.placeholder = "Your full name";
-    nameRow.append(el("span", null, "Type your full name as your signature"), name);
     const err = el("div", "color:#b3261e;min-height:1.2em"); err.setAttribute("role", "alert"); err.id = "rivis-terms-error";
     const row = el("div", "display:flex;gap:8px;justify-content:flex-end");
     const no = el("button", BTN, "I do not agree"); no.type = "button"; no.id = "rivis-terms-decline";
     const yes = el("button", BTN + ";background:#0f6cbd;border-color:#0f6cbd;color:#fff", "Agree"); yes.type = "submit"; yes.id = "rivis-terms-accept";
     row.append(no, yes);
-    form.append(read, nameRow, err, row);
+    form.append(read, err, row);
     card.append(head, sub, text, form);
-    const ready = () => { yes.disabled = !(check.checked && name.value.trim().length >= 3); yes.style.opacity = yes.disabled ? ".5" : "1"; };
-    check.onchange = ready; name.oninput = ready; ready();
+    const ready = () => { yes.disabled = !check.checked; yes.style.opacity = yes.disabled ? ".5" : "1"; };
+    check.onchange = ready; ready();
     form.onsubmit = async (ev) => {
       ev.preventDefault();
       if (yes.disabled) return;
       err.textContent = "";
-      try { await api("terms_accept", { name: name.value, sha256: doc.sha256 }); close(); }
+      try { await api("terms_accept", { sha256: doc.sha256 }); close(); }
       catch (e) { err.textContent = e.message; if (/changed/.test(e.message)) { shownSha = null; close(); } }
     };
     no.onclick = async () => {
@@ -105,7 +101,7 @@
       stopped = true;
       message("Rivis has stopped", "You did not agree to the Terms of Use, so Rivis will not run. To read them again, run 'rivis terms' in a terminal or start Rivis again.");
     };
-    name.focus();
+    check.focus();
   }
 
   // Both windows poll "state" anyway and hand its "terms" here (seen), so the cover adds no requests of its own while

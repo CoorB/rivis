@@ -2087,8 +2087,8 @@ case "${1:-}" in -h|--help|help|""|cert|doctor|bug-report) ;; *) migrate_legacy 
 
 # ── Terms of Use (addons/terms.py is the one implementation; addons/proxy_terms.py locks the proxy) ──────────────
 TERMS_PY="$SCRIPT_DIR/addons/terms.py"
-terms_prompt() {   # show the terms in this terminal and ask for a typed name; 0 = agreed
-  local name problem
+terms_prompt() {   # show the terms in this terminal and ask for "yes"; 0 = agreed
+  local answer
   echo
   if command -v less >/dev/null 2>&1 && [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; then
     /usr/bin/python3 -I "$TERMS_PY" text | less -FX || true
@@ -2097,17 +2097,17 @@ terms_prompt() {   # show the terms in this terminal and ask for a typed name; 0
   fi
   echo
   while :; do
-    printf 'Type your full name to agree to these Terms of Use, or press Enter to decline: '
-    IFS= read -r name || name=""
-    if [ -z "$name" ]; then
-      /usr/bin/python3 -I "$TERMS_PY" decline cli >/dev/null 2>&1 || true
-      echo "$CLI: you did not agree to the Terms of Use, so $PRODUCT_NAME will not run. To read them again: $CLI terms" >&2
-      return 1
-    fi
-    problem=$(/usr/bin/python3 -I "$TERMS_PY" accept "$name" cli 2>&1 >/dev/null) && break
-    echo "  $problem"
+    printf 'I have read the Terms of Use and I agree to follow them. Type yes to agree, or press Enter to decline: '
+    IFS= read -r answer || answer=""
+    case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+      "") /usr/bin/python3 -I "$TERMS_PY" decline cli >/dev/null 2>&1 || true
+          echo "$CLI: you did not agree to the Terms of Use, so $PRODUCT_NAME will not run. To read them again: $CLI terms" >&2
+          return 1 ;;
+      yes) /usr/bin/python3 -I "$TERMS_PY" accept cli >/dev/null || return 1; break ;;
+      *)  echo "  type yes to agree, or press Enter to decline" ;;
+    esac
   done
-  info "Terms of Use accepted — thank you, $name."
+  info "Terms of Use accepted — thank you."
 }
 cmd_terms() {
   local st rc
@@ -2126,7 +2126,7 @@ cmd_terms() {
             /usr/bin/python3 -I "$TERMS_PY" text ;;
     "")     /usr/bin/python3 -I "$TERMS_PY" status >/dev/null 2>&1; rc=$?
             [ "$rc" != 4 ] || die "this copy of $PRODUCT_NAME has no Terms of Use text — reinstall it from the official release"
-            [ -t 0 ] || die "run '$CLI terms' in a terminal (it asks you to type your name), or agree in the $PRODUCT_NAME window"
+            [ -t 0 ] || die "run '$CLI terms' in a terminal (it asks you to agree), or agree in the $PRODUCT_NAME window"
             terms_prompt || exit 10 ;;
     *)      die "usage: $CLI terms [status|show]" ;;
   esac

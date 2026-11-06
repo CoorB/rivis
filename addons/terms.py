@@ -3,7 +3,7 @@
 
   terms.py status [--json]     exit 0 accepted · 3 not accepted, declined or the text changed · 4 no terms text
   terms.py text                print the terms text
-  terms.py accept NAME VIA     record that NAME agreed (VIA: cli | window | powershell); prints the record as JSON
+  terms.py accept VIA          record that the user agreed (VIA: cli | window | powershell); prints the record as JSON
   terms.py decline VIA         record that the user did not agree (Rivis stays unusable until they do)
 
 One implementation for every entry point: the bash and PowerShell CLIs call this file, the proxy add-on
@@ -13,6 +13,8 @@ Trust model
 - The text ships with the installed copy (product.json "terms_file", default terms/TERMS.md). A copy with no text
   refuses to run (exit 4): fail closed, never "no terms, so no gate".
 - Agreement is to the exact text: its SHA-256 is recorded, so any change to the text asks everyone again.
+- The user agrees by ticking the box and pressing Agree (window) or typing "yes" (terminal); there is no typed name.
+  Who agreed is the Mac account, plus the organisation account they signed in with for IT approval (access.py).
 - The record (~/.rivis-terms-acceptance.json, 0600) keeps who agreed, when, on which Mac and Rivis version, plus
   every earlier answer. It is a compliance record, not a lock against a determined user editing local files.
 """
@@ -118,20 +120,6 @@ def _version():
     return "dev"
 
 
-def valid_name(name):
-    """Why a typed name is not a usable signature, or None."""
-    if not isinstance(name, str):
-        return "type your full name"
-    name = name.strip()
-    if len(name) < 3 or len(name) > 100:
-        return "type your full name (3 to 100 characters)"
-    if any(ord(c) < 32 or ord(c) == 127 for c in name):
-        return "the name must be one line of plain text"
-    if sum(c.isalpha() for c in name) < 2:
-        return "type your full name"
-    return None
-
-
 def _write(doc):
     home = os.path.dirname(record_path())
     fd, tmp = tempfile.mkstemp(dir=home, prefix=".rivis-terms-", suffix=".tmp")
@@ -151,7 +139,17 @@ def _write(doc):
         raise
 
 
-def _answer(answer, via, name=None):
+def _signed_in_account():
+    """The organisation account IT approval last confirmed (access.py's record), or None."""
+    try:
+        with open(os.path.expanduser("~/.%s-access.json" % (PRODUCT.get("cli") or "rivis"))) as fh:
+            doc = json.load(fh)
+        return str(doc["account"])[:200] if isinstance(doc, dict) and doc.get("account") else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def _answer(answer, via):
     terms = current()
     if terms is None:
         raise ValueError("this copy has no Terms of Use text (%s); reinstall it from the official release" % terms_path())
@@ -161,8 +159,9 @@ def _answer(answer, via, name=None):
              "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
              "mac_user": getpass.getuser(), "account_name": _account_name(), "host": socket.gethostname(),
              "version": _version(), "via": via}
-    if name is not None:
-        entry["name"] = name.strip()
+    account = _signed_in_account()
+    if account:
+        entry["account"] = account
     doc = _load_record()
     history = doc.get("history") if isinstance(doc.get("history"), list) else []
     if isinstance(doc.get("current"), dict):
@@ -171,11 +170,8 @@ def _answer(answer, via, name=None):
     return entry
 
 
-def accept(name, via):
-    problem = valid_name(name)
-    if problem:
-        raise ValueError(problem)
-    return _answer("accepted", via, name)
+def accept(via):
+    return _answer("accepted", via)
 
 
 def decline(via):
@@ -199,8 +195,8 @@ def main(argv):
                 return 4
             sys.stdout.write(terms["text"])
             return 0
-        if cmd == "accept" and len(argv) == 3:
-            print(json.dumps(accept(argv[1], argv[2])))
+        if cmd == "accept" and len(argv) == 2:
+            print(json.dumps(accept(argv[1])))
             return 0
         if cmd == "decline" and len(argv) == 2:
             print(json.dumps(decline(argv[1])))

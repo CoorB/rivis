@@ -56,7 +56,7 @@ class TermsModule(unittest.TestCase):
     def test_a_first_run_is_not_accepted_and_agreeing_records_who_when_and_which_text(self):
         r = self.py("status")
         self.assertEqual((r.returncode, r.stdout.strip()), (3, "required"))
-        r = self.py("accept", "Ada Lovelace", "cli")
+        r = self.py("accept", "cli")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.py("status").returncode, 0)
         path = os.path.join(self.home, ".rivis-terms-acceptance.json")
@@ -64,20 +64,29 @@ class TermsModule(unittest.TestCase):
         cur = json.load(open(path))["current"]
         with open(os.path.join(harness.REPO, "terms", "TERMS.md"), "rb") as fh:
             self.assertEqual(cur["terms_sha256"], hashlib.sha256(fh.read()).hexdigest())
-        self.assertEqual((cur["answer"], cur["name"], cur["via"]), ("accepted", "Ada Lovelace", "cli"))
+        self.assertEqual((cur["answer"], cur["via"]), ("accepted", "cli"))
+        self.assertNotIn("name", cur)                       # no typed name: the accounts say who agreed
+        self.assertNotIn("account", cur)                    # not signed in for IT approval (yet)
         for key in ("at", "mac_user", "host", "version"):
             self.assertTrue(cur[key], key)
 
+    def test_the_organisation_account_from_it_approval_is_recorded_with_the_agreement(self):
+        with open(os.path.join(self.home, ".rivis-access.json"), "w") as fh:
+            json.dump({"result": "approved", "account": "ada@example.test"}, fh)
+        self.assertEqual(self.py("accept", "window").returncode, 0)
+        cur = json.load(open(os.path.join(self.home, ".rivis-terms-acceptance.json")))["current"]
+        self.assertEqual((cur["account"], cur["via"]), ("ada@example.test", "window"))
+
     def test_a_changed_text_asks_again_and_history_is_kept(self):
         root = self.copy("# Terms v1\n\nOne.\n")
-        self.assertEqual(self.py("accept", "Ada Lovelace", "window", root=root).returncode, 0)
+        self.assertEqual(self.py("accept", "window", root=root).returncode, 0)
         self.assertEqual(self.py("status", root=root).returncode, 0)
         with open(os.path.join(root, "terms", "TERMS.md"), "w") as fh:
             fh.write("# Terms v2\n\nTwo.\n")
         r = self.py("status", "--json", root=root)
         self.assertEqual(r.returncode, 3)
         self.assertEqual(json.loads(r.stdout)["state"], "changed")
-        self.assertEqual(self.py("accept", "Ada Lovelace", "cli", root=root).returncode, 0)
+        self.assertEqual(self.py("accept", "cli", root=root).returncode, 0)
         doc = json.load(open(os.path.join(self.home, ".rivis-terms-acceptance.json")))
         self.assertEqual(len(doc["history"]), 1)
         self.assertEqual(doc["history"][0]["terms_title"], "Terms v1")
@@ -85,17 +94,17 @@ class TermsModule(unittest.TestCase):
     def test_a_copy_without_terms_text_fails_closed(self):
         root = self.copy(None)
         self.assertEqual(self.py("status", root=root).returncode, 4)
-        r = self.py("accept", "Ada Lovelace", "cli", root=root)
+        r = self.py("accept", "cli", root=root)
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(self.py("status", root=self.copy("   \n")).returncode, 4)      # blank counts as none
 
-    def test_declining_keeps_it_locked_and_a_name_must_be_a_name(self):
+    def test_declining_keeps_it_locked_and_only_known_channels_count(self):
         self.assertEqual(self.py("decline", "cli").returncode, 0)
         self.assertEqual(self.py("status").stdout.strip(), "declined")
         self.assertEqual(self.py("status").returncode, 3)
-        for bad in ("", "  ", "ab", "12345", "x" * 101, "Ada\nLovelace"):
-            self.assertEqual(self.py("accept", bad, "cli").returncode, 2, repr(bad))
-        self.assertEqual(self.py("accept", "Ada Lovelace", "email").returncode, 2)       # unknown channel
+        self.assertEqual(self.py("accept", "email").returncode, 2)                       # unknown channel
+        self.assertEqual(self.py("accept", "Ada Lovelace", "cli").returncode, 2)         # the old form: refused
+        self.assertEqual(self.py("accept").returncode, 2)
         self.assertNotEqual(self.py("status").returncode, 0)
 
 
@@ -139,7 +148,7 @@ class TermsCli(unittest.TestCase):
                 if not chunk:
                     break
                 out += chunk
-                if not sent and b"Type your full name" in out:
+                if not sent and b"Type yes to agree" in out:
                     os.write(master, typed.encode() + b"\n")
                     sent = True
             if p.poll() is not None and not r:
@@ -153,7 +162,7 @@ class TermsCli(unittest.TestCase):
         self.assertEqual(rc, 10, out)
         self.assertIn("will not run", out)
         self.assertIn("declined", self.cli("terms", "status").stdout)
-        rc, out = self.tty_run(["terms"], "Ada Lovelace")
+        rc, out = self.tty_run(["terms"], "YES ")
         self.assertEqual(rc, 0, out)
         self.assertIn("accepted", out)
         self.assertEqual(self.cli("rules", "list").returncode, 0)
@@ -176,17 +185,17 @@ class TermsLocked(LiveCase):
         self.assertEqual(len(self.up.hits_for("/json/small")), 0)                 # never reached the server
         doc = self.panel.ok("terms_text", {})
         self.assertIn("Terms of Use", doc["text"])
-        code, _d, raw = self.panel.post("terms_accept", {"name": "Ada Lovelace", "sha256": "0" * 64})
+        code, _d, raw = self.panel.post("terms_accept", {"sha256": "0" * 64})
         self.assertEqual(code, 400)
         self.assertIn("changed", raw.decode())
-        code, _d, raw = self.panel.post("terms_accept", {"name": "x", "sha256": doc["sha256"]})
+        code, _d, raw = self.panel.post("terms_accept", {})                # never fetched: never agreed
         self.assertEqual(code, 400)
         self.assertEqual(self.fetch("/json/small").status, 403)
-        self.panel.ok("terms_accept", {"name": "Ada Lovelace", "sha256": doc["sha256"]})
+        self.panel.ok("terms_accept", {"sha256": doc["sha256"]})
         self.assertEqual(self.panel.state()["terms"]["state"], "accepted")
         self.assertEqual(self.fetch("/json/small").status, 200)
         rec = json.load(open(os.path.join(self.inst.home, ".rivis-terms-acceptance.json")))["current"]
-        self.assertEqual((rec["name"], rec["via"]), ("Ada Lovelace", "window"))
+        self.assertEqual((rec["answer"], rec["via"]), ("accepted", "window"))
 
     def test_z_declining_in_the_window_stops_rivis(self):
         self.panel.ok("terms_decline", {})

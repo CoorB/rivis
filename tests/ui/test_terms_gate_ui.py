@@ -1,5 +1,5 @@
 """The Terms of Use cover in a real browser: both windows show it while the terms are not accepted, the Agree button
-needs the box ticked and a typed name, and agreeing removes it and unlocks the proxy."""
+needs the box ticked, and agreeing removes it and unlocks the proxy."""
 import os
 import sys
 import unittest
@@ -37,7 +37,7 @@ class TermsGateUi(UiBase):
         cover = page.locator("#rivis-terms")
         cover.wait_for(timeout=15000)
         self.assertEqual(self.fetch("/json/small").status, 403)
-        page.locator("#rivis-terms-name").fill("Ada Lovelace")
+        self.assertEqual(page.locator("#rivis-terms-name").count(), 0)          # no typed name any more
         self.assertTrue(page.locator("#rivis-terms-accept").is_disabled())   # the box is not ticked yet
         page.locator("#rivis-terms-read").check()
         page.locator("#rivis-terms-accept").click()

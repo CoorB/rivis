@@ -757,15 +757,16 @@ function Show-TermsPrompt {
   Write-Host (Invoke-TermsPy text).Out
   Write-Host ""
   while ($true) {
-    $typed = Read-Host "Type your full name to agree to these Terms of Use, or press Enter to decline"
-    if (-not $typed) {
+    $typed = Read-Host "I have read the Terms of Use and I agree to follow them. Type yes to agree, or press Enter to decline"
+    if (-not $typed -or -not $typed.Trim()) {
       Invoke-TermsPy decline powershell | Out-Null
       Write-Host "${Cli}: you did not agree to the Terms of Use, so $ProductName will not run. To read them again: ${Cli}.ps1 terms" -ForegroundColor Red
       return $false
     }
-    $r = Invoke-TermsPy accept $typed powershell
-    if ($r.Code -eq 0) { Info "Terms of Use accepted - thank you, $($typed.Trim())."; return $true }
-    Write-Host "  $($r.Out)"
+    if ($typed.Trim().ToLowerInvariant() -ne "yes") { Write-Host "  type yes to agree, or press Enter to decline"; continue }
+    $r = Invoke-TermsPy accept powershell
+    if ($r.Code -eq 0) { Info "Terms of Use accepted - thank you."; return $true }
+    Write-Host "  $($r.Out)"; return $false
   }
 }
 $TermsOpen = @("help","version","terms","access","stop","status","doctor","bug-report","net-reset","update","health")
@@ -818,7 +819,7 @@ switch ($Command) {
       $t = Invoke-TermsPy text; Write-Host $t.Out; exit $t.Code
     } elseif ($Action) { Die "usage: terms [status|show]" }
     if ($r.Code -eq 4) { Die "this copy of $ProductName has no Terms of Use text - reinstall it from the official release" }
-    if ([Console]::IsInputRedirected) { Die "run '${Cli}.ps1 terms' in a terminal (it asks you to type your name), or agree in the $ProductName window" }
+    if ([Console]::IsInputRedirected) { Die "run '${Cli}.ps1 terms' in a terminal (it asks you to agree), or agree in the $ProductName window" }
     if (-not (Show-TermsPrompt)) { exit 10 }
   }
   "access" {

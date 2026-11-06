@@ -2601,11 +2601,11 @@ class ProxyPanel:
                 # agree only to the text that was shown: it changed (or was never fetched) since the page opened
                 raise PanelError("the Terms of Use changed while they were open; read them again")
             try:
-                entry = terms.accept(a.get("name"), "window")
+                entry = terms.accept("window")
             except ValueError as e:
                 raise PanelError(str(e))
-            ctx.log.info("terms: accepted by %s" % entry.get("name"))
-            return {"terms": {"state": terms.ACCEPTED}, "name": entry.get("name")}
+            ctx.log.info("terms: accepted by %s" % (entry.get("account") or entry.get("mac_user")))
+            return {"terms": {"state": terms.ACCEPTED}}
         elif op == "terms_decline":
             try:
                 terms.decline("window")
