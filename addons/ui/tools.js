@@ -30,19 +30,22 @@
     const m = document.querySelector(".rv-main"), r = m && m.getBoundingClientRect();
     return r && r.height > 50 ? { top: r.top, bottom: r.bottom } : { top: 70, bottom: innerHeight - 28 };
   }
+  const DOCK_MIN = 380;      // = .rv-win min-width in app.css
   function dock(w, def, saved) {
     // docked: at most 480px and never more than ~36% of the window, so the list and the call keep the larger part
-    const width = Math.round(Math.max(320, Math.min((saved && saved.w) || Math.min(def.width || 720, 480), innerWidth * 0.36)));
+    const width = Math.round(Math.max(DOCK_MIN, Math.min((saved && saved.w) || Math.min(def.width || 720, 480), innerWidth * 0.36)));   // never below the CSS min-width, or the window overhangs its own left edge
     const b = mainBox();
     w.docked = true;
     Object.assign(w.el.style, { left: (innerWidth - width - 6) + "px", top: Math.round(b.top) + "px", width: width + "px",
                                 height: Math.max(200, Math.round(b.bottom - b.top)) + "px" });
   }
   function relayout() {
+    // size the docked windows FIRST, then reserve exactly the room they now take (measuring before sizing reserved
+    // the width the window had before this call, so the list ended up under the dock below ~1440 px)
     let px = 0;
+    wins.forEach((w) => { if (w.shown && w.docked && !w.el.hidden) dock(w, w.def, { w: w.el.offsetWidth }); });
     wins.forEach((w) => { if (w.shown && w.docked && !w.el.hidden) px = Math.max(px, w.el.offsetWidth + 12); });
     document.documentElement.style.setProperty("--rv-dock", px + "px");
-    wins.forEach((w) => { if (w.shown && w.docked && !w.el.hidden) dock(w, w.def, { w: w.el.offsetWidth }); });
   }
   addEventListener("resize", () => relayout());
   function place(w, def) {

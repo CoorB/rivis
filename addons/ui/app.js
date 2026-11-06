@@ -1450,20 +1450,65 @@
       ${[["system", "Follow the Mac"], ["light", "Light"], ["dark", "Dark"]].map(([v, l]) => `<label><input type="radio" name="theme" value="${v}"${t === v ? " checked" : ""}> ${l}</label>`).join("")}
       <h4>Rows</h4>
       ${[["", "Comfortable"], ["compact", "Compact"]].map(([v, l]) => `<label><input type="radio" name="density" value="${v}"${store.get("rivis-density", "") === v ? " checked" : ""}> ${l}</label>`).join("")}
-      <h4>Updates</h4><p>${esc((S.state && S.state.version) || "")} <button class="rv-btn" id="set-update">Check for updates</button> <span id="set-update-r" class="rv-win-hint"></span></p>
+      <h4>Updates</h4><div id="set-update-box"></div>
       <h4>Welcome</h4><p><button class="rv-btn" id="set-welcome">Show the welcome again</button></p>
       <div class="rv-btns"><button class="rv-btn p" data-close>Done</button></div>`, "input[name=theme]:checked");
     d.querySelectorAll("input[name=theme]").forEach((r) => (r.onchange = () => { store.set("rivis-theme", r.value === "system" ? "" : r.value); applyTheme(); }));
     d.querySelector("#set-welcome").onclick = () => { store.set("rivis-ui-welcome", ""); showWelcome(); };
     d.querySelectorAll("input[name=density]").forEach((r) => (r.onchange = () => { store.set("rivis-density", r.value); applyDensity(); }));
-    d.querySelector("#set-update").onclick = async () => {
-      const out = d.querySelector("#set-update-r"); out.textContent = "Checking…";
+    // Updates: sign in with the organisation account (device code, in the browser), then check. The same steps as
+    // `rivis update login` / `rivis update`, so nobody has to open a terminal for them.
+    const ubox = d.querySelector("#set-update-box");
+    let unote = "", upoll = null, usignin = false;
+    const link = (u) => /^https:\/\//.test(u || "") ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>` : esc(u || "");
+    const stopPoll = () => { if (upoll) { clearInterval(upoll); upoll = null; } };
+    function drawUpdates(u) {
+      u = u || {};
+      const ver = esc((S.state && S.state.version) || ""), l = u.login || {}, hint = (t, id) => `<span${id ? ` id="${id}"` : ""} class="rv-win-hint">${esc(t)}</span>`;
+      const azure = !u.repo, needsSignIn = !u.signed_in && (azure || /sign in/i.test(u.error || ""));
+      let html;
+      if (u.pending) html = `<p>${ver} ${hint("Checking…")}</p>`;
+      else if (!u.configured) html = `<p>${ver} ${hint("Updates are not set up in this build.")}</p>`;
+      else if (!u.installed) html = `<p>${ver} ${hint("This copy runs from a source checkout: update it with git.")}</p>`;
+      else if (l.status === "waiting" || l.status === "starting")
+        html = `<p>${ver}</p><p>Open ${link(l.uri)} and enter this code:</p><p><strong id="set-update-code" style="font:600 18px ui-monospace,Menlo,monospace;letter-spacing:2px">${esc(l.user_code || "…")}</strong></p><p>${hint("Waiting for the sign-in to finish…")}</p>`;
+      else if (needsSignIn)
+        html = `<p>${ver} <button class="rv-btn" id="set-update-signin">Sign in</button> ${hint(l.status === "error" ? "Sign-in failed: " + (l.error || "try again") : "Sign in with your organisation account to check for updates.", "set-update-r")}</p>`;
+      else html = `<p>${ver} <button class="rv-btn" id="set-update">Check for updates</button> ${hint(unote, "set-update-r")}</p>`;
+      ubox.innerHTML = html;
+      const si = ubox.querySelector("#set-update-signin"), ck = ubox.querySelector("#set-update");
+      if (si) si.onclick = signIn;
+      if (ck) ck.onclick = checkNow;
+    }
+    async function refreshUpdates() { const st = await api("state"); S.state = st; drawUpdates(st.update); return st.update || {}; }
+    async function checkNow() {
+      unote = "Checking…"; drawUpdates({ configured: true, installed: true, signed_in: true });
       try {
         await api("update_check", {});
         const u = await new Promise((res) => setTimeout(async () => res(((await api("state")).update) || {}), 2500));
-        out.textContent = u.available ? u.available.version + " is available (see the banner)" : u.error ? u.error : u.pending ? "Still checking; the result shows as a banner" : "Up to date";
-      } catch (e) { out.textContent = e.message; }
-    };
+        unote = u.available ? u.available.version + " is available (see the banner)" : u.error ? u.error : u.pending ? "Still checking; the result shows as a banner" : "Up to date";
+        S.state = Object.assign({}, S.state, { update: u }); drawUpdates(u);
+      } catch (e) { unote = e.message; drawUpdates({ configured: true, installed: true, signed_in: true }); }
+    }
+    async function signIn() {
+      if (usignin) return;
+      usignin = true;
+      try {
+        await api("update_login_start", {});
+        stopPoll();
+        upoll = setInterval(async () => {
+          if (!d.isConnected) { stopPoll(); usignin = false; return; }
+          try {
+            const u = await refreshUpdates(), st = (u.login || {}).status;
+            if (st === "ok" || st === "error" || (!st && u.signed_in)) { stopPoll(); usignin = false; if (st === "ok" || u.signed_in) checkNow(); }
+          } catch (e) { /* the next tick tries again */ }
+        }, 2000);
+        await refreshUpdates();
+      } catch (e) { usignin = false; ubox.querySelector("#set-update-r") && (ubox.querySelector("#set-update-r").textContent = e.message); }
+    }
+    drawUpdates((S.state && S.state.update) || {});
+    refreshUpdates().catch(() => {});
+    new MutationObserver(() => { if (!d.isConnected) { stopPoll(); } }).observe(document.body, { childList: true });
   }
   function applyDensity() { document.documentElement.style.setProperty("--rv-row-h", store.get("rivis-density", "") === "compact" ? "24px" : "30px"); }
   applyDensity();

@@ -81,12 +81,12 @@ button, input, select { font: inherit; color: inherit; }
 .rv-src .rv-sname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rv-src .rv-scount { color: var(--rv-text-3); font-size: 12px; }
 .rv-src.rv-sub { padding-left: 20px; }
-.rv-main { container-type: inline-size; container-name: rvmain; margin-right: var(--rv-dock, 0px); transition: margin-right .12s; display: grid; grid-template-rows: minmax(120px, 1fr) 5px minmax(160px, var(--rv-detail-h, 45%)); min-width: 0; min-height: 0; }
+.rv-main { container-type: inline-size; container-name: rvmain; margin-right: var(--rv-dock, 0px); transition: margin-right .12s; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 1fr) 5px minmax(160px, var(--rv-detail-h, 45%)); min-width: 0; min-height: 0; }
 .rv-hsplit { cursor: row-resize; background: var(--rv-border); }
 .rv-hsplit:hover { background: var(--rv-accent); }
 
 /* call list (virtual: only the rows on screen exist) */
-.rv-list { display: flex; flex-direction: column; min-height: 0; background: var(--rv-surface); }
+.rv-list { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--rv-surface); }
 .rv-thead { display: grid; background: var(--rv-surface-2); border-bottom: 1px solid var(--rv-border); font-size: 12px; font-weight: 600; color: var(--rv-text-2); user-select: none; }
 .rv-th { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; border-right: 1px solid var(--rv-border); }
 .rv-th:last-child { border-right: 0; }
@@ -113,7 +113,7 @@ button, input, select { font: inherit; color: inherit; }
 .rv-empty[hidden] { display: none; }
 
 /* request | response (+ protocol viewer strip when a call has JWT / GraphQL / gRPC) */
-.rv-detail { display: grid; grid-template-columns: 1fr 5px 1fr; grid-template-rows: auto minmax(0, 1fr); min-height: 0; background: var(--rv-surface); }
+.rv-detail { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 5px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-height: 0; background: var(--rv-surface); }
 .rv-viewer { grid-column: 1 / -1; max-height: 42%; overflow: auto; padding: 8px 10px; border-bottom: 1px solid var(--rv-border); background: var(--rv-surface-2); font-size: 12px; }
 .rv-viewer[hidden] { display: none; }
 .rv-viewer h3 { margin: 0 0 6px; font-size: 12px; font-weight: 700; }
