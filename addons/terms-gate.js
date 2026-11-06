@@ -16,14 +16,49 @@
   };
   async function api(op, body) {
     const c = new AbortController(), t = setTimeout(() => c.abort(), 10000);
+    let r;
     try {
-      const r = await fetch(API + op, Object.assign({ credentials: "same-origin", signal: c.signal }, body === undefined ? {} : {
+      r = await fetch(API + op, Object.assign({ credentials: "same-origin", signal: c.signal }, body === undefined ? {} : {
         method: "POST", headers: { "Content-Type": "application/json", "X-XSRFToken": xsrf() }, body: JSON.stringify(body) }));
-      let j = {};
-      try { j = await r.json(); } catch (e) { j = { error: "HTTP " + r.status }; }
-      if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
-      return j;
+    } catch (e) {        // no answer at all: stopped, restarting, or a window left open from an earlier start
+      throw new Error("Rivis is not answering. Check that it is running ('rivis status'), then reload this window.");
     } finally { clearTimeout(t); }
+    let j = {};
+    try { j = await r.json(); } catch (e) { j = {}; }
+    if (r.status === 401 || r.status === 403 && !j.error)
+      throw new Error("This window is no longer signed in to Rivis (Rivis was restarted). Open it again with 'rivis ui' or the Mac app.");
+    if (!r.ok) throw new Error(j.error || "Rivis answered HTTP " + r.status);
+    return j;
+  }
+
+  // The terms are Markdown: show headings, paragraphs and bullet points as such (text only, never as HTML), joining the
+  // lines a paragraph was wrapped on, so the text reads the same in any window width.
+  function renderTerms(md, title) {
+    const out = document.createDocumentFragment();
+    const blocks = md.replace(/\r/g, "").replace(/<!--[\s\S]*?-->/g, "").split(/\n\s*\n/);
+    for (const block of blocks) {
+      const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
+      let para = null, list = null;
+      for (const line of lines) {
+        const h = /^(#{1,6})\s+(.*)$/.exec(line);
+        if (h) {
+          para = list = null;
+          if (h[2] === title && !out.childNodes.length) continue;          // already the cover's own title
+          out.appendChild(el(h[1].length <= 2 ? "h3" : "h4", "margin:14px 0 6px;font-size:" + (h[1].length <= 2 ? "16px" : "14px"), h[2]));
+        } else if (/^[-*]\s+/.test(line)) {
+          para = null;
+          if (!list) { list = el("ul", "margin:6px 0;padding-left:22px"); out.appendChild(list); }
+          list.appendChild(el("li", "margin:3px 0", line.replace(/^[-*]\s+/, "")));
+        } else if (list && list.lastChild && !para) {
+          list.lastChild.textContent += " " + line;                         // a bullet wrapped onto the next line
+        } else if (para) {
+          para.textContent += " " + line;
+        } else {
+          para = el("p", "margin:6px 0", line); out.appendChild(para);
+        }
+      }
+    }
+    return out;
   }
 
   let box = null, shownSha = null, stopped = false;
@@ -68,8 +103,8 @@
     const sub = el("p", "margin:0;padding:0 20px 10px;color:#4a5866",
       st.state === "changed" ? "The Terms of Use changed since you agreed. Read them again; Rivis passes no traffic until you agree."
         : "Before you use Rivis, read the Terms of Use. Rivis passes no traffic until you agree.");
-    const text = el("div", "margin:0 20px;padding:12px 14px;border:1px solid #d5dde4;border-radius:6px;background:#f7f9fb;overflow:auto;white-space:pre-wrap;flex:1;min-height:160px");
-    text.textContent = doc.text.replace(/^\s*<!--[\s\S]*?-->\s*$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+    const text = el("div", "margin:0 20px;padding:4px 16px;border:1px solid #d5dde4;border-radius:6px;background:#f7f9fb;overflow:auto;flex:1;min-height:160px");
+    text.appendChild(renderTerms(doc.text, doc.title || ""));
     text.tabIndex = 0; text.setAttribute("aria-label", "Terms of Use text");
     const form = el("form", "padding:14px 20px 18px;display:flex;flex-direction:column;gap:10px");
     const read = el("label", "display:flex;gap:8px;align-items:center");

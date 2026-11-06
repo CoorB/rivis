@@ -39,14 +39,22 @@ class TermsGateUi(UiBase):
         self.assertEqual(self.fetch("/json/small").status, 403)
         self.assertEqual(page.locator("#rivis-terms-name").count(), 0)          # no typed name any more
         self.assertTrue(page.locator("#rivis-terms-accept").is_disabled())   # the box is not ticked yet
+        self.assertNotIn("# ", cover.inner_text())                              # Markdown shown as text, not raw
+        self.assertGreaterEqual(page.locator("#rivis-terms p").count(), 2)
         page.locator("#rivis-terms-read").check()
+        page.route("**/proxy/api/terms_accept", lambda route: route.abort())  # Rivis not answering at that moment
+        page.locator("#rivis-terms-accept").click()
+        page.locator("#rivis-terms-error", has_text="not answering").wait_for(timeout=10000)
+        self.assertNotIn("Failed to fetch", page.locator("#rivis-terms-error").inner_text())
+        page.unroute("**/proxy/api/terms_accept")
         page.locator("#rivis-terms-accept").click()
         wait_for(lambda: page.locator("#rivis-terms").count() == 0, 10, 0.2, "cover gone after agreeing")
         self.assertEqual(self.panel.state()["terms"]["state"], "accepted")
         self.assertEqual(self.fetch("/json/small").status, 200)
         # polls still in flight when the cover closes or the page navigates are cut off by the browser
         self.errors[:] = [e for e in self.errors if not (e[0] == "requestfailed"
-                                                         and e[1].endswith(("/proxy/api/state", "/proxy/api/terms_status")))]
+                                                         and e[1].endswith(("/proxy/api/state", "/proxy/api/terms_status", "/proxy/api/terms_accept")))
+                          and e != ("console.error", "Failed to load resource: net::ERR_FAILED")]   # the call cut on purpose
         self.assertEqual(self.errors, [])
 
 
