@@ -55,6 +55,8 @@ class ProxyTerms:
         try:      # re-read at once when the kept manifest changes (an update check), else once a minute (deadlines)
             st = os.stat(update_policy.MANIFEST)
             key = (st.st_mtime_ns, st.st_size, st.st_ino)
+            sg = os.stat(update_policy.SIGNATURE)           # the manifest and its signature are written one after the other
+            key += (sg.st_mtime_ns, sg.st_size, sg.st_ino)
         except OSError:
             key = None
         if key != getattr(self, "_policy_key", None) or now - self._policy_at >= POLICY_EVERY:
@@ -71,12 +73,16 @@ class ProxyTerms:
         for path in (terms.terms_path(), terms.record_path()):
             try:
                 st = os.stat(path)
-                key.append((st.st_mtime_ns, st.st_size, st.st_ino))
+                key.append((st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino))   # ctime: a chmod is a change too
             except OSError:
                 key.append(None)
         key = tuple(key)
         if key != self._key:
-            self._key, self._ok = key, terms.accepted()
+            try:
+                ok = terms.accepted()
+            except Exception:          # noqa: BLE001 - fail closed: a record that cannot be read is not an agreement
+                ok = False
+            self._key, self._ok = key, ok
         return self._ok
 
     def _locked(self):

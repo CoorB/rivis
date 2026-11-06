@@ -651,7 +651,7 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
   ensure_ca; ensure_rules
   # Already running (the installer offers to start it, then the quickstart says `start` again): say so, exit 0.
   if [ -n "$(our_listeners)" ]; then
-    info "$PRODUCT_NAME is already running (proxy 127.0.0.1:$PORT, UI http://127.0.0.1:$WEB_PORT/)."
+    info "$PRODUCT_NAME is already running (proxy 127.0.0.1:$PORT, UI on :$WEB_PORT)."
     warn_running_version # R4A-01: installed --version alone says nothing about a live old proxy.
     info "  open the UI: $CLI ui    ·    to start it with other options: $CLI stop, then $CLI start …"
     return 0
@@ -689,7 +689,7 @@ except (AssertionError,ValueError): sys.exit(1)' "$upstream" || die "--upstream 
     for i in $(seq 1 60); do [ -n "$(port_owner "$WEB_PORT")" ] && break; kill -0 "$child" 2>/dev/null || break; sleep 0.5; done
     [ -n "$(port_owner "$WEB_PORT")" ] || { tail -5 "$log" >&2; die "did not start — full log: $log"; }
     rmdir "$start_guard" 2>/dev/null || rm -rf "$start_guard"
-    info "$PRODUCT_NAME is running in the background (proxy 127.0.0.1:$PORT, UI http://127.0.0.1:$WEB_PORT/)"
+    info "$PRODUCT_NAME is running in the background (proxy 127.0.0.1:$PORT, UI on :$WEB_PORT — open it with: $CLI ui)"
     info "devices  in the UI: Tools → Devices, one click per simulator / emulator (or: $CLI setup)"
     info "reopen the UI: $CLI ui   ·   stop: $CLI stop   ·   log: $log"
     return 0
@@ -904,7 +904,7 @@ cmd_update() {
     check|install)
       local pinned; pinned=$(mitmdump --version 2>/dev/null | sed -n 's/^[Mm]itmproxy:* *v*\([0-9.]*\).*/\1/p' | head -1)
       [ -z "$pinned" ] || /usr/bin/python3 -I "$SCRIPT_DIR/addons/mitm_watch.py" check "$pinned" | sed 's/^/• /' || true
-      out=$("${U[@]}" check) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error","update check failed"))' 2>/dev/null). To upgrade by hand, get the new release zip (Azure DevOps: Rivis > Artifacts > rivis) and run its install.sh."
+      out=$("${U[@]}" check) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error") or "update check failed")' 2>/dev/null || echo "update check failed"). To upgrade by hand, get the new release zip (Azure DevOps: Rivis > Artifacts > rivis) and run its install.sh."
       local v notes; v=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; a=json.load(sys.stdin)["available"]; print(a["version"] if a else "")')
       if [ -z "$v" ]; then info "$PRODUCT_NAME $(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["current"])') is up to date"; return 0; fi
       notes=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["available"]["notes"])')
@@ -915,7 +915,7 @@ cmd_update() {
         case "$ans" in ""|y|Y|yes) ;; *) return 0 ;; esac; fi
       printf '%s' "$("${U[@]}" status)" | /usr/bin/python3 -I -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["installed"] else 1)' \
         || die "this copy runs from a source checkout — update it with git, not with '$CLI update'"
-      out=$("${U[@]}" download) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error","download failed"))' 2>/dev/null)"
+      out=$("${U[@]}" download) || die "$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("error") or "download failed")' 2>/dev/null || echo "download failed")"
       local zip; zip=$(printf '%s' "$out" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin)["path"])')
       mkdir -p -m 700 "$STATE_ROOT/updates"
       nohup /bin/bash "$SCRIPT_DIR/addons/update_install.sh" "$zip" > "$STATE_ROOT/updates/install.log" 2>&1 < /dev/null &
@@ -1007,8 +1007,17 @@ print("\n".join(sorted(vs, key=key)))')
   if [ -n "$arg" ]; then target="$arg"
   else target=$(printf '%s\n' "$list" | awk -v c="$cur" '$0==c{print p; exit} {p=$0}'); fi
   [ -n "$target" ] || die "no earlier version is installed (installed: $(printf '%s' "$list" | tr '\n' ' ')) — reinstall the older installer zip instead"
+  [[ "$target" =~ ^[0-9][0-9A-Za-z.-]*$ ]] || die "'$target' is not a version number (installed: $(printf '%s' "$list" | tr '\n' ' '))"
   [ "$target" != "$cur" ] || die "$PRODUCT_NAME $cur is already the current version"
   [ -x "$root/tool-$target/$CLI" ] || die "$PRODUCT_NAME $target is not installed (installed: $(printf '%s' "$list" | tr '\n' ' '))"
+  # A version from before the Terms of Use / required-update checks cannot enforce them. Going back to one is allowed
+  # only while this copy's own checks are satisfied, so a rollback can never be a way round them.
+  if [ ! -f "$root/tool-$target/addons/terms.py" ] || [ ! -f "$root/tool-$target/addons/update_policy.py" ]; then
+    /usr/bin/python3 -I "$TERMS_PY" status >/dev/null 2>&1 \
+      || die "$PRODUCT_NAME $target has no Terms of Use check, and the Terms have not been accepted on this Mac — run '$CLI terms' first, then roll back"
+    local pol_rc=0; /usr/bin/python3 -I "$SCRIPT_DIR/addons/update_policy.py" status >/dev/null 2>&1 || pol_rc=$?
+    [ "$pol_rc" != 11 ] || die "$PRODUCT_NAME $target has no update check, and an update is required on this Mac — run '$CLI update' instead"
+  fi
   local was_running=""; [ -n "$(our_listeners)" ] && was_running=1
   START_PORT=""; START_WEB_PORT=""; START_PROJECT_SOURCE=""; START_PROJECT_EXPLICIT=0; START_ARGS=()
   if [ -n "$was_running" ]; then

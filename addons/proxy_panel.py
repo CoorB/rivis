@@ -918,10 +918,11 @@ class ProxyPanel:
 
     # ── in-app updates: everything slow (network, Keychain) runs off the event loop ─────────────────────────────────
     @staticmethod
-    def _updater(*args, timeout=90):
+    def _updater(*args, timeout=90, extra_env=None):
         try:
             r = subprocess.run(["/usr/bin/python3", "-I", os.path.join(HERE, "updater.py"), *args],
-                               capture_output=True, text=True, timeout=timeout)
+                               capture_output=True, text=True, timeout=timeout,
+                               env=dict(os.environ, **extra_env) if extra_env else None)
             return r.returncode, json.loads(r.stdout or "{}")
         except (OSError, subprocess.SubprocessError, ValueError) as e:
             return 1, {"error": "update check failed: %s" % e}
@@ -977,7 +978,7 @@ class ProxyPanel:
         interval = int(j.get("interval", 5))
         while time.time() < j["expires_at"]:
             time.sleep(interval)
-            rc, r = self._updater("login-poll", j["device_code"], timeout=30)
+            rc, r = self._updater("login-poll", timeout=30, extra_env={"RIVIS_DEVICE_CODE": j["device_code"]})
             if rc != 0:
                 self._update_login = {"status": "error", "error": r.get("error")}
                 return
@@ -1029,7 +1030,8 @@ class ProxyPanel:
         have, doc = self._mitm.get()          # never waits: the check runs on a background thread
         if not have or not doc:
             return None
-        return {"summary": mitm_watch.summary(doc), "pinned": doc.get("pinned"), "latest": doc.get("latest"),
+        # a failed check (offline, pypi.org blocked) is not news at the window: `rivis doctor` still says it
+        return {"summary": None if doc.get("error") else mitm_watch.summary(doc), "pinned": doc.get("pinned"), "latest": doc.get("latest"),
                 "newer": bool(doc.get("newer")), "advisories": len(doc.get("advisories") or []),
                 "checked_at": doc.get("checked_at")}
 

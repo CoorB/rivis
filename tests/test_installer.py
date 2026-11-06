@@ -466,6 +466,48 @@ class RealInstall(InstallerBase):
         self.assertEqual(fwd.returncode, 0, fwd.stdout + fwd.stderr)
         self.assertEqual(os.path.realpath(os.path.join(root, "current")), new_tool)
 
+    def test_rollback_to_a_version_without_the_terms_check_needs_the_terms_accepted(self):
+        # A pre-gate version (0.9.10 and earlier) cannot enforce the Terms of Use: going back to one must not be a way round them
+        self.ok("--yes", "--skip-local-capture")
+        root = os.path.join(self.home, ".local", "rivis")
+        new_tool = os.path.realpath(os.path.join(root, "current"))
+        old_tool = os.path.join(root, "tool-0.9.4")
+        shutil.copytree(new_tool, old_tool)
+        with open(os.path.join(old_tool, "VERSION"), "w") as fh: fh.write("0.9.4\n")
+        for gone in ("terms.py", "update_policy.py"):
+            os.unlink(os.path.join(old_tool, "addons", gone))
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        env = self.suite.env(self.home)
+        record = os.path.join(self.home, ".rivis-terms-acceptance.json")
+        saved = open(record).read()
+        os.unlink(record)                                             # Terms not accepted on this Mac
+        r = self.suite.run([launcher, "rollback", "0.9.4"], home=self.home, env=env, timeout=60)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Terms", r.stdout + r.stderr)
+        self.assertEqual(os.path.realpath(os.path.join(root, "current")), new_tool)       # nothing was switched
+        with open(record, "w") as fh: fh.write(saved)
+        r = self.suite.run([launcher, "rollback", "0.9.4"], home=self.home, env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(os.path.realpath(os.path.join(root, "current")), os.path.realpath(old_tool))
+
+    def test_rollback_refuses_a_version_that_is_a_path(self):
+        self.ok("--yes", "--skip-local-capture")
+        launcher = os.path.join(self.home, ".local", "bin", "rivis")
+        r = self.suite.run([launcher, "rollback", "../tool-x"], home=self.home, env=self.suite.env(self.home))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not a version number", r.stdout + r.stderr)
+
+    def test_uninstall_leaves_a_shell_file_alone_when_our_end_marker_is_missing(self):
+        # with the END line gone, everything after BEGIN is the user's own: removing it would delete their lines
+        self.ok("--yes", "--skip-local-capture")
+        rc = os.path.join(self.home, ".zshrc")
+        text = open(rc).read()
+        cut = text.replace("# <<< proxy-tool installer (managed) <<<", "")
+        self.assertNotEqual(cut, text, "the test needs the real end marker line")
+        with open(rc, "w") as fh: fh.write(cut + "export MINE=1\n")
+        self.ok("--uninstall", "--yes")
+        self.assertIn("export MINE=1", open(rc).read())
+
     def test_rollback_with_nothing_older_installed_explains(self):
         self.ok("--yes", "--skip-local-capture")
         launcher = os.path.join(self.home, ".local", "bin", "rivis")

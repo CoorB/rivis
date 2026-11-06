@@ -142,6 +142,7 @@ class ToolWindows(UiBase):
         ta = w.locator("#mlbody")
         wait_for(lambda: ta.count() == 1 and ta.input_value() != "", 10, 0.1, "editor with the call's response")
         self.assertIn("discarded", w.inner_text(), "a draft says it is discarded unless saved")
+        self.assertNotIn("GET GET", w.inner_text(), "the method is shown once in the editor header")
         ta.fill('{"mocked": 1}')
         w.locator("#mlst").fill("201")
         ta.press(MOD + "+s")

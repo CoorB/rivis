@@ -12,6 +12,11 @@
   const BIG = 1024 * 1024;          // above this, JSON is checked after typing pauses, not on every key
 
   const maps = () => (((A.state() || {}).rules) || []).filter((r) => r.action === "map_local");
+  // "GET https://…": the saved note already starts with the method, so it is not put in front a second time
+  const headLabel = (e) => {
+    const m = e.method || "Any", t = pretty(maps().find((r) => r.name === e.name) || { match: e.match });
+    return t.indexOf(m + " ") === 0 ? t : m + " " + t;
+  };
   const pretty = (r) => {
     if (r.note && /^(from|manual:) /.test(r.note)) return r.note.replace(/^(from|manual:) /, "");
     if (r.base) return r.base + "*";
@@ -116,7 +121,7 @@
     if (!e) { box.innerHTML = ui.empty("Pick a rule", "Its response — status, headers and body — opens here."); return; }
     const variants = e.variants.length ? e.variants : ["Default"];
     box.innerHTML = `
-      <div class="rv-ml-head"><b class="rv-mono rv-ell-line" title="${esc(e.match)}">${esc(e.method || "Any")} ${esc(pretty(maps().find((r) => r.name === e.name) || { match: e.match }))}</b>
+      <div class="rv-ml-head"><b class="rv-mono rv-ell-line" title="${esc(e.match)}">${esc(headLabel(e))}</b>
         <button type="button" class="rv-icon-btn" data-ml-del title="Delete this rule" aria-label="Delete rule ${esc(e.name)}">🗑</button></div>
       ${e.draft ? `<p class="rv-note">New rule from a call: edit the response, then <b>Save</b> to turn it on. Close without saving and it is discarded.</p>` : ""}
       <div class="rv-form"><label>Status <input type="number" id="mlst" min="100" max="999" value="${esc(e.status)}" style="width:84px"></label>

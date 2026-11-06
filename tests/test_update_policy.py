@@ -286,5 +286,16 @@ class MitmWatchInTheWindow(LiveCase):
         self.assertIn("security advisor", r.stdout)
 
 
+class MitmWatchOffline(LiveCase):
+    @classmethod
+    def make_instance(cls):
+        return Instance(cls.suite, "mitmwatchoff", extra_env={"RIVIS_MITM_WATCH_URL": "http://127.0.0.1:9/"})
+
+    def test_a_failed_check_leaves_the_window_quiet(self):
+        # an offline Mac (or a blocked pypi.org) showed "[Errno 61] Connection refused" over the empty first-run window
+        st = wait_for(lambda: self.panel.state().get("mitm_watch"), 20, 0.3, "the background check has answered")
+        self.assertIsNone(st["summary"], st)
+
+
 if __name__ == "__main__":
     unittest.main()

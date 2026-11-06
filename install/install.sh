@@ -193,6 +193,9 @@ fi
 strip_rc_block() {  # strip_rc_block FILE — removes only our marked block
   local f="$1"
   [ -f "$f" ] && grep -qF "$RC_BEGIN" "$f" || return 0
+  # only a block that has BOTH of our markers is ours: with a missing END line everything after BEGIN would be the
+  # user's own lines
+  grep -qF "$RC_END" "$f" || { info "$f has our start marker but no end marker — left alone; remove the $NAME lines by hand"; return 0; }
   info "removing PATH block from $f"
   if [ "$DRY" = 1 ]; then echo "  [dry-run] strip marked block from $f"; return 0; fi
   local t; t=$(mktemp)

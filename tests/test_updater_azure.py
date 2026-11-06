@@ -44,6 +44,7 @@ class FakeAzure:
         self.packages = {}          # version -> {"tgz": bytes, "meta": extra package.json fields}
         self.pending = 1
         self.answer = None          # force a status code for registry GETs
+        self.token_status = None    # force a status code for the sign-in service (device code, token, refresh)
         outer = self
 
         class H(http.server.BaseHTTPRequestHandler):
@@ -60,6 +61,8 @@ class FakeAzure:
                 form = dict(x.split("=", 1) for x in self.rfile.read(n).decode().split("&") if "=" in x)
                 form = {k: __import__("urllib.parse").parse.unquote_plus(v) for k, v in form.items()}
                 outer.calls.append(("POST", self.path, form))
+                if outer.token_status:
+                    return self.reply(outer.token_status, raw=b"<html>busy</html>", ctype="text/html")
                 if self.path == "/%s/oauth2/v2.0/devicecode" % TENANT:
                     return self.reply(200, {"device_code": "dc-1", "user_code": "ABCD1234", "interval": 1,
                                             "verification_uri": "https://microsoft.com/devicelogin", "expires_in": 900})
@@ -270,6 +273,52 @@ class AzureDownload(AzureBase):
         rc, j = self.upd("download")
         self.assertEqual(rc, 1)
         self.assertIn("not a plain file", j["error"])
+
+
+class AzureFailureModes(AzureBase):
+    def test_no_network_is_one_plain_sentence_not_a_traceback(self):
+        self.configure()
+        p = os.path.join(self.tool, "product.json")
+        prod = json.load(open(p)); prod["azure_login_url"] = "http://127.0.0.1:9"; json.dump(prod, open(p, "w"))
+        r = subprocess.run(["/usr/bin/python3", "-I", os.path.join(self.tool, "addons", "updater.py"), "login-start"],
+                           capture_output=True, text=True, env=self.env(), timeout=60)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("cannot reach 127.0.0.1:9", json.loads(r.stdout)["error"])
+        self.assertIn("network or VPN", json.loads(r.stdout)["error"])
+
+    def test_a_busy_sign_in_service_keeps_the_sign_in(self):
+        # a 503 on the refresh is the service having a moment, not the sign-in being revoked
+        self.sign_in(expires_at=time.time() - 10, refresh_expires_at=time.time() + 86400)
+        self.az.token_status = 503
+        rc, j = self.upd("check")
+        self.assertEqual(rc, 1)
+        self.assertIn("did not answer", j["error"])
+        self.assertTrue(os.path.exists(self.token_file), "the sign-in must survive a 5xx")
+
+    def test_a_redirect_from_https_to_http_never_carries_the_token(self):
+        code = ("import sys, urllib.request; sys.path.insert(0, sys.argv[1]); sys.dont_write_bytecode = True\n"
+                "import updater\n"
+                "h = updater._NoAuthOnRedirect()\n"
+                "req = urllib.request.Request('https://pkgs.dev.azure.com/a', headers={'Authorization': 'Bearer secret'})\n"
+                "def go(url):\n"
+                "    n = h.redirect_request(req, None, 302, 'Found', {}, url)\n"
+                "    return 'Authorization' in {k.title() for k in dict(n.header_items())}\n"
+                "print(go('http://pkgs.dev.azure.com/x'), go('https://other.example/x'), go('https://pkgs.dev.azure.com/y'))\n")
+        r = subprocess.run(["/usr/bin/python3", "-I", "-c", code, os.path.join(self.tool, "addons")],
+                           capture_output=True, text=True, env=self.env(), timeout=30)
+        self.assertEqual(r.stdout.strip(), "False False True", r.stdout + r.stderr)
+
+    def test_the_device_code_is_read_from_the_environment_not_the_command_line(self):
+        self.az.pending = 5
+        rc, start = self.upd("login-start")
+        self.assertEqual(rc, 0, start)
+        r = subprocess.run(["/usr/bin/python3", "-I", os.path.join(self.tool, "addons", "updater.py"), "login-poll"],
+                           capture_output=True, text=True, timeout=30,
+                           env=dict(self.env(), RIVIS_DEVICE_CODE=start["device_code"]))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout)["result"], "pending")
+        self.assertTrue(any(c[0] == "POST" and c[2].get("device_code") == "dc-1" for c in self.az.calls))
 
 
 @unittest.skipUnless(os.path.exists("/usr/bin/security"), "needs the macOS Keychain")

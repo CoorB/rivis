@@ -40,8 +40,8 @@ def _product():
         with open(os.path.join(ROOT, "product.json")) as fh:
             doc = json.load(fh)
         return doc if isinstance(doc, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    except Exception:        # noqa: BLE001 - OSError, bad JSON, or JSON nested so deep it raises RecursionError: all mean
+        return {}            # "no valid record", which is a locked Rivis, never an open one
 
 
 PRODUCT = _product()
@@ -79,8 +79,8 @@ def _load_record():
         with open(record_path()) as fh:
             doc = json.load(fh)
         return doc if isinstance(doc, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    except Exception:        # noqa: BLE001 - OSError, bad JSON, or JSON nested so deep it raises RecursionError: all mean
+        return {}            # "no valid record", which is a locked Rivis, never an open one
 
 
 def status():
@@ -203,6 +203,9 @@ def main(argv):
             return 0
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print("could not save your answer in %s: %s" % (record_path(), exc.strerror or exc), file=sys.stderr)
         return 2
     print(__doc__.split("\n\n")[1], file=sys.stderr)
     return 2

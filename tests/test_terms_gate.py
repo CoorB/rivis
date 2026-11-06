@@ -98,6 +98,23 @@ class TermsModule(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(self.py("status", root=self.copy("   \n")).returncode, 4)      # blank counts as none
 
+    def test_a_hostile_or_unwritable_record_is_not_an_agreement(self):
+        # JSON nested 100,000 deep raised RecursionError inside the proxy, and an add-on error lets the call through
+        path = os.path.join(self.home, ".rivis-terms-acceptance.json")
+        self.assertEqual(self.py("accept", "cli").returncode, 0)
+        with open(path, "w") as fh:
+            fh.write("[" * 100000 + "]" * 100000)
+        r = self.py("status")
+        self.assertEqual((r.returncode, r.stdout.strip()), (3, "required"), r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        # and when the answer cannot be saved, one plain sentence, not a traceback
+        os.unlink(path)
+        os.mkdir(path)                                     # a directory where the record should be
+        r = self.py("accept", "cli")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("could not save your answer", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_declining_keeps_it_locked_and_only_known_channels_count(self):
         self.assertEqual(self.py("decline", "cli").returncode, 0)
         self.assertEqual(self.py("status").stdout.strip(), "declined")

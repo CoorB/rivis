@@ -29,6 +29,7 @@ Trust model
 """
 import base64
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -192,7 +193,9 @@ def token_save(tok):
         r = subprocess.run(["security", "-i"], input=cmd, capture_output=True, text=True, timeout=15)
         if r.returncode != 0 or "error" in (r.stdout + r.stderr).lower():
             token_delete()
-            raise UpdateError("could not save the sign-in in the Keychain: %s" % (r.stderr or r.stdout).strip()[:200])
+            # `security` can echo the part of the command it did not understand, which is the token: never show it
+            raise UpdateError("could not save the sign-in in the Keychain (security exit %d) — unlock the login keychain "
+                              "and run '%s update login' again" % (r.returncode, CLI))
     if token_load() != tok:                            # never claim a sign-in that cannot be read back
         token_delete()
         raise UpdateError("the sign-in was saved but could not be read back from the Keychain — try '%s update login' "
@@ -219,7 +222,8 @@ class _NoAuthOnRedirect(urllib.request.HTTPRedirectHandler):
     """Release downloads redirect to a storage host: never carry the GitHub token there."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new is not None and urllib.parse.urlsplit(newurl).netloc != urllib.parse.urlsplit(req.full_url).netloc:
+        a, b = urllib.parse.urlsplit(newurl), urllib.parse.urlsplit(req.full_url)
+        if new is not None and (a.netloc != b.netloc or a.scheme != b.scheme):    # https -> http would send it in clear
             for h in list(new.headers):
                 if h.lower() == "authorization":
                     del new.headers[h]
@@ -240,6 +244,10 @@ def _http(url, data=None, headers=None, timeout=30):
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
+    except (OSError, http.client.HTTPException) as e:        # no network, VPN down, DNS, TLS, timeout: a plain sentence
+        host = urllib.parse.urlsplit(url).netloc or url
+        reason = getattr(e, "reason", None) or e
+        raise UpdateError("cannot reach %s (%s) — check your network or VPN and try again" % (host, str(reason)[:120]))
 
 
 def _json_post(url, data):
@@ -322,6 +330,9 @@ def access_token():
         else:
             code, doc = _json_post(LOGIN + "/login/oauth/access_token", dict(form, client_id=CLIENT_ID))
         if not doc.get("access_token"):
+            if code >= 500 or code == 429 or doc.get("error") in ("temporarily_unavailable", "slow_down"):
+                # the sign-in service is having a moment: keep the sign-in, try again later
+                raise UpdateError("the sign-in service did not answer (%s) — try again in a minute" % code)
             token_delete()
             return None
         _store_token(doc)
@@ -583,7 +594,7 @@ def main(argv):
         elif cmd == "login-start":
             print(json.dumps(login_start()))
         elif cmd == "login-poll":
-            print(json.dumps({"result": login_poll(argv[1])}))
+            print(json.dumps({"result": login_poll(os.environ.pop("RIVIS_DEVICE_CODE", "") or argv[1])}))
         elif cmd == "logout":
             token_delete()
             print(json.dumps({"signed_in": False}))
@@ -607,6 +618,11 @@ def main(argv):
     except UpdateError as e:
         print(json.dumps({"error": str(e)}) if cmd not in ("login",) else "update: %s" % e,
               file=sys.stdout if cmd not in ("login",) else sys.stderr)
+        return 1
+    except Exception as e:          # noqa: BLE001 - an unexpected failure is one plain sentence, never a traceback
+        msg = "the update step failed (%s: %s)" % (type(e).__name__, str(e)[:160])
+        print(json.dumps({"error": msg}) if cmd != "login" else "update: %s" % msg,
+              file=sys.stdout if cmd != "login" else sys.stderr)
         return 1
     return 0
 
