@@ -674,6 +674,27 @@ class Release(unittest.TestCase):
         self.assertEqual(bad, [])
 
 
+    def test_release_carries_everything_the_tool_reads_at_run_time(self):
+        """The 0.9.11 candidate shipped without terms/: every installed copy refused to run ("no Terms of Use text").
+        Each top-level path of the checkout that the tool uses must be in the release tarball."""
+        out = os.path.join(self.suite.root, "release-out3")
+        subprocess.run(["/bin/bash", MAKE_RELEASE, out], capture_output=True, check=True,
+                       env=self.suite.env(self.suite.new_home("rel3")))
+        tarball = [f for f in os.listdir(out) if f.endswith(".tar.gz")][0]
+        with tarfile.open(os.path.join(out, tarball)) as tf:
+            top = {n.split("/")[1] for n in tf.getnames() if n.count("/") >= 1 and n.split("/")[1]}
+            names = set(tf.getnames())
+        root = tarball[:-len(".tar.gz")]
+        for rel in ("terms/TERMS.md", "addons/terms.py", "addons/access.py", "addons/terms-gate.js",
+                    "addons/update_policy.py", "addons/mitm_watch.py", "addons/release-signers", "product.json"):
+            self.assertIn(root + "/" + rel, names, rel)
+        tracked = set(subprocess.run(["git", "-C", harness.REPO, "ls-files"], capture_output=True, text=True,
+                                     check=True).stdout.split())
+        wanted = {p.split("/")[0] for p in tracked} - {"tests", "install", ".github", ".gitlab-ci.yml", "release-tools", ".gitignore", ".gitattributes",
+                                                      "CONTRIBUTING.md", "LICENSE", "SECURITY.md", "CHANGELOG.md"}
+        self.assertEqual(sorted(wanted - top), [], "top-level paths of the checkout missing from the release")
+
+
 class Cosmetics(InstallerBase):
     def test_install_then_uninstall_restores_the_rc_file_byte_for_byte(self):
         """FOUND-BUGS B10: install appends a blank line before the managed block; uninstall leaves it behind."""
