@@ -691,7 +691,10 @@ class ProxyScripts:
                     content = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             elif isinstance(body, str):
                 candidate = body.encode()
-                if candidate != decoded_before: content = candidate
+                # a script that never touched the body must not rewrite it: for a non-UTF-8 body the script saw a
+                # lossy (U+FFFD) copy, and writing that back would corrupt what the server sent
+                if candidate != decoded_before and body != decoded_before.decode("utf-8", "replace"):
+                    content = candidate
             else:
                 # JSON null/false/true/numbers must stay JSON, not Python's str() (None/False/True).
                 candidate = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

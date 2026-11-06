@@ -24,9 +24,10 @@ SECRET_HEADERS = frozenset((
     "authorization", "proxy-authorization", "cookie", "set-cookie", "set-cookie2",
     "x-api-key", "api-key", "apikey", "x-auth-token", "x-access-token", "x-refresh-token", "x-id-token",
     "x-csrf-token", "x-xsrf-token", "x-session-id", "x-session-token", "x-amz-security-token",
+    "ocp-apim-subscription-key", "x-functions-key", "x-goog-api-key", "x-api-secret",
 ))
-_SECRET_HEADER_PART = re.compile(r"token|secret|session|api[-_]?key|auth", re.I)
-_SECRET_HEADER_FIELD = re.compile(r"(^|[-_])(otp|pin|pass(word|code)?|pwd|pw|cvv|cvc|csrf|xsrf|mfa)([-_]|$)", re.I)
+_SECRET_HEADER_PART = re.compile(r"token|secret|session|api[-_]?key|auth|subscription|signature|credential", re.I)
+_SECRET_HEADER_FIELD = re.compile(r"(^|[-_])(otp|pin|pass(word|code)?|pwd|pw|cvv|cvc|csrf|xsrf|mfa|keys?)([-_]|$)", re.I)
 # R1A-02: include bare/delimited pw, without matching ordinary words like "pwned" or "upward".
 # field names: whole-word-ish match so "pinned"/"opinion"/"spine" are not caught but "pin", "user_pin", "newPin" are
 _SECRET_KEY = re.compile(
@@ -34,6 +35,10 @@ _SECRET_KEY = re.compile(
     r"api[_\-]?key|private[_\-]?key|client[_\-]?secret|credentials?)($|[_\-.])"
     r"|(password|passcode|pwd|pw|otp|pin|secret|token|apikey|apiKey|sessionid|sessionId)$"
     r"|^(access|refresh|id|auth|bearer)[_\-]?token", re.I)
+# Cloud/API credentials with generic names (Azure subscription keys, Google ?key=, signed-URL sig/signature, "auth"):
+# matched on whole camel/snake tokens, so "monkey" and "hockey" stay readable but "key", "accessKey", "sig" do not.
+_KEYISH_KEY = re.compile(
+    r"(^|_)(key|keys|access_key|secret_key|subscription_key|signature|sig|auth|credential|credentials)($|_)", re.I)
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
 _EXTRA_SECRET_KEY = re.compile(
     r"^(password|passcode|otp|pin|cvv|cvc|secret)(_|\d|$)|^(auth_?code|code_verifier|mfa_?code)$", re.I)
@@ -64,7 +69,7 @@ def secret_key(key):
         return False
     normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key).replace("-", "_").replace(".", "_")
     return bool(_SECRET_KEY.search(key) or _EXTRA_SECRET_KEY.search(normalized)
-                or _LOGIN_PROOF_KEY.search(normalized))
+                or _LOGIN_PROOF_KEY.search(normalized) or _KEYISH_KEY.search(normalized))
 
 
 def _value(obj, depth=0):
@@ -85,7 +90,9 @@ def _value(obj, depth=0):
         stripped = without_leading_bom(obj)
         if depth < 4 and stripped[:1] in ("{", "[") and len(stripped) <= 2_000_000:
             try:   # JSON sent as a string inside JSON (echoed bodies, wrapped payloads): redact it by field name too
-                return json.dumps(_value(json.loads(stripped), depth + 1), ensure_ascii=False)
+                inner = json.loads(stripped)
+                masked = _value(inner, depth + 1)
+                return obj if masked == inner else json.dumps(masked, ensure_ascii=False)
             except (ValueError, RecursionError):
                 pass
         if "=" in stripped and ("&" in stripped or secret_key(stripped.split("=", 1)[0])):
@@ -190,7 +197,10 @@ def text(body, mime=""):
     stripped = without_leading_bom(body)
     if stripped[:1] in ("{", "["):
         try:
-            return json.dumps(_value(json.loads(stripped)), ensure_ascii=False)
+            doc = json.loads(stripped)
+            masked = _value(doc)
+            # nothing to hide: keep the body byte-for-byte (re-serialising would turn 1.10 into 1.1, 1e3 into 1000.0)
+            return body if masked == doc else json.dumps(masked, ensure_ascii=False)
         except (ValueError, RecursionError):   # not JSON, or nested too deep to walk: redact it as text
             pass
     if "x-www-form-urlencoded" in (mime or "").lower():

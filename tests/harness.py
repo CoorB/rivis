@@ -164,7 +164,7 @@ if [ "$1" = "--proxy" ]; then printf '<dictionary> {\\n  HTTPEnable : 0\\n  HTTP
 exec /usr/sbin/scutil "$@"
 ''',
     # SHIM_PRE_ADDON: a test-only add-on loaded first (e.g. a DNS stand-in); never set outside a test
-    "mitmweb": "#!/bin/sh\nprintf '%%s\\n' \"mitmweb $*\" >> \"$SHIM_LOG/mitm-argv.log\"\n[ -n \"${SHIM_DRYRUN:-}\" ] && exit 0\n"
+    "mitmweb": "#!/bin/sh\nprintf '%%s\\n' \"mitmweb $*\" >> \"$SHIM_LOG/mitm-argv.log\"\nprintf '%%s\\n' \"fdlimit $(ulimit -Sn)\" >> \"$SHIM_LOG/mitm-argv.log\"\n[ -n \"${SHIM_DRYRUN:-}\" ] && exit 0\n"
                "[ -n \"${SHIM_PRE_ADDON:-}\" ] && exec %s -s \"$SHIM_PRE_ADDON\" \"$@\"\nexec %s \"$@\"\n" % (REAL_MITMWEB, REAL_MITMWEB),
     "mitmdump": "#!/bin/sh\nprintf '%%s\\n' \"mitmdump $*\" >> \"$SHIM_LOG/mitm-argv.log\"\n[ -n \"${SHIM_DRYRUN:-}\" ] && exit 0\nexec %s \"$@\"\n" % REAL_MITMDUMP,
 }

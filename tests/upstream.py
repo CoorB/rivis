@@ -152,6 +152,9 @@ class Handler(BaseHTTPRequestHandler):
             # UTF-8 BOM + JSON: legal on the wire; JSON.parse rejects it unless the BOM is stripped first
             return self._send(200, b"\xef\xbb\xbf" + json.dumps({"bom_marker": "present", "ok": True}).encode(),
                               ctype="application/json")
+        if p == "/json/latin1":
+            # JSON in a legacy charset (not valid UTF-8): a script that only edits headers must pass it through untouched
+            return self._send(200, b'{"name": "caf\xe9", "n": 1.10}', ctype="application/json; charset=iso-8859-1")
         if p == "/closing":
             # a gateway that ends the connection after its answer (the UAT edge does this on about half its calls)
             return self._send(200, {"closing": True}, headers=[("Connection", "close"), ("Keep-Alive", "timeout=5")])

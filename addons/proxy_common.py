@@ -555,13 +555,21 @@ def set_trusted_file(state_dir, path, trusted=True):
 def rule_file_path(state_dir, path, what, extra_forbidden=()):
     """Real path a rule may read: inside the project, or a file the user trusted here (never a forbidden one)."""
     try:
-        return confined_path(state_dir, path, what)
+        inside = confined_path(state_dir, path, what)
     except ValueError:
         real = os.path.realpath(os.path.expanduser(str(path)))
         if real in trusted_files(state_dir) and not forbidden_file(real, extra_forbidden):
             return real
         raise ValueError("%s '%s' is outside the project — if it is your own file, trust it on this machine: "
                          "%s rules allow-file '%s'" % (what, path, PRODUCT["cli"], path)) from None
+    # inside the project is not automatically safe to serve: the project also holds client-certificate keys and the
+    # web login secrets
+    why = forbidden_file(inside, extra_forbidden)
+    if not why and _same_or_under(inside, os.path.join(os.path.realpath(os.path.expanduser(str(state_dir))), "client-certs")):
+        why = "it is in the project's client-certs folder (private keys)"
+    if why:
+        raise ValueError("%s '%s' cannot be served: %s" % (what, path, why))
+    return inside
 
 
 try:                                    # stdlib parser: sre_parse on 3.9, re._parser on 3.11+ (mitmproxy's bundle)
