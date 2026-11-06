@@ -23,12 +23,14 @@ class ViewLabelsUi(UiBase):
         code, raw = self.panel._do(req, 30)
         self.assertEqual(code, 200, raw[:200])
 
-    def test_stream_threshold_status_label_uses_configured_size(self):
+    def test_engine_settings_leave_the_status_bar(self):
+        """The stream threshold and HTTP/1.1-upstream labels are engine settings, not status a user acts on: hidden
+        from the status bar (design review F14 / QA D3), so the bar is not cut when the Tools drawer is open."""
         page = self.open()
         label = page.locator("footer .label").filter(has_text="stream:").first
-        label.wait_for(timeout=10000)
-        wait_for(lambda: label.get_attribute("data-rv") == "Bodies over 64 MB not kept", 8, 0.2,
-                 "readable stream threshold in status bar")
+        label.wait_for(state="attached", timeout=10000)
+        wait_for(lambda: label.get_attribute("data-rv-hide") == "1", 8, 0.2, "stream label hidden")
+        self.assertFalse(label.is_visible())
         self.assertEqual(self.errors, [])
 
     def test_all_traffic_puts_the_project_label_back(self):

@@ -65,4 +65,6 @@ class PilotVisual(UiBase):
         self.call_tab()
         shot(self.page, "pv-long")
         top = self.page.evaluate("document.querySelector('#proxy-panel-host').shadowRoot.querySelector('#mock').getBoundingClientRect().top")
-        self.assertLess(top, 400, "Map Local this call… stays near the top even for a huge query string")
+        # 460: the 12px text floor (0.9.11 design review) made the panel header ~12px taller; an unclipped 2,400-character
+        # URL would push the action thousands of pixels down, which is what this guards
+        self.assertLess(top, 460, "Map Local this call… stays near the top even for a huge query string")

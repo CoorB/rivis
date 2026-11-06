@@ -232,8 +232,8 @@
     nav button:hover { color: var(--rv-text); background: var(--rv-surface-2); }
     nav button.on { color: var(--rv-accent-text); border-bottom-color: var(--rv-accent); font-weight: 600; }
     /* Rules / Show / Source get their own full-width row under the title, so their values are never cut ("All tra") */
-    .pjrow { flex: 1 1 100%; display: flex; gap: 8px; min-width: 0; margin-top: 6px; }
-    label.pj { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rv-text-3); min-width: 0; flex: 1 1 0; }
+    .pjrow { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 6px 8px; min-width: 0; margin-top: 6px; }
+    label.pj { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rv-text-3); min-width: 0; flex: 1 1 160px; }
     label.pj select { min-width: 0; width: 100%; }
     .info { color: var(--rv-text-3); cursor: help; font-size: 12px; }
     nav .cnt:empty { display: none; }
@@ -1637,8 +1637,7 @@
       if (/^stream:/i.test(t)) {
         const size = String(state && state.stream_large_bodies || "").trim().match(/^(\d+(?:\.\d+)?)\s*([kmgt]?)(?:b)?$/i);
         const readable = size ? `${size[1]} ${size[2] ? size[2].toUpperCase() + "B" : "bytes"}` : "configured size";
-        setAttr(el, "data-rv", `Bodies over ${readable} not kept`);
-        setAttr(el, "title", `Response and request bodies larger than ${readable} pass straight through and are not stored (stream_large_bodies).`);
+        setAttr(el, "data-rv-hide", "1");             // an engine setting (stream_large_bodies): not status a user acts on
         return;
       }
       if ((m = t.match(/^(\d+) of (\d+) flows? selected$/))) {
@@ -1654,8 +1653,7 @@
         setAttr(el, "data-rv", "No Caching on");
         setAttr(el, "title", "Every call is fetched fresh (conditional request headers removed). Turn it off in Network.");
       } else if (t === "no-http2" || t === "http2: off") {
-        setAttr(el, "data-rv", "HTTP/1.1 to servers");
-        setAttr(el, "title", "HTTP/2 is off between Rivis and servers (faster over VPN for HTTP/1.1-only gateways). RIVIS_HTTP2=1 turns it on.");
+        setAttr(el, "data-rv-hide", "1");             // an engine setting (HTTP/1.1 upstream): see rivis doctor
       } else if (/^mitmproxy \d/.test(t) || /^v?\d+\.\d+\.\d+$/.test(t)) {
         setAttr(el, "data-rv-hide", "1");             // the engine version: in Settings and `rivis doctor`, not on the status bar
       } else if (t === "ssl_insecure") {

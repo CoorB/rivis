@@ -272,7 +272,8 @@ def rule_fingerprint(source):
 
 def explain_rules(sources, state_dir, url, method="GET", confdir=None, body=None, content_type=""):
     """Would each rule fire on this call, and what would it do? Mirrors proxy_rules' matching order: the first matching
-    Map Local / respond answers the call, so later mocks and server-side rules never see it. Returns one dict per rule:
+    Map Local / respond answers the call, so later mocks and request-side rules never see it (response rules still change
+    the local answer: the proxy runs them on it). Returns one dict per rule:
     {name, action, enabled, fires, effect | reason}."""
     method = (method or "GET").upper()
     out, answered_by, blocked_by = [], None, None
@@ -312,11 +313,12 @@ def explain_rules(sources, state_dir, url, method="GET", confdir=None, body=None
             row["effect"] = "answered locally with %s from %s; the server is not called" % (rule.get("status", 200), what)
             _every_effect(row, rule)
             continue
-        if (answered_by and action in ("status", "json_patch")
-                or answered_by and action == "set_header" and rule.get("side") == "response"
-                or answered_by and action == "replace_body" and rule.get("side", "response") == "response"):
-            row["reason"] = "matches, but '%s' answers this call locally, so there is no server response to change" % answered_by
-            continue
+        # A local answer (respond / map_local) still goes through the response rules — the proxy runs them on it —
+        # so status, json_patch and response-side set_header / replace_body change what the app gets from the mock.
+        local_note = ("" if not answered_by or not (action in ("status", "json_patch")
+                      or action == "set_header" and rule.get("side") == "response"
+                      or action == "replace_body" and rule.get("side", "response") == "response")
+                      else " (applied to the local answer from '%s')" % answered_by)
         if action == "map_remote":
             new = rule["_replace"].sub(rule["with"], url)
             if new == url:
@@ -351,6 +353,8 @@ def explain_rules(sources, state_dir, url, method="GET", confdir=None, body=None
                              % (how, rule["find"], rule["replace"], side, lim))
         else:
             row["effect"] = _ACTION_LABEL.get(action, action)
+        if local_note:
+            row["effect"] = row["effect"].replace("the server's status", "the status") + local_note
         _every_effect(row, rule)
     return out
 

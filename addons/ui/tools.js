@@ -31,7 +31,8 @@
     return r && r.height > 50 ? { top: r.top, bottom: r.bottom } : { top: 70, bottom: innerHeight - 28 };
   }
   function dock(w, def, saved) {
-    const width = Math.round(Math.min((saved && saved.w) || Math.min(def.width || 720, 480), innerWidth * 0.55));
+    // docked: at most 480px and never more than ~36% of the window, so the list and the call keep the larger part
+    const width = Math.round(Math.max(320, Math.min((saved && saved.w) || Math.min(def.width || 720, 480), innerWidth * 0.36)));
     const b = mainBox();
     w.docked = true;
     Object.assign(w.el.style, { left: (innerWidth - width - 6) + "px", top: Math.round(b.top) + "px", width: width + "px",
